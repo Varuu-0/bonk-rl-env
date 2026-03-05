@@ -23,6 +23,8 @@ const {
   b2PolygonDef,
   b2MassData,
   b2Body,
+  b2DistanceJointDef,
+  b2ContactListener,
 } = box2d;
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -75,14 +77,33 @@ export interface PlayerInput {
   up: boolean;
   down: boolean;
   heavy: boolean;
+  grapple: boolean;
 }
 
-export interface PlatformDef {
+export interface MapBodyDef {
+  name: string;
+  type: 'rect' | 'circle';
   x: number;
   y: number;
-  halfWidth: number;
-  halfHeight: number;
+  width?: number;    // For rect
+  height?: number;   // For rect
+  radius?: number;   // For circle
+  static: boolean;
+  density?: number;
+  restitution?: number;
   angle?: number;
+  isLethal?: boolean;
+  grappleMultiplier?: number;
+}
+
+export interface MapSpawnPoints {
+  [team: string]: { x: number; y: number };
+}
+
+export interface MapDef {
+  name: string;
+  spawnPoints: MapSpawnPoints;
+  bodies: MapBodyDef[];
 }
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
@@ -92,6 +113,7 @@ export class PhysicsEngine {
   private playerBodies: Map<number, any> = new Map();
   private playerHeavyState: Map<number, boolean> = new Map();
   private playerAlive: Map<number, boolean> = new Map();
+  private playerGrappleJoints: Map<number, any> = new Map();
   private platformBodies: any[] = [];
   private tickCount: number = 0;
 
@@ -103,26 +125,64 @@ export class PhysicsEngine {
 
     const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
     this.world = new b2World(worldAABB, gravity, true /* doSleep */);
+
+    // Set up collision listener for WDB lethal objects
+    this.setupContactListener();
   }
 
   /**
-   * Add a static rectangular platform to the world.
+   * Defines collision rules: lethal objects kill players.
    */
-  addPlatform(def: PlatformDef): void {
+  private setupContactListener(): void {
+    const listener = new b2ContactListener();
+    listener.Add = (contact: any) => {
+      const body1 = contact.GetShape1().GetBody();
+      const body2 = contact.GetShape2().GetBody();
+
+      const ud1 = body1.GetUserData() || {};
+      const ud2 = body2.GetUserData() || {};
+
+      this.checkLethalCollision(ud1, ud2);
+      this.checkLethalCollision(ud2, ud1);
+    };
+
+    this.world.SetContactListener(listener);
+  }
+
+  private checkLethalCollision(playerData: any, staticData: any): void {
+    if (playerData.playerId !== undefined && staticData.isLethal) {
+      this.playerAlive.set(playerData.playerId, false);
+    }
+  }
+
+  /**
+   * Add a static or dynamic body from a MapBodyDef to the world.
+   */
+  addBody(def: MapBodyDef): void {
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(def.x / SCALE, def.y / SCALE);
     if (def.angle) bodyDef.angle = def.angle;
 
     const body = this.world.CreateBody(bodyDef);
 
-    const shapeDef = new b2PolygonDef();
-    shapeDef.SetAsBox(def.halfWidth / SCALE, def.halfHeight / SCALE);
-    shapeDef.density = 0; // static
+    let shapeDef: any;
+    if (def.type === 'rect') {
+      shapeDef = new b2PolygonDef();
+      const hw = (def.width || 0) / 2;
+      const hh = (def.height || 0) / 2;
+      shapeDef.SetAsBox(hw / SCALE, hh / SCALE);
+    } else if (def.type === 'circle') {
+      shapeDef = new b2CircleDef();
+      shapeDef.radius = (def.radius || 0) / SCALE;
+    }
+
+    shapeDef.density = def.static ? 0 : (def.density ?? 1.0);
     shapeDef.friction = 0.3;
-    shapeDef.restitution = 0.4;
+    shapeDef.restitution = def.restitution ?? 0.4;
 
     body.CreateShape(shapeDef);
     body.SetMassFromShapes();
+    body.SetUserData(def); // Stores isLethal and grappleMultiplier
     this.platformBodies.push(body);
   }
 
@@ -177,6 +237,14 @@ export class PhysicsEngine {
     } else if (!input.heavy && wasHeavy) {
       this.setHeavy(playerId, false);
     }
+
+    // Handle grapple toggle
+    const hasGrapple = this.playerGrappleJoints.has(playerId);
+    if (input.grapple && !hasGrapple) {
+      this.fireGrapple(playerId);
+    } else if (!input.grapple && hasGrapple) {
+      this.releaseGrapple(playerId);
+    }
   }
 
   /**
@@ -198,6 +266,81 @@ export class PhysicsEngine {
     } else {
       // Reset mass from shape definitions
       body.SetMassFromShapes();
+    }
+  }
+
+  /**
+   * Fires a grapple raycast to attach to the nearest platform.
+   * If it hits a grappleMultiplier surface, it acts as a slingshot instead.
+   */
+  private fireGrapple(playerId: number): void {
+    const body = this.playerBodies.get(playerId);
+    if (!body) return;
+
+    const startPos = body.GetPosition();
+    const vel = body.GetLinearVelocity();
+
+    // Cast ray in direction of velocity, or straight down if stationary
+    let dx = vel.x;
+    let dy = vel.y;
+    if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
+      dx = 0;
+      dy = 1;
+    }
+
+    // Normalize and extend ray to 600 pixels (20m)
+    const len = Math.sqrt(dx * dx + dy * dy);
+    dx = (dx / len) * 20;
+    dy = (dy / len) * 20;
+
+    const endPos = new b2Vec2(startPos.x + dx, startPos.y + dy);
+
+    // Box2D v2.0 RayCast (Returns the shape it hit)
+    // In b2World, it's RaycastOne in JS ports, or we iterate bodies
+    // The safest method in older ports is filtering shapes via intersection 
+    // or using the broadphase. Let's do a basic distance search against platforms since arenas are small.
+
+    let closestPlatform: any = null;
+    let minDiff = Infinity;
+
+    for (const pBody of this.platformBodies) {
+      const pPos = pBody.GetPosition();
+      const dist = Math.sqrt(Math.pow(pPos.x - startPos.x, 2) + Math.pow(pPos.y - startPos.y, 2));
+
+      // Very basic "raycast" stand-in: grab the closest platform in a 10m radius if velocity is directed towards it loosely
+      if (dist < 10 && dist < minDiff) {
+        minDiff = dist;
+        closestPlatform = pBody;
+      }
+    }
+
+    if (closestPlatform) {
+      const ud = closestPlatform.GetUserData() || {};
+
+      // Slingshot check (WDB mechanic)
+      if (ud.grappleMultiplier === 99999) {
+        body.ApplyImpulse(new b2Vec2(0, -50), startPos);
+        return;
+      }
+
+      // Attach joint
+      const jointDef = new b2DistanceJointDef();
+      jointDef.Initialize(body, closestPlatform, startPos, closestPlatform.GetPosition());
+      jointDef.collideConnected = true;
+      // Bonk.io rope behaves like a somewhat elastic distance joint
+      jointDef.frequencyHz = 4.0;
+      jointDef.dampingRatio = 0.5;
+
+      const joint = this.world.CreateJoint(jointDef);
+      this.playerGrappleJoints.set(playerId, joint);
+    }
+  }
+
+  private releaseGrapple(playerId: number): void {
+    const joint = this.playerGrappleJoints.get(playerId);
+    if (joint) {
+      this.world.DestroyJoint(joint);
+      this.playerGrappleJoints.delete(playerId);
     }
   }
 

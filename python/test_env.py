@@ -1,9 +1,11 @@
 import time
 from bonk_env import BonkEnv
+from training_logger import TrainingLogger
 
 def main():
     print("Connecting to Bonk RL Environment...")
     env = BonkEnv()
+    logger = TrainingLogger()
     
     print("Resetting environment...")
     obs, info = env.reset()
@@ -20,6 +22,7 @@ def main():
         action = env.action_space.sample()
         obs, reward, done, truncated, info = env.step(action)
         total_reward += reward
+        logger.log_step(episodes, i, obs, reward, done)
         
         if done or truncated:
             episodes += 1
@@ -31,9 +34,12 @@ def main():
     
     print(f"\n1000 steps completed in {elapsed:.4f} seconds.")
     print(f"Effective FPS: {fps:.2f} (Includes communication overhead & physics speed)")
-    print(f"Episodes finished: {episodes}")
-    print(f"Sum of rewards over 1000 steps: {total_reward:.4f}")
+    print(f"Total loop time: {elapsed:.4f} seconds")
+    print(f"Effective steps per second (FPS): {1000 / elapsed:.2f}")
     
+    logger.close()
+    
+    print("Disconnecting...")
     env.close()
     print("Disconnecting...")
 

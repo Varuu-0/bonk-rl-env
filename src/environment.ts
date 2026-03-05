@@ -12,10 +12,15 @@
  *   - Each step() call advances physics by exactly one tick (1/30s).
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
+
 import {
     PhysicsEngine,
     PlayerInput,
     PlayerState,
+    MapDef,
+    MapBodyDef,
     ARENA_HALF_WIDTH,
     ARENA_HALF_HEIGHT,
     SCALE,
@@ -27,11 +32,7 @@ import {
 /** Maximum number of ticks before a round is forcefully ended (truncation). */
 const MAX_TICKS = 30 * TPS; // 30 seconds at 30 TPS = 900 ticks
 
-/** Default spawn positions (in pixels) */
-const SPAWN_POSITIONS = [
-    { x: -200, y: -100 },  // Player 0 (AI) — left side
-    { x: 200, y: -100 },   // Player 1 (opponent) — right side
-];
+// SPAWN_POSITIONS removed, now read dynamically from map
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -84,31 +85,28 @@ export interface EnvironmentConfig {
     maxTicks?: number;
     /** Whether to use a random opponent policy (default true) */
     randomOpponent?: boolean;
-    /** Custom platform layout (default: simple arena with floor) */
-    platforms?: Array<{
-        x: number;
-        y: number;
-        halfWidth: number;
-        halfHeight: number;
-        angle?: number;
-    }>;
+    /** Custom map definition */
+    mapData?: MapDef;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
 
 /**
- * Creates a simple default arena: a flat floor platform in the center.
- * This mimics a basic bonk.io map.
+ * Creates a simple default map config if none is provided.
  */
-function getDefaultPlatforms() {
-    return [
-        // Main floor platform — centered, wide
-        { x: 0, y: 200, halfWidth: 400, halfHeight: 15 },
-        // Left wall
-        { x: -500, y: 0, halfWidth: 15, halfHeight: 300 },
-        // Right wall
-        { x: 500, y: 0, halfWidth: 15, halfHeight: 300 },
-    ];
+function getDefaultMap(): MapDef {
+    return {
+        name: "Default_Box",
+        spawnPoints: {
+            team_blue: { x: -200, y: -100 },
+            team_red: { x: 200, y: -100 }
+        },
+        bodies: [
+            { name: "floor", type: "rect", x: 0, y: 200, width: 800, height: 30, static: true },
+            { name: "left", type: "rect", x: -500, y: 0, width: 30, height: 600, static: true },
+            { name: "right", type: "rect", x: 500, y: 0, width: 30, height: 600, static: true }
+        ]
+    };
 }
 
 // ─── Environment ─────────────────────────────────────────────────────
@@ -120,15 +118,35 @@ export class BonkEnvironment {
     private opponentIds: number[] = [];
     private previousAliveState: Map<number, boolean> = new Map();
 
-    constructor(config: EnvironmentConfig = {}) {
+    constructor(config: Partial<EnvironmentConfig> = {}) {
+        // Load map from file or use provided config
+        let mapDef: MapDef;
+        if (config.mapData) {
+            mapDef = config.mapData;
+        } else {
+            const mapPath = path.join(__dirname, '..', 'maps', 'wdb.json');
+            try {
+                mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+            } catch (e) {
+                console.warn("Could not load maps/wdb.json, using fallback box");
+                mapDef = getDefaultMap();
+            }
+        }
+
         this.config = {
             numOpponents: config.numOpponents ?? 1,
             maxTicks: config.maxTicks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? true,
-            platforms: config.platforms ?? getDefaultPlatforms(),
+            mapData: mapDef,
         };
 
         this.physics = new PhysicsEngine();
+
+        for (const body of this.config.mapData.bodies) {
+            this.physics.addBody(body);
+        }
+
+        this.reset();
     }
 
     /**
@@ -137,31 +155,32 @@ export class BonkEnvironment {
     reset(): Observation {
         this.physics.reset();
 
-        // Rebuild the physics engine (fresh world)
-        this.physics = new PhysicsEngine();
+        // Add platforms (already added in constructor, reset just clears players/inputs)
+        // No need to re-add platforms here unless they can change per reset.
+        // If platforms can change, they should be part of the reset logic.
+        // For now, assuming static platforms loaded once.
 
-        // Add platforms
-        for (const p of this.config.platforms) {
-            this.physics.addPlatform(p);
-        }
+        // Extract spawn positions from map
+        const spawnVals = Object.values(this.config.mapData.spawnPoints);
+        const teamB = spawnVals[0] || { x: -200, y: -100 };
+        const teamR = spawnVals[1] || { x: 200, y: -100 };
 
         // Add AI player
         this.aiPlayerId = 0;
         this.physics.addPlayer(
             this.aiPlayerId,
-            SPAWN_POSITIONS[0].x,
-            SPAWN_POSITIONS[0].y,
+            teamB.x,
+            teamB.y,
         );
 
         // Add opponent(s)
         this.opponentIds = [];
         for (let i = 0; i < this.config.numOpponents; i++) {
             const id = i + 1;
-            const spawnIdx = Math.min(id, SPAWN_POSITIONS.length - 1);
             this.physics.addPlayer(
                 id,
-                SPAWN_POSITIONS[spawnIdx].x,
-                SPAWN_POSITIONS[spawnIdx].y,
+                teamR.x,
+                teamR.y,
             );
             this.opponentIds.push(id);
         }
@@ -185,6 +204,7 @@ export class BonkEnvironment {
      *   - Bit 2: up
      *   - Bit 3: down
      *   - Bit 4: heavy
+     *   - Bit 5: grapple
      */
     step(action: Action): StepResult {
         const aiInput = this.decodeAction(action);
@@ -256,6 +276,7 @@ export class BonkEnvironment {
                 up: !!(action & 4),
                 down: !!(action & 8),
                 heavy: !!(action & 16),
+                grapple: !!(action & 32),
             };
         }
         return action;
@@ -266,7 +287,7 @@ export class BonkEnvironment {
      */
     private getOpponentInput(opId: number): PlayerInput {
         if (!this.config.randomOpponent) {
-            return { left: false, right: false, up: false, down: false, heavy: false };
+            return { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
         }
 
         // Simple random policy: each direction has 20% chance per tick
@@ -276,6 +297,7 @@ export class BonkEnvironment {
             up: Math.random() < 0.15,
             down: Math.random() < 0.1,
             heavy: Math.random() < 0.05,
+            grapple: Math.random() < 0.05,
         };
     }
 

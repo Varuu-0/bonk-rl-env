@@ -13,9 +13,9 @@ class BonkEnv(gym.Env):
         self.socket = self.context.socket(zmq.REQ)
         self.socket.connect(f"tcp://127.0.0.1:{port}")
         
-        # Action space: 5 binary inputs (left, right, up, down, heavy)
-        # We represent this as a Discrete(32) space.
-        self.action_space = spaces.Discrete(32)
+        # Action space: 6 binary inputs (left, right, up, down, heavy, grapple)
+        # We represent this as a Discrete(64) space.
+        self.action_space = spaces.Discrete(64)
         
         # Observation space
         # We flatten the observation to a 1D vector of float32s.
