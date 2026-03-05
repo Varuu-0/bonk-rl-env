@@ -1,7 +1,91 @@
 /**
- * High-precision telemetry profiler for the vectorized bonk environment.
- * Uses process.hrtime.bigint() for nanosecond precision with zero overhead.
+ * High-precision telemetry profiler with zero-allocation hot path.
+ *
+ * Design:
+ *   - A global BigUint64Array accumulator indexed by TelemetryIndices.
+ *   - A wrap(label, fn) helper that returns a wrapped function which
+ *     records elapsed time using process.hrtime.bigint().
+ *   - The wrapper supports both sync and async functions and guarantees
+ *     that timing is recorded even when errors are thrown (finally block).
  */
+
+// ─── Global Telemetry Registry ───────────────────────────────────────────
+
+export const TelemetryIndices = {
+    PHYSICS_TICK: 0,
+    RAYCAST_CALL: 1,
+    COLLISION_RESOLVE: 2,
+    ZMQ_SEND: 3,
+    JSON_PARSE: 4,
+} as const;
+
+const TELEMETRY_SLOT_COUNT = 5;
+
+/**
+ * Global accumulator for nanoseconds spent in each telemetry bucket.
+ * This is safe to import from workers; each worker process gets its own
+ * view, and worker.ts can aggregate and report these stats upstream.
+ */
+export const TelemetryBuffer = new BigUint64Array(TELEMETRY_SLOT_COUNT);
+
+// Pre-computed label lookup by index to avoid allocations in report().
+const TelemetryLabels: string[] = [];
+TelemetryLabels[TelemetryIndices.PHYSICS_TICK] = 'PHYSICS_TICK';
+TelemetryLabels[TelemetryIndices.RAYCAST_CALL] = 'RAYCAST_CALL';
+TelemetryLabels[TelemetryIndices.COLLISION_RESOLVE] = 'COLLISION_RESOLVE';
+TelemetryLabels[TelemetryIndices.ZMQ_SEND] = 'ZMQ_SEND';
+TelemetryLabels[TelemetryIndices.JSON_PARSE] = 'JSON_PARSE';
+
+// Target frame budget for 30 FPS in nanoseconds (33.3ms ≈ 33_333_333ns).
+const FRAME_BUDGET_NS = BigInt(33_333_333);
+
+// Helper to detect async functions without allocating on the hot path.
+// eslint-disable-next-line @typescript-eslint/no-implied-eval
+const AsyncFunction = (async function () { /* empty */ }).constructor as FunctionConstructor;
+
+/**
+ * Decorator-style wrapper around a function that profiles its wall-clock time.
+ *
+ * Constraints respected:
+ *   - No object or array literals are created on the hot path.
+ *   - Works for both synchronous and async (Promise-returning) functions.
+ *   - Timing is always recorded via a finally block, even on error.
+ */
+export function wrap(label: keyof typeof TelemetryIndices | string, fn: Function): Function {
+    const index = (TelemetryIndices as any)[label];
+    if (index === undefined) {
+        throw new Error(`Unknown telemetry label: ${label}`);
+    }
+
+    // Async functions get an async wrapper that awaits the inner function.
+    if ((fn as any).constructor === AsyncFunction) {
+        const wrappedAsync = async function (this: unknown): Promise<unknown> {
+            const start = process.hrtime.bigint();
+            try {
+                // Use arguments object to avoid rest parameter allocations.
+                return await (fn as any).apply(this, arguments as any);
+            } finally {
+                const end = process.hrtime.bigint();
+                TelemetryBuffer[index] += end - start;
+            }
+        };
+        return wrappedAsync;
+    }
+
+    // Synchronous fast-path wrapper.
+    const wrappedSync = function (this: unknown): unknown {
+        const start = process.hrtime.bigint();
+        try {
+            return (fn as any).apply(this, arguments as any);
+        } finally {
+            const end = process.hrtime.bigint();
+            TelemetryBuffer[index] += end - start;
+        }
+    };
+    return wrappedSync;
+}
+
+// ─── Legacy Profiler API (counters / gauges / reporting) ────────────────
 
 interface TimeMetric {
     totalNs: bigint;
@@ -27,14 +111,15 @@ export class Profiler {
     }
 
     /**
-     * Start timing a block of code.
+     * Start timing a block of code (legacy manual API).
+     * Kept for compatibility; new code should prefer wrap().
      */
     start(label: string) {
         this.activeTimers.set(label, process.hrtime.bigint());
     }
 
     /**
-     * Stop timing a block and record the duration.
+     * Stop timing a block and record the duration (legacy manual API).
      */
     end(label: string) {
         const startTime = this.activeTimers.get(label);
@@ -96,56 +181,76 @@ export class Profiler {
         this.timeMetrics.clear();
         this.counters.clear();
         this.startTick = this.currentTick;
+
+        // Also reset the global telemetry accumulator.
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            TelemetryBuffer[i] = BigInt(0);
+        }
     }
 
     /**
-     * Output a structured table of metrics.
+     * Output a heatmap-style report of telemetry usage.
      * @param windowSize Number of ticks in this reporting window.
      */
     report(windowSize: number = 5000) {
         if (this.currentTick - this.startTick < windowSize) return;
 
-        console.log(`\n=== Telemetry Report (Avg over last ${windowSize} ticks) ===`);
+        const windowTicks = this.currentTick - this.startTick;
 
-        // Performance Timing
-        const perfData: any[] = [];
-        this.timeMetrics.forEach((metric, label) => {
-            const avgMs = Number(metric.totalNs) / metric.count / 1_000_000;
-            perfData.push({
-                'Metric': label,
-                'Avg Time (ms)': avgMs.toFixed(4),
-                'Total Calls': metric.count
-            });
-        });
-        if (perfData.length > 0) {
-            console.log('--- Performance ---');
-            console.table(perfData);
+        console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
+        console.log('Label                | Avg ms/frame | % of 33.3ms frame');
+        console.log('---------------------+-------------+-------------------');
+
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            const totalNs = TelemetryBuffer[i];
+            if (totalNs === BigInt(0)) continue;
+
+            const label = TelemetryLabels[i];
+            if (!label) continue;
+
+            const avgNsPerFrame = totalNs / BigInt(windowTicks);
+            const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
+
+            // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
+            const hundred = BigInt(100);
+            const bp = (avgNsPerFrame * hundred * hundred) / FRAME_BUDGET_NS; // 100 * 100 = 10_000 (basis points)
+            const percent = Number(bp) / 100; // back to percentage with 2 decimal places
+
+            const paddedLabel = (label + '                    ').slice(0, 21);
+            const avgMsStr = avgMsPerFrame.toFixed(3).padStart(11);
+            const pctStr = percent.toFixed(2).padStart(9);
+
+            console.log(`${paddedLabel} | ${avgMsStr} | ${pctStr}%`);
+
+            // Critical path highlight: scream when a bucket dominates the frame budget.
+            if (percent > 25.0) {
+                console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
+            }
         }
 
-        // Throughput Counters
-        const countData: any[] = [];
-        this.counters.forEach((val, label) => {
-            countData.push({
-                'Metric': label,
-                'Total': val,
-                'Avg/Tick': (val / windowSize).toFixed(4)
+        // Optionally keep the legacy tables for counters/gauges.
+        if (this.counters.size > 0) {
+            console.log('\n--- Throughput (legacy counters) ---');
+            const countData: any[] = [];
+            this.counters.forEach((val, label) => {
+                countData.push({
+                    Metric: label,
+                    Total: val,
+                    'Avg/Tick': (val / windowTicks).toFixed(4),
+                });
             });
-        });
-        if (countData.length > 0) {
-            console.log('--- Throughput ---');
             console.table(countData);
         }
 
-        // Health Gauges
-        const gaugeData: any[] = [];
-        this.gauges.forEach((val, label) => {
-            gaugeData.push({
-                'Metric': label,
-                'Value': val.toFixed(2)
+        if (this.gauges.size > 0) {
+            console.log('--- Health & State (legacy gauges) ---');
+            const gaugeData: any[] = [];
+            this.gauges.forEach((val, label) => {
+                gaugeData.push({
+                    Metric: label,
+                    Value: val.toFixed(2),
+                });
             });
-        });
-        if (gaugeData.length > 0) {
-            console.log('--- Health & State ---');
             console.table(gaugeData);
         }
 

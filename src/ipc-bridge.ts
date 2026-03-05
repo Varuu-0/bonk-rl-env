@@ -1,6 +1,9 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "./worker-pool";
-import { globalProfiler } from "./profiler";
+import { globalProfiler, wrap, TelemetryIndices } from "./profiler";
+
+// Pre-wrapped JSON.parse for telemetry on bridge deserialization.
+const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
 
 export class IpcBridge {
     private sock: zmq.Router;
@@ -12,6 +15,10 @@ export class IpcBridge {
         this.port = port;
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
+
+        // Wrap the underlying ZMQ send with telemetry.
+        const originalSend = this.sock.send;
+        this.sock.send = wrap(TelemetryIndices.ZMQ_SEND, originalSend.bind(this.sock)) as any;
     }
 
     async start() {
@@ -30,7 +37,7 @@ export class IpcBridge {
     private async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         try {
-            const payload = JSON.parse(rawMsg);
+            const payload = parseJson(rawMsg);
             const command = payload.command;
 
             if (command === "init") {

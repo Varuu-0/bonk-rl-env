@@ -14,7 +14,7 @@
 // @ts-ignore — box2d has no type declarations
 const box2d = require('box2d');
 
-import { globalProfiler } from './profiler';
+import { globalProfiler, wrap, TelemetryIndices } from './profiler';
 
 const {
   b2World,
@@ -356,7 +356,6 @@ export class PhysicsEngine {
    * This is the core synchronous step — no real-time clock involved.
    */
   tick(): void {
-    globalProfiler.start('physics_tick');
     this.world.Step(DT, SOLVER_ITERATIONS);
     this.tickCount++;
 
@@ -375,7 +374,6 @@ export class PhysicsEngine {
     }
 
     globalProfiler.gauge('active_joints', this.playerGrappleJoints.size);
-    globalProfiler.end('physics_tick');
   }
 
   /**
@@ -453,3 +451,16 @@ export class PhysicsEngine {
     this.world = null;
   }
 }
+
+// ─── Telemetry Wrapping for Hot Paths ───────────────────────────────────
+
+// Wrap selected PhysicsEngine methods in-place to avoid manual start/end pairs.
+// This is done after the class definition so that the prototype methods exist.
+const physicsProto = PhysicsEngine.prototype as any;
+
+physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
+physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
+physicsProto.checkLethalCollision = wrap(
+  TelemetryIndices.COLLISION_RESOLVE,
+  physicsProto.checkLethalCollision,
+);
