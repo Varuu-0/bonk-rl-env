@@ -5,7 +5,7 @@ if (!parentPort) {
     throw new Error('This file must be run as a worker thread.');
 }
 
-import { globalProfiler } from './profiler';
+import { globalProfiler, TelemetryBuffer } from './profiler';
 
 let envs: BonkEnvironment[] = [];
 let stepCounter = 0;
@@ -49,6 +49,14 @@ parentPort.on('message', (msg) => {
                     heapUsed: process.memoryUsage().heapUsed,
                     tick: stepCounter
                 }
+            });
+        } else if (msg.type === 'GET_TELEMETRY') {
+            // Return a thread-safe snapshot of this worker's telemetry buffer.
+            const snapshot = TelemetryBuffer.slice();
+            parentPort!.postMessage({
+                id: msg.id,
+                status: 'ok',
+                data: snapshot,
             });
         }
     } catch (err: any) {
