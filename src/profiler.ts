@@ -36,6 +36,13 @@ TelemetryLabels[TelemetryIndices.COLLISION_RESOLVE] = 'COLLISION_RESOLVE';
 TelemetryLabels[TelemetryIndices.ZMQ_SEND] = 'ZMQ_SEND';
 TelemetryLabels[TelemetryIndices.JSON_PARSE] = 'JSON_PARSE';
 
+// Latest worker telemetry snapshots (set from the main thread).
+let latestWorkerTelemetry: BigUint64Array[] | null = null;
+
+export function setLatestWorkerTelemetry(snapshots: BigUint64Array[] | null): void {
+    latestWorkerTelemetry = snapshots;
+}
+
 // Target frame budget for 30 FPS in nanoseconds (33.3ms ≈ 33_333_333ns).
 const FRAME_BUDGET_NS = BigInt(33_333_333);
 
@@ -226,6 +233,74 @@ export class Profiler {
             if (percent > 25.0) {
                 console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
             }
+        }
+
+        // RimWorld-style global worker telemetry and straggler report.
+        if (latestWorkerTelemetry && latestWorkerTelemetry.length > 0) {
+            const workerCount = latestWorkerTelemetry.length;
+
+            console.log('\n=== Global Worker Telemetry (per-metric lifetime stats) ===');
+            console.log('Label                | Mean (ms) | Min (ms) | Max (ms)');
+            console.log('---------------------+----------+----------+----------');
+
+            let stragglerWorker = -1;
+            let stragglerPhysicsNs = BigInt(0);
+
+            for (let i = 0; i < TelemetryBuffer.length; i++) {
+                let sumNs = BigInt(0);
+                let minNs: bigint | null = null;
+                let maxNs: bigint | null = null;
+
+                for (let w = 0; w < workerCount; w++) {
+                    const buf = latestWorkerTelemetry[w];
+                    if (!buf || buf.length <= i) continue;
+                    const v = buf[i];
+
+                    if (minNs === null || v < minNs) {
+                        minNs = v;
+                    }
+                    if (maxNs === null || v > maxNs) {
+                        maxNs = v;
+                    }
+                    sumNs += v;
+
+                    if (i === TelemetryIndices.PHYSICS_TICK && v > stragglerPhysicsNs) {
+                        stragglerPhysicsNs = v;
+                        stragglerWorker = w;
+                    }
+                }
+
+                if (minNs === null || maxNs === null) {
+                    continue;
+                }
+
+                const meanNs = sumNs / BigInt(workerCount);
+                const meanMs = Number(meanNs) / 1_000_000;
+                const minMs = Number(minNs) / 1_000_000;
+                const maxMs = Number(maxNs) / 1_000_000;
+
+                const label = TelemetryLabels[i];
+                if (!label) continue;
+
+                const paddedLabel = (label + '                    ').slice(0, 21);
+                const meanStr = meanMs.toFixed(3).padStart(8);
+                const minStr = minMs.toFixed(3).padStart(8);
+                const maxStr = maxMs.toFixed(3).padStart(8);
+
+                console.log(`${paddedLabel} | ${meanStr} | ${minStr} | ${maxStr}`);
+            }
+
+            if (stragglerWorker >= 0) {
+                const physicsMs = Number(stragglerPhysicsNs) / 1_000_000;
+                console.log(
+                    `Straggler Report: [Worker ID: ${stragglerWorker}] | Physics Time: ${physicsMs.toFixed(
+                        3,
+                    )} ms | Status: Lagging.`,
+                );
+            }
+
+            // Clear snapshots so they are not reused accidentally on the next report.
+            latestWorkerTelemetry = null;
         }
 
         // Optionally keep the legacy tables for counters/gauges.

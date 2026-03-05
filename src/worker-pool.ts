@@ -117,6 +117,19 @@ export class WorkerPool {
         return results.flat();
     }
 
+    /**
+     * Request telemetry snapshots from all workers.
+     * Each worker returns a copy of its local TelemetryBuffer.
+     */
+    async getTelemetrySnapshots(): Promise<BigUint64Array[]> {
+        const promises = [];
+        for (let i = 0; i < this.workers.length; i++) {
+            promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
+        }
+        const snapshots = await Promise.all(promises);
+        return snapshots as BigUint64Array[];
+    }
+
     close() {
         for (const worker of this.workers) {
             worker.terminate();
