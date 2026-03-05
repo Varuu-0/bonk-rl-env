@@ -1,36 +1,41 @@
 import * as zmq from "zeromq";
-import { BonkEnvironment, Action } from "./environment";
+import { WorkerPool } from "./worker-pool";
 
 export class IpcBridge {
-    private sock: zmq.Reply;
-    private env: BonkEnvironment;
+    private sock: zmq.Router;
+    private pool: WorkerPool;
     private port: number;
 
-    constructor(env: BonkEnvironment, port: number = 5555) {
-        this.env = env;
+    constructor(port: number = 5555) {
         this.port = port;
-        this.sock = new zmq.Reply();
+        this.sock = new zmq.Router();
+        this.pool = new WorkerPool();
     }
 
     async start() {
         const addr = `tcp://127.0.0.1:${this.port}`;
         await this.sock.bind(addr);
-        console.log(`[IPC] Bound ZMQ Reply socket to ${addr}`);
+        console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
 
         // Wait for incoming requests from Python
-        for await (const [msg] of this.sock) {
-            await this.handleRequest(msg.toString());
+        for await (const frames of this.sock) {
+            const identity = frames[0];
+            const msg = frames[frames.length - 1];
+            await this.handleRequest(identity, msg.toString());
         }
     }
 
-    private async handleRequest(rawMsg: string) {
+    private async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         try {
             const payload = JSON.parse(rawMsg);
             const command = payload.command;
 
-            if (command === "reset") {
-                const obs = this.env.reset();
+            if (command === "init") {
+                await this.pool.init(payload.numEnvs, payload.config);
+                response = { status: "ok" };
+            } else if (command === "reset") {
+                const obs = await this.pool.reset(payload.seeds);
                 response = {
                     status: "ok",
                     data: {
@@ -38,11 +43,10 @@ export class IpcBridge {
                     }
                 };
             } else if (command === "step") {
-                const action: Action = payload.action;
-                const result = this.env.step(action);
+                const results = await this.pool.step(payload.actions);
                 response = {
                     status: "ok",
-                    data: result
+                    data: results
                 };
             } else {
                 response = { status: "error", error: `Unknown command: ${command}` };
@@ -53,13 +57,14 @@ export class IpcBridge {
         }
 
         try {
-            await this.sock.send(JSON.stringify(response));
+            await this.sock.send([identity, JSON.stringify(response)]);
         } catch (sendError) {
             console.error("[IPC] Error sending response:", sendError);
         }
     }
 
     async close() {
+        this.pool.close();
         this.sock.close();
     }
 }

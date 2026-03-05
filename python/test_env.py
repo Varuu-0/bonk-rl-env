@@ -1,47 +1,60 @@
 import time
-from bonk_env import BonkEnv
-from training_logger import TrainingLogger
+import numpy as np
+from bonk_env import BonkVecEnv
 
 def main():
-    print("Connecting to Bonk RL Environment...")
-    env = BonkEnv()
-    logger = TrainingLogger()
+    num_envs = 64
+    print(f"Connecting to Bonk RL Massively Parallel Environment (N={num_envs})...")
     
-    print("Resetting environment...")
-    obs, info = env.reset()
+    # Needs to be matched with the already running Node.js server
+    env = BonkVecEnv(num_envs=num_envs)
+    
+    print(f"Resetting {num_envs} environments...")
+    obs = env.reset()
     print("Initial observation array shape:", obs.shape)
-    print("Initial observation:", obs)
     
-    print("\nRunning 1000 random steps to test bridge speed...")
+    print("\nRunning 100 random steps to test batch throughput...")
+    
+    # Initialize random actions for 64 envs using the Discrete(64) space
+    actions = np.random.randint(0, 64, size=num_envs)
+    
     start_time = time.time()
     
-    episodes = 0
-    total_reward = 0.0
+    total_steps = 100
+    total_rewards = np.zeros(num_envs)
+    episodes_completed = 0
     
-    for i in range(1000):
-        action = env.action_space.sample()
-        obs, reward, done, truncated, info = env.step(action)
-        total_reward += reward
-        logger.log_step(episodes, i, obs, reward, done)
-        
-        if done or truncated:
-            episodes += 1
-            env.reset()
+    for i in range(total_steps):
+        # We can just use random integers for actions
+        actions = np.random.randint(0, 64, size=num_envs)
+        obs, rewards, dones, infos = env.step_wait() if i > 0 else (obs, np.zeros(num_envs), np.zeros(num_envs, dtype=bool), [])
+        if i == 0:
+            env.step_async(actions)
+            continue
             
+        total_rewards += rewards
+        episodes_completed += np.sum(dones)
+        
+        env.step_async(actions)
+            
+    # Final step wait
+    obs, rewards, dones, infos = env.step_wait()
+    total_rewards += rewards
+    episodes_completed += np.sum(dones)
+
     end_time = time.time()
     elapsed = end_time - start_time
-    fps = 1000 / elapsed if elapsed > 0 else 0
     
-    print(f"\n1000 steps completed in {elapsed:.4f} seconds.")
-    print(f"Effective FPS: {fps:.2f} (Includes communication overhead & physics speed)")
-    print(f"Total loop time: {elapsed:.4f} seconds")
-    print(f"Effective steps per second (FPS): {1000 / elapsed:.2f}")
+    total_physics_steps = (total_steps) * num_envs
+    fps = total_physics_steps / elapsed if elapsed > 0 else 0
     
-    logger.close()
+    print(f"\n{total_steps} batched steps completed in {elapsed:.4f} seconds.")
+    print(f"Total physics steps (ticks): {total_physics_steps}")
+    print(f"Effective Massively Parallel FPS: {fps:.2f} (Includes ZMQ router/dealer + Node cluster)")
+    print(f"Total episodes completed: {episodes_completed}")
     
     print("Disconnecting...")
     env.close()
-    print("Disconnecting...")
 
 if __name__ == "__main__":
     main()

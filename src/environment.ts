@@ -26,6 +26,7 @@ import {
     SCALE,
     TPS,
 } from './physics-engine';
+import { PRNG } from './prng';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -87,6 +88,8 @@ export interface EnvironmentConfig {
     randomOpponent?: boolean;
     /** Custom map definition */
     mapData?: MapDef;
+    /** Seed for deterministic randomness */
+    seed?: number;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -117,6 +120,7 @@ export class BonkEnvironment {
     private aiPlayerId: number = 0;
     private opponentIds: number[] = [];
     private previousAliveState: Map<number, boolean> = new Map();
+    private rng: PRNG;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Load map from file or use provided config
@@ -138,8 +142,10 @@ export class BonkEnvironment {
             maxTicks: config.maxTicks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? true,
             mapData: mapDef,
+            seed: config.seed ?? Math.floor(Math.random() * 1000000),
         };
 
+        this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
 
         for (const body of this.config.mapData.bodies) {
@@ -152,12 +158,15 @@ export class BonkEnvironment {
     /**
      * Reset the environment to initial state, returning the first observation.
      */
-    reset(): Observation {
+    reset(seed?: number): Observation {
+        if (seed !== undefined) {
+            this.config.seed = seed;
+            this.rng.setSeed(seed);
+        }
         this.physics.reset();
 
         // Add platforms (already added in constructor, reset just clears players/inputs)
         // No need to re-add platforms here unless they can change per reset.
-        // If platforms can change, they should be part of the reset logic.
         // For now, assuming static platforms loaded once.
 
         // Extract spawn positions from map
@@ -290,14 +299,14 @@ export class BonkEnvironment {
             return { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
         }
 
-        // Simple random policy: each direction has 20% chance per tick
+        // Simple random policy: each direction has x% chance per tick
         return {
-            left: Math.random() < 0.2,
-            right: Math.random() < 0.2,
-            up: Math.random() < 0.15,
-            down: Math.random() < 0.1,
-            heavy: Math.random() < 0.05,
-            grapple: Math.random() < 0.05,
+            left: this.rng.next() < 0.2,
+            right: this.rng.next() < 0.2,
+            up: this.rng.next() < 0.15,
+            down: this.rng.next() < 0.1,
+            heavy: this.rng.next() < 0.05,
+            grapple: this.rng.next() < 0.05,
         };
     }
 
