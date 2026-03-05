@@ -1,10 +1,12 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "./worker-pool";
+import { globalProfiler } from "./profiler";
 
 export class IpcBridge {
     private sock: zmq.Router;
     private pool: WorkerPool;
     private port: number;
+    private stepCount: number = 0;
 
     constructor(port: number = 5555) {
         this.port = port;
@@ -43,11 +45,22 @@ export class IpcBridge {
                     }
                 };
             } else if (command === "step") {
+                globalProfiler.start('bridge_step_total');
                 const results = await this.pool.step(payload.actions);
+
+                this.stepCount++;
+                globalProfiler.tick();
+
+                if (this.stepCount % 5000 === 0) {
+                    globalProfiler.recordMemory();
+                    globalProfiler.report(5000);
+                }
+
                 response = {
                     status: "ok",
                     data: results
                 };
+                globalProfiler.end('bridge_step_total');
             } else {
                 response = { status: "error", error: `Unknown command: ${command}` };
             }

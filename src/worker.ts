@@ -5,7 +5,10 @@ if (!parentPort) {
     throw new Error('This file must be run as a worker thread.');
 }
 
+import { globalProfiler } from './profiler';
+
 let envs: BonkEnvironment[] = [];
+let stepCounter = 0;
 
 parentPort.on('message', (msg) => {
     try {
@@ -23,6 +26,7 @@ parentPort.on('message', (msg) => {
             parentPort!.postMessage({ id: msg.id, status: 'ok', data: obs });
         } else if (msg.type === 'step') {
             const actions: Action[] = msg.actions;
+
             const results = envs.map((env, i) => {
                 const res = env.step(actions[i]);
                 if (res.done) {
@@ -31,7 +35,21 @@ parentPort.on('message', (msg) => {
                 }
                 return res;
             });
-            parentPort!.postMessage({ id: msg.id, status: 'ok', data: results });
+
+            stepCounter++;
+            if (stepCounter % 100 === 0) {
+                globalProfiler.recordMemory();
+            }
+
+            parentPort!.postMessage({
+                id: msg.id,
+                status: 'ok',
+                data: results,
+                telemetry: {
+                    heapUsed: process.memoryUsage().heapUsed,
+                    tick: stepCounter
+                }
+            });
         }
     } catch (err: any) {
         parentPort!.postMessage({ id: msg.id, status: 'error', error: err.message });

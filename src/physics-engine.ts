@@ -14,6 +14,8 @@
 // @ts-ignore — box2d has no type declarations
 const box2d = require('box2d');
 
+import { globalProfiler } from './profiler';
+
 const {
   b2World,
   b2AABB,
@@ -136,6 +138,8 @@ export class PhysicsEngine {
   private setupContactListener(): void {
     const listener = new b2ContactListener();
     listener.Add = (contact: any) => {
+      globalProfiler.increment('collision_events');
+
       const body1 = contact.GetShape1().GetBody();
       const body2 = contact.GetShape2().GetBody();
 
@@ -152,6 +156,7 @@ export class PhysicsEngine {
   private checkLethalCollision(playerData: any, staticData: any): void {
     if (playerData.playerId !== undefined && staticData.isLethal) {
       this.playerAlive.set(playerData.playerId, false);
+      globalProfiler.increment('collision_lethal');
     }
   }
 
@@ -277,6 +282,8 @@ export class PhysicsEngine {
     const body = this.playerBodies.get(playerId);
     if (!body) return;
 
+    globalProfiler.increment('grapple_fire');
+
     const startPos = body.GetPosition();
     const vel = body.GetLinearVelocity();
 
@@ -349,6 +356,7 @@ export class PhysicsEngine {
    * This is the core synchronous step — no real-time clock involved.
    */
   tick(): void {
+    globalProfiler.start('physics_tick');
     this.world.Step(DT, SOLVER_ITERATIONS);
     this.tickCount++;
 
@@ -362,8 +370,12 @@ export class PhysicsEngine {
         Math.abs(pos.y) > ARENA_HALF_HEIGHT
       ) {
         this.playerAlive.set(id, false);
+        globalProfiler.increment('death_out_of_bounds');
       }
     }
+
+    globalProfiler.gauge('active_joints', this.playerGrappleJoints.size);
+    globalProfiler.end('physics_tick');
   }
 
   /**

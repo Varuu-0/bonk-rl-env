@@ -1,6 +1,7 @@
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
+import { globalProfiler } from './profiler';
 
 export class WorkerPool {
     private workers: Worker[] = [];
@@ -75,15 +76,44 @@ export class WorkerPool {
     }
 
     async step(actions: any[]): Promise<any[]> {
+        const batchStart = process.hrtime.bigint();
+        const returnTimes: bigint[] = [];
+
         const promises = [];
         let actionIdx = 0;
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
             const wActions = actions.slice(actionIdx, actionIdx + wEnvs);
-            promises.push(this.sendMessage(this.workers[i], { type: 'step', actions: wActions }));
+
+            const p = this.sendMessage(this.workers[i], { type: 'step', actions: wActions })
+                .then(data => {
+                    returnTimes.push(process.hrtime.bigint());
+                    return data;
+                });
+
+            promises.push(p);
             actionIdx += wEnvs;
         }
+
         const results = await Promise.all(promises);
+        const batchEnd = process.hrtime.bigint();
+
+        // Record Batch Latency
+        const totalMs = Number(batchEnd - batchStart) / 1_000_000;
+        globalProfiler.gauge('Batch Latency (ms)', totalMs);
+
+        // Record Sync Gap (Max - Min return time)
+        if (returnTimes.length > 1) {
+            let min = returnTimes[0];
+            let max = returnTimes[0];
+            for (const t of returnTimes) {
+                if (t < min) min = t;
+                if (t > max) max = t;
+            }
+            const gapMs = Number(max - min) / 1_000_000;
+            globalProfiler.gauge('Sync Gap (ms)', gapMs);
+        }
+
         return results.flat();
     }
 

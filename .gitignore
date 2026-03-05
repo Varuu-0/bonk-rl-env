@@ -13,9 +13,17 @@ __pycache__/
 # Models, logs, and training outputs
 models/
 tensorboard_logs/
+logs/
+profiler_results/
+*.log
 
 # Environment / secrets
 .env
+
+# IDE / agent metadata
+.cursor/
+.antigravity/
+.vscode/
 
 # Project-specific runtime data
 chatlogs/
