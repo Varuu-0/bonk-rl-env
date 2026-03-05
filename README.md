@@ -13,7 +13,22 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 - **Vectorized Gymnasium API**: Implements the `stable_baselines3.common.vec_env.VecEnv` interface natively, allowing the Python agent to dispatch actions and aggregate observations across 64+ parallel environments simultaneously.
 
 ## Performance
-By dispersing batched simulation steps across multiple worker threads, the engine shatters previous limits, achieving a combined throughput of **>3,000+ simulation frames per second per core**. Training regimens can process tens of thousands of environment steps per second.
+By dispersing batched simulation steps across multiple worker threads, the engine achieves massive horizontal scaling. 
+
+### Benchmark Results (Sustained Performance)
+Ran 10,000 steps across varying instance counts to measure sustained throughput:
+
+| Concurrent Envs (N) | Aggregate FPS | Total Time (10,000 steps) |
+|:--------------------|:--------------|:--------------------------|
+| 1                   | 3,120.19      | 3.2049s                   |
+| 2                   | 5,171.39      | 3.8674s                   |
+| 4                   | 8,533.98      | 4.6871s                   |
+| 8                   | 12,829.85     | 6.2355s                   |
+| 16                  | 17,969.23     | 8.9041s                   |
+| 32                  | 21,917.79     | 14.6000s                  |
+| 64                  | 23,460.06     | 27.2804s                  |
+
+*Total physics throughput peaks at **>23,400 simulation steps per second** with 64 parallel environments.*
 
 ## Setup & Installation
 
