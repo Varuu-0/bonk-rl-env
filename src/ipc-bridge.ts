@@ -69,12 +69,12 @@ export class IpcBridge {
                 if (this.stepCount % 5000 === 0) {
                     globalProfiler.recordMemory();
 
-                    // Collect worker telemetry snapshots on the main thread only
-                    // when a report is about to be generated (never per-tick).
-                    const snapshots = await this.pool.getTelemetrySnapshots();
-                    setLatestWorkerTelemetry(snapshots);
-
-                    globalProfiler.report(5000);
+                    const config = require('../config').default;
+                    if (config.verboseTelemetry) {
+                        const snapshots = await this.pool.getTelemetrySnapshots();
+                        setLatestWorkerTelemetry(snapshots);
+                        globalProfiler.report(5000);
+                    }
                 }
 
                 response = {

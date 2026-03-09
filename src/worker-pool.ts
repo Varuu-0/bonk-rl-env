@@ -104,19 +104,19 @@ export class WorkerPool {
                     this.sharedMemManagers.push(shm);
 
                     // Send init and wait for it
-                    await this.sendMessage(worker, {
+                    const initPromise = this.sendMessage(worker, {
                         type: 'init',
                         numEnvs,
                         config,
                         sharedBuffer: shm.getBuffer(),
                         ringSize: this.ringSize
+                    }).then(res => {
+                        // After successful init, trigger the wait-for-action loop
+                        worker.postMessage({ type: 'wait-for-action', config });
+                        return res;
                     });
 
-                    // Trigger the persistent wait-for-action loop on the worker
-                    // This is Fire-and-Forget; the worker will loop indefinitely in the background
-                    worker.postMessage({ type: 'wait-for-action', config });
-
-                    promises.push(Promise.resolve({ mode: 'shared' }));
+                    promises.push(initPromise);
                 } else {
                     this.sharedMemManagers.push(null);
                     promises.push(this.sendMessage(worker, { type: 'init', numEnvs, config }));
@@ -169,6 +169,51 @@ export class WorkerPool {
     }
 
     async reset(seeds?: number[]): Promise<any[]> {
+        if (this.useSharedMemory) {
+            // 1. Send reset command to all workers
+            let seedIdx = 0;
+            for (let i = 0; i < this.workers.length; i++) {
+                const wEnvs = this.workerEnvs[i];
+                const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : new Array(wEnvs).fill(0);
+                seedIdx += wEnvs;
+
+                const shm = this.sharedMemManagers[i]!;
+                shm.writeSeeds(wSeeds);
+                shm.sendCommand(1); // RESET command
+            }
+
+            // 2. Poll for reset completion
+            const timeoutMs = 5000;
+            const startTime = Date.now();
+            let workersRemaining = this.workers.length;
+            const finished = new Uint8Array(this.workers.length);
+
+            while (workersRemaining > 0) {
+                for (let i = 0; i < this.workers.length; i++) {
+                    if (finished[i]) continue;
+                    if (this.sharedMemManagers[i]!.isResultsReady()) {
+                        this.sharedMemManagers[i]!.consumeResultsSignal();
+                        finished[i] = 1;
+                        workersRemaining--;
+                    }
+                }
+                if (workersRemaining > 0 && (Date.now() - startTime) > timeoutMs) {
+                    throw new Error('Timeout waiting for worker reset');
+                }
+            }
+
+            // 3. Extract observations
+            const observations: any[] = [];
+            for (let i = 0; i < this.workers.length; i++) {
+                const wEnvs = this.workerEnvs[i];
+                const res = this.sharedMemManagers[i]!.readResults();
+                for (let j = 0; j < wEnvs; j++) {
+                    observations.push(this.extractObservation(res.observations, j));
+                }
+            }
+            return observations;
+        }
+
         const promises = [];
         let seedIdx = 0;
         for (let i = 0; i < this.workers.length; i++) {
@@ -210,11 +255,9 @@ export class WorkerPool {
                 encodedActions[j] = this.encodeAction(wActions[j]);
             }
 
-            const shm = this.sharedMemManagers[i];
-            if (!shm) throw new Error(`Shared memory manager not initialized for worker ${i}`);
-
+            const shm = this.sharedMemManagers[i]!;
             shm.writeActions(encodedActions);
-            shm.signalWorkerReady();
+            shm.sendCommand(0); // STEP command
         }
 
         // 2. Poll for results from all workers in parallel (Busy-wait with timeout)
@@ -239,10 +282,6 @@ export class WorkerPool {
             if (workersRemaining > 0 && (Date.now() - startTime) > timeoutMs) {
                 throw new Error(`Timeout waiting for workers: ${Array.from(finished).map((f, i) => f ? '' : i).filter(v => v !== '').join(',')}`);
             }
-
-            // Yield to event loop if we've been spinning too long? 
-            // For >20k FPS, we expect workers to finish in <50us. 
-            // We'll spin for 1ms before yielding if needed, but for now just spin.
         }
 
         const batchEnd = process.hrtime.bigint();

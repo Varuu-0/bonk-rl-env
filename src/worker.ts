@@ -184,71 +184,74 @@ parentPort.on('message', (msg) => {
 
             if (sharedMem) {
                 while (true) {
-                    // Wait for main to signal new actions are available
+                    // Wait for main to signal
                     const waitResult = sharedMem.waitForActions();
 
                     if (waitResult === 'timed-out') {
                         if (verbose) {
-                            parentPort!.postMessage({
-                                id: msg.id,
-                                status: 'timeout',
-                                mode: 'shared'
-                            });
+                            parentPort!.postMessage({ id: msg.id, status: 'timeout' });
                         }
                         break;
                     }
 
-                    // Read actions and process
-                    const actionBytes = sharedMem.readActions(sharedMem.readActionSlot());
-                    const actions: Action[] = Array.from(actionBytes);
+                    // Check which command was sent
+                    const cmd = sharedMem.readCommand();
 
-                    const results = envs.map((env, i) => {
-                        const res = env.step(actions[i]);
-                        if (res.done) {
-                            res.info.terminal_observation = res.observation;
-                            res.observation = env.reset();
+                    if (cmd === 1) {
+                        // RESET COMMAND
+                        const seedsView = sharedMem.readSeeds();
+                        const seeds = Array.from(seedsView);
+                        const obs = envs.map((env, i) => env.reset(seeds[i] || undefined));
+
+                        obs.forEach((o, i) => sharedMem!.writeObservation(i, observationToArray(o)));
+                        sharedMem.signalMainReady();
+                        sharedMem.signalWorkerConsumed();
+
+                        if (verbose) {
+                            parentPort!.postMessage({ id: msg.id, status: 'reset-ok' });
                         }
-                        return res;
-                    });
+                    } else {
+                        // STEP COMMAND (Default or 0)
+                        const actionSlot = sharedMem.readActionSlot();
+                        const actions = sharedMem.getActionsView(actionSlot);
 
-                    stepCounter++;
-                    if (verbose && stepCounter % 100 === 0) {
-                        globalProfiler.recordMemory();
-                    }
-
-                    // Write results to shared memory
-                    results.forEach((res, i) => {
-                        sharedMem!.writeObservation(i, observationToArray(res.observation));
-                        sharedMem!.writeReward(i, res.reward);
-                        sharedMem!.writeDone(i, res.done ? 1 : 0);
-                        sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
-                        sharedMem!.writeTick(i, res.info.tick || stepCounter);
-                    });
-
-                    // Signal main thread results are ready
-                    sharedMem.signalMainReady();
-
-                    // Signal worker consumed actions
-                    sharedMem.signalWorkerConsumed();
-
-                    // Only send postMessage if verbose telemetry is enabled
-                    if (verbose) {
-                        parentPort!.postMessage({
-                            id: msg.id,
-                            status: 'ok',
-                            mode: 'shared',
-                            telemetry: {
-                                tick: stepCounter
+                        const results = envs.map((env, i) => {
+                            const res = env.step(actions[i]);
+                            if (res.done) {
+                                res.info.terminal_observation = res.observation;
+                                res.observation = env.reset();
                             }
+                            return res;
                         });
+
+                        stepCounter++;
+                        if (verbose && stepCounter % 100 === 0) {
+                            globalProfiler.recordMemory();
+                        }
+
+                        results.forEach((res, i) => {
+                            sharedMem!.writeObservation(i, observationToArray(res.observation));
+                            sharedMem!.writeReward(i, res.reward);
+                            sharedMem!.writeDone(i, res.done ? 1 : 0);
+                            sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
+                            sharedMem!.writeTick(i, res.info.tick || stepCounter);
+                        });
+
+                        sharedMem.signalMainReady();
+                        sharedMem.signalWorkerConsumed();
+
+                        if (verbose) {
+                            parentPort!.postMessage({
+                                id: msg.id,
+                                status: 'ok',
+                                mode: 'shared',
+                                telemetry: { tick: stepCounter }
+                            });
+                        }
                     }
                 }
             } else {
-                parentPort!.postMessage({
-                    id: msg.id,
-                    status: 'error',
-                    error: 'Shared memory not initialized'
-                });
+                parentPort!.postMessage({ id: msg.id, status: 'error', error: 'Shared memory not initialized' });
             }
         } else if (msg.type === 'GET_TELEMETRY') {
             // Return a thread-safe snapshot of this worker's telemetry buffer.
