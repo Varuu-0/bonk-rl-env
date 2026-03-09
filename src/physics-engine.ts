@@ -454,13 +454,12 @@ export class PhysicsEngine {
 
 // ─── Telemetry Wrapping for Hot Paths ───────────────────────────────────
 
-// Wrap selected PhysicsEngine methods in-place to avoid manual start/end pairs.
-// This is done after the class definition so that the prototype methods exist.
+// Wrap selected PhysicsEngine methods for testing (currently disabled for baseline check)
 const physicsProto = PhysicsEngine.prototype as any;
 
-physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
-physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
-physicsProto.checkLethalCollision = wrap(
-  TelemetryIndices.COLLISION_RESOLVE,
-  physicsProto.checkLethalCollision,
-);
+// physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
+// physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
+// physicsProto.checkLethalCollision = wrap(
+//   TelemetryIndices.COLLISION_RESOLVE,
+//   physicsProto.checkLethalCollision,
+// );

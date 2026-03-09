@@ -28,7 +28,8 @@ class BonkVecEnv(VecEnv):
         self.socket.send_json({
             "command": "init", 
             "numEnvs": num_envs, 
-            "config": config or {}
+            "config": config or {},
+            "useSharedMemory": True
         })
         message = self.socket.recv_json()
         

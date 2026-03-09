@@ -175,6 +175,13 @@ export type Config = {
    * well as players trying to join the room.
    */
   restrictions: ConfigRestrictions;
+
+  /**
+   * If `true`, the server will send detailed telemetry and profiling data
+   * over `postMessage`. This is useful for debugging but significantly
+   * impacts performance.
+   */
+  verboseTelemetry: boolean;
 };
 
 declare interface GameSettings {

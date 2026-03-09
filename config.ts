@@ -172,6 +172,11 @@ const config: Config = {
       transferringHost: { amount: 5, timeframe: 10, restore: 60 },
     },
   },
+
+  /**
+   * Enables detailed telemetry and profiling. Set to false for maximum performance.
+   */
+  verboseTelemetry: false,
 };
 
 export default config;

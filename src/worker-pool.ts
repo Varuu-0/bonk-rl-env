@@ -2,6 +2,39 @@ import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
 import { globalProfiler } from './profiler';
+import { SharedMemoryManager } from './shared-memory';
+
+/**
+ * Player input action interface for encoding to shared memory
+ */
+interface PlayerInput {
+    left?: boolean;
+    right?: boolean;
+    up?: boolean;
+    down?: boolean;
+    heavy?: boolean;
+    grapple?: boolean;
+}
+
+/**
+ * Observation data structure extracted from shared memory
+ */
+interface SharedObservation {
+    playerX: number;
+    playerY: number;
+    playerVelX: number;
+    playerVelY: number;
+    playerAngle: number;
+    playerAngularVel: number;
+    playerIsHeavy: number;
+    opponentX: number;
+    opponentY: number;
+    opponentVelX: number;
+    opponentVelY: number;
+    opponentIsHeavy: number;
+    opponentAlive: number;
+    tick: number;
+}
 
 export class WorkerPool {
     private workers: Worker[] = [];
@@ -9,13 +42,30 @@ export class WorkerPool {
     private callbacks: Map<number, { resolve: Function, reject: Function }> = new Map();
     private msgId = 0;
 
+    // Shared memory state
+    private sharedMemManagers: (SharedMemoryManager | null)[] = [];
+    private useSharedMemory: boolean = false;
+    private ringSize: number = 16;
+
+    // Buffer pool for encoding actions (avoids per-step allocation)
+    private actionBufferPool: Uint8Array[] = [];
+    private maxEnvsPerWorker: number = 0;
+
     constructor(private numWorkers: number = os.cpus().length) {
     }
 
-    async init(totalEnvs: number, config: any = {}) {
+    async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
         this.close(); // Clean up existing if re-initialized
         this.workers = [];
         this.workerEnvs = [];
+        this.sharedMemManagers = [];
+
+        // Determine if we should use shared memory
+        const sharedMemorySupported = SharedMemoryManager.isSupported();
+        this.useSharedMemory = useSharedMemory !== undefined ? useSharedMemory : sharedMemorySupported;
+
+        // Set default ring size
+        this.ringSize = 16;
 
         // Ensure we don't start more workers than environment instances
         const activeWorkers = Math.min(this.numWorkers, totalEnvs);
@@ -48,16 +98,72 @@ export class WorkerPool {
                     console.error(`[WorkerPool] Worker error: ${err}`);
                 });
 
-                promises.push(this.sendMessage(worker, { type: 'init', numEnvs, config }));
+                // Initialize shared memory if enabled
+                if (this.useSharedMemory) {
+                    const shm = new SharedMemoryManager(numEnvs, this.ringSize);
+                    this.sharedMemManagers.push(shm);
+
+                    // Send init and wait for it
+                    await this.sendMessage(worker, {
+                        type: 'init',
+                        numEnvs,
+                        config,
+                        sharedBuffer: shm.getBuffer(),
+                        ringSize: this.ringSize
+                    });
+
+                    // Trigger the persistent wait-for-action loop on the worker
+                    // This is Fire-and-Forget; the worker will loop indefinitely in the background
+                    worker.postMessage({ type: 'wait-for-action', config });
+
+                    promises.push(Promise.resolve({ mode: 'shared' }));
+                } else {
+                    this.sharedMemManagers.push(null);
+                    promises.push(this.sendMessage(worker, { type: 'init', numEnvs, config }));
+                }
             }
         }
-        await Promise.all(promises);
+
+        // Wait for all workers to initialize
+        const results = await Promise.all(promises);
+
+        // Initialize buffer pool based on max environments per worker
+        this.maxEnvsPerWorker = Math.max(...this.workerEnvs);
+        for (let i = 0; i < this.workers.length; i++) {
+            this.actionBufferPool.push(new Uint8Array(this.workerEnvs[i]));
+        }
+
+        // Check if workers actually support shared memory mode
+        if (this.useSharedMemory) {
+            const allSupportShared = results.every((r: any) => r && r.mode === 'shared');
+            if (!allSupportShared) {
+                console.warn('[WorkerPool] Some workers did not support shared memory, falling back to message passing');
+                results.forEach((r: any, idx: number) => {
+                    if (!r || r.mode !== 'shared') {
+                        console.warn(`  - Worker ${idx} returned mode: ${r ? r.mode : 'undefined'}`);
+                    }
+                });
+                this.useSharedMemory = false;
+            } else {
+                console.log('[WorkerPool] All workers successfully initialized with SharedArrayBuffer');
+            }
+        } else {
+            console.log('[WorkerPool] Shared memory optimization is disabled (either not supported or explicitly turned off)');
+        }
     }
 
     private sendMessage(worker: Worker, msg: any): Promise<any> {
         return new Promise((resolve, reject) => {
             const id = this.msgId++;
             this.callbacks.set(id, { resolve, reject });
+            // Set a timeout to reject if no response
+            const timeout = setTimeout(() => {
+                if (this.callbacks.has(id)) {
+                    this.callbacks.delete(id);
+                    console.error(`[WorkerPool] Message ${id} timed out`);
+                    reject(new Error(`Message ${id} timed out`));
+                }
+            }, 5000);  // 5 second timeout
             worker.postMessage({ id, ...msg });
         });
     }
@@ -76,6 +182,121 @@ export class WorkerPool {
     }
 
     async step(actions: any[]): Promise<any[]> {
+        // Use shared memory mode if enabled
+        if (this.useSharedMemory) {
+            return this.stepSharedMemory(actions);
+        } else {
+            return this.stepMessagePassing(actions);
+        }
+    }
+
+    /**
+     * Step using shared memory (zero-copy IPC)
+     * Writes actions to shared memory, signals workers, and waits for results
+     */
+    private async stepSharedMemory(actions: any[]): Promise<any[]> {
+        const batchStart = process.hrtime.bigint();
+        const returnTimes: bigint[] = [];
+
+        // Encode actions to Uint8Array for each worker and write to shared memory
+        const promises = [];
+        let actionIdx = 0;
+
+        for (let i = 0; i < this.workers.length; i++) {
+            const wEnvs = this.workerEnvs[i];
+            const wActions = actions.slice(actionIdx, actionIdx + wEnvs);
+            actionIdx += wEnvs;
+
+            // Encode actions using cached buffer from pool
+            const encodedActions = this.actionBufferPool[i];
+            for (let j = 0; j < wActions.length; j++) {
+                encodedActions[j] = this.encodeAction(wActions[j]);
+            }
+
+            // Write to shared memory
+            const shm = this.sharedMemManagers[i];
+            if (!shm) {
+                throw new Error(`Shared memory manager not initialized for worker ${i}`);
+            }
+            shm.writeActions(encodedActions);
+
+            // Notify worker that actions are ready (using Atomics instead of postMessage)
+            shm.signalWorkerReady();
+
+            // Wait for worker to complete (using Atomics instead of waiting for message)
+            const p = new Promise<void>((resolve, reject) => {
+                const waitStatus = shm.waitForResults(5000);
+                if (waitStatus === 'ok') {
+                    returnTimes.push(process.hrtime.bigint());
+                    resolve();
+                } else {
+                    reject(new Error(`Worker ${i} timed out waiting for results (status: ${waitStatus})`));
+                }
+            });
+
+            promises.push(p);
+        }
+
+        // Wait for all workers to complete
+        const results = await Promise.all(promises);
+        const batchEnd = process.hrtime.bigint();
+
+        // Record Batch Latency
+        const totalMs = Number(batchEnd - batchStart) / 1_000_000;
+        globalProfiler.gauge('Batch Latency (ms)', totalMs);
+        globalProfiler.gauge('Shared Memory Step (ms)', totalMs);
+
+        // Record Sync Gap (Max - Min return time)
+        if (returnTimes.length > 1) {
+            let min = returnTimes[0];
+            let max = returnTimes[0];
+            for (const t of returnTimes) {
+                if (t < min) min = t;
+                if (t > max) max = t;
+            }
+            const gapMs = Number(max - min) / 1_000_000;
+            globalProfiler.gauge('Sync Gap (ms)', gapMs);
+        }
+
+        // Convert shared memory results to observation objects
+        const convertedResults: any[] = [];
+        actionIdx = 0;
+
+        for (let i = 0; i < this.workers.length; i++) {
+            const wEnvs = this.workerEnvs[i];
+            const shm = this.sharedMemManagers[i];
+
+            if (!shm) {
+                throw new Error(`Shared memory manager not initialized for worker ${i}`);
+            }
+
+            // Read results from shared memory
+            const rawResults = shm.readResults();
+            const obs = rawResults.observations;
+            const rewards = rawResults.rewards;
+            const dones = rawResults.dones;
+            const truncated = rawResults.truncated;
+            const ticks = rawResults.ticks;
+
+            // Extract results for each environment in this worker
+            for (let j = 0; j < wEnvs; j++) {
+                convertedResults.push({
+                    observation: this.extractObservation(obs, j),
+                    reward: rewards[j],
+                    done: dones[j] === 1,
+                    truncated: truncated[j] === 1,
+                    info: { tick: ticks[j] }
+                });
+            }
+        }
+
+        return convertedResults;
+    }
+
+    /**
+     * Step using message passing (fallback mode)
+     */
+    private async stepMessagePassing(actions: any[]): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
         const returnTimes: bigint[] = [];
 
@@ -101,6 +322,7 @@ export class WorkerPool {
         // Record Batch Latency
         const totalMs = Number(batchEnd - batchStart) / 1_000_000;
         globalProfiler.gauge('Batch Latency (ms)', totalMs);
+        globalProfiler.gauge('Message Passing Step (ms)', totalMs);
 
         // Record Sync Gap (Max - Min return time)
         if (returnTimes.length > 1) {
@@ -115,6 +337,51 @@ export class WorkerPool {
         }
 
         return results.flat();
+    }
+
+    /**
+     * Encodes a PlayerInput action to a number for shared memory storage
+     * Uses bit flags: left=1, right=2, up=4, down=8, heavy=16, grapple=32
+     */
+    private encodeAction(action: PlayerInput | number): number {
+        if (typeof action === 'number') {
+            return action; // Already encoded
+        }
+        let encoded = 0;
+        if (action.left) encoded |= 1;
+        if (action.right) encoded |= 2;
+        if (action.up) encoded |= 4;
+        if (action.down) encoded |= 8;
+        if (action.heavy) encoded |= 16;
+        if (action.grapple) encoded |= 32;
+        return encoded;
+    }
+
+    /**
+     * Extracts observation data from shared memory Float32Array
+     * @param obs Float32Array containing all observations
+     * @param idx Environment index
+     */
+    private extractObservation(obs: Float32Array, idx: number): any {
+        const offset = idx * 14;
+        return {
+            playerX: obs[offset + 0],
+            playerY: obs[offset + 1],
+            playerVelX: obs[offset + 2],
+            playerVelY: obs[offset + 3],
+            playerAngle: obs[offset + 4],
+            playerAngularVel: obs[offset + 5],
+            playerIsHeavy: obs[offset + 6] === 1,
+            opponents: [{
+                x: obs[offset + 7],
+                y: obs[offset + 8],
+                velX: obs[offset + 9],
+                velY: obs[offset + 10],
+                isHeavy: obs[offset + 11] === 1,
+                alive: obs[offset + 12] === 1
+            }],
+            tick: obs[offset + 13]
+        };
     }
 
     /**
@@ -134,7 +401,31 @@ export class WorkerPool {
         for (const worker of this.workers) {
             worker.terminate();
         }
+
+        // Properly dispose of SharedMemoryManager instances to prevent memory leaks
+        for (const shm of this.sharedMemManagers) {
+            if (shm) {
+                shm.dispose();
+            }
+        }
+
         this.workers = [];
         this.workerEnvs = [];
+        this.sharedMemManagers = [];
+        this.actionBufferPool = [];
+    }
+
+    /**
+     * Checks if SharedArrayBuffer is supported in the current environment
+     */
+    static isSupported(): boolean {
+        return SharedMemoryManager.isSupported();
+    }
+
+    /**
+     * Returns whether shared memory mode is currently enabled
+     */
+    isUsingSharedMemory(): boolean {
+        return this.useSharedMemory;
     }
 }

@@ -22,6 +22,57 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 - **Configurable Tick Rates**: Support for 15/30/60 ticks per second simulation
 - **Memory Efficient**: Typed arrays for observations, worker thread memory isolation
 
+## SharedArrayBuffer Worker Pool (Optional Feature)
+
+This implementation includes an optional **SharedArrayBuffer** mode for high-performance worker pool communication. This feature provides zero-copy inter-process communication between the main thread and worker threads.
+
+### What It Does
+
+The SharedArrayBuffer implementation enables **zero-copy IPC** between the main thread and worker threads. Instead of serializing and copying data through message passing, workers share a common memory region for exchanging environment states and actions.
+
+### How It Works
+
+The implementation uses JavaScript's `SharedArrayBuffer` combined with the `Atomics` API for synchronization:
+
+- **Shared Memory Region**: A pre-allocated `SharedArrayBuffer` is shared between the main thread and all worker threads
+- **Atomic Synchronization**: The `Atomics` API (specifically `Atomics.wait`, `Atomics.notify`, and `Atomics.store`/`Atomics.load`) provides lock-free synchronization between threads
+- **Ring Buffer Protocol**: A ring buffer structure in shared memory allows efficient, non-blocking exchange of environment steps
+
+### Benefits
+
+- **Reduced Latency**: Eliminates serialization/deserialization overhead for each environment step
+- **Lower Memory Usage**: Single buffer instead of per-message allocation
+- **Improved Throughput**: Particularly beneficial for high-frequency environment stepping (60 ticks/sec)
+- **Cache-Friendly**: Shared memory can be more cache-coherent than message passing
+
+### How to Enable/Disable
+
+Pass the `useSharedMemory` parameter when initializing the environment:
+
+```typescript
+// Enable SharedArrayBuffer (default: false)
+const env = await init({
+  numEnvs: 32,
+  useSharedMemory: true  // Enable zero-copy IPC
+});
+
+// Disable SharedArrayBuffer (default behavior)
+const env = await init({
+  numEnvs: 32,
+  useSharedMemory: false  // Use standard message passing
+});
+```
+
+### Requirements
+
+- **Browser Security**: SharedArrayBuffer requires specific HTTP headers for cross-origin isolation:
+  - `Cross-Origin-Opener-Policy: same-origin`
+  - `Cross-Origin-Embedder-Policy: require-corp`
+- **Node.js Version**: Requires Node.js v12+ (v18+ recommended)
+- **Platform Support**: Works on Windows, macOS, and Linux
+
+If SharedArrayBuffer is not available (or headers not set), the system automatically falls back to standard `postMessage` communication.
+
 ## Performance
 
 By dispersing batched simulation steps across multiple worker threads, the engine achieves massive horizontal scaling.
