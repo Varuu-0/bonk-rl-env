@@ -1,21 +1,33 @@
-
 # Bonk.io Reinforcement Learning Environment
 
-A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 3,100 frames per second.
+A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 23,400 frames per second.
 
 ## Overview
+
 This project decouples the core *Bonk.io* physics logic from the original multiplayer networking stack. By removing browser-based rendering and WebSocket bottlenecks, we have created a deterministic, headless simulation loop. This allows machine learning agents to train in minutes rather than days, making it an ideal environment for testing PPO, DQN, or other reinforcement learning algorithms.
 
 ## Architecture
-- **Worker Pool**: Now operates as a Massively Parallel Vectorized Environment, dynamically scaling to use all available CPU cores via Node.js `worker_threads`.
+
+- **Worker Pool**: Operates as a Massively Parallel Vectorized Environment, dynamically scaling to use all available CPU cores via Node.js `worker_threads`.
 - **Synchronous Loop**: Replaces real-time clocks with a synchronous `tick()` system equipped with a deterministic PRNG for perfectly reproducible rollouts.
 - **Batch IPC Bridge**: Utilizes **ZeroMQ (ZMQ) ROUTER/DEALER** patterns for high-speed, batch communication between the TypeScript worker pool and the Python ML pipeline.
 - **Vectorized Gymnasium API**: Implements the `stable_baselines3.common.vec_env.VecEnv` interface natively, allowing the Python agent to dispatch actions and aggregate observations across 64+ parallel environments simultaneously.
 
+## Features
+
+- **Deterministic Physics**: Reproducible simulation results for reliable RL training
+- **Multi-threaded Parallelism**: Horizontal scaling across all available CPU cores
+- **Gymnasium Compatible**: Native integration with stable-baselines3 and other Python RL frameworks
+- **ZeroMQ Communication**: Low-latency message passing between Node.js and Python
+- **Configurable Tick Rates**: Support for 15/30/60 ticks per second simulation
+- **Memory Efficient**: Typed arrays for observations, worker thread memory isolation
+
 ## Performance
-By dispersing batched simulation steps across multiple worker threads, the engine achieves massive horizontal scaling. 
+
+By dispersing batched simulation steps across multiple worker threads, the engine achieves massive horizontal scaling.
 
 ### Benchmark Results (Sustained Performance)
+
 Ran 10,000 steps across varying instance counts to measure sustained throughput:
 
 | Concurrent Envs (N) | Aggregate FPS | Total Time (10,000 steps) |
@@ -33,10 +45,12 @@ Ran 10,000 steps across varying instance counts to measure sustained throughput:
 ## Setup & Installation
 
 ### Prerequisites
-- [Node.js](https://nodejs.org/) (v18+)
+
+- [Node.js](https://nodejs.org/) (v18+ recommended, v22+ for latest optimizations)
 - [Python 3.8+](https://www.python.org/)
 
 ### Node.js Backend
+
 1. Install dependencies:
    ```bash
    npm install
@@ -48,9 +62,10 @@ Ran 10,000 steps across varying instance counts to measure sustained throughput:
    ```
 
 ### Python ML Pipeline
+
 1. Install requirements:
    ```bash
-   pip install -r python/requirements.txt
+   pip install -r requirements.txt
    ```
    *(Ensure `stable-baselines3`, `gymnasium`, and `pyzmq` are included)*
 2. Train your agent:
@@ -59,25 +74,46 @@ Ran 10,000 steps across varying instance counts to measure sustained throughput:
    ```
 
 ## Repository Structure
+
 - `/src`: Contains the TypeScript headless physics engine and the ZMQ bridge server.
 - `/python`: Contains the `BonkEnv` Gymnasium wrapper and the training scripts.
 - `/bonk1-box2d`: The source physics module reference.
 
+## Roadmap
+
+Planned improvements organized by priority and implementation phase.
+
+### Phase 1: Quick Wins (1-2 weeks)
+
+- Binary protocol for ZMQ (MsgPack/Protocol Buffers)
+- Typed arrays for observations
+- ZMQ socket optimization
+- Box2D configuration tuning
+
+### Phase 2: Core Optimization (2-4 weeks)
+
+- Worker affinity and NUMA optimization
+- Adaptive worker pool scaling
+- SharedArrayBuffer for zero-copy IPC
+- Worker pool pre-warming
+- Performance benchmarks and profiling
+
+### Phase 3: Advanced Features (4-8 weeks)
+
+- Multi-agent support
+- Curriculum learning
+- Custom reward function support
+- GPU-accelerated batch processing
+- Trajectory recording and playback
+- Real-time statistics dashboard
+
+### Future Enhancements
+
+- Multi-environment map support
+- Server mode for human play
+- Box2D WASM investigation
+- TypeScript 5.x migration
+
 ## License
+
 This project is for research and educational purposes. Please respect the original developers of *Bonk.io* and follow their policies regarding third-party software.
-
-***
-
-### Pro-Tip for your GitHub Repo:
-Before you commit and push this:
-1. **Create a `LICENSE` file**: If you aren't sure, the `MIT License` is the standard for open-source.
-2. **Create a `.gitignore` file**: Make sure the following are inside to avoid cluttering your repo:
-   ```text
-   node_modules/
-   python/__pycache__/
-   models/
-   tensorboard_logs/
-   .env
-   dist/
-   ```
-3. **Double-check your `requirements.txt`**: Run `pip freeze > python/requirements.txt` to ensure your training environment dependencies are locked for anyone else who wants to try your project! 
