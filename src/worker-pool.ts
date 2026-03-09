@@ -196,49 +196,55 @@ export class WorkerPool {
      */
     private async stepSharedMemory(actions: any[]): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
-        const returnTimes: bigint[] = [];
+        const returnTimes: bigint[] = new Array(this.workers.length).fill(BigInt(0));
 
-        // Encode actions to Uint8Array for each worker and write to shared memory
-        const promises = [];
+        // 1. Encode actions and signal all workers in parallel
         let actionIdx = 0;
-
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
             const wActions = actions.slice(actionIdx, actionIdx + wEnvs);
             actionIdx += wEnvs;
 
-            // Encode actions using cached buffer from pool
             const encodedActions = this.actionBufferPool[i];
             for (let j = 0; j < wActions.length; j++) {
                 encodedActions[j] = this.encodeAction(wActions[j]);
             }
 
-            // Write to shared memory
             const shm = this.sharedMemManagers[i];
-            if (!shm) {
-                throw new Error(`Shared memory manager not initialized for worker ${i}`);
-            }
+            if (!shm) throw new Error(`Shared memory manager not initialized for worker ${i}`);
+
             shm.writeActions(encodedActions);
-
-            // Notify worker that actions are ready (using Atomics instead of postMessage)
             shm.signalWorkerReady();
-
-            // Wait for worker to complete (using Atomics instead of waiting for message)
-            const p = new Promise<void>((resolve, reject) => {
-                const waitStatus = shm.waitForResults(5000);
-                if (waitStatus === 'ok') {
-                    returnTimes.push(process.hrtime.bigint());
-                    resolve();
-                } else {
-                    reject(new Error(`Worker ${i} timed out waiting for results (status: ${waitStatus})`));
-                }
-            });
-
-            promises.push(p);
         }
 
-        // Wait for all workers to complete
-        const results = await Promise.all(promises);
+        // 2. Poll for results from all workers in parallel (Busy-wait with timeout)
+        const timeoutMs = 5000;
+        const startTime = Date.now();
+        let workersRemaining = this.workers.length;
+        const finished = new Uint8Array(this.workers.length);
+
+        while (workersRemaining > 0) {
+            for (let i = 0; i < this.workers.length; i++) {
+                if (finished[i]) continue;
+
+                const shm = this.sharedMemManagers[i]!;
+                if (shm.isResultsReady()) {
+                    shm.consumeResultsSignal();
+                    returnTimes[i] = process.hrtime.bigint();
+                    finished[i] = 1;
+                    workersRemaining--;
+                }
+            }
+
+            if (workersRemaining > 0 && (Date.now() - startTime) > timeoutMs) {
+                throw new Error(`Timeout waiting for workers: ${Array.from(finished).map((f, i) => f ? '' : i).filter(v => v !== '').join(',')}`);
+            }
+
+            // Yield to event loop if we've been spinning too long? 
+            // For >20k FPS, we expect workers to finish in <50us. 
+            // We'll spin for 1ms before yielding if needed, but for now just spin.
+        }
+
         const batchEnd = process.hrtime.bigint();
 
         // Record Batch Latency

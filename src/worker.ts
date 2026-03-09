@@ -187,7 +187,7 @@ parentPort.on('message', (msg) => {
                     // Wait for main to signal new actions are available
                     const waitResult = sharedMem.waitForActions();
 
-                    if (waitResult !== 'ok') {
+                    if (waitResult === 'timed-out') {
                         if (verbose) {
                             parentPort!.postMessage({
                                 id: msg.id,
@@ -195,9 +195,6 @@ parentPort.on('message', (msg) => {
                                 mode: 'shared'
                             });
                         }
-                        // If it's a timeout or other error, we break the loop to avoid spinning 
-                        // or we could continue. For high-speed loop, we usually want to spin or wait again.
-                        // Here we break to let the worker potentially receive other messages.
                         break;
                     }
 

@@ -295,16 +295,32 @@ export class SharedMemoryManager {
         const result = Atomics.wait(this.control.mainReady, 0, 0,
             timeout === Infinity ? undefined : timeout);
 
-        // Reset mainReady to 0 after waking
-        Atomics.store(this.control.mainReady, 0, 0);
-
         if (result === 'timed-out') {
             return 'timed-out';
         } else if (result === 'not-equal') {
-            return 'not-equal';
+            // Value changed before we could wait, this is fine
+            this.consumeResultsSignal();
+            return 'ok';
         }
 
+        // Reset mainReady to 0 after waking
+        this.consumeResultsSignal();
         return 'ok';
+    }
+
+    /**
+     * Checks if results are ready (non-blocking)
+     * @returns true if results are available in shared memory
+     */
+    isResultsReady(): boolean {
+        return Atomics.load(this.control.mainReady, 0) === 1;
+    }
+
+    /**
+     * Consumes the results signal (sets mainReady back to 0)
+     */
+    consumeResultsSignal(): void {
+        Atomics.store(this.control.mainReady, 0, 0);
     }
 
     /**
