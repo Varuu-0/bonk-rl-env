@@ -1,6 +1,7 @@
 import moment from 'moment';
 import config from './config';
 import ManifoldServer from './src/server';
+import { TelemetryController } from './src/telemetry-controller';
 
 moment.updateLocale('en', {
   relativeTime: {
@@ -19,5 +20,10 @@ moment.updateLocale('en', {
     yy: '%d years',
   },
 });
+
+// Initialize telemetry controller with config and CLI flags
+// This must be done before creating the server to ensure hooks are properly configured
+const telemetryController = TelemetryController.getInstance();
+telemetryController.initialize(config.telemetry);
 
 new ManifoldServer(config);

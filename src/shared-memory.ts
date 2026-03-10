@@ -110,6 +110,8 @@ export class SharedMemoryManager {
         Atomics.store(this.control.actionSlotIndex, 0, slot);
         this.views.actions.set(actions, slot * this.numEnvs);
         this.currentActionSlot = (this.currentActionSlot + 1) & this.actionRingMask;
+        // Signal that new actions are available
+        Atomics.store(this.control.workerReady, 0, 1);
     }
 
     writeSeeds(seeds: number[]) {
@@ -171,6 +173,9 @@ export class SharedMemoryManager {
     }
 
     signalWorkerConsumed() { Atomics.store(this.control.workerReady, 0, 0); }
+
+    /** Check if there are new actions waiting for the worker to consume */
+    hasNewActions(): boolean { return Atomics.load(this.control.workerReady, 0) === 1; }
 
     readActionSlot() { return Atomics.load(this.control.actionSlotIndex, 0) & this.actionRingMask; }
 

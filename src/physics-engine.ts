@@ -15,6 +15,7 @@
 const box2d = require('box2d');
 
 import { globalProfiler, wrap, TelemetryIndices } from './profiler';
+import { isTelemetryEnabled } from './telemetry-controller';
 
 const {
   b2World,
@@ -454,12 +455,39 @@ export class PhysicsEngine {
 
 // ─── Telemetry Wrapping for Hot Paths ───────────────────────────────────
 
-// Wrap selected PhysicsEngine methods for testing (currently disabled for baseline check)
+// Wrap selected PhysicsEngine methods for profiling
+// Only enable wrapping when telemetry is explicitly enabled for performance
+// Hooks are enabled lazily on first call to avoid module-load timing issues
 const physicsProto = PhysicsEngine.prototype as any;
+let hooksEnabled = false;
 
-// physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
-// physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
-// physicsProto.checkLethalCollision = wrap(
-//   TelemetryIndices.COLLISION_RESOLVE,
-//   physicsProto.checkLethalCollision,
-// );
+function enablePhysicsHooks(): void {
+  if (hooksEnabled) return;
+  
+  if (!isTelemetryEnabled()) {
+    return; // Skip wrapping when telemetry is disabled for performance
+  }
+  
+  physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
+  physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
+  physicsProto.checkLethalCollision = wrap(
+    TelemetryIndices.COLLISION_RESOLVE,
+    physicsProto.checkLethalCollision,
+  );
+  hooksEnabled = true;
+}
+
+// Lazy hook installer - wraps methods on first access
+// This ensures TelemetryController is initialized before hooks are enabled
+function ensureHooks(): void {
+  if (!hooksEnabled) {
+    enablePhysicsHooks();
+  }
+}
+
+// Wrap tick() to ensure hooks are enabled before first physics step
+const originalTick = physicsProto.tick;
+physicsProto.tick = function(...args: any[]) {
+  ensureHooks();
+  return originalTick.apply(this, args);
+};

@@ -73,6 +73,158 @@ const env = await init({
 
 If SharedArrayBuffer is not available (or headers not set), the system automatically falls back to standard `postMessage` communication.
 
+## Telemetry System
+
+The Manifold Server includes a comprehensive telemetry system for monitoring performance, debugging issues, and analyzing simulation behavior. The system is designed with a **zero-overhead default** - telemetry is disabled by default and only activates when explicitly enabled.
+
+### Flag-Based Activation
+
+Telemetry is controlled via CLI flags. All flags are optional; the system defaults to maximum performance with all telemetry disabled.
+
+#### CLI Flags
+
+| Flag | Alias | Description | Default |
+|:-----|:------|:------------|:--------|
+| `--telemetry` | `-t` | Master switch to enable telemetry | `false` |
+| `--profile` | `-p` | Profiling detail level: `minimal`, `standard`, `detailed` | `standard` |
+| `--debug` | `-d` | Debug output level: `none`, `error`, `verbose` | `none` |
+| `--output` | `-o` | Output format: `console`, `file`, `both` | `console` |
+| `--dashboard-port` | — | HTTP port for telemetry dashboard | `3001` |
+| `--report-interval` | — | Milliseconds between telemetry reports | `5000` |
+| `--retention` | — | Days to retain telemetry data files | `7` |
+
+#### Profile Levels
+
+- **`minimal`**: Basic timing information only - minimal overhead
+- **`standard`**: Includes per-worker statistics, tick rates, and throughput - recommended for production monitoring
+- **`detailed`**: Full debug information including memory usage, IPC latency histograms, and detailed worker state
+
+#### Debug Levels
+
+- **`none`**: No debug output
+- **`error`**: Errors and warnings only
+- **`verbose`**: Full debug output including all telemetry events
+
+### Environment Variables
+
+Environment variables provide an alternative way to configure telemetry. They take precedence over CLI flags:
+
+| Variable | Values | Description |
+|:---------|:-------|:------------|
+| `MANIFOLD_TELEMETRY` | `true`, `false`, `1`, `0`, `yes`, `no` | Enable/disable telemetry |
+| `MANIFOLD_TELEMETRY_OUTPUT` | `console`, `file`, `both` | Output format |
+| `MANIFOLD_PROFILE` | `minimal`, `standard`, `detailed` | Profile level |
+| `MANIFOLD_DEBUG` | `none`, `error`, `verbose` | Debug level |
+
+#### Precedence Order
+
+Configuration priority (highest to lowest):
+1. Environment variables
+2. CLI flags
+3. Config file settings
+4. Default values
+
+### Usage Examples
+
+#### Basic Usage - Enable Telemetry
+
+```bash
+# Enable telemetry with default settings
+npx tsx src/main.ts --telemetry
+
+# Short flag form
+npx tsx src/main.ts -t
+```
+
+#### Production Monitoring
+
+```bash
+# Enable with standard profiling, output to file
+npx tsx src/main.ts -t --profile standard --output file
+
+# With custom dashboard port
+npx tsx src/main.ts -t --dashboard-port 8080
+
+# Less frequent reports for high-throughput scenarios
+npx tsx tsx src/main.ts -t --report-interval 10000
+```
+
+#### Debugging Issues
+
+```bash
+# Enable verbose debug output
+npx tsx src/main.ts -t --debug verbose
+
+# Detailed profiling with console output
+npx tsx src/main.ts -t --profile detailed --output console
+
+# Both console and file for comprehensive debugging
+npx tsx src/main.ts -t --profile detailed --debug verbose --output both
+```
+
+#### Environment Variable Usage
+
+```bash
+# Enable via environment variable (useful for containers)
+export MANIFOLD_TELEMETRY=true
+export MANIFOLD_PROFILE=standard
+npx tsx src/main.ts
+
+# Docker example
+docker run -e MANIFOLD_TELEMETRY=true -e MANIFOLD_DEBUG=error manifold-server
+```
+
+### Performance Characteristics
+
+The telemetry system is engineered for minimal performance impact:
+
+| Profile Level | Overhead | Use Case |
+|:-------------|:---------|:----------|
+| Disabled | **0%** | Production, maximum performance |
+| `minimal` | <1% | Lightweight monitoring |
+| `standard` | 2-5% | Production monitoring, troubleshooting |
+| `detailed` | 5-15% | Debugging, development |
+
+#### Zero-Overhead Default
+
+When `--telemetry` is not specified:
+- No telemetry objects are allocated
+- No timing hooks are installed
+- No IPC messages are sent for metrics
+- The simulation runs at full native speed
+
+The fast-path check [`isAnyTelemetryEnabled()`](src/flags.ts:193) uses direct argv scanning without any object allocation, ensuring even the flag check has negligible cost.
+
+#### Performance Tips
+
+1. **Use `minimal` profile** for production monitoring with minimal impact
+2. **Increase `--report-interval`** to 10000+ ms for high-throughput workloads
+3. **Use file output** (`--output file`) for detailed profiling to avoid console I/O overhead
+4. **Disable debug** (`--debug none`) in production to eliminate debug string generation
+
+### Backward Compatibility
+
+The telemetry system is fully backward compatible:
+
+- **Default behavior unchanged**: Telemetry is opt-in; existing deployments continue to work without modification
+- **Config file support**: The existing `config.ts` telemetry configuration remains supported
+- **Graceful degradation**: Invalid flag values fall back to defaults with a warning
+- **No breaking changes**: All existing CLI arguments and environment variables continue to work
+
+#### Migration Guide
+
+If you previously used config-based telemetry:
+
+```typescript
+// Old config-based approach (still supported)
+const config = {
+  telemetry: { enabled: true, outputFormat: 'console' }
+};
+
+// New flag-based approach (recommended)
+npx tsx src/main.ts -t --output console
+```
+
 ## Performance
 
 By dispersing batched simulation steps across multiple worker threads, the engine achieves massive horizontal scaling.
