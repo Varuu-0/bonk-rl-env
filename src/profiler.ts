@@ -58,19 +58,25 @@ const AsyncFunction = (async function () { /* empty */ }).constructor as Functio
  *   - Works for both synchronous and async (Promise-returning) functions.
  *   - Timing is always recorded via a finally block, even on error.
  */
-export function wrap(label: keyof typeof TelemetryIndices | string, fn: Function): Function {
-    const index = (TelemetryIndices as any)[label];
+export function wrap(label: keyof typeof TelemetryIndices | number, fn: Function): Function {
+    // Determine the index: if label is a number, use it directly; 
+    // if string, look it up in the TelemetryIndices object.
+    const index = typeof label === 'number'
+        ? label
+        : (TelemetryIndices as any)[label];
+
     if (index === undefined) {
         throw new Error(`Unknown telemetry label: ${label}`);
     }
 
     // Async functions get an async wrapper that awaits the inner function.
-    if ((fn as any).constructor === AsyncFunction) {
-        const wrappedAsync = async function (this: unknown): Promise<unknown> {
+    // Note: We check if it's an async function using the constructor name for better compatibility.
+    if (fn.constructor.name === 'AsyncFunction') {
+        const wrappedAsync = async function (this: unknown, ...args: any[]): Promise<unknown> {
             const start = process.hrtime.bigint();
             try {
-                // Use arguments object to avoid rest parameter allocations.
-                return await (fn as any).apply(this, arguments as any);
+                // Use spread operator to pass arguments.
+                return await (fn as any).apply(this, args);
             } finally {
                 const end = process.hrtime.bigint();
                 TelemetryBuffer[index] += end - start;
@@ -80,10 +86,10 @@ export function wrap(label: keyof typeof TelemetryIndices | string, fn: Function
     }
 
     // Synchronous fast-path wrapper.
-    const wrappedSync = function (this: unknown): unknown {
+    const wrappedSync = function (this: unknown, ...args: any[]): unknown {
         const start = process.hrtime.bigint();
         try {
-            return (fn as any).apply(this, arguments as any);
+            return (fn as any).apply(this, args);
         } finally {
             const end = process.hrtime.bigint();
             TelemetryBuffer[index] += end - start;

@@ -88,6 +88,12 @@ export default class ManifoldServer {
       }),
     );
 
+    this.expressApp.use((_req, res, next) => {
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
+      res.setHeader('Cross-Origin-Embedder-Policy', 'require-corp');
+      next();
+    });
+
     this.expressApp.get('/', (_req, res) => {
       res.json({
         isBonkServer: true,

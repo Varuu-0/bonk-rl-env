@@ -16,10 +16,12 @@ export class IpcBridge {
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 
-        // Wrap the underlying ZMQ send with telemetry.
-        const originalSend = this.sock.send;
-        this.sock.send = wrap(TelemetryIndices.ZMQ_SEND, originalSend.bind(this.sock)) as any;
+        // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
+        this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
+
+    // Wrapped send function for telemetry
+    private _wrappedSend: Function;
 
     async start() {
         const addr = `tcp://127.0.0.1:${this.port}`;
@@ -41,10 +43,14 @@ export class IpcBridge {
             const command = payload.command;
 
             if (command === "init") {
-                await this.pool.init(payload.numEnvs, payload.config);
+                const useSharedMemory = payload.useSharedMemory;
+                console.log(`[IPC] Init request: numEnvs=${payload.numEnvs}, config=${JSON.stringify(payload.config || {})}, useSharedMemory=${useSharedMemory}`);
+                await this.pool.init(payload.numEnvs, payload.config, useSharedMemory);
                 response = { status: "ok" };
             } else if (command === "reset") {
+                console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
                 const obs = await this.pool.reset(payload.seeds);
+                console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
                 response = {
                     status: "ok",
                     data: {
@@ -52,8 +58,10 @@ export class IpcBridge {
                     }
                 };
             } else if (command === "step") {
+                console.log(`[IPC] Step request: actions=${payload.actions ? payload.actions.length : 0}`);
                 globalProfiler.start('bridge_step_total');
                 const results = await this.pool.step(payload.actions);
+                console.log(`[IPC] Step response: results is ${Array.isArray(results) ? 'array of length ' + results.length : results}`);
 
                 this.stepCount++;
                 globalProfiler.tick();
@@ -61,12 +69,12 @@ export class IpcBridge {
                 if (this.stepCount % 5000 === 0) {
                     globalProfiler.recordMemory();
 
-                    // Collect worker telemetry snapshots on the main thread only
-                    // when a report is about to be generated (never per-tick).
-                    const snapshots = await this.pool.getTelemetrySnapshots();
-                    setLatestWorkerTelemetry(snapshots);
-
-                    globalProfiler.report(5000);
+                    const config = require('../config').default;
+                    if (config.verboseTelemetry) {
+                        const snapshots = await this.pool.getTelemetrySnapshots();
+                        setLatestWorkerTelemetry(snapshots);
+                        globalProfiler.report(5000);
+                    }
                 }
 
                 response = {
@@ -83,7 +91,9 @@ export class IpcBridge {
         }
 
         try {
-            await this.sock.send([identity, JSON.stringify(response)]);
+            const jsonStr = JSON.stringify(response);
+            console.log(`[IPC] Sending response: ${jsonStr.substring(0, 200)}`);
+            await this._wrappedSend([identity, jsonStr]);
         } catch (sendError) {
             console.error("[IPC] Error sending response:", sendError);
         }

@@ -172,6 +172,56 @@ const config: Config = {
       transferringHost: { amount: 5, timeframe: 10, restore: 60 },
     },
   },
+
+  /**
+   * If `true`, the server will send detailed telemetry and profiling data
+   * over `postMessage`. This is useful for debugging but significantly
+   * impacts performance.
+   *
+   * @deprecated Use CLI flags --telemetry or --profile instead.
+   * This config option is maintained for backward compatibility.
+   */
+  verboseTelemetry: false,
+
+  /**
+   * Telemetry configuration for profiling and performance monitoring.
+   * Use CLI flags to override these settings at runtime.
+   */
+  telemetry: {
+    /**
+     * If `true`, enables detailed telemetry and profiling.
+     * Set to false for maximum performance.
+     * @default false
+     */
+    enabled: false,
+
+    /**
+     * Output format for telemetry data.
+     * - 'console': Print to stdout
+     * - 'file': Write to JSONL files
+     * - 'both': Console and file output
+     * @default 'console'
+     */
+    outputFormat: 'console',
+
+    /**
+     * Number of days to retain telemetry data.
+     * @default 7
+     */
+    retentionDays: 7,
+
+    /**
+     * Port for the telemetry dashboard.
+     * @default 3001
+     */
+    dashboardPort: 3001,
+
+    /**
+     * Number of ticks between telemetry reports.
+     * @default 5000
+     */
+    reportInterval: 5000,
+  },
 };
 
 export default config;

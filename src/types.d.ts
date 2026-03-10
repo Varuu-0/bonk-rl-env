@@ -175,6 +175,22 @@ export type Config = {
    * well as players trying to join the room.
    */
   restrictions: ConfigRestrictions;
+
+  /**
+   * If `true`, the server will send detailed telemetry and profiling data
+   * over `postMessage`. This is useful for debugging but significantly
+   * impacts performance.
+   *
+   * @deprecated Use CLI flags --telemetry or --profile instead.
+   * This config option is maintained for backward compatibility.
+   */
+  verboseTelemetry: boolean;
+
+  /**
+   * Telemetry configuration for profiling and performance monitoring.
+   * Use CLI flags to override these settings at runtime.
+   */
+  telemetry: TelemetryConfig;
 };
 
 declare interface GameSettings {
@@ -456,4 +472,99 @@ export interface TerminalCommand {
   description: string;
   callback: (cmd: string[], server: ManifoldServer) => void;
   aliases?: string[];
+}
+
+/**
+ * Telemetry flag configuration for CLI arguments.
+ * These flags control the activation and behavior of the telemetry system.
+ */
+export interface TelemetryFlags {
+  /**
+   * Master switch to enable/disable telemetry.
+   * When false, all telemetry overhead should be zero.
+   * @default false
+   */
+  enableTelemetry: boolean;
+
+  /**
+   * Profiling level for telemetry detail.
+   * - 'minimal': Basic timing only
+   * - 'standard': Includes per-worker stats
+   * - 'detailed': Full debug info including memory
+   * @default 'standard'
+   */
+  profileLevel: 'minimal' | 'standard' | 'detailed';
+
+  /**
+   * Debug output level.
+   * - 'none': No debug output
+   * - 'error': Errors only
+   * - 'verbose': Full debug output
+   * @default 'none'
+   */
+  debugLevel: 'none' | 'error' | 'verbose';
+
+  /**
+   * Output format for telemetry data.
+   * - 'console': Print to stdout
+   * - 'file': Write to JSONL files
+   * - 'both': Console and file output
+   * @default 'console'
+   */
+  outputFormat: 'console' | 'file' | 'both';
+
+  /**
+   * Port for the telemetry dashboard (when enabled).
+   * @default 3001
+   */
+  dashboardPort: number;
+
+  /**
+   * Number of ticks between telemetry reports.
+   * @default 5000
+   */
+  reportInterval: number;
+
+  /**
+   * Number of days to retain raw telemetry data.
+   * @default 7
+   */
+  retentionDays: number;
+}
+
+/**
+ * Telemetry configuration for the config file.
+ * This extends the runtime flags with persistent settings.
+ */
+export interface TelemetryConfig {
+  /**
+   * If true, enables detailed telemetry and profiling.
+   * Set to false for maximum performance.
+   * @default false
+   */
+  enabled: boolean;
+
+  /**
+   * Output format for telemetry data.
+   * @default 'console'
+   */
+  outputFormat: 'console' | 'file' | 'both';
+
+  /**
+   * Number of days to retain telemetry data.
+   * @default 7
+   */
+  retentionDays: number;
+
+  /**
+   * Port for the telemetry dashboard.
+   * @default 3001
+   */
+  dashboardPort: number;
+
+  /**
+   * Number of ticks between telemetry reports.
+   * @default 5000
+   */
+  reportInterval: number;
 }
