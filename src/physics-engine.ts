@@ -427,6 +427,12 @@ export class PhysicsEngine {
    * Reset the world — destroy all bodies, recreate a fresh world.
    */
   reset(): void {
+    // Destroy all grapple joints first (before destroying bodies)
+    for (const [playerId, joint] of this.playerGrappleJoints) {
+      this.world.DestroyJoint(joint);
+    }
+    this.playerGrappleJoints.clear();
+
     // Destroy all player bodies
     for (const [_id, body] of this.playerBodies) {
       this.world.DestroyBody(body);

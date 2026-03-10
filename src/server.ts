@@ -331,7 +331,11 @@ export default class ManifoldServer {
     if (playerId == this.hostId) return true;
 
     if (shouldErrorMessage) {
-      this.playerSockets[playerId].emit(OUT.ERROR_MESSAGE, 'not_hosting');
+      // Safe access - check if socket exists before emitting
+      const socket = this.playerSockets[playerId];
+      if (socket) {
+        socket.emit(OUT.ERROR_MESSAGE, 'not_hosting');
+      }
     }
 
     return false;
@@ -350,7 +354,13 @@ export default class ManifoldServer {
     if (this.chatLog == '') return;
 
     if (!fs.existsSync('./chatlogs')) fs.mkdirSync('./chatlogs');
-    fs.writeFileSync(`./chatlogs/${moment().format(this.config.timeStampFormat)}.txt`, this.chatLog);
+    
+    // Sanitize timestamp format to prevent path traversal
+    const sanitizedTimestamp = moment().format(this.config.timeStampFormat)
+      .replace(/[\\/\.\.]/g, '_')  // Replace path separators and dots
+      .replace(/[^a-zA-Z0-9_\-:]/g, '_');  // Replace any other unsafe characters
+    
+    fs.writeFileSync(`./chatlogs/${sanitizedTimestamp}.txt`, this.chatLog);
     this.chatLog = '';
   }
 
@@ -377,7 +387,11 @@ export default class ManifoldServer {
   }
 
   banPlayer(id: number) {
-    this.banList.addresses.push(this.playerSockets[id].handshake.address);
+    // Safe access - check if socket exists
+    const socket = this.playerSockets[id];
+    if (!socket) return;
+    
+    this.banList.addresses.push(socket.handshake.address);
     this.banList.usernames.push(this.playerInfo[id].userName);
 
     fs.writeFileSync('./banlist.json', JSON.stringify(this.banList), {
@@ -385,12 +399,16 @@ export default class ManifoldServer {
     });
 
     this.logChatMessage(`${this.playerInfo[id].userName} was banned from the server`);
-    this.playerSockets[id].disconnect();
+    socket.disconnect();
   }
 
   kickPlayer(id: number) {
     this.logChatMessage(`${this.playerInfo[id].userName} was kicked from the server`);
-    this.playerSockets[id].disconnect();
+    // Safe access - check if socket exists before disconnecting
+    const socket = this.playerSockets[id];
+    if (socket) {
+      socket.disconnect();
+    }
   }
 
   scheduledClose(timeUntilForceStop?: number): string | undefined {
@@ -446,13 +464,21 @@ export default class ManifoldServer {
     // "inform in lobby" packet
     socket.on(IN.HOST_INFORM_IN_LOBBY, (data) => {
       if (!this.assertPlayerIsHost(socket.data.bonkId)) return;
-      this.playerSockets[data.sid].emit(OUT.HOST_INFORM_IN_LOBBY, data.gs);
+      // Safe access - check if target socket exists
+      const targetSocket = this.playerSockets[data.sid];
+      if (targetSocket) {
+        targetSocket.emit(OUT.HOST_INFORM_IN_LOBBY, data.gs);
+      }
     });
 
     // "inform in game" packet
     socket.on(IN.HOST_INFORM_IN_GAME, (data) => {
       if (!this.assertPlayerIsHost(socket.data.bonkId)) return;
-      this.playerSockets[data.sid].emit(OUT.HOST_INFORM_IN_GAME, data.allData);
+      // Safe access - check if target socket exists
+      const targetSocket = this.playerSockets[data.sid];
+      if (targetSocket) {
+        targetSocket.emit(OUT.HOST_INFORM_IN_GAME, data.allData);
+      }
     });
 
     /* #endregion JOIN HANDLERS */
@@ -504,16 +530,20 @@ export default class ManifoldServer {
       if (this.hostId == -1) {
         this.io.emit(OUT.MAP_REQUEST_NON_HOST, data.mapname, data.mapauthor, socket.data.bonkId);
       } else {
-        // send map request packet to everyone but the host (only contains metadata of the map)
-        this.playerSockets[this.hostId].broadcast.emit(
-          OUT.MAP_REQUEST_NON_HOST,
-          data.mapname,
-          data.mapauthor,
-          socket.data.bonkId,
-        );
+        // Safe access - check if host socket exists
+        const hostSocket = this.playerSockets[this.hostId];
+        if (hostSocket) {
+          // send map request packet to everyone but the host (only contains metadata of the map)
+          hostSocket.broadcast.emit(
+            OUT.MAP_REQUEST_NON_HOST,
+            data.mapname,
+            data.mapauthor,
+            socket.data.bonkId,
+          );
 
-        // send map request packet to host (contains the actual map)
-        this.playerSockets[this.hostId].emit(OUT.MAP_REQUEST_HOST, data.m, socket.data.bonkId);
+          // send map request packet to host (contains the actual map)
+          hostSocket.emit(OUT.MAP_REQUEST_HOST, data.m, socket.data.bonkId);
+        }
       }
 
       // log map request
@@ -531,8 +561,12 @@ export default class ManifoldServer {
 
     // send friend request
     socket.on(IN.FRIEND_REQUEST, (data) => {
-      // send friend request packet to the target player
-      this.playerSockets[data.id].emit(OUT.FRIEND_REQUEST, socket.data.bonkId);
+      // Safe access - check if target socket exists
+      const targetSocket = this.playerSockets[data.id];
+      if (targetSocket) {
+        // send friend request packet to the target player
+        targetSocket.emit(OUT.FRIEND_REQUEST, socket.data.bonkId);
+      }
     });
 
     // set tabbed (afk) state

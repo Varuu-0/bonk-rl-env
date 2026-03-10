@@ -165,9 +165,10 @@ export class BonkEnvironment {
         }
         this.physics.reset();
 
-        // Add platforms (already added in constructor, reset just clears players/inputs)
-        // No need to re-add platforms here unless they can change per reset.
-        // For now, assuming static platforms loaded once.
+        // Re-add platforms after physics reset (they were destroyed by physics.reset())
+        for (const body of this.config.mapData.bodies) {
+            this.physics.addBody(body);
+        }
 
         // Extract spawn positions from map
         const spawnVals = Object.values(this.config.mapData.spawnPoints);

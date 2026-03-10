@@ -188,9 +188,8 @@ parentPort.on('message', (msg) => {
                     const waitResult = sharedMem.waitForActions();
 
                     if (waitResult === 'timed-out') {
-                        if (verbose) {
-                            parentPort!.postMessage({ id: msg.id, status: 'timeout' });
-                        }
+                        // Always notify parent about timeout and break the loop
+                        parentPort!.postMessage({ id: msg.id, status: 'timeout' });
                         break;
                     }
 
