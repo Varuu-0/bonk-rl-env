@@ -197,7 +197,7 @@ The telemetry system is engineered for minimal performance impact:
 
 ```bash
 # Clone the repository
-git clone https://github.com/yourusername/manifold-server.git
+git clone https://github.com/Varuu-0/bonk-rl-env.git
 cd manifold-server
 
 # Install Node.js dependencies

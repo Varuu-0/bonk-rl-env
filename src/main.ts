@@ -16,6 +16,10 @@ import * as readline from 'readline';
 let bridge: IpcBridge | null = null;
 let isShuttingDown = false;
 
+// Module-level flag to track if shutdown handlers have been registered
+// This ensures idempotent registration - we don't rely on global listener counts
+let _shutdownHandlersRegistered = false;
+
 // Readline interface for Windows Ctrl+C handling - initialized lazily
 let rl: readline.Interface | null = null;
 
@@ -88,20 +92,15 @@ async function shutdown(signal: string, isError = false): Promise<void> {
  * Handles SIGINT (Ctrl+C), SIGTERM, and Windows-specific signals.
  * 
  * This function is idempotent - calling multiple times will not register
- * duplicate handlers.
+ * duplicate handlers. Uses a module-level flag to track registration.
  * 
  * @param platformOverride - Optional platform override for testing (e.g., 'win32', 'linux')
  * @returns Object with wasRegistered flag and closeResources function
  */
 export function registerShutdownHandlers(platformOverride?: string): {wasRegistered: boolean, closeResources: () => Promise<void>} {
     // Use module-level flag to prevent duplicate registration
-    const platform = platformOverride || process.platform;
-    
-    // Check if handlers are already registered (check SIGINT listener count)
-    const existingSigintHandlers = process.listenerCount('SIGINT');
-    const wasRegistered = existingSigintHandlers > 0;
-    
-    if (wasRegistered) {
+    // This ensures we register our handlers regardless of what other modules have registered
+    if (_shutdownHandlersRegistered) {
         return {
             wasRegistered: true,
             closeResources: async () => {
@@ -113,6 +112,9 @@ export function registerShutdownHandlers(platformOverride?: string): {wasRegiste
         };
     }
     
+    _shutdownHandlersRegistered = true;
+    const platform = platformOverride || process.platform;
+    
     // Unix/Linux/macOS signals - single handler for both SIGINT and SIGTERM
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
@@ -120,7 +122,7 @@ export function registerShutdownHandlers(platformOverride?: string): {wasRegiste
     // Windows-specific: Handle Ctrl+Break 
     if (platform === 'win32') {
         // Set up readline interface for Windows Ctrl+C detection
-        // This enables proper Ctrl+C handling on Windows terminals
+        // This enables proper Ctrl+C handling in Windows terminals
         rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
@@ -137,10 +139,11 @@ export function registerShutdownHandlers(platformOverride?: string): {wasRegiste
         // Handle console window close - use beforeExit instead of close
         // Note: process.on('close') is NOT a valid Node.js event on the global process object
         // beforeExit fires when the event loop is empty but before exiting
+        // Only log cleanup message during actual graceful shutdown
         process.on('beforeExit', (code) => {
-            if (code === 0 && !isShuttingDown) {
-                // Only log if not already shutting down gracefully
-                console.log('Process cleanup complete.');
+            // Only log cleanup message during graceful shutdown (isShuttingDown === true)
+            if (isShuttingDown) {
+                console.log('Graceful shutdown: cleanup complete.');
             }
         });
     }
