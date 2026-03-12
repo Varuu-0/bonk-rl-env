@@ -1,13 +1,15 @@
 {
   "name": "manifold-server",
   "version": "1.1.0",
-  "description": "",
+  "description": "High-performance Bonk.io RL environment with ZeroMQ IPC bridge",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
-    "start": "tsx src/main.ts"
+    "test": "npx tsx tests/shutdown.ts",
+    "test:telemetry": "npx tsx tests/telemetry.ts",
+    "start": "tsx src/main.ts",
+    "typecheck": "tsc --noEmit"
   },
-  "keywords": [],
+  "keywords": ["bonk", "reinforcement-learning", "rl", "game-simulation"],
   "author": "SneezingCactus",
   "engines": {
     "node": ">=20.0.0"

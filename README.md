@@ -183,3 +183,125 @@ The telemetry system is engineered for minimal performance impact:
 | Disabled | **0%** | Production, maximum performance |
 | `minimal` | <1% | Lightweight monitoring |
 | `standard` | 2-5% | Produ
+| `standard` | 2-5% | Production monitoring, recommended |
+| `detailed` | 5-10% | Debugging, development |
+
+## Setup and Installation
+
+### Prerequisites
+
+- **Node.js**: v20.0.0 or higher
+- **Python**: v3.10+ (for RL agent training)
+- **npm** or **yarn**
+
+### Installation
+
+```bash
+# Clone the repository
+git clone https://github.com/yourusername/manifold-server.git
+cd manifold-server
+
+# Install Node.js dependencies
+npm install
+
+# Verify installation
+npm run typecheck
+```
+
+### Quick Start
+
+```bash
+# Start the server (uses ZeroMQ IPC bridge on port 5555)
+npm start
+
+# Or with custom port
+PORT=5556 npm start
+
+# Stop with Ctrl+C (graceful shutdown)
+```
+
+## Shutdown and Signals
+
+The server handles graceful shutdown across different platforms:
+
+### Signal Handling
+
+| Signal | Platform | Behavior |
+|--------|----------|----------|
+| SIGINT | Unix/macOS/Windows | Graceful shutdown (Ctrl+C) |
+| SIGTERM | Unix/macOS | Graceful shutdown |
+| SIGBREAK | Windows | Graceful shutdown (Ctrl+Break) |
+| close | Windows | Console window close |
+
+### How It Works
+
+1. **Signal Detection**: The `registerShutdownHandlers()` function in `src/main.ts` registers handlers for all relevant signals
+2. **Idempotent Registration**: Multiple calls to `registerShutdownHandlers()` won't register duplicate handlers
+3. **Resource Cleanup**: On shutdown, the IPC bridge and readline interfaces are properly closed
+4. **Timeout Protection**: A 10-second timeout ensures forced exit if graceful shutdown hangs
+
+### Using Scripts
+
+#### Unix/macOS/Linux
+
+```bash
+# Start server
+./scripts/start-server.sh [port]
+
+# Stop server
+./scripts/stop-server.sh
+```
+
+#### Windows PowerShell
+
+```powershell
+# Start server on custom port
+.\scripts\Start-BonkServer.ps1 -Port 5555
+
+# Stop server
+.\scripts\Stop-BonkServer.ps1
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| PORT | 5555 | IPC bridge port |
+| MANIFOLD_TELEMETRY | false | Enable telemetry |
+| MANIFOLD_PROFILE | standard | Profile level |
+
+## Running Tests
+
+```bash
+# Run shutdown and script tests
+npm test
+
+# Run telemetry tests
+npm run test:telemetry
+
+# Type check
+npm run typecheck
+```
+
+## Performance Benchmarks
+
+Based on internal testing:
+
+| Metric | Value |
+|--------|-------|
+| Max FPS | 23,400 |
+| Tick Rate | 15/30/60 ticks/sec (configurable) |
+| Parallel Environments | 64+ |
+| IPC Latency | <1ms |
+
+## Contributing
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## License
+
+MIT License - See LICENSE file for details.
