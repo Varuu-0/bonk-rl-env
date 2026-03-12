@@ -100,51 +100,68 @@ python -c "import json; json.load(open('maps/wdb.json'))"
 
 ---
 
-## Future Plans
+## Roadmap Implementation Status
+
+This document tracks the implementation status of items listed in the project roadmap.
+
+---
 
 ### Phase 1: Quick Wins (1-2 weeks)
 
-| Feature | Description | Priority |
-|:--------|:------------|:---------|
-| Binary protocol | MsgPack/Protocol Buffers for ZMQ | High |
-| Typed arrays | Use TypedArrays for observations | High |
-| ZMQ optimization | Socket tuning | Medium |
-| Box2D tuning | Physics parameter optimization | Medium |
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Binary protocol (MsgPack/Protocol Buffers) | **Not Implemented** | Still using JSON for ZMQ communication |
+| Typed arrays for observations | **Partial** | Observations converted in Python; could use TypedArrays for IPC |
+| ZMQ socket optimization | **Partial** | DEALER/ROUTER pattern implemented; further optimization possible |
+| Box2D configuration tuning | **Implemented** | Physics constants (TPS, DT, SOLVER_ITERATIONS, etc.) are configurable |
 
 ---
 
 ### Phase 2: Core Optimization (2-4 weeks)
 
-| Feature | Description | Priority |
-|:--------|:------------|:---------|
-| Worker affinity | NUMA optimization | High |
-| Adaptive scaling | Dynamic worker pool | High |
-| Pre-warming | Worker warmup | Medium |
-| Performance benchmarks | Comprehensive profiling | Medium |
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Worker affinity and NUMA optimization | **Not Implemented** | Static worker pool allocation |
+| Adaptive worker pool scaling | **Not Implemented** | Fixed pool size at startup |
+| SharedArrayBuffer for zero-copy IPC | **Implemented** | Full implementation in `src/ipc/shared-memory.ts` |
+| Worker pool pre-warming | **Not Implemented** | Workers start on first use |
+| Performance benchmarks and profiling | **Implemented** | Full telemetry system with profiler (`src/telemetry/profiler.ts`) |
 
 ---
 
 ### Phase 3: Advanced Features (4-8 weeks)
 
-| Feature | Description | Priority |
-|:--------|:------------|:---------|
-| Multi-agent support | >2 players | High |
-| Curriculum learning | Progressive difficulty | Medium |
-| Custom rewards | User-defined reward functions | Medium |
-| GPU acceleration | Batch processing on GPU | Low |
-| Trajectory recording | Save/replay | Medium |
-| Real-time dashboard | Web-based monitoring | Medium |
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Multi-agent support | **Partial** | Supports 2-player (1v1); >2 players not implemented |
+| Curriculum learning | **Not Implemented** | Would require multi-map support |
+| Custom reward function support | **Not Implemented** | Fixed reward function in environment |
+| GPU-accelerated batch processing | **Not Implemented** | CPU-only at present |
+| Trajectory recording and playback | **Partial** | Recording via `training_logger.py`; playback not implemented |
+| Real-time statistics dashboard | **Not Implemented** | Telemetry outputs to console/file; no web UI |
 
 ---
 
 ### Future Enhancements
 
-| Feature | Description | Priority |
-|:--------|:------------|:---------|
-| Multi-map support | Multiple arena types | Low |
-| Server mode | Human play support | Low |
-| Box2D WASM | WebAssembly physics | Low |
-| TypeScript 5.x | Language upgrade | Low |
+| Feature | Status | Notes |
+|:--------|:-------|:------|
+| Multi-environment map support | **Not Implemented** | Single map loaded at startup |
+| Server mode for human play | **Not Implemented** | Headless-only |
+| Box2D WASM investigation | **Not Implemented** | JS-based Box2D in use |
+| TypeScript 5.x migration | **Not Implemented** | Currently using TypeScript 5.3.3 |
+
+---
+
+### Implementation Summary
+
+| Phase | Completed | Partial | Not Started |
+|:------|:----------|:--------|:------------|
+| Phase 1 | 1 | 2 | 1 |
+| Phase 2 | 2 | 0 | 3 |
+| Phase 3 | 0 | 2 | 4 |
+| Future | 0 | 0 | 4 |
+| **Total** | **3** | **4** | **12** |
 
 ---
 
@@ -165,6 +182,8 @@ python -c "import json; json.load(open('maps/wdb.json'))"
 ---
 
 ## Contributing
+
+To see which features to prioritize next, see [Priority Recommendation](./priority-recommendation.md).
 
 Contributions are welcome. Please ensure:
 
