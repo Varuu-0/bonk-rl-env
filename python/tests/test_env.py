@@ -30,20 +30,20 @@ def main():
     for i in range(total_steps):
         # We can just use random integers for actions
         actions = np.random.randint(0, 64, size=num_envs)
-        obs, rewards, dones, infos = env.step_wait() if i > 0 else (obs, np.zeros(num_envs), np.zeros(num_envs, dtype=bool), [])
+        obs, rewards, terminated, truncated, infos = env.step_wait() if i > 0 else (obs, np.zeros(num_envs), np.zeros(num_envs, dtype=bool), np.zeros(num_envs, dtype=bool), [])
         if i == 0:
             env.step_async(actions)
             continue
             
         total_rewards += rewards
-        episodes_completed += np.sum(dones)
+        episodes_completed += np.sum(terminated)
         
         env.step_async(actions)
             
     # Final step wait
-    obs, rewards, dones, infos = env.step_wait()
+    obs, rewards, terminated, truncated, infos = env.step_wait()
     total_rewards += rewards
-    episodes_completed += np.sum(dones)
+    episodes_completed += np.sum(terminated)
 
     end_time = time.time()
     elapsed = end_time - start_time
