@@ -183,6 +183,8 @@ This document tracks the implementation status of items listed in the project ro
 
 ## Contributing
 
+To see which features to prioritize next, see [Priority Recommendation](./priority-recommendation.md).
+
 Contributions are welcome. Please ensure:
 
 1. Tests pass for new features

@@ -2,6 +2,8 @@
 
 This document outlines the planned improvements for the Manifold Server project, organized by priority and implementation phase.
 
+> **Recommendation**: See [Priority Recommendation](./priority-recommendation.md) for detailed analysis of which features to implement next.
+
 ## Implementation Status Legend
 
 | Status | Description |
