@@ -30,3 +30,6 @@ chatlogs/
 banlist.json
 plans/sharedarraybuffer-implementation.md
 .kilocode/setup-script
+
+# Temporary files
+tmp/
