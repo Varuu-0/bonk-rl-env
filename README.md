@@ -182,7 +182,6 @@ The telemetry system is engineered for minimal performance impact:
 |:-------------|:---------|:----------|
 | Disabled | **0%** | Production, maximum performance |
 | `minimal` | <1% | Lightweight monitoring |
-| `standard` | 2-5% | Produ
 | `standard` | 2-5% | Production monitoring, recommended |
 | `detailed` | 5-10% | Debugging, development |
 
