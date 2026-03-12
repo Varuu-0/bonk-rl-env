@@ -20,15 +20,41 @@ let isShuttingDown = false;
 let rl: readline.Interface | null = null;
 
 /**
+ * Get the IPC bridge port from environment variable or default.
+ * 
+ * @returns The port number to use for the IPC bridge
+ * @throws Error if PORT environment variable is invalid
+ */
+function getPort(): number {
+    const portStr = process.env.PORT ?? '5555';
+    const port = parseInt(portStr, 10);
+    
+    if (isNaN(port)) {
+        throw new Error(`Invalid PORT value: "${portStr}". PORT must be a valid integer.`);
+    }
+    
+    if (port < 1 || port > 65535) {
+        throw new Error(`Invalid PORT value: ${port}. PORT must be between 1 and 65535.`);
+    }
+    
+    return port;
+}
+
+/**
  * Performs graceful shutdown of the IPC bridge and worker threads.
  * Ensures all resources are properly released before exiting.
+ * 
+ * @param signal - The signal or reason for shutdown
+ * @param isError - Whether this is an error shutdown (non-zero exit code)
  */
-async function shutdown(signal: string): Promise<void> {
+async function shutdown(signal: string, isError = false): Promise<void> {
     if (isShuttingDown) {
         console.log('\nShutdown already in progress...');
         return;
     }
     isShuttingDown = true;
+    
+    const exitCode = isError ? 1 : 0;
     
     console.log(`\nReceived ${signal}. Shutting down IPC bridge and worker threads...`);
     
@@ -50,7 +76,7 @@ async function shutdown(signal: string): Promise<void> {
             clearTimeout(shutdownTimeout);
         }
         console.log('Shutdown complete. Goodbye!');
-        process.exit(0);
+        process.exit(exitCode);
     } catch (error) {
         console.error('Error during shutdown:', error);
         process.exit(1);
@@ -91,7 +117,7 @@ export function registerShutdownHandlers(platformOverride?: string): {wasRegiste
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     
-    // Windows-specific: Handle Ctrl+Break and console close
+    // Windows-specific: Handle Ctrl+Break 
     if (platform === 'win32') {
         // Set up readline interface for Windows Ctrl+C detection
         // This enables proper Ctrl+C handling on Windows terminals
@@ -108,20 +134,27 @@ export function registerShutdownHandlers(platformOverride?: string): {wasRegiste
         // Handle Ctrl+Break on Windows
         process.on('SIGBREAK', () => shutdown('SIGBREAK (Windows)'));
         
-        // Handle console window close
-        process.on('close', () => shutdown('close (Windows)'));
+        // Handle console window close - use beforeExit instead of close
+        // Note: process.on('close') is NOT a valid Node.js event on the global process object
+        // beforeExit fires when the event loop is empty but before exiting
+        process.on('beforeExit', (code) => {
+            if (code === 0 && !isShuttingDown) {
+                // Only log if not already shutting down gracefully
+                console.log('Process cleanup complete.');
+            }
+        });
     }
     
-    // Handle uncaught exceptions
+    // Handle uncaught exceptions - these are fatal errors
     process.on('uncaughtException', (error) => {
         console.error('Uncaught exception:', error);
-        shutdown('uncaughtException');
+        shutdown('uncaughtException', true); // Exit with non-zero code
     });
     
-    // Handle unhandled promise rejections
+    // Handle unhandled promise rejections - these are fatal errors
     process.on('unhandledRejection', (reason, promise) => {
         console.error('Unhandled rejection at:', promise, 'reason:', reason);
-        shutdown('unhandledRejection');
+        shutdown('unhandledRejection', true); // Exit with non-zero code
     });
     
     // Removed redundant process.on('exit') handler that duplicated shutdown logging.
@@ -155,10 +188,15 @@ function setupSignalHandlers(): void {
 
 async function main(): Promise<void> {
     console.log('=== Bonk.io Headless RL Environment ===');
+    
+    // Get port from environment variable or use default
+    const port = getPort();
+    console.log(`IPC Bridge configured on port: ${port}`);
     console.log('Initializing zero-mq bridge (Worker pool initialized on demand over ipc)...');
     console.log('Press Ctrl+C to stop the server gracefully.');
     
-    bridge = new IpcBridge(5555);
+    // Create bridge with configured port
+    bridge = new IpcBridge(port);
     
     // Set up signal handlers BEFORE starting the server
     registerShutdownHandlers();
