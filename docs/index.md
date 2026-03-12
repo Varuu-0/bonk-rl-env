@@ -67,14 +67,13 @@ The system consists of two primary components:
 ### Prerequisites
 
 - Node.js (v20+ recommended)
-- Python 3.8+
+- Python 3.10+
 
 ### Installation
 
 ```bash
 # Install Node.js dependencies
 npm install
-npm install zeromq@6
 
 # Install Python dependencies
 pip install -r requirements.txt
@@ -89,7 +88,7 @@ pip install -r requirements.txt
 
 2. Run Python training:
    ```bash
-   python python/train_agent.py
+   python -c "from python.envs.bonk_env import BonkEnv; e = BonkEnv(); print(e.reset())"
    ```
 
 ## Performance Benchmarks

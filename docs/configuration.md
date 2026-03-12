@@ -16,7 +16,7 @@ This document describes the configuration options available in the Manifold Serv
 
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
-| `port` | `number` | `3000` | HTTP server port |
+| `port` | `number` | `5555` | IPC bridge port (ZeroMQ) |
 | `useHttps` | `boolean` | `false` | Enable HTTPS |
 | `roomNameOnStartup` | `string` | `"Manifold Server"` | Default room name |
 | `roomPasswordOnStartup` | `string` | `null` | Room password (null = none) |
@@ -214,4 +214,4 @@ Maps are loaded from JSON files in the `maps/` directory.
 
 - [Telemetry System](./telemetry.md) - Detailed telemetry documentation
 - [Flags](./flags.md) - CLI flag reference
-- [API Reference](./api-reference.md) - Full API documentation
+- [Telemetry Flags](./typescript/src/telemetry/flags.md) - CLI flag reference

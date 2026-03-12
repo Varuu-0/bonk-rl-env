@@ -198,7 +198,7 @@ The telemetry system is engineered for minimal performance impact:
 ```bash
 # Clone the repository
 git clone https://github.com/Varuu-0/bonk-rl-env.git
-cd manifold-server
+cd bonk-rl-env
 
 # Install Node.js dependencies
 npm install
@@ -230,7 +230,6 @@ The server handles graceful shutdown across different platforms:
 | SIGINT | Unix/macOS/Windows | Graceful shutdown (Ctrl+C) |
 | SIGTERM | Unix/macOS | Graceful shutdown |
 | SIGBREAK | Windows | Graceful shutdown (Ctrl+Break) |
-| close | Windows | Console window close |
 
 ### How It Works
 
