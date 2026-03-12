@@ -28,7 +28,5 @@ profiler_results/
 # Project-specific runtime data
 chatlogs/
 banlist.json
-plans/improvement-plan.md
 plans/sharedarraybuffer-implementation.md
-docs/priority-recommendation.md
 .kilocode/setup-script
