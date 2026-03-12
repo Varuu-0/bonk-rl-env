@@ -110,8 +110,9 @@ pip install -r requirements.txt
 
 - [Telemetry System](./telemetry.md) - Comprehensive telemetry configuration guide
 - [SharedArrayBuffer](./shared-memory.md) - Optional high-performance IPC mode
-- [Roadmap](./roadmap.md) - Planned improvements and future enhancements
-- [API Reference](./api-reference.md) - Detailed API documentation
+- [Roadmap](./roadmap.md) - Planned improvements and implementation status
+- [Deprecated APIs](./deprecated.md) - Known issues, deprecated features, and future plans
+- [Configuration](./configuration.md) - Setup and configuration guide
 
 ## Contributing
 
