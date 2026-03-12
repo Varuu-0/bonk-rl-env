@@ -1,9 +1,10 @@
 @echo off
-REM start.bat - Non-blocking start script for Windows
+REM start.bat - Start the Bonk RL server
 REM Usage: start.bat [port]
 REM 
-REM This script starts the Bonk RL server in a new window without blocking the terminal.
-REM For background operation with PID tracking, use: .\scripts\Start-BonkServer.ps1
+REM This script starts the Bonk RL server.
+REM For non-blocking operation with PID tracking, use: .\scripts\Start-BonkServer.ps1
+REM For background operation on Unix, use: ./scripts/start-server.sh
 
 if "%1"=="" (
     set PORT=5555
