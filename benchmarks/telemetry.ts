@@ -7,7 +7,7 @@
  * Run with: npx tsx benchmark-telemetry.ts
  */
 
-import { TelemetryBuffer, TelemetryIndices } from './src/profiler';
+import { TelemetryBuffer, TelemetryIndices } from '../src/telemetry/profiler';
 
 // Benchmark configuration
 const WARMUP_ITERATIONS = 1000;

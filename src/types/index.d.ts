@@ -1,4 +1,4 @@
-import ManifoldServer from './server';
+import ManifoldServer from '../legacy/server';
 
 export interface BanList {
   addresses: string[];

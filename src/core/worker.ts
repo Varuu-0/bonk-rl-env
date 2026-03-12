@@ -1,6 +1,6 @@
 import { parentPort } from 'worker_threads';
 import { BonkEnvironment, Action, Observation } from './environment';
-import { SharedMemoryManager } from './shared-memory';
+import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // Type for SharedArrayBuffer (available in Node.js >= 9.1.0)
 declare const SharedArrayBuffer: any;
@@ -9,12 +9,13 @@ if (!parentPort) {
     throw new Error('This file must be run as a worker thread.');
 }
 
-import { globalProfiler, TelemetryBuffer } from './profiler';
+import { globalProfiler, TelemetryBuffer } from '../telemetry/profiler';
 
 let envs: BonkEnvironment[] = [];
 let stepCounter = 0;
 let sharedMem: SharedMemoryManager | null = null;
 let numEnvs = 0;
+let globalOffset = 0;
 
 /**
  * Converts an Observation to a flat number array for shared memory storage
@@ -53,6 +54,7 @@ parentPort.on('message', (msg) => {
                 envs.push(new BonkEnvironment(config));
             }
             numEnvs = numEnvsParam;
+            globalOffset = msg.startId || 0;
 
             // If sharedBuffer is provided and is a valid SharedArrayBuffer, initialize SharedMemoryManager
             // Note: When passed via postMessage, SharedArrayBuffer becomes an empty object.
@@ -163,11 +165,11 @@ parentPort.on('message', (msg) => {
                     sharedMem!.writeTick(i, res.info.tick || stepCounter);
                 });
 
-                // Signal main thread that results are ready
-                sharedMem.signalMainReady();
-
                 // Signal that worker has consumed the actions
                 sharedMem.signalWorkerConsumed();
+
+                // Signal main thread that results are ready
+                sharedMem.signalMainReady();
 
                 parentPort!.postMessage({
                     id: msg.id,
@@ -183,9 +185,11 @@ parentPort.on('message', (msg) => {
             const verbose = config.verboseTelemetry ?? false;
 
             if (sharedMem) {
+                try {
                 while (true) {
                     // Wait for main to signal
                     const waitResult = sharedMem.waitForActions();
+                    console.log(`[Worker ${globalOffset}] waitForActions returned: ${waitResult}`);
 
                     if (waitResult === 'timed-out') {
                         // Always notify parent about timeout and break the loop
@@ -203,8 +207,9 @@ parentPort.on('message', (msg) => {
                         const obs = envs.map((env, i) => env.reset(seeds[i] || undefined));
 
                         obs.forEach((o, i) => sharedMem!.writeObservation(i, observationToArray(o)));
-                        sharedMem.signalMainReady();
+
                         sharedMem.signalWorkerConsumed();
+                        sharedMem.signalMainReady();
 
                         if (verbose) {
                             parentPort!.postMessage({ id: msg.id, status: 'reset-ok' });
@@ -236,8 +241,8 @@ parentPort.on('message', (msg) => {
                             sharedMem!.writeTick(i, res.info.tick || stepCounter);
                         });
 
-                        sharedMem.signalMainReady();
                         sharedMem.signalWorkerConsumed();
+                        sharedMem.signalMainReady();
 
                         if (verbose) {
                             parentPort!.postMessage({
@@ -248,6 +253,10 @@ parentPort.on('message', (msg) => {
                             });
                         }
                     }
+                }
+                } catch (e: any) {
+                    console.error(`[Worker ${globalOffset}] wait-for-action crashed:`, e.message, e.stack);
+                    parentPort!.postMessage({ id: msg.id, status: 'error', error: `worker-loop-crash: ${e.message}` });
                 }
             } else {
                 parentPort!.postMessage({ id: msg.id, status: 'error', error: 'Shared memory not initialized' });

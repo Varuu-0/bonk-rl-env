@@ -40,8 +40,10 @@ of your map (e.g., dense collision clusters in wdb.json).
 
 import time
 from typing import Optional
-
 import numpy as np
+import os
+import sys
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'envs')))
 
 from bonk_env import BonkVecEnv
 

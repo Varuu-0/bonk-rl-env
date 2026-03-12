@@ -2,7 +2,7 @@
  * test-shared-memory.ts
  * Standalone verification for SharedMemoryManager logic.
  */
-import { SharedMemoryManager } from './src/shared-memory';
+import { SharedMemoryManager } from '../src/ipc/shared-memory';
 import assert from 'assert';
 
 function testSAB() {

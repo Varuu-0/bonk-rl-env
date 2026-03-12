@@ -5,7 +5,7 @@
  * Instantiates the BonkEnvironment and starts the ZeroMQ IPC Bridge on port 5555.
  */
 
-import { IpcBridge } from './ipc-bridge';
+import { IpcBridge } from './ipc/ipc-bridge';
 
 async function main() {
     console.log('=== Bonk.io Headless RL Environment ===');

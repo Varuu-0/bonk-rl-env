@@ -1,7 +1,7 @@
 import moment from 'moment';
 import config from './config';
-import ManifoldServer from './src/server';
-import { TelemetryController } from './src/telemetry-controller';
+import ManifoldServer from './src/legacy/server';
+import { TelemetryController } from './src/telemetry/telemetry-controller';
 
 moment.updateLocale('en', {
   relativeTime: {

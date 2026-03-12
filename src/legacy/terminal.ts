@@ -4,7 +4,7 @@ import fs from 'fs';
 import columnify from 'columnify';
 import chalk from 'chalk';
 import wrap from 'word-wrap';
-import { TerminalCommand } from './types';
+import { TerminalCommand } from '../types/index.d';
 
 const availableCommands: Record<string, TerminalCommand> = {
   host: {

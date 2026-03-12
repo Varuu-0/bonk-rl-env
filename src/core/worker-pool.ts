@@ -1,8 +1,8 @@
 import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
-import { globalProfiler } from './profiler';
-import { SharedMemoryManager } from './shared-memory';
+import { globalProfiler } from '../telemetry/profiler';
+import { SharedMemoryManager } from '../ipc/shared-memory';
 
 /**
  * Player input action interface for encoding to shared memory
@@ -51,7 +51,7 @@ export class WorkerPool {
     private actionBufferPool: Uint8Array[] = [];
     private maxEnvsPerWorker: number = 0;
 
-    constructor(private numWorkers: number = os.cpus().length) {
+    constructor(private numWorkers: number = Math.min(os.cpus().length, 8)) {
     }
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
@@ -74,6 +74,7 @@ export class WorkerPool {
         let remainder = totalEnvs % activeWorkers;
 
         const promises = [];
+        let currentStartId = 0;
         for (let i = 0; i < activeWorkers; i++) {
             const numEnvs = baseEnvsPerWorker + (remainder > 0 ? 1 : 0);
             remainder--;
@@ -107,6 +108,7 @@ export class WorkerPool {
                     const initPromise = this.sendMessage(worker, {
                         type: 'init',
                         numEnvs,
+                        startId: currentStartId,
                         config,
                         sharedBuffer: shm.getBuffer(),
                         ringSize: this.ringSize
@@ -119,8 +121,9 @@ export class WorkerPool {
                     promises.push(initPromise);
                 } else {
                     this.sharedMemManagers.push(null);
-                    promises.push(this.sendMessage(worker, { type: 'init', numEnvs, config }));
+                    promises.push(this.sendMessage(worker, { type: 'init', numEnvs, startId: currentStartId, config }));
                 }
+                currentStartId += numEnvs;
             }
         }
 
@@ -163,7 +166,7 @@ export class WorkerPool {
                     console.error(`[WorkerPool] Message ${id} timed out`);
                     reject(new Error(`Message ${id} timed out`));
                 }
-            }, 5000);  // 5 second timeout
+            }, 30000);  // 30 second timeout for init/other messages
             worker.postMessage({ id, ...msg });
         });
     }
@@ -183,7 +186,7 @@ export class WorkerPool {
             }
 
             // 2. Poll for reset completion
-            const timeoutMs = 5000;
+            const timeoutMs = 30000;
             const startTime = Date.now();
             let workersRemaining = this.workers.length;
             const finished = new Uint8Array(this.workers.length);
@@ -197,8 +200,11 @@ export class WorkerPool {
                         workersRemaining--;
                     }
                 }
-                if (workersRemaining > 0 && (Date.now() - startTime) > timeoutMs) {
-                    throw new Error('Timeout waiting for worker reset');
+                if (workersRemaining > 0) {
+                    if ((Date.now() - startTime) > timeoutMs) {
+                        throw new Error('Timeout waiting for worker reset');
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 1));
                 }
             }
 
@@ -256,8 +262,8 @@ export class WorkerPool {
             }
 
             const shm = this.sharedMemManagers[i]!;
-            shm.writeActions(encodedActions);
-            shm.sendCommand(0); // STEP command
+            shm.writeActionsQuiet(encodedActions);
+            shm.sendCommand(0); // STEP command (also notifies worker)
         }
 
         // 2. Poll for results from all workers in parallel (Busy-wait with timeout)
@@ -279,8 +285,11 @@ export class WorkerPool {
                 }
             }
 
-            if (workersRemaining > 0 && (Date.now() - startTime) > timeoutMs) {
-                throw new Error(`Timeout waiting for workers: ${Array.from(finished).map((f, i) => f ? '' : i).filter(v => v !== '').join(',')}`);
+            if (workersRemaining > 0) {
+                if ((Date.now() - startTime) > timeoutMs) {
+                    throw new Error(`Timeout waiting for workers: ${Array.from(finished).map((f, i) => f ? '' : i).filter(v => v !== '').join(',')}`);
+                }
+                await new Promise(resolve => setTimeout(resolve, 1));
             }
         }
 

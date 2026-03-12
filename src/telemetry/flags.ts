@@ -8,7 +8,7 @@
  * Uses process.argv directly without external dependencies.
  */
 
-import { TelemetryFlags } from './types';
+import { TelemetryFlags } from '../types/index.d';
 
 /**
  * Default telemetry flags - all disabled for maximum performance.

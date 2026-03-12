@@ -11,7 +11,7 @@
  * - Backward compatible: Supports legacy verboseTelemetry config
  */
 
-import { TelemetryFlags, TelemetryConfig } from './types';
+import { TelemetryFlags, TelemetryConfig } from '../types/index.d';
 import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from './flags';
 import { globalProfiler, TelemetryBuffer, TelemetryIndices, setLatestWorkerTelemetry } from './profiler';
 

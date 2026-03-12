@@ -10,9 +10,9 @@
  * Run with: npx tsx test-telemetry.ts
  */
 
-import { TelemetryBuffer, TelemetryIndices, globalProfiler, wrap } from './src/profiler';
-import { parseFlags, isAnyTelemetryEnabled } from './src/flags';
-import { TelemetryController, isTelemetryEnabled, getTelemetryController } from './src/telemetry-controller';
+import { TelemetryBuffer, TelemetryIndices, globalProfiler, wrap } from '../src/telemetry/profiler';
+import { parseFlags, isAnyTelemetryEnabled } from '../src/telemetry/flags';
+import { TelemetryController, isTelemetryEnabled, getTelemetryController } from '../src/telemetry/telemetry-controller';
 
 // Test counters
 let testsPassed = 0;

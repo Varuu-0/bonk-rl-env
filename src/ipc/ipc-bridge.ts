@@ -1,6 +1,6 @@
 import * as zmq from "zeromq";
-import { WorkerPool } from "./worker-pool";
-import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "./profiler";
+import { WorkerPool } from "../core/worker-pool";
+import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -69,7 +69,7 @@ export class IpcBridge {
                 if (this.stepCount % 5000 === 0) {
                     globalProfiler.recordMemory();
 
-                    const config = require('../config').default;
+                    const config = require('../../config').default;
                     if (config.verboseTelemetry) {
                         const snapshots = await this.pool.getTelemetrySnapshots();
                         setLatestWorkerTelemetry(snapshots);

@@ -9,7 +9,7 @@ import ManifoldTerminal from './terminal';
 
 import * as IN from './inPacketIds';
 import * as OUT from './outPacketIds';
-import { BanList, Config, GameSettings, Player, RatelimitRestrictions } from './types';
+import { BanList, Config, GameSettings, Player, RatelimitRestrictions } from '../types/index.d';
 import moment from 'moment';
 
 const ratelimitMessages: Record<string, string> = {

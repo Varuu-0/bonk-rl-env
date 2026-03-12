@@ -128,7 +128,7 @@ export class BonkEnvironment {
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = path.join(__dirname, '..', 'maps', 'wdb.json');
+            const mapPath = path.join(__dirname, '..', '..', 'maps', 'wdb.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
             } catch (e) {

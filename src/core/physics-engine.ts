@@ -14,8 +14,8 @@
 // @ts-ignore — box2d has no type declarations
 const box2d = require('box2d');
 
-import { globalProfiler, wrap, TelemetryIndices } from './profiler';
-import { isTelemetryEnabled } from './telemetry-controller';
+import { globalProfiler, wrap, TelemetryIndices } from '../telemetry/profiler';
+import { isTelemetryEnabled } from '../telemetry/telemetry-controller';
 
 const {
   b2World,
@@ -139,16 +139,25 @@ export class PhysicsEngine {
   private setupContactListener(): void {
     const listener = new b2ContactListener();
     listener.Add = (contact: any) => {
-      globalProfiler.increment('collision_events');
+      try {
+        globalProfiler.increment('collision_events');
 
-      const body1 = contact.GetShape1().GetBody();
-      const body2 = contact.GetShape2().GetBody();
+        const shape1 = contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.();
+        const shape2 = contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.();
+        if (!shape1 || !shape2) return;
 
-      const ud1 = body1.GetUserData() || {};
-      const ud2 = body2.GetUserData() || {};
+        const body1 = shape1.GetBody();
+        const body2 = shape2.GetBody();
+        if (!body1 || !body2) return;
 
-      this.checkLethalCollision(ud1, ud2);
-      this.checkLethalCollision(ud2, ud1);
+        const ud1 = body1.GetUserData() || {};
+        const ud2 = body2.GetUserData() || {};
+
+        this.checkLethalCollision(ud1, ud2);
+        this.checkLethalCollision(ud2, ud1);
+      } catch (e) {
+        // Ignore contact errors — some TOI contacts lack valid shapes
+      }
     };
 
     this.world.SetContactListener(listener);
