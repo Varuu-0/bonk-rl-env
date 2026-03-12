@@ -16,6 +16,9 @@ import * as readline from 'readline';
 let bridge: IpcBridge | null = null;
 let isShuttingDown = false;
 
+// Readline interface for Windows Ctrl+C handling - initialized lazily
+let rl: readline.Interface | null = null;
+
 /**
  * Performs graceful shutdown of the IPC bridge and worker threads.
  * Ensures all resources are properly released before exiting.
@@ -30,6 +33,12 @@ async function shutdown(signal: string): Promise<void> {
     console.log(`\nReceived ${signal}. Shutting down IPC bridge and worker threads...`);
     
     try {
+        // Close readline interface on Windows to free resource
+        if (rl) {
+            rl.close();
+            rl = null;
+        }
+        
         if (bridge) {
             // Set a timeout for graceful shutdown
             const shutdownTimeout = setTimeout(() => {
@@ -51,23 +60,48 @@ async function shutdown(signal: string): Promise<void> {
 /**
  * Sets up cross-platform signal handlers for graceful shutdown.
  * Handles SIGINT (Ctrl+C), SIGTERM, and Windows-specific signals.
+ * 
+ * This function is idempotent - calling multiple times will not register
+ * duplicate handlers.
+ * 
+ * @param platformOverride - Optional platform override for testing (e.g., 'win32', 'linux')
+ * @returns Object with wasRegistered flag and closeResources function
  */
-function setupSignalHandlers(): void {
-    // Unix/Linux/macOS signals
+export function registerShutdownHandlers(platformOverride?: string): {wasRegistered: boolean, closeResources: () => Promise<void>} {
+    // Use module-level flag to prevent duplicate registration
+    const platform = platformOverride || process.platform;
+    
+    // Check if handlers are already registered (check SIGINT listener count)
+    const existingSigintHandlers = process.listenerCount('SIGINT');
+    const wasRegistered = existingSigintHandlers > 0;
+    
+    if (wasRegistered) {
+        return {
+            wasRegistered: true,
+            closeResources: async () => {
+                if (rl) {
+                    rl.close();
+                    rl = null;
+                }
+            }
+        };
+    }
+    
+    // Unix/Linux/macOS signals - single handler for both SIGINT and SIGTERM
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     
     // Windows-specific: Handle Ctrl+Break and console close
-    if (process.platform === 'win32') {
-        // Readline setup for Windows Ctrl+C detection
-        const rl = readline.createInterface({
+    if (platform === 'win32') {
+        // Set up readline interface for Windows Ctrl+C detection
+        // This enables proper Ctrl+C handling on Windows terminals
+        rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
         
-        // Handle Ctrl+C on Windows more reliably
-        process.on('SIGINT', () => {
-            // Double SIGINT on Windows means force exit
+        // Wire readline's SIGINT event to our shutdown handler
+        rl.on('SIGINT', () => {
             shutdown('SIGINT (Windows)');
         });
         
@@ -90,10 +124,33 @@ function setupSignalHandlers(): void {
         shutdown('unhandledRejection');
     });
     
-    // Exit handler
+    // Removed redundant process.on('exit') handler that duplicated shutdown logging.
+    // The shutdown() function already logs "Shutdown complete. Goodbye!" on line above.
+    // Only log non-zero exit codes for debugging purposes.
     process.on('exit', (code) => {
-        console.log(`Process exiting with code: ${code}`);
+        if (code !== 0) {
+            console.log(`Process exiting with code: ${code}`);
+        }
     });
+    
+    return {
+        wasRegistered: false,
+        closeResources: async () => {
+            if (rl) {
+                rl.close();
+                rl = null;
+            }
+        }
+    };
+}
+
+/**
+ * @deprecated Use registerShutdownHandlers() instead
+ * Sets up cross-platform signal handlers for graceful shutdown.
+ * Handles SIGINT (Ctrl+C), SIGTERM, and Windows-specific signals.
+ */
+function setupSignalHandlers(): void {
+    registerShutdownHandlers();
 }
 
 async function main(): Promise<void> {
@@ -104,7 +161,7 @@ async function main(): Promise<void> {
     bridge = new IpcBridge(5555);
     
     // Set up signal handlers BEFORE starting the server
-    setupSignalHandlers();
+    registerShutdownHandlers();
     
     console.log('Starting IPC Bridge. Waiting for Python connection...');
     await bridge.start();
