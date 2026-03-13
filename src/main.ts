@@ -1,33 +1,22 @@
 /**
- * main.ts — Entry point for the bonk.io RL environment with IPC bridge.
+ * main.ts — CLI entry point for the Bonk.io RL environment server
  *
- * Replaces the original index.ts (which started the Express/Socket.IO server).
- * Instantiates the BonkEnvironment and starts the ZeroMQ IPC Bridge on port 5555.
- *
- * Supports graceful shutdown via:
- * - SIGINT (Ctrl+C) on Unix/macOS/Windows
- * - SIGTERM on Unix/macOS
- * - Windows: Ctrl+Break or close console window
+ * Provides human-friendly CLI with support for:
+ * - TEST_MODE for automation/CI environments
+ * - --max-runtime CLI flag for time-limited execution
+ * - Graceful shutdown via SIGINT/SIGTERM
  */
 
-import { IpcBridge } from './ipc/ipc-bridge';
+import { startServer, stopServer } from './server';
 import * as readline from 'readline';
 
-let bridge: IpcBridge | null = null;
 let isShuttingDown = false;
 
-// Module-level flag to track if shutdown handlers have been registered
-// This ensures idempotent registration - we don't rely on global listener counts
-let _shutdownHandlersRegistered = false;
-
-// Readline interface for Windows Ctrl+C handling - initialized lazily
+// Readline interface for Windows Ctrl+C handling
 let rl: readline.Interface | null = null;
 
 /**
  * Get the IPC bridge port from environment variable or default.
- * 
- * @returns The port number to use for the IPC bridge
- * @throws Error if PORT environment variable is invalid
  */
 function getPort(): number {
     const portStr = process.env.PORT ?? '5555';
@@ -45,148 +34,70 @@ function getPort(): number {
 }
 
 /**
- * Performs graceful shutdown of the IPC bridge and worker threads.
- * Ensures all resources are properly released before exiting.
- * 
- * @param signal - The signal or reason for shutdown
- * @param isError - Whether this is an error shutdown (non-zero exit code)
+ * Parse --max-runtime CLI argument.
+ * @returns Max runtime in seconds, or undefined if not specified
+ */
+function getMaxRuntime(): number | undefined {
+    const args = process.argv.slice(2);
+    const maxRuntimeIndex = args.findIndex(arg => arg === '--max-runtime');
+    
+    if (maxRuntimeIndex !== -1 && args[maxRuntimeIndex + 1]) {
+        const value = parseInt(args[maxRuntimeIndex + 1], 10);
+        if (!isNaN(value) && value > 0) {
+            return value;
+        }
+    }
+    
+    return undefined;
+}
+
+/**
+ * Performs graceful shutdown.
  */
 async function shutdown(signal: string, isError = false): Promise<void> {
     if (isShuttingDown) {
-        console.log('\nShutdown already in progress...');
         return;
     }
     isShuttingDown = true;
     
     const exitCode = isError ? 1 : 0;
-    
-    console.log(`\nReceived ${signal}. Shutting down IPC bridge and worker threads...`);
+    console.log(`\nShutting down...`);
     
     try {
-        // Close readline interface on Windows to free resource
+        // Close readline interface on Windows
         if (rl) {
             rl.close();
             rl = null;
         }
         
-        if (bridge) {
-            // Set a timeout for graceful shutdown
-            const shutdownTimeout = setTimeout(() => {
-                console.error('Shutdown timed out. Forcing exit...');
-                process.exit(1);
-            }, 10000); // 10 second timeout
-            
-            await bridge.close();
-            clearTimeout(shutdownTimeout);
-        }
-        console.log('Shutdown complete. Goodbye!');
-        process.exit(exitCode);
+        await stopServer();
     } catch (error) {
         console.error('Error during shutdown:', error);
         process.exit(1);
     }
+    
+    process.exit(exitCode);
 }
 
 /**
- * Sets up cross-platform signal handlers for graceful shutdown.
- * Handles SIGINT (Ctrl+C), SIGTERM, and Windows-specific signals.
- * 
- * This function is idempotent - calling multiple times will not register
- * duplicate handlers. Uses a module-level flag to track registration.
- * 
- * @param platformOverride - Optional platform override for testing (e.g., 'win32', 'linux')
- * @returns Object with wasRegistered flag and closeResources function
+ * Register shutdown handlers for SIGINT and SIGTERM.
  */
-export function registerShutdownHandlers(platformOverride?: string): {wasRegistered: boolean, closeResources: () => Promise<void>} {
-    // Use module-level flag to prevent duplicate registration
-    // This ensures we register our handlers regardless of what other modules have registered
-    if (_shutdownHandlersRegistered) {
-        return {
-            wasRegistered: true,
-            closeResources: async () => {
-                if (rl) {
-                    rl.close();
-                    rl = null;
-                }
-            }
-        };
-    }
-    
-    _shutdownHandlersRegistered = true;
-    const platform = platformOverride || process.platform;
-    
-    // Unix/Linux/macOS signals - single handler for both SIGINT and SIGTERM
+function registerShutdownHandlers(): void {
+    // Register signal handlers
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
     
-    // Windows-specific: Handle Ctrl+Break 
-    if (platform === 'win32') {
-        // Set up readline interface for Windows Ctrl+C detection
-        // This enables proper Ctrl+C handling in Windows terminals
+    // Windows-specific: Handle Ctrl+C via readline
+    if (process.platform === 'win32') {
         rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
         
-        // Wire readline's SIGINT event to our shutdown handler
         rl.on('SIGINT', () => {
             shutdown('SIGINT (Windows)');
         });
-        
-        // Handle Ctrl+Break on Windows
-        process.on('SIGBREAK', () => shutdown('SIGBREAK (Windows)'));
-        
-        // Handle console window close - use beforeExit instead of close
-        // Note: process.on('close') is NOT a valid Node.js event on the global process object
-        // beforeExit fires when the event loop is empty but before exiting
-        // Only log cleanup message during actual graceful shutdown
-        process.on('beforeExit', (code) => {
-            // Only log cleanup message during graceful shutdown (isShuttingDown === true)
-            if (isShuttingDown) {
-                console.log('Graceful shutdown: cleanup complete.');
-            }
-        });
     }
-    
-    // Handle uncaught exceptions - these are fatal errors
-    process.on('uncaughtException', (error) => {
-        console.error('Uncaught exception:', error);
-        shutdown('uncaughtException', true); // Exit with non-zero code
-    });
-    
-    // Handle unhandled promise rejections - these are fatal errors
-    process.on('unhandledRejection', (reason, promise) => {
-        console.error('Unhandled rejection at:', promise, 'reason:', reason);
-        shutdown('unhandledRejection', true); // Exit with non-zero code
-    });
-    
-    // Removed redundant process.on('exit') handler that duplicated shutdown logging.
-    // The shutdown() function already logs "Shutdown complete. Goodbye!" on line above.
-    // Only log non-zero exit codes for debugging purposes.
-    process.on('exit', (code) => {
-        if (code !== 0) {
-            console.log(`Process exiting with code: ${code}`);
-        }
-    });
-    
-    return {
-        wasRegistered: false,
-        closeResources: async () => {
-            if (rl) {
-                rl.close();
-                rl = null;
-            }
-        }
-    };
-}
-
-/**
- * @deprecated Use registerShutdownHandlers() instead
- * Sets up cross-platform signal handlers for graceful shutdown.
- * Handles SIGINT (Ctrl+C), SIGTERM, and Windows-specific signals.
- */
-function setupSignalHandlers(): void {
-    registerShutdownHandlers();
 }
 
 async function main(): Promise<void> {
@@ -194,18 +105,45 @@ async function main(): Promise<void> {
     
     // Get port from environment variable or use default
     const port = getPort();
-    console.log(`IPC Bridge configured on port: ${port}`);
-    console.log('Initializing zero-mq bridge (Worker pool initialized on demand over ipc)...');
-    console.log('Press Ctrl+C to stop the server gracefully.');
+    console.log(`Server running on port ${port}`);
     
-    // Create bridge with configured port
-    bridge = new IpcBridge(port);
+    // Check for TEST_MODE
+    const testMode = process.env.TEST_MODE === '1';
     
-    // Set up signal handlers BEFORE starting the server
+    // Check for --max-runtime CLI flag
+    const maxRuntime = getMaxRuntime();
+    
+    // Determine the effective timeout (use shorter of TEST_MODE or --max-runtime)
+    let effectiveTimeout: number | undefined;
+    
+    if (testMode && maxRuntime !== undefined) {
+        effectiveTimeout = Math.min(2, maxRuntime);
+    } else if (testMode) {
+        effectiveTimeout = 2;
+    } else if (maxRuntime !== undefined) {
+        effectiveTimeout = maxRuntime;
+    }
+    
+    if (testMode) {
+        console.log('TEST_MODE enabled');
+    }
+    
+    // Register shutdown handlers
     registerShutdownHandlers();
     
-    console.log('Starting IPC Bridge. Waiting for Python connection...');
-    await bridge.start();
+    // Set up auto-shutdown if needed BEFORE starting the server
+    if (effectiveTimeout !== undefined) {
+        setTimeout(async () => {
+            await shutdown('auto-timeout');
+        }, effectiveTimeout * 1000);
+    }
+    
+    // Start the server
+    await startServer(port);
+    
+    if (!effectiveTimeout) {
+        console.log('Press Ctrl+C to stop the server.');
+    }
 }
 
 main().catch(err => {
