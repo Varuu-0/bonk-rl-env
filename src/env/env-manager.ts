@@ -187,10 +187,10 @@ export class EnvManager {
         const envs = this.getAllEnvs();
         const results: any[] = [];
         
-        // Reset all environments in parallel
-        const resetPromises = envs.map(async (env) => {
-            const envSeeds = seeds ? seeds.slice(0, 1) : undefined;
-            return env.reset(envSeeds);
+        // Reset all environments in parallel, each with its own seed
+        const resetPromises = envs.map((env, idx) => {
+            const envSeed = seeds ? seeds[idx] : undefined;
+            return env.reset(envSeed !== undefined ? [envSeed] : undefined);
         });
         
         const resetResults = await Promise.all(resetPromises);
@@ -214,10 +214,10 @@ export class EnvManager {
     async stepAll(actions: any[]): Promise<any[]> {
         const envs = this.getAllEnvs();
         
-        // Step all environments in parallel
+        // Step all environments in parallel, each with exactly one action
         const stepPromises = envs.map((env, idx) => {
-            const envActions = actions.slice(idx, idx + 1);
-            return env.step(envActions);
+            const action = actions[idx];
+            return env.step(action !== undefined ? [action] : []);
         });
         
         return Promise.all(stepPromises);

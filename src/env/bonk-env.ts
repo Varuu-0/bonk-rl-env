@@ -54,11 +54,9 @@ export class BonkEnv {
         
         // Get port from config or allocate one
         if (config.port) {
+            // Use provided port and reserve it
             this.port = config.port;
-            if (!config.portManager) {
-                // Allocate this port in the manager if using global
-                this.portManager.allocate();
-            }
+            this.portManager.reserve(this.port);
         } else {
             // Allocate a unique port
             this.port = this.portManager.allocate();

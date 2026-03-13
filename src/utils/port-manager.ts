@@ -24,7 +24,12 @@ export class PortManager {
         this.startPort = options.startPort ?? 6000;
         this.endPort = options.endPort ?? 7000;
         
-        if (this.startPort < 1 || this.endPort > 65535) {
+        if (
+            this.startPort < 1 ||
+            this.startPort > 65535 ||
+            this.endPort < 1 ||
+            this.endPort > 65535
+        ) {
             throw new Error(`Invalid port range: ${this.startPort}-${this.endPort}`);
         }
         
@@ -70,6 +75,18 @@ export class PortManager {
                 throw new Error(`No available ports in range ${this.startPort}-${this.endPort}`);
             }
         }
+    }
+
+    /**
+     * Reserve a specific port without allocating from the pool.
+     * @param port The port to reserve
+     * @throws Error if port is already allocated
+     */
+    reserve(port: number): void {
+        if (this.allocatedPorts.has(port)) {
+            throw new Error(`Port ${port} is already allocated`);
+        }
+        this.allocatedPorts.add(port);
     }
 
     /**
