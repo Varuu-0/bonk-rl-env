@@ -10,6 +10,7 @@ export class IpcBridge {
     private pool: WorkerPool;
     private port: number;
     private stepCount: number = 0;
+    private _closed: boolean = false;
 
     constructor(port: number = 5555) {
         this.port = port;
@@ -27,12 +28,21 @@ export class IpcBridge {
         const addr = `tcp://127.0.0.1:${this.port}`;
         await this.sock.bind(addr);
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
+        this._closed = false;
 
         // Wait for incoming requests from Python
-        for await (const frames of this.sock) {
-            const identity = frames[0];
-            const msg = frames[frames.length - 1];
-            await this.handleRequest(identity, msg.toString());
+        try {
+            for await (const frames of this.sock) {
+                if (this._closed) break;
+                const identity = frames[0];
+                const msg = frames[frames.length - 1];
+                await this.handleRequest(identity, msg.toString());
+            }
+        } catch (err: any) {
+            // Ignore errors during shutdown
+            if (!this._closed) {
+                console.error('[IPC] Error in server loop:', err);
+            }
         }
     }
 
@@ -100,7 +110,18 @@ export class IpcBridge {
     }
 
     async close() {
+        if (this._closed) {
+            return;
+        }
+        this._closed = true;
+        
+        // Close the socket to break out of the for await loop
+        try {
+            this.sock.close();
+        } catch (e) {
+            // Ignore close errors
+        }
+        
         this.pool.close();
-        this.sock.close();
     }
 }
