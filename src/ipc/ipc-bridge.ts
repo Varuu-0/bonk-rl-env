@@ -109,6 +109,44 @@ export class IpcBridge {
         }
     }
 
+    /**
+     * Initialize the environment pool directly (bypassing IPC).
+     * Used by BonkEnv for programmatic control.
+     */
+    async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
+        await this.pool.init(numEnvs, config, useSharedMemory);
+    }
+
+    /**
+     * Reset the environment directly (bypassing IPC).
+     * Used by BonkEnv for programmatic control.
+     */
+    async resetEnv(seeds?: number[]): Promise<any[]> {
+        return this.pool.reset(seeds);
+    }
+
+    /**
+     * Step the environment directly (bypassing IPC).
+     * Used by BonkEnv for programmatic control.
+     */
+    async stepEnv(actions: any[]): Promise<any[]> {
+        return this.pool.step(actions);
+    }
+
+    /**
+     * Get the port number.
+     */
+    getPort(): number {
+        return this.port;
+    }
+
+    /**
+     * Check if the bridge is closed.
+     */
+    isClosed(): boolean {
+        return this._closed;
+    }
+
     async close() {
         if (this._closed) {
             return;
