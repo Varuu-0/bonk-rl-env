@@ -1,6 +1,6 @@
 # Project Roadmap
 
-This document outlines the planned improvements for the Manifold Server project, organized by priority and implementation phase.
+This document outlines the planned improvements for the Bonk.io RL Environment, organized by priority and implementation phase.
 
 > **Recommendation**: See [Priority Recommendation](./priority-recommendation.md) for detailed analysis of which features to implement next.
 
@@ -11,6 +11,7 @@ This document outlines the planned improvements for the Manifold Server project,
 | ✅ Implemented | Complete and functional |
 | ⚠️ Partial | Partially implemented |
 | ❌ Not Started | Not yet implemented |
+| 🔥 Proposal | Proposed for consideration |
 
 ---
 
@@ -21,16 +22,28 @@ These are high-impact, low-effort improvements that can be completed quickly.
 | Feature | Status | Description |
 |:--------|:-------|:------------|
 | Binary protocol for ZMQ | ❌ | Replace JSON with MsgPack/Protocol Buffers for faster serialization |
+| Action Frame Skip | 🔥 | Allow agent to hold actions for multiple ticks to reduce jitter |
 | Typed arrays for observations | ⚠️ | Use TypedArrays for observations (partial implementation in Python) |
 | ZMQ socket optimization | ⚠️ | Socket tuning - DEALER/ROUTER pattern implemented |
 | Box2D configuration tuning | ✅ | Physics constants are configurable in `physics-engine.ts` |
 
-### Details
+### Action Frame Skip (Proposal)
 
-- **Binary Protocol**: Currently using JSON for all ZMQ messages. Switching to binary format could reduce message size by 50%+ and improve serialization speed.
-- **Typed Arrays**: Observations are already numpy arrays in Python, but could use TypedArrays for IPC to avoid conversion.
-- **ZMQ Optimization**: Current implementation uses DEALER/ROUTER pattern which is efficient but could benefit from socket tuning.
-- **Box2D Tuning**: Constants like `TPS`, `DT`, `SOLVER_ITERATIONS`, `GRAVITY`, etc. are exported and configurable.
+**Problem**: At 30 TPS, agent makes 30 decisions/second. Many decisions are redundant - holding "left" for 1 tick produces negligible movement, causing agent to jitter in place.
+
+**Solution**: Add `action_repeat` parameter that holds each action for N ticks before asking for next decision:
+
+```python
+# Agent decides every 4 ticks (7.5 meaningful decisions/sec)
+env = BonkVecEnv(num_envs=32, action_repeat=4)
+
+# Training is more efficient:
+# - Each action has meaningful effect
+# - Closer to human input patterns
+# - Faster convergence
+```
+
+**Implementation**: Add `frame_skip` parameter to environment config.
 
 ---
 
@@ -95,7 +108,7 @@ Long-term goals for the project.
 ### Summary by Phase
 
 ```
-Phase 1: ████████░░ 25% complete (1/4 fully, 2/4 partial)
+Phase 1: ████████░░ 20% complete (1/5 fully, 2/5 partial)
 Phase 2: █████░░░░░ 40% complete (2/5 fully, 0/5 partial)  
 Phase 3: ░░░░░░░░░░  0% complete (0/6 fully, 2/6 partial)
 Future:  ░░░░░░░░░░  0% complete (0/4 fully, 0/4 partial)
@@ -103,10 +116,11 @@ Future:  ░░░░░░░░░░  0% complete (0/4 fully, 0/4 partial)
 
 ### Overall Progress
 
-- **Total Features**: 19
-- **Fully Implemented**: 3 (16%)
-- **Partially Implemented**: 4 (21%)
-- **Not Started**: 12 (63%)
+- **Total Features**: 20
+- **Fully Implemented**: 3 (15%)
+- **Partially Implemented**: 4 (20%)
+- **Not Started**: 12 (60%)
+- **Proposals**: 1 (5%)
 
 ---
 
