@@ -188,8 +188,9 @@ export class EnvManager {
         const results: any[] = [];
         
         // Reset all environments in parallel, each with its own seed
+        // Use optional chaining to handle cases where seeds array is shorter than envs
         const resetPromises = envs.map((env, idx) => {
-            const envSeed = seeds ? seeds[idx] : undefined;
+            const envSeed = seeds?.[idx];
             return env.reset(envSeed !== undefined ? [envSeed] : undefined);
         });
         
