@@ -5,10 +5,25 @@
 # Node.js dependencies and build output
 node_modules/
 dist/
+*.tsbuildinfo
 
 # Python bytecode / caches
 python/__pycache__/
 __pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.egg-info/
+.eggs/
+*.egg
+
+# Coverage and testing
+.coverage
+.coverage.*
+htmlcov/
+.pytest_cache/
+.tox/
+coverage/
 
 # Models, logs, and training outputs
 models/
@@ -16,14 +31,27 @@ tensorboard_logs/
 logs/
 profiler_results/
 *.log
+checkpoints/
+*.h5
+*.pkl
+*.pth
+*.onnx
 
 # Environment / secrets
 .env
+.env.local
+*.pem
+*.key
 
-# IDE / agent metadata
-.cursor/
-.antigravity/
+# IDE / editor metadata
+.idea/
 .vscode/
+.cursors/
+.antigravity/
+*.swp
+*.swo
+*~
+.DS_Store
 
 # Project-specific runtime data
 chatlogs/
@@ -33,3 +61,13 @@ plans/sharedarraybuffer-implementation.md
 
 # Temporary files
 tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.backup
+*.orig
+
+# Benchmark outputs
+benchmarks/results/
+*.csv
