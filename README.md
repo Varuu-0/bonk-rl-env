@@ -13,6 +13,17 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 - **Batch IPC Bridge**: Utilizes **ZeroMQ (ZMQ) ROUTER/DEALER** patterns for high-speed, batch communication between the TypeScript worker pool and the Python ML pipeline.
 - **Vectorized Gymnasium API**: Implements the `stable_baselines3.common.vec_env.VecEnv` interface natively, allowing the Python agent to dispatch actions and aggregate observations across 64+ parallel environments simultaneously.
 
+## Key Physics Constants (Verified)
+
+| Constant | Value | Description |
+|:---------|:------|:------------|
+| TPS | 30 | Ticks per second |
+| DT | 0.0333... | Time per tick (1/30s) |
+| HEAVY_MASS_MULTIPLIER | 3.0 | Triples mass when heavy |
+| ARENA_HALF_WIDTH | 25m | Arena half-width |
+| ARENA_HALF_HEIGHT | 20m | Arena half-height |
+| MAX_TICKS | 900 | Max episode (30s at 30 TPS) |
+
 ## Features
 
 - **Deterministic Physics**: Reproducible simulation results for reliable RL training
