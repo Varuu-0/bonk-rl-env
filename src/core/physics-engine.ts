@@ -52,7 +52,7 @@ export const PLAYER_RADIUS = 0.5;
 export const PLAYER_DENSITY = 1.0;
 
 /** Heavy-state mass multiplier */
-export const HEAVY_MASS_MULTIPLIER = 3.0;
+export const HEAVY_MASS_MULTIPLIER = 3.0; // triples mass
 
 /** Arena bounds (in metres). Players outside these are considered dead. */
 export const ARENA_HALF_WIDTH = 25;

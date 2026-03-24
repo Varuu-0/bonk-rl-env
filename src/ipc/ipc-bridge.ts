@@ -53,10 +53,15 @@ export class IpcBridge {
             const command = payload.command;
 
             if (command === "init") {
-                const useSharedMemory = payload.useSharedMemory;
-                console.log(`[IPC] Init request: numEnvs=${payload.numEnvs}, config=${JSON.stringify(payload.config || {})}, useSharedMemory=${useSharedMemory}`);
-                await this.pool.init(payload.numEnvs, payload.config, useSharedMemory);
-                response = { status: "ok" };
+                const numEnvs = payload.numEnvs;
+                if (typeof numEnvs !== 'number' || numEnvs < 1) {
+                    response = { status: "error", error: "Invalid numEnvs: must be a positive number" };
+                } else {
+                    const useSharedMemory = payload.useSharedMemory;
+                    console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(payload.config || {})}, useSharedMemory=${useSharedMemory}`);
+                    await this.pool.init(numEnvs, payload.config || {}, useSharedMemory);
+                    response = { status: "ok" };
+                }
             } else if (command === "reset") {
                 console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
                 const obs = await this.pool.reset(payload.seeds);
@@ -68,30 +73,37 @@ export class IpcBridge {
                     }
                 };
             } else if (command === "step") {
-                console.log(`[IPC] Step request: actions=${payload.actions ? payload.actions.length : 0}`);
-                globalProfiler.start('bridge_step_total');
-                const results = await this.pool.step(payload.actions);
-                console.log(`[IPC] Step response: results is ${Array.isArray(results) ? 'array of length ' + results.length : results}`);
+                const actions = payload.actions;
+                if (!Array.isArray(actions)) {
+                    response = { status: "error", error: "Invalid actions: must be an array" };
+                } else if (actions.length === 0) {
+                    response = { status: "error", error: "Invalid actions: array cannot be empty" };
+                } else {
+                    console.log(`[IPC] Step request: actions=${actions.length}`);
+                    globalProfiler.start('bridge_step_total');
+                    const results = await this.pool.step(actions);
+                    console.log(`[IPC] Step response: results is ${Array.isArray(results) ? 'array of length ' + results.length : results}`);
 
-                this.stepCount++;
-                globalProfiler.tick();
+                    this.stepCount++;
+                    globalProfiler.tick();
 
-                if (this.stepCount % 5000 === 0) {
-                    globalProfiler.recordMemory();
+                    if (this.stepCount % 5000 === 0) {
+                        globalProfiler.recordMemory();
 
-                    const config = require('../../config').default;
-                    if (config.verboseTelemetry) {
-                        const snapshots = await this.pool.getTelemetrySnapshots();
-                        setLatestWorkerTelemetry(snapshots);
-                        globalProfiler.report(5000);
+                        const config = require('../../config').default;
+                        if (config.verboseTelemetry) {
+                            const snapshots = await this.pool.getTelemetrySnapshots();
+                            setLatestWorkerTelemetry(snapshots);
+                            globalProfiler.report(5000);
+                        }
                     }
-                }
 
-                response = {
-                    status: "ok",
-                    data: results
-                };
-                globalProfiler.end('bridge_step_total');
+                    response = {
+                        status: "ok",
+                        data: results
+                    };
+                    globalProfiler.end('bridge_step_total');
+                }
             } else {
                 response = { status: "error", error: `Unknown command: ${command}` };
             }
