@@ -31,11 +31,11 @@ These are high-impact, low-effort improvements that can be completed quickly.
 
 **Problem**: At 30 TPS, agent makes 30 decisions/second. Many decisions are redundant - holding "left" for 1 tick produces negligible movement, causing agent to jitter in place.
 
-**Solution**: Add `action_repeat` parameter that holds each action for N ticks before asking for next decision:
+**Solution**: Add `frame_skip` parameter that holds each action for N ticks before asking for next decision:
 
 ```python
 # Agent decides every 4 ticks (7.5 meaningful decisions/sec)
-env = BonkVecEnv(num_envs=32, action_repeat=4)
+env = BonkVecEnv(num_envs=32, frame_skip=4)
 
 # Training is more efficient:
 # - Each action has meaningful effect
