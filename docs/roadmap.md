@@ -1,6 +1,7 @@
 # Project Roadmap
 
 This document outlines the planned improvements for the Bonk.io RL Environment, organized by priority and implementation phase.
+This document outlines the planned improvements for the Bonk.io RL Environment, organized by priority and implementation phase.
 
 > **Recommendation**: See [Priority Recommendation](./priority-recommendation.md) for detailed analysis of which features to implement next.
 
@@ -11,6 +12,7 @@ This document outlines the planned improvements for the Bonk.io RL Environment, 
 | ✅ Implemented | Complete and functional |
 | ⚠️ Partial | Partially implemented |
 | ❌ Not Started | Not yet implemented |
+| 🔥 Proposal | Proposed for consideration |
 | 🔥 Proposal | Proposed for consideration |
 
 ---
