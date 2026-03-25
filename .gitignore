@@ -17,6 +17,25 @@ __pycache__/
 .eggs/
 *.egg
 
+# Python tools cache
+.mypy_cache/
+.ruff_cache/
+.dmypy.json
+dmypy.json
+.pyre/
+
+# Python virtual environments
+venv/
+.venv/
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+
+# Package managers
+.npm/
+.yarn/
+.pip/
+
 # Coverage and testing
 .coverage
 .coverage.*
@@ -42,16 +61,28 @@ checkpoints/
 .env.local
 *.pem
 *.key
+credentials.json
 
 # IDE / editor metadata
 .idea/
 .vscode/
 .cursors/
 .antigravity/
+.agent/
+.vs/
+*.suo
+*.user
+.history/
 *.swp
 *.swo
 *~
 .DS_Store
+
+# OS and system files
+Thumbs.db
+ehthumbs.db
+.Spotlight-V100
+.Trashes
 
 # Project-specific runtime data
 chatlogs/
