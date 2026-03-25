@@ -212,4 +212,15 @@ class BonkVecEnv(VecEnv):
         """Set attribute in environments."""
         pass
 
-    def env_method(self, method_name, *method_args, indices=None, **met
+    def env_method(self, method_name, *method_args, indices=None, **method_kwargs):
+        """Call method on environments."""
+        return [None] * self.num_envs
+
+    def seed(self, seed=None):
+        """Set seeds for environments."""
+        # Seeds are handled in reset
+        return [None] * self.num_envs
+
+    def env_is_wrapped(self, wrapper_class, indices=None):
+        """Check if environment is wrapped."""
+        return [False] * self.num_envs
