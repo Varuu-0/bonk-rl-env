@@ -22,16 +22,16 @@ These are high-impact, low-effort improvements that can be completed quickly.
 | Feature | Status | Description |
 |:--------|:-------|:------------|
 | Binary protocol for ZMQ | ❌ | Replace JSON with MsgPack/Protocol Buffers for faster serialization |
-| Action Frame Skip | 🔥 | Allow agent to hold actions for multiple ticks to reduce jitter |
+| Action Frame Skip | ✅ | Allow agent to hold actions for multiple ticks to reduce jitter |
 | Typed arrays for observations | ⚠️ | Use TypedArrays for observations (partial implementation in Python) |
 | ZMQ socket optimization | ⚠️ | Socket tuning - DEALER/ROUTER pattern implemented |
 | Box2D configuration tuning | ✅ | Physics constants are configurable in `physics-engine.ts` |
 
-### Action Frame Skip (Proposal)
+### Action Frame Skip
 
 **Problem**: At 30 TPS, agent makes 30 decisions/second. Many decisions are redundant - holding "left" for 1 tick produces negligible movement, causing agent to jitter in place.
 
-**Solution**: Add `frame_skip` parameter that holds each action for N ticks before asking for next decision:
+**Solution**: ✅ Implemented in `src/core/environment.ts`. The `frame_skip` parameter can be configured in the environment config to hold each action for N ticks before asking for next decision:
 
 ```python
 # Agent decides every 4 ticks (7.5 meaningful decisions/sec)
@@ -108,7 +108,7 @@ Long-term goals for the project.
 ### Summary by Phase
 
 ```
-Phase 1: ████████░░ 20% complete (1/5 fully, 2/5 partial)
+Phase 1: ██████████░░ 40% complete (2/5 fully, 2/5 partial)
 Phase 2: █████░░░░░ 40% complete (2/5 fully, 0/5 partial)  
 Phase 3: ░░░░░░░░░░  0% complete (0/6 fully, 2/6 partial)
 Future:  ░░░░░░░░░░  0% complete (0/4 fully, 0/4 partial)
@@ -117,10 +117,10 @@ Future:  ░░░░░░░░░░  0% complete (0/4 fully, 0/4 partial)
 ### Overall Progress
 
 - **Total Features**: 20
-- **Fully Implemented**: 3 (15%)
+- **Fully Implemented**: 4 (20%)
 - **Partially Implemented**: 4 (20%)
 - **Not Started**: 12 (60%)
-- **Proposals**: 1 (5%)
+- **Proposals**: 0 (0%)
 
 ---
 

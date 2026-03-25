@@ -90,6 +90,8 @@ export interface EnvironmentConfig {
     mapData?: MapDef;
     /** Seed for deterministic randomness */
     seed?: number;
+    /** Number of ticks to hold each action before requesting new decision (default 1) */
+    frameSkip?: number;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -121,6 +123,8 @@ export class BonkEnvironment {
     private opponentIds: number[] = [];
     private previousAliveState: Map<number, boolean> = new Map();
     private rng: PRNG;
+    private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+    private frameSkipTicks: number = 0;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Load map from file or use provided config
@@ -143,6 +147,7 @@ export class BonkEnvironment {
             randomOpponent: config.randomOpponent ?? true,
             mapData: mapDef,
             seed: config.seed ?? Math.floor(Math.random() * 1000000),
+            frameSkip: config.frameSkip ?? 1,
         };
 
         this.rng = new PRNG(this.config.seed);
@@ -202,6 +207,10 @@ export class BonkEnvironment {
             this.previousAliveState.set(id, true);
         }
 
+        // Reset frame skip state
+        this.frameSkipTicks = 0;
+        this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+
         return this.getObservation();
     }
 
@@ -217,7 +226,12 @@ export class BonkEnvironment {
      *   - Bit 5: grapple
      */
     step(action: Action): StepResult {
-        const aiInput = this.decodeAction(action);
+        // If starting a new frame skip cycle, update the stored action
+        if (this.frameSkipTicks === 0) {
+            this.lastAction = this.decodeAction(action);
+        }
+
+        const aiInput = this.lastAction;
 
         // Apply AI input
         this.physics.applyInput(this.aiPlayerId, aiInput);
@@ -240,13 +254,25 @@ export class BonkEnvironment {
             this.previousAliveState.set(playerId, this.physics.getPlayerState(playerId).alive);
         }
 
-        // Check terminal conditions
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
-        const allOpponentsDead = this.opponentIds.every(
-            id => !this.physics.getPlayerState(id).alive,
-        );
-        const terminated = !aiState.alive || allOpponentsDead;
-        const truncated = this.physics.getTickCount() >= this.config.maxTicks;
+        // Increment frame skip counter
+        this.frameSkipTicks++;
+
+        // Check terminal conditions only on the final tick of the frame skip cycle
+        const isFinalTick = this.frameSkipTicks >= this.config.frameSkip;
+        let terminated = false;
+        let truncated = false;
+
+        if (isFinalTick) {
+            const aiState = this.physics.getPlayerState(this.aiPlayerId);
+            const allOpponentsDead = this.opponentIds.every(
+                id => !this.physics.getPlayerState(id).alive,
+            );
+            terminated = !aiState.alive || allOpponentsDead;
+            truncated = this.physics.getTickCount() >= this.config.maxTicks;
+
+            // Reset frame skip counter for next action
+            this.frameSkipTicks = 0;
+        }
 
         const observation = this.getObservation();
 
@@ -257,11 +283,12 @@ export class BonkEnvironment {
             truncated,
             info: {
                 tick: this.physics.getTickCount(),
-                aiAlive: aiState.alive,
+                aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
                 opponentsAlive: this.opponentIds.filter(
                     id => this.physics.getPlayerState(id).alive,
                 ).length,
                 terminated,
+                frameSkip: this.config.frameSkip,
             },
         };
     }

@@ -12,7 +12,12 @@ class BonkVecEnv(VecEnv):
         Args:
             num_envs: Number of parallel environments
             port: ZMQ port for communication with Node.js backend
-            config: Optional configuration dictionary
+            config: Optional configuration dictionary, can include:
+                - frame_skip: Number of ticks to hold each action (default 1)
+                - num_opponents: Number of opponents (default 1)
+                - max_ticks: Maximum ticks per episode (default 900)
+                - random_opponent: Use random opponent policy (default True)
+                - seed: Random seed
         """
         # Action space: 6 binary inputs (left, right, up, down, heavy, grapple)
         action_space = spaces.Discrete(64)
