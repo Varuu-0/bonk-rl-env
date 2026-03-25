@@ -281,16 +281,46 @@ The server handles graceful shutdown across different platforms:
 
 ## Running Tests
 
+The test suite provides a consolidated CLI with multiple ways to run tests:
+
 ```bash
-# Run shutdown and script tests
+# Run all tests (default)
 npm test
 
-# Run telemetry tests
-npm run test:telemetry
+# Interactive test runner menu
+npm run test:runner
+
+# List all available tests
+npm run test:list
+
+# Run specific test categories
+npm run test:physics    # Physics engine tests
+npm run test:prng       # PRNG tests
+npm run test:env        # Environment tests
+npm run test:frameskip  # Frame skip tests
+npm run test:shared     # Shared memory tests
+npm run test:shutdown   # Shutdown handler tests
+npm run test:telemetry  # Telemetry tests
+npm run test:manager    # Env manager tests
 
 # Type check
 npm run typecheck
 ```
+
+### Test Suite Overview
+
+| # | Test File | Description | Test Cases |
+|:--|:----------|:------------|:-----------|
+| 1 | `physics-engine.test.ts` | Box2D physics simulation | 25 |
+| 2 | `prng.test.ts` | Deterministic RNG | 11 |
+| 3 | `bonk-env.test.ts` | Gymnasium API | 24 |
+| 4 | `frame-skip.test.ts` | Action repetition | 22 |
+| 5 | `shared-memory.ts` | Zero-copy IPC | 6 |
+| 6 | `shutdown.ts` | Signal handlers | 17 |
+| 7 | `telemetry.ts` | Profiling system | 16 |
+| 8 | `env-manager.test.ts` | Pool management | 24 |
+
+**Total: 145 test cases across 8 test suites**
 
 ## Performance Benchmarks
 
