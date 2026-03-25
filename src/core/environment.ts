@@ -125,8 +125,12 @@ export class BonkEnvironment {
     private rng: PRNG;
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
+    private terminalReached: boolean = false;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
+        // Normalize config: accept both camelCase and snake_case
+        const frameSkip = config.frameSkip !== undefined ? config.frameSkip : (config as any).frame_skip;
+
         // Load map from file or use provided config
         let mapDef: MapDef;
         if (config.mapData) {
@@ -147,7 +151,7 @@ export class BonkEnvironment {
             randomOpponent: config.randomOpponent ?? true,
             mapData: mapDef,
             seed: config.seed ?? Math.floor(Math.random() * 1000000),
-            frameSkip: config.frameSkip ?? 1,
+            frameSkip: frameSkip ?? 1,
         };
 
         this.rng = new PRNG(this.config.seed);
@@ -209,6 +213,7 @@ export class BonkEnvironment {
 
         // Reset frame skip state
         this.frameSkipTicks = 0;
+        this.terminalReached = false;
         this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
 
         return this.getObservation();
@@ -226,6 +231,32 @@ export class BonkEnvironment {
      *   - Bit 5: grapple
      */
     step(action: Action): StepResult {
+        // If terminal was already reached in a previous tick of this cycle, return done immediately
+        // without stepping physics further (rewards were already accumulated)
+        if (this.terminalReached) {
+            this.frameSkipTicks++;
+            if (this.frameSkipTicks >= this.config.frameSkip) {
+                this.frameSkipTicks = 0;
+                this.terminalReached = false;
+            }
+            const observation = this.getObservation();
+            return {
+                observation,
+                reward: 0,
+                done: true,
+                truncated: false,
+                info: {
+                    tick: this.physics.getTickCount(),
+                    aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
+                    opponentsAlive: this.opponentIds.filter(
+                        id => this.physics.getPlayerState(id).alive,
+                    ).length,
+                    terminated: true,
+                    frameSkip: this.config.frameSkip,
+                },
+            };
+        }
+
         // If starting a new frame skip cycle, update the stored action
         if (this.frameSkipTicks === 0) {
             this.lastAction = this.decodeAction(action);
@@ -254,24 +285,26 @@ export class BonkEnvironment {
             this.previousAliveState.set(playerId, this.physics.getPlayerState(playerId).alive);
         }
 
+        // Check for terminal state (death or maxTicks)
+        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+        const allOpponentsDead = this.opponentIds.every(
+            id => !this.physics.getPlayerState(id).alive,
+        );
+        const terminated = !aiState.alive || allOpponentsDead;
+        const truncated = this.physics.getTickCount() >= this.config.maxTicks;
+
+        // If terminal reached, set flag to report done immediately on subsequent ticks
+        if (terminated || truncated) {
+            this.terminalReached = true;
+        }
+
         // Increment frame skip counter
         this.frameSkipTicks++;
 
-        // Check terminal conditions only on the final tick of the frame skip cycle
-        const isFinalTick = this.frameSkipTicks >= this.config.frameSkip;
-        let terminated = false;
-        let truncated = false;
-
-        if (isFinalTick) {
-            const aiState = this.physics.getPlayerState(this.aiPlayerId);
-            const allOpponentsDead = this.opponentIds.every(
-                id => !this.physics.getPlayerState(id).alive,
-            );
-            terminated = !aiState.alive || allOpponentsDead;
-            truncated = this.physics.getTickCount() >= this.config.maxTicks;
-
-            // Reset frame skip counter for next action
+        // Reset frame skip counter for next action after completing the cycle
+        if (this.frameSkipTicks >= this.config.frameSkip) {
             this.frameSkipTicks = 0;
+            this.terminalReached = false;
         }
 
         const observation = this.getObservation();

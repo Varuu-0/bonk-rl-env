@@ -122,14 +122,14 @@ function testFrameSkip4(): void {
     test("Done is false on intermediate tick", result.done === false);
     
     let result2: ReturnType<typeof env.step> | undefined;
-    for (let i = 0; i < 3; i++) {
+    for (let i = 0; i < 4; i++) {
         result2 = env.step({ 
             left: true, right: false, up: false, down: false, 
             heavy: false, grapple: false 
         });
     }
     
-    test("Tick advances to 4 after 4 steps", result2!.observation.tick === 4);
+    test("Tick advances to 5 after 4 more steps (new cycle starts)", result2!.observation.tick === 5);
     
     env.close();
 }
