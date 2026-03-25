@@ -36,7 +36,7 @@ export const TPS = 30;
 export const DT = 1 / TPS;
 
 /** Box2D solver iterations per step (matches bonk defaults) */
-export const SOLVER_ITERATIONS = 10;
+export const SOLVER_ITERATIONS = 5;
 
 /** Physics scale: pixels → metres (bonk uses ~30px per metre) */
 export const SCALE = 30;
