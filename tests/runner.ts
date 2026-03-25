@@ -9,16 +9,16 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 const colors = {
-  reset: '\x1b[0m',
-  bright: '\x1b[1m',
-  dim: '\x1b[2m',
-  red: '\x1b[31m',
-  green: '\x1b[32m',
-  yellow: '\x1b[33m',
-  blue: '\x1b[34m',
-  cyan: '\x1b[36m',
-  white: '\x1b[37m',
-  gray: '\x1b[90m',
+  reset: '[0m',
+  bright: '[1m',
+  dim: '[2m',
+  red: '[31m',
+  green: '[32m',
+  yellow: '[33m',
+  blue: '[34m',
+  cyan: '[36m',
+  white: '[37m',
+  gray: '[90m',
 };
 
 // Test timeout in milliseconds (60 seconds)
@@ -93,7 +93,7 @@ function runTest(testFile) {
     // Set up timeout to prevent indefinite hanging
     const timeout = setTimeout(() => {
       child.kill('SIGKILL');
-      reject(new Error(`Test timed out after ${TEST_TIMEOUT}ms`));
+      reject(new Error('Test timed out after ' + TEST_TIMEOUT + 'ms'));
     }, TEST_TIMEOUT);
     
     child.on('close', (code) => {
@@ -170,7 +170,7 @@ async function main() {
       return;
     }
     console.log('Unknown test: ' + arg);
-    console.log('Use "list" to see available tests');
+    console.log('Use list to see available tests');
     process.exit(1);
   }
   printHeader();

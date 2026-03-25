@@ -19,7 +19,12 @@
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit"
   },
-  "keywords": ["bonk", "reinforcement-learning", "rl", "game-simulation"],
+  "keywords": [
+    "bonk",
+    "reinforcement-learning",
+    "rl",
+    "game-simulation"
+  ],
   "author": "SneezingCactus",
   "engines": {
     "node": ">=20.0.0"
