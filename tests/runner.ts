@@ -9,17 +9,20 @@ import * as path from 'path';
 import * as fs from 'fs';
 
 const colors = {
-  reset: '[0m',
-  bright: '[1m',
-  dim: '[2m',
-  red: '[31m',
-  green: '[32m',
-  yellow: '[33m',
-  blue: '[34m',
-  cyan: '[36m',
-  white: '[37m',
-  gray: '[90m',
+  reset: '\x1b[0m',
+  bright: '\x1b[1m',
+  dim: '\x1b[2m',
+  red: '\x1b[31m',
+  green: '\x1b[32m',
+  yellow: '\x1b[33m',
+  blue: '\x1b[34m',
+  cyan: '\x1b[36m',
+  white: '\x1b[37m',
+  gray: '\x1b[90m',
 };
+
+// Test timeout in milliseconds (60 seconds)
+const TEST_TIMEOUT = 60000;
 
 const TEST_FILES = {
   '1': { file: 'physics-engine.test.ts', description: 'Box2D physics simulation' },
@@ -38,7 +41,10 @@ function print(text, color) {
 }
 
 function printHeader() {
-  console.clear();
+  // Only clear terminal in interactive TTY environments (not CI)
+  if (process.stdout.isTTY) {
+    console.clear();
+  }
   print('========================================================', colors.cyan);
   print('  BONK.RL-ENV - AUTOMATED TEST SUITE', colors.cyan);
   print('========================================================', colors.cyan);
@@ -77,16 +83,29 @@ function runTest(testFile) {
     print('Running: ' + testFile + ' ...', colors.cyan);
     console.log();
     const startTime = Date.now();
+    
     const child = spawn('npx', ['tsx', testPath], {
       stdio: 'inherit',
       shell: true,
       cwd: path.join(__dirname, '..'),
     });
+    
+    // Set up timeout to prevent indefinite hanging
+    const timeout = setTimeout(() => {
+      child.kill('SIGKILL');
+      reject(new Error(`Test timed out after ${TEST_TIMEOUT}ms`));
+    }, TEST_TIMEOUT);
+    
     child.on('close', (code) => {
+      clearTimeout(timeout);
       const time = Date.now() - startTime;
       resolve({ passed: code === 0 ? 1 : 0, failed: code === 0 ? 0 : 1, time });
     });
-    child.on('error', (err) => reject(err));
+    
+    child.on('error', (err) => {
+      clearTimeout(timeout);
+      reject(err);
+    });
   });
 }
 
