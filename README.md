@@ -302,6 +302,12 @@ npm run test:shared     # Shared memory tests
 npm run test:shutdown   # Shutdown handler tests
 npm run test:telemetry  # Telemetry tests
 npm run test:manager    # Env manager tests
+npm run test:map-types    # Map body type tests
+npm run test:collision    # Collision filtering tests  
+npm run test:nophysics    # noPhysics/friction tests
+npm run test:grapple      # Grapple mechanics tests
+npm run test:bounds       # Dynamic arena bounds tests
+npm run test:integration  # Map integration tests
 
 # Type check
 npm run typecheck
@@ -319,8 +325,14 @@ npm run typecheck
 | 6 | `shutdown.ts` | Signal handlers | 17 |
 | 7 | `telemetry.ts` | Profiling system | 16 |
 | 8 | `env-manager.test.ts` | Pool management | 24 |
+| 9 | `map-body-types.test.ts` | Map body types & properties | 34 |
+| 10 | `collision-filtering.test.ts` | Collision group filtering | 33 |
+| 11 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 |
+| 12 | `grapple-mechanics.test.ts` | Grapple & slingshot | 34 |
+| 13 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
+| 14 | `map-integration.test.ts` | Real map file loading | 78 |
 
-**Total: 145 test cases across 8 test suites**
+**Total: 374 test cases across 14 test suites**
 
 ## Performance Benchmarks
 
