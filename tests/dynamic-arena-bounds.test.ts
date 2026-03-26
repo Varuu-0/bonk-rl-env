@@ -216,14 +216,14 @@ function testLargeMapBounds(): void {
         x: 1000, y: 0, width: 1825, height: 30, static: true
     });
 
-    // Body center at 1000/30 = 33.33m. Extent estimate: 50/30=1.67m.
-    // minX = 33.33-1.67 = 31.67, maxX = 33.33+1.67 = 35.0
-    // halfWidth = max(31.67, 35.0) + 5 = 40.0m = 1200px
+    // Body center at 1000/30 = 33.33m. Actual AABB extent: (1825/30)/2 = 30.42m.
+    // minX = 33.33-30.42 = 2.91, maxX = 33.33+30.42 = 63.75
+    // halfWidth = max(2.91, 63.75) + 5 = 68.75m = 2062.5px
 
-    // Player at 900px (30m) — within 40m half-width
+    // Player at 900px (30m) — within 68.75m half-width
     engine.addPlayer(0, 900, 0);
-    // Player at 1250px (41.67m) — outside 40m half-width
-    engine.addPlayer(1, 1250, 0);
+    // Player at 2100px (70m) — outside 68.75m half-width
+    engine.addPlayer(1, 2100, 0);
 
     engine.tick();
 
@@ -378,12 +378,12 @@ function testTallBodyExpandsHeight(): void {
         x: 0, y: 600, width: 30, height: 300, static: true
     });
 
-    // Center at 600/30 = 20m. Extent estimate: 1.67m.
-    // maxY = 21.67 → halfHeight = 21.67 + 5 = 26.67m
+    // Center at 600/30 = 20m. Actual AABB extent: (300/30)/2 = 5m.
+    // minY = 15, maxY = 25 → halfHeight = max(|15|, |25|) + 5 = 30m = 900px
     // Player at y=600px (20m) should be alive
     engine.addPlayer(0, 0, 600);
-    // Player at y=850px (28.33m) should be dead (>26.67m)
-    engine.addPlayer(1, 0, 850);
+    // Player at y=950px (31.67m) should be dead (>30m)
+    engine.addPlayer(1, 0, 950);
 
     engine.tick();
 
@@ -411,13 +411,13 @@ function testNegativeCoordinateBodies(): void {
         x: -600, y: 0, width: 200, height: 30, static: true
     });
 
-    // Center at -600/30 = -20m. Extent: 1.67m.
-    // minX = -21.67 → halfWidth = max(|-21.67|, |-18.33|) + 5 = 26.67m
+    // Center at -600/30 = -20m. Actual AABB extent: (200/30)/2 = 3.33m.
+    // minX = -23.33, maxX = -16.67 → halfWidth = max(|-23.33|, |-16.67|) + 5 = 28.33m = 850px
 
-    // Player at -720px (-24m) — within 26.67m
+    // Player at -720px (-24m) — within 28.33m
     engine.addPlayer(0, -720, 0);
-    // Player at -850px (-28.33m) — outside 26.67m
-    engine.addPlayer(1, -850, 0);
+    // Player at -900px (-30m) — outside 28.33m
+    engine.addPlayer(1, -900, 0);
 
     engine.tick();
 

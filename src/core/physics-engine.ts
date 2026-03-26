@@ -208,6 +208,7 @@ export class PhysicsEngine {
      } else if (def.type === 'polygon') {
        if (!def.vertices || def.vertices.length < 3) {
          console.warn(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
+         this.world.DestroyBody(body);
          return; // Skip invalid polygon
        }
        shapeDef = new b2PolygonDef();
@@ -258,12 +259,15 @@ export class PhysicsEngine {
     let minY = Infinity, maxY = -Infinity;
 
     for (const body of this.platformBodies) {
-      const pos = body.GetPosition();
-      // Rough extent estimate — add margin for body size
-      minX = Math.min(minX, pos.x - 50 / SCALE);
-      maxX = Math.max(maxX, pos.x + 50 / SCALE);
-      minY = Math.min(minY, pos.y - 50 / SCALE);
-      maxY = Math.max(maxY, pos.y + 50 / SCALE);
+      const aabb = new b2AABB();
+      const transform = body.GetXForm();
+      for (let shape = body.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        shape.ComputeAABB(aabb, transform);
+        minX = Math.min(minX, aabb.lowerBound.x);
+        maxX = Math.max(maxX, aabb.upperBound.x);
+        minY = Math.min(minY, aabb.lowerBound.y);
+        maxY = Math.max(maxY, aabb.upperBound.y);
+      }
     }
 
     if (isFinite(minX)) {
