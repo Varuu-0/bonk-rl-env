@@ -28,6 +28,7 @@ const {
   b2Body,
   b2DistanceJointDef,
   b2ContactListener,
+  b2FilterData,
 } = box2d;
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -85,18 +86,31 @@ export interface PlayerInput {
 
 export interface MapBodyDef {
   name: string;
-  type: 'rect' | 'circle';
+  type: 'rect' | 'circle' | 'polygon';
   x: number;
   y: number;
   width?: number;    // For rect
   height?: number;   // For rect
   radius?: number;   // For circle
+  vertices?: { x: number; y: number }[]; // For polygon
   static: boolean;
   density?: number;
   restitution?: number;
   angle?: number;
   isLethal?: boolean;
   grappleMultiplier?: number;
+  noPhysics?: boolean;           // When true, body should be a sensor (no collision response)
+  noGrapple?: boolean;           // When true, cannot be grappled
+  innerGrapple?: boolean;        // Inner grapple behavior
+  friction?: number;             // Surface friction coefficient
+  collides?: {                   // Collision group filtering
+    g1: boolean;
+    g2: boolean;
+    g3: boolean;
+    g4: boolean;
+  };
+  color?: number;                // Visual color (RGB as integer)
+  surfaceName?: string;          // Surface type name
 }
 
 export interface MapSpawnPoints {
@@ -119,6 +133,8 @@ export class PhysicsEngine {
   private playerGrappleJoints: Map<number, any> = new Map();
   private platformBodies: any[] = [];
   private tickCount: number = 0;
+  private arenaHalfWidth: number = ARENA_HALF_WIDTH;
+  private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
 
   constructor() {
     // Create world with AABB and gravity
@@ -142,8 +158,8 @@ export class PhysicsEngine {
       try {
         globalProfiler.increment('collision_events');
 
-        const shape1 = contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.();
-        const shape2 = contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.();
+        const shape1 = contact.shape1 || (contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.());
+        const shape2 = contact.shape2 || (contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.());
         if (!shape1 || !shape2) return;
 
         const body1 = shape1.GetBody();
@@ -186,19 +202,75 @@ export class PhysicsEngine {
       const hw = (def.width || 0) / 2;
       const hh = (def.height || 0) / 2;
       shapeDef.SetAsBox(hw / SCALE, hh / SCALE);
-    } else if (def.type === 'circle') {
-      shapeDef = new b2CircleDef();
-      shapeDef.radius = (def.radius || 0) / SCALE;
-    }
+     } else if (def.type === 'circle') {
+       shapeDef = new b2CircleDef();
+       shapeDef.radius = (def.radius || 0) / SCALE;
+     } else if (def.type === 'polygon') {
+       if (!def.vertices || def.vertices.length < 3) {
+         console.warn(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
+         return; // Skip invalid polygon
+       }
+       shapeDef = new b2PolygonDef();
+       // Box2D supports max 8 vertices for convex polygons
+       const maxVertices = Math.min(def.vertices.length, 8);
+       for (let i = 0; i < maxVertices; i++) {
+         const v = def.vertices[i];
+         shapeDef.vertices[i].Set(v.x / SCALE, v.y / SCALE);
+       }
+       shapeDef.vertexCount = maxVertices;
+     }
 
-    shapeDef.density = def.static ? 0 : (def.density ?? 1.0);
-    shapeDef.friction = 0.3;
-    shapeDef.restitution = def.restitution ?? 0.4;
+     shapeDef.density = def.static ? 0 : (def.density ?? 1.0);
+     shapeDef.friction = def.friction ?? 0.3;
+     const restitutionValue = def.restitution === -1 ? 0.4 : (def.restitution ?? 0.4);
+     shapeDef.restitution = restitutionValue;
+
+      // Handle noPhysics: true → make body a sensor (no collision response, but still triggers contact events)
+      if (def.noPhysics) {
+        shapeDef.isSensor = true;
+      }
+
+      // Apply collision filtering if specified
+      if (def.collides) {
+        const filter = new b2FilterData();
+        filter.categoryBits = 0x0001; // Map bodies are category 1
+        filter.maskBits = 0x0000; // Start with no collision
+        if (def.collides.g1) filter.maskBits |= 0x0002;
+        if (def.collides.g2) filter.maskBits |= 0x0004;
+        if (def.collides.g3) filter.maskBits |= 0x0008;
+        if (def.collides.g4) filter.maskBits |= 0x0010;
+        shapeDef.filter = filter;
+      }
 
     body.CreateShape(shapeDef);
     body.SetMassFromShapes();
     body.SetUserData(def); // Stores isLethal and grappleMultiplier
     this.platformBodies.push(body);
+    this.calculateArenaBounds();
+  }
+
+  /**
+   * Calculate arena bounds based on map body extents.
+   * Call this after adding all map bodies.
+   */
+  calculateArenaBounds(): void {
+    let minX = Infinity, maxX = -Infinity;
+    let minY = Infinity, maxY = -Infinity;
+
+    for (const body of this.platformBodies) {
+      const pos = body.GetPosition();
+      // Rough extent estimate — add margin for body size
+      minX = Math.min(minX, pos.x - 50 / SCALE);
+      maxX = Math.max(maxX, pos.x + 50 / SCALE);
+      minY = Math.min(minY, pos.y - 50 / SCALE);
+      maxY = Math.max(maxY, pos.y + 50 / SCALE);
+    }
+
+    if (isFinite(minX)) {
+      const margin = 5; // 5 metres extra buffer
+      this.arenaHalfWidth = Math.max(Math.abs(minX), Math.abs(maxX)) + margin;
+      this.arenaHalfHeight = Math.max(Math.abs(minY), Math.abs(maxY)) + margin;
+    }
   }
 
   /**
@@ -216,6 +288,13 @@ export class PhysicsEngine {
     circleDef.density = PLAYER_DENSITY;
     circleDef.friction = 0.3;
     circleDef.restitution = 0.5;
+
+    // Assign collision category based on player ID
+    // Player 0 = team g1 (category 0x0002), Player 1+ = team g2 (category 0x0004)
+    const filter = new b2FilterData();
+    filter.categoryBits = id === 0 ? 0x0002 : 0x0004;
+    filter.maskBits = 0xFFFF; // Collide with everything by default
+    circleDef.filter = filter;
 
     body.CreateShape(circleDef);
     body.SetMassFromShapes();
@@ -334,6 +413,17 @@ export class PhysicsEngine {
     if (closestPlatform) {
       const ud = closestPlatform.GetUserData() || {};
 
+      // Skip platforms marked as noGrapple
+      if (ud.noGrapple) {
+        return; // Cannot grapple this surface
+      }
+
+      // innerGrapple: only grapple from inside (simplified implementation)
+      // For now, skip innerGrapple bodies as they need special handling
+      if (ud.innerGrapple) {
+        return;
+      }
+
       // Slingshot check (WDB mechanic)
       if (ud.grappleMultiplier === 99999) {
         body.ApplyImpulse(new b2Vec2(0, -50), startPos);
@@ -375,8 +465,8 @@ export class PhysicsEngine {
 
       const pos = body.GetPosition();
       if (
-        Math.abs(pos.x) > ARENA_HALF_WIDTH ||
-        Math.abs(pos.y) > ARENA_HALF_HEIGHT
+        Math.abs(pos.x) > this.arenaHalfWidth ||
+        Math.abs(pos.y) > this.arenaHalfHeight
       ) {
         this.playerAlive.set(id, false);
         globalProfiler.increment('death_out_of_bounds');

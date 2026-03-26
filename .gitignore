@@ -102,3 +102,7 @@ temp/
 # Benchmark outputs
 benchmarks/results/
 *.csv
+maps/bonk_Desert_Bridge_289838.json
+maps/bonk_grapple_V5_1362801.json
+maps/bonk_Simple_1v1_123.json
+maps/bonk_WDB__No_Mapshake__716916.json
