@@ -79,10 +79,7 @@ export class IpcBridge {
                 } else if (actions.length === 0) {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
                 } else {
-                    console.log(`[IPC] Step request: actions=${actions.length}`);
-                    globalProfiler.start('bridge_step_total');
                     const results = await this.pool.step(actions);
-                    console.log(`[IPC] Step response: results is ${Array.isArray(results) ? 'array of length ' + results.length : results}`);
 
                     this.stepCount++;
                     globalProfiler.tick();
@@ -102,7 +99,6 @@ export class IpcBridge {
                         status: "ok",
                         data: results
                     };
-                    globalProfiler.end('bridge_step_total');
                 }
             } else {
                 response = { status: "error", error: `Unknown command: ${command}` };
@@ -113,9 +109,7 @@ export class IpcBridge {
         }
 
         try {
-            const jsonStr = JSON.stringify(response);
-            console.log(`[IPC] Sending response: ${jsonStr.substring(0, 200)}`);
-            await this._wrappedSend([identity, jsonStr]);
+            await this._wrappedSend([identity, JSON.stringify(response)]);
         } catch (sendError) {
             console.error("[IPC] Error sending response:", sendError);
         }

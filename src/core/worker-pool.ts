@@ -50,6 +50,7 @@ export class WorkerPool {
     // Buffer pool for encoding actions (avoids per-step allocation)
     private actionBufferPool: Uint8Array[] = [];
     private maxEnvsPerWorker: number = 0;
+    private _stepCount: number = 0;
 
     constructor(private numWorkers: number = Math.min(os.cpus().length, 8)) {
     }
@@ -185,27 +186,29 @@ export class WorkerPool {
                 shm.sendCommand(1); // RESET command
             }
 
-            // 2. Poll for reset completion
+            // 2. Wait for reset completion using Atomics.wait (no polling overhead)
             const timeoutMs = 30000;
             const startTime = Date.now();
-            let workersRemaining = this.workers.length;
             const finished = new Uint8Array(this.workers.length);
 
-            while (workersRemaining > 0) {
-                for (let i = 0; i < this.workers.length; i++) {
-                    if (finished[i]) continue;
-                    if (this.sharedMemManagers[i]!.isResultsReady()) {
-                        this.sharedMemManagers[i]!.consumeResultsSignal();
-                        finished[i] = 1;
-                        workersRemaining--;
-                    }
+            // First pass: check if any workers already done
+            for (let i = 0; i < this.workers.length; i++) {
+                if (this.sharedMemManagers[i]!.isResultsReady()) {
+                    this.sharedMemManagers[i]!.consumeResultsSignal();
+                    finished[i] = 1;
                 }
-                if (workersRemaining > 0) {
-                    if ((Date.now() - startTime) > timeoutMs) {
-                        throw new Error('Timeout waiting for worker reset');
-                    }
-                    await new Promise(resolve => setTimeout(resolve, 1));
-                }
+            }
+
+            // Second pass: Atomics.wait on unfinished workers
+            for (let i = 0; i < this.workers.length; i++) {
+                if (finished[i]) continue;
+                const shm = this.sharedMemManagers[i]!;
+                const ctrl = shm.getControl();
+                const elapsed = Date.now() - startTime;
+                const remaining = Math.max(1, timeoutMs - elapsed);
+                Atomics.wait(ctrl.mainReady, 0, 0, remaining);
+                shm.consumeResultsSignal();
+                finished[i] = 1;
             }
 
             // 3. Extract observations
@@ -266,50 +269,54 @@ export class WorkerPool {
             shm.sendCommand(0); // STEP command (also notifies worker)
         }
 
-        // 2. Poll for results from all workers in parallel (Busy-wait with timeout)
+        // 2. Wait for results from all workers using Atomics.wait (no polling overhead)
         const timeoutMs = 5000;
         const startTime = Date.now();
-        let workersRemaining = this.workers.length;
         const finished = new Uint8Array(this.workers.length);
 
-        while (workersRemaining > 0) {
-            for (let i = 0; i < this.workers.length; i++) {
-                if (finished[i]) continue;
-
-                const shm = this.sharedMemManagers[i]!;
-                if (shm.isResultsReady()) {
-                    shm.consumeResultsSignal();
-                    returnTimes[i] = process.hrtime.bigint();
-                    finished[i] = 1;
-                    workersRemaining--;
-                }
+        // First pass: check if any workers already done (non-blocking)
+        for (let i = 0; i < this.workers.length; i++) {
+            const shm = this.sharedMemManagers[i]!;
+            if (shm.isResultsReady()) {
+                shm.consumeResultsSignal();
+                returnTimes[i] = process.hrtime.bigint();
+                finished[i] = 1;
             }
+        }
 
-            if (workersRemaining > 0) {
-                if ((Date.now() - startTime) > timeoutMs) {
-                    throw new Error(`Timeout waiting for workers: ${Array.from(finished).map((f, i) => f ? '' : i).filter(v => v !== '').join(',')}`);
-                }
-                await new Promise(resolve => setTimeout(resolve, 1));
-            }
+        // Second pass: Atomics.wait on unfinished workers
+        for (let i = 0; i < this.workers.length; i++) {
+            if (finished[i]) continue;
+            const shm = this.sharedMemManagers[i]!;
+            const ctrl = shm.getControl();
+            const elapsed = Date.now() - startTime;
+            const remaining = Math.max(1, timeoutMs - elapsed);
+            Atomics.wait(ctrl.mainReady, 0, 0, remaining);
+            shm.consumeResultsSignal();
+            returnTimes[i] = process.hrtime.bigint();
+            finished[i] = 1;
         }
 
         const batchEnd = process.hrtime.bigint();
 
-        // Record Batch Latency
-        const totalMs = Number(batchEnd - batchStart) / 1_000_000;
-        globalProfiler.gauge('Batch Latency (ms)', totalMs);
-        globalProfiler.gauge('Shared Memory Step (ms)', totalMs);
+        // Record Batch Latency (only every 100 steps to reduce overhead)
+        this._stepCount = (this._stepCount || 0) + 1;
+        if (this._stepCount % 100 === 0) {
+            const totalMs = Number(batchEnd - batchStart) / 1_000_000;
+            globalProfiler.gauge('Batch Latency (ms)', totalMs);
+            globalProfiler.gauge('Shared Memory Step (ms)', totalMs);
 
-        // Record Sync Gap (Max - Min return time)
-        if (returnTimes.length > 1) {
-            let min = returnTimes[0];
-            let max = returnTimes[0];
-            for (const t of returnTimes) {
-                if (t < min) min = t;
-                if (t > max) max = t;
+            // Record Sync Gap (Max - Min return time)
+            if (returnTimes.length > 1) {
+                let min = returnTimes[0];
+                let max = returnTimes[0];
+                for (const t of returnTimes) {
+                    if (t < min) min = t;
+                    if (t > max) max = t;
+                }
+                const gapMs = Number(max - min) / 1_000_000;
+                globalProfiler.gauge('Sync Gap (ms)', gapMs);
             }
-            const gapMs = Number(max - min) / 1_000_000;
-            globalProfiler.gauge('Sync Gap (ms)', gapMs);
         }
 
         // Convert shared memory results to observation objects

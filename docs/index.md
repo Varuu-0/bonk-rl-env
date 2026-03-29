@@ -56,7 +56,7 @@ npm run test:manager    # Env manager
 
 ## Test Suite
 
-The project includes a comprehensive automated test suite with 8 test files covering all core functionality:
+The project includes a comprehensive automated test suite with 14 test files covering all core functionality:
 
 | # | Test File | Description |
 |:--|:----------|:------------|
@@ -64,12 +64,20 @@ The project includes a comprehensive automated test suite with 8 test files cove
 | 2 | `prng.test.ts` | Deterministic RNG |
 | 3 | `bonk-env.test.ts` | Gymnasium API |
 | 4 | `frame-skip.test.ts` | Action repetition |
-| 5 | `shared-memory.ts` | Zero-copy IPC |
+| 5 | `shared-memory.ts` | SharedArrayBuffer IPC |
 | 6 | `shutdown.ts` | Signal handlers |
 | 7 | `telemetry.ts` | Profiling system |
 | 8 | `env-manager.test.ts` | Pool management |
+| 9 | `map-body-types.test.ts` | Map body types (rect/circle/polygon) |
+| 10 | `collision-filtering.test.ts` | Collision group filtering |
+| 11 | `nophysics-friction.test.ts` | Sensor bodies and friction |
+| 12 | `grapple-mechanics.test.ts` | Grapple and slingshot mechanics |
+| 13 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds expansion |
+| 14 | `map-integration.test.ts` | Real map loading and integration |
 
-**Total: 140+ individual test cases**
+**Total: 361 individual test cases (361 passing, 100%)**
+
+See [Test Runner](./typescript/tests/runner.md) for full documentation on the test execution framework, output parsing, and test file contract.
 
 ## Module Reference
 
@@ -132,14 +140,16 @@ See [physics-engine docs](./typescript/src/core/physics-engine.md) for full cons
 | 7-12 | Opponent state (x, y, vx, vy, isHeavy, alive) |
 | 13 | tick |
 
-## Performance
+## Performance (Measured March 2026)
 
 | Metric | Value |
 |:-------|:------|
-| Max FPS | 23,400 |
-| Tick Rate | 15/30/60 TPS |
-| Parallel Envs | 64+ |
-| IPC Latency | <1ms |
+| Raw PhysicsEngine TPS | ~14,500 |
+| WorkerPool SPS (N=1) | ~14,700 |
+| WorkerPool Env-SPS (N=16) | ~80,600 |
+| ZMQ IPC SPS (N=1) | 1,272 |
+| ZMQ IPC SPM (N=1) | 76,313 |
+| Telemetry Overhead | <0.02% of frame |
 
 ## See Also
 

@@ -139,8 +139,8 @@ export class PhysicsEngine {
   constructor() {
     // Create world with AABB and gravity
     const worldAABB = new b2AABB();
-    worldAABB.lowerBound.Set(-100, -100);
-    worldAABB.upperBound.Set(100, 100);
+    worldAABB.lowerBound.Set(-1000, -1000);
+    worldAABB.upperBound.Set(1000, 1000);
 
     const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
     this.world = new b2World(worldAABB, gravity, true /* doSleep */);
@@ -459,8 +459,9 @@ export class PhysicsEngine {
    * Advance the physics simulation by exactly one tick (1/30s).
    * This is the core synchronous step — no real-time clock involved.
    */
-  tick(): void {
-    this.world.Step(DT, SOLVER_ITERATIONS);
+    tick(): void {
+        if (!this.world) return;
+        this.world.Step(DT, SOLVER_ITERATIONS);
     this.tickCount++;
 
     // Check for players out of bounds (dead)
@@ -529,29 +530,50 @@ export class PhysicsEngine {
   /**
    * Reset the world — destroy all bodies, recreate a fresh world.
    */
-  reset(): void {
-    // Destroy all grapple joints first (before destroying bodies)
-    for (const [playerId, joint] of this.playerGrappleJoints) {
-      this.world.DestroyJoint(joint);
-    }
-    this.playerGrappleJoints.clear();
+    reset(): void {
+        // Force-unlock the world — if Step() crashed mid-execution, m_lock
+        // stays true and all Destroy* calls silently no-op, leaving the world
+        // in a corrupted state for subsequent use.
+        try {
+            (this.world as any).m_lock = false;
+        } catch (e: any) {
+            console.warn('[PhysicsEngine] reset: failed to force-unlock world:', e?.message || e);
+        }
 
-    // Destroy all player bodies
-    for (const [_id, body] of this.playerBodies) {
-      this.world.DestroyBody(body);
-    }
-    this.playerBodies.clear();
-    this.playerHeavyState.clear();
-    this.playerAlive.clear();
+        // Destroy grapple joints first (before destroying bodies)
+        for (const [playerId, joint] of this.playerGrappleJoints) {
+            try {
+                this.world.DestroyJoint(joint);
+            } catch (e: any) {
+                console.warn(`[PhysicsEngine] reset: failed to destroy grapple joint for player ${playerId}:`, e?.message || e);
+            }
+        }
+        this.playerGrappleJoints.clear();
 
-    // Destroy all platform bodies
-    for (const body of this.platformBodies) {
-      this.world.DestroyBody(body);
-    }
-    this.platformBodies = [];
+        // Destroy all player bodies
+        for (const [_id, body] of this.playerBodies) {
+            try {
+                this.world.DestroyBody(body);
+            } catch (e: any) {
+                console.warn(`[PhysicsEngine] reset: failed to destroy player body ${_id}:`, e?.message || e);
+            }
+        }
+        this.playerBodies.clear();
+        this.playerHeavyState.clear();
+        this.playerAlive.clear();
 
-    this.tickCount = 0;
-  }
+        // Destroy all platform bodies
+        for (const body of this.platformBodies) {
+            try {
+                this.world.DestroyBody(body);
+            } catch (e: any) {
+                console.warn('[PhysicsEngine] reset: failed to destroy platform body:', e?.message || e);
+            }
+        }
+        this.platformBodies = [];
+
+        this.tickCount = 0;
+    }
 
   /**
    * Completely destroy the world for cleanup.
