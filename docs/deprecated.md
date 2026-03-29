@@ -95,7 +95,7 @@ from bonk_env import BonkVecEnv
 
 **Workaround**: Validate JSON before loading:
 ```bash
-python -c "import json; json.load(open('maps/wdb.json'))"
+python -c "import json; json.load(open('maps/bonk_WDB__No_Mapshake__716916.json'))"
 ```
 
 ---

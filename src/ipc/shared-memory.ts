@@ -18,6 +18,7 @@ export class SharedMemoryManager {
         mainReady: Int32Array;
         actionSlotIndex: Int32Array;
         command: Int32Array; // 0=step, 1=reset, 2=shutdown
+        completed: Int32Array;
     };
 
     private numEnvs: number;
@@ -28,6 +29,9 @@ export class SharedMemoryManager {
 
     constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer) {
         this.numEnvs = numEnvs;
+        if (ringSize < 2 || (ringSize & (ringSize - 1)) !== 0) {
+            throw new Error(`SharedMemoryManager: ringSize must be a power of 2 (got ${ringSize})`);
+        }
         this.ringSize = ringSize;
         this.actionRingMask = ringSize - 1;
 
@@ -85,7 +89,8 @@ export class SharedMemoryManager {
             workerReady: new Int32Array(this.buffer, offset + 4, 1),
             mainReady: new Int32Array(this.buffer, offset + 8, 1),
             actionSlotIndex: new Int32Array(this.buffer, offset + 12, 1),
-            command: new Int32Array(this.buffer, offset + 16, 1)
+            command: new Int32Array(this.buffer, offset + 16, 1),
+            completed: new Int32Array(this.buffer, offset + 20, 1)
         };
 
         if (!existingBuffer) {
@@ -147,6 +152,15 @@ export class SharedMemoryManager {
         Atomics.notify(this.control.mainReady, 0, 1);
     }
 
+    getCompleted(): Int32Array {
+        return this.control.completed;
+    }
+
+    signalCompleted(): void {
+        Atomics.add(this.control.completed, 0, 1);
+        Atomics.notify(this.control.completed, 0, 1);
+    }
+
     waitForResults(timeout: number = Infinity) {
         const res = Atomics.wait(this.control.mainReady, 0, 0, timeout === Infinity ? undefined : timeout);
         this.consumeResultsSignal();
@@ -166,7 +180,7 @@ export class SharedMemoryManager {
         };
     }
 
-    writeObservation(envIndex: number, obs: number[]) {
+    writeObservation(envIndex: number, obs: number[] | Float32Array) {
         this.views.observations.set(obs, envIndex * 14);
     }
 
@@ -209,6 +223,7 @@ export class SharedMemoryManager {
         Atomics.store(this.control.mainReady, 0, 0);
         Atomics.store(this.control.actionSlotIndex, 0, 0);
         Atomics.store(this.control.command, 0, 0);
+        Atomics.store(this.control.completed, 0, 0);
         this.currentActionSlot = 0;
     }
 

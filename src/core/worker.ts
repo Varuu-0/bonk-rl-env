@@ -16,6 +16,14 @@ let stepCounter = 0;
 let sharedMem: SharedMemoryManager | null = null;
 let numEnvs = 0;
 let globalOffset = 0;
+let syncCompleted: Int32Array | null = null;
+
+function signalSyncCompleted() {
+    if (syncCompleted) {
+        Atomics.add(syncCompleted, 0, 1);
+        Atomics.notify(syncCompleted, 0, 1);
+    }
+}
 
 /**
  * Converts an Observation to a flat number array for shared memory storage
@@ -23,24 +31,35 @@ let globalOffset = 0;
  * playerAngularVel, playerIsHeavy, opponentX, opponentY, opponentVelX, 
  * opponentVelY, opponentIsHeavy, opponentAlive, tick
  */
-function observationToArray(obs: Observation): number[] {
-    const opp = obs.opponents[0] || { x: 0, y: 0, velX: 0, velY: 0, isHeavy: false, alive: false };
-    return [
-        obs.playerX,
-        obs.playerY,
-        obs.playerVelX,
-        obs.playerVelY,
-        obs.playerAngle,
-        obs.playerAngularVel,
-        obs.playerIsHeavy ? 1 : 0,
-        opp.x,
-        opp.y,
-        opp.velX,
-        opp.velY,
-        opp.isHeavy ? 1 : 0,
-        opp.alive ? 1 : 0,
-        obs.tick
-    ];
+// Pre-allocated buffer for zero-allocation observation conversion
+const _obsBuffer = new Float32Array(14);
+
+function observationToArray(obs: Observation): Float32Array {
+    const opp = obs.opponents[0];
+    _obsBuffer[0] = obs.playerX;
+    _obsBuffer[1] = obs.playerY;
+    _obsBuffer[2] = obs.playerVelX;
+    _obsBuffer[3] = obs.playerVelY;
+    _obsBuffer[4] = obs.playerAngle;
+    _obsBuffer[5] = obs.playerAngularVel;
+    _obsBuffer[6] = obs.playerIsHeavy ? 1 : 0;
+    if (opp) {
+        _obsBuffer[7] = opp.x;
+        _obsBuffer[8] = opp.y;
+        _obsBuffer[9] = opp.velX;
+        _obsBuffer[10] = opp.velY;
+        _obsBuffer[11] = opp.isHeavy ? 1 : 0;
+        _obsBuffer[12] = opp.alive ? 1 : 0;
+    } else {
+        _obsBuffer[7] = 0;
+        _obsBuffer[8] = 0;
+        _obsBuffer[9] = 0;
+        _obsBuffer[10] = 0;
+        _obsBuffer[11] = 0;
+        _obsBuffer[12] = 0;
+    }
+    _obsBuffer[13] = obs.tick;
+    return _obsBuffer;
 }
 
 parentPort.on('message', (msg) => {
@@ -68,6 +87,9 @@ parentPort.on('message', (msg) => {
                     ringSize,
                     msg.sharedBuffer as SharedArrayBuffer
                 );
+                if (msg.syncBuffer) {
+                    syncCompleted = new Int32Array(msg.syncBuffer);
+                }
                 parentPort!.postMessage({
                     id: msg.id,
                     status: 'ok',
@@ -91,6 +113,7 @@ parentPort.on('message', (msg) => {
             if (sharedMem) {
                 obs.forEach((o, i) => sharedMem!.writeObservation(i, observationToArray(o)));
                 sharedMem.signalMainReady();
+                signalSyncCompleted();
             }
             // Always include observation data in the response (shared memory is for step(), not reset())
             parentPort!.postMessage({
@@ -135,9 +158,8 @@ parentPort.on('message', (msg) => {
                 return;
             }
 
-            // Read actions from shared memory as Uint8Array
-            const actionBytes = sharedMem.readActions(sharedMem.readActionSlot());
-            const actions: Action[] = Array.from(actionBytes);
+            // Read actions from shared memory as Uint8Array (indexed directly)
+            const actions = sharedMem.readActions(sharedMem.readActionSlot());
 
             // Process environments
             const results = envs.map((env, i) => {
@@ -201,13 +223,13 @@ parentPort.on('message', (msg) => {
                     if (cmd === 1) {
                         // RESET COMMAND
                         const seedsView = sharedMem.readSeeds();
-                        const seeds = Array.from(seedsView);
-                        const obs = envs.map((env, i) => env.reset(seeds[i] || undefined));
+                        const obs = envs.map((env, i) => env.reset(seedsView[i] || undefined));
 
                         obs.forEach((o, i) => sharedMem!.writeObservation(i, observationToArray(o)));
 
                         sharedMem.signalWorkerConsumed();
                         sharedMem.signalMainReady();
+                        signalSyncCompleted();
 
                         if (verbose) {
                             parentPort!.postMessage({ id: msg.id, status: 'reset-ok' });
@@ -241,6 +263,7 @@ parentPort.on('message', (msg) => {
 
                         sharedMem.signalWorkerConsumed();
                         sharedMem.signalMainReady();
+                        signalSyncCompleted();
 
                         if (verbose) {
                             parentPort!.postMessage({

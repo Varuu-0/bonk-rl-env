@@ -94,7 +94,7 @@ Throughput: XXXX.XX Physics Ticks/sec
 
 #### Straggler Detection
 
-If the same worker is consistently flagged as "Lagging", it may be handling an environment in a "heavy" part of the map (e.g., dense collision clusters in wdb.json).
+If the same worker is consistently flagged as "Lagging", it may be handling an environment in a "heavy" part of the map (e.g., dense collision clusters in bonk_WDB__No_Mapshake__716916.json).
 
 ---
 

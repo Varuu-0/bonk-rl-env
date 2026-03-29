@@ -31,6 +31,73 @@ const {
   b2FilterData,
 } = box2d;
 
+// Monkey-patch b2BroadPhase.Query to guard against undefined bounds entries.
+// The box2d JS port (Box2DFlash v2.0) can leave stale/undefined entries in
+// the bounds array during DestroyProxy, causing "Cannot read properties of
+// undefined (reading 'IsLower')" crashes during Step → Solve → SynchronizeShapes.
+(() => {
+  const b2BroadPhase = box2d.b2BroadPhase;
+
+  // Guard Query (original fix)
+  const _origQuery = b2BroadPhase.prototype.Query;
+  b2BroadPhase.prototype.Query = function (
+    lowerQueryOut: any, upperQueryOut: any,
+    lowerValue: number, upperValue: number,
+    bounds: any[], boundCount: number, axis: number,
+  ) {
+    try {
+      _origQuery.call(this, lowerQueryOut, upperQueryOut, lowerValue, upperValue, bounds, boundCount, axis);
+    } catch (e: any) {
+      if (e instanceof TypeError && (e.message.includes("IsLower") || e.message.includes("value"))) {
+        // Bounds array corrupted — skip this query to prevent cascading failures
+      } else {
+        throw e;
+      }
+    }
+  };
+
+  // Guard TestOverlap
+  const _origTestOverlap = b2BroadPhase.prototype.TestOverlap;
+  b2BroadPhase.prototype.TestOverlap = function (proxyA: number, proxyB: number) {
+    try {
+      return _origTestOverlap.call(this, proxyA, proxyB);
+    } catch (e: any) {
+      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
+        return false;  // Treat corrupted broadphase as no overlap
+      }
+      throw e;
+    }
+  };
+
+  // Guard MoveProxy
+  const _origMoveProxy = b2BroadPhase.prototype.MoveProxy;
+  b2BroadPhase.prototype.MoveProxy = function (proxyId: number, aabb: any, displacement: any) {
+    try {
+      _origMoveProxy.call(this, proxyId, aabb, displacement);
+    } catch (e: any) {
+      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
+        // Broadphase corrupted — skip this move to prevent cascading failures
+      } else {
+        throw e;
+      }
+    }
+  };
+
+  // Guard DestroyProxy
+  const _origDestroyProxy = b2BroadPhase.prototype.DestroyProxy;
+  b2BroadPhase.prototype.DestroyProxy = function (proxyId: number) {
+    try {
+      _origDestroyProxy.call(this, proxyId);
+    } catch (e: any) {
+      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
+        // Broadphase corrupted — skip this destroy to prevent cascading failures
+      } else {
+        throw e;
+      }
+    }
+  };
+})();
+
 // ─── Constants ───────────────────────────────────────────────────────
 /** bonk.io runs at 30 ticks per second */
 export const TPS = 30;
@@ -135,6 +202,7 @@ export class PhysicsEngine {
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
+  private _tempForce = new b2Vec2(0, 0);
 
   constructor() {
     // Create world with AABB and gravity
@@ -319,7 +387,9 @@ export class PhysicsEngine {
     if (!body || !this.playerAlive.get(playerId)) return;
 
     const pos = body.GetPosition();
-    const force = new b2Vec2(0, 0);
+    const force = this._tempForce;
+    force.x = 0;
+    force.y = 0;
 
     if (input.left) force.x -= MOVE_FORCE;
     if (input.right) force.x += MOVE_FORCE;
@@ -405,7 +475,7 @@ export class PhysicsEngine {
 
     for (const pBody of this.platformBodies) {
       const pPos = pBody.GetPosition();
-      const dist = Math.sqrt(Math.pow(pPos.x - startPos.x, 2) + Math.pow(pPos.y - startPos.y, 2));
+      const dist = Math.sqrt((pPos.x - startPos.x) * (pPos.x - startPos.x) + (pPos.y - startPos.y) * (pPos.y - startPos.y));
 
       // Very basic "raycast" stand-in: grab the closest platform in a 10m radius if velocity is directed towards it loosely
       if (dist < 10 && dist < minDiff) {
@@ -478,7 +548,9 @@ export class PhysicsEngine {
       }
     }
 
-    globalProfiler.gauge('active_joints', this.playerGrappleJoints.size);
+    if (isTelemetryEnabled()) {
+      globalProfiler.gauge('active_joints', this.playerGrappleJoints.size);
+    }
   }
 
   /**
@@ -528,58 +600,32 @@ export class PhysicsEngine {
   }
 
   /**
-   * Reset the world — destroy all bodies, recreate a fresh world.
+   * Reset the world — discard the old world entirely and create a fresh one.
+   * This avoids box2d broadphase corruption that occurs when destroying many
+   * bodies (especially polygons and dynamic bodies) individually.
    */
-    reset(): void {
-        // Force-unlock the world — if Step() crashed mid-execution, m_lock
-        // stays true and all Destroy* calls silently no-op, leaving the world
-        // in a corrupted state for subsequent use.
-        try {
-            (this.world as any).m_lock = false;
-        } catch (e: any) {
-            console.warn('[PhysicsEngine] reset: failed to force-unlock world:', e?.message || e);
-        }
+  reset(): void {
+    // Don't try to destroy bodies one-by-one — box2d broadphase gets corrupted
+    // on complex maps. Just create a fresh world and let the old one be GC'd.
+    const worldAABB = new b2AABB();
+    worldAABB.lowerBound.Set(-1000, -1000);
+    worldAABB.upperBound.Set(1000, 1000);
+    const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
+    this.world = new b2World(worldAABB, gravity, true);
 
-        // Destroy grapple joints first (before destroying bodies)
-        for (const [playerId, joint] of this.playerGrappleJoints) {
-            try {
-                this.world.DestroyJoint(joint);
-            } catch (e: any) {
-                console.warn(`[PhysicsEngine] reset: failed to destroy grapple joint for player ${playerId}:`, e?.message || e);
-            }
-        }
-        this.playerGrappleJoints.clear();
-
-        // Destroy all player bodies
-        for (const [_id, body] of this.playerBodies) {
-            try {
-                this.world.DestroyBody(body);
-            } catch (e: any) {
-                console.warn(`[PhysicsEngine] reset: failed to destroy player body ${_id}:`, e?.message || e);
-            }
-        }
-        this.playerBodies.clear();
-        this.playerHeavyState.clear();
-        this.playerAlive.clear();
-
-        // Destroy all platform bodies
-        for (const body of this.platformBodies) {
-            try {
-                this.world.DestroyBody(body);
-            } catch (e: any) {
-                console.warn('[PhysicsEngine] reset: failed to destroy platform body:', e?.message || e);
-            }
-        }
-        this.platformBodies = [];
-
-        this.tickCount = 0;
-    }
+    // Clear all state
+    this.playerBodies.clear();
+    this.playerHeavyState.clear();
+    this.playerAlive.clear();
+    this.playerGrappleJoints.clear();
+    this.platformBodies = [];
+    this.tickCount = 0;
+  }
 
   /**
    * Completely destroy the world for cleanup.
    */
   destroy(): void {
-    this.reset();
     this.world = null;
   }
 }

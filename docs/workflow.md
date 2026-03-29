@@ -327,7 +327,7 @@ Phase 4: Metadata (WEEK 4)
 3. Run all 8 test suites
 
 ### Maps to Test
-- `maps/wdb.json` — Simple format, grappleMultiplier, no special fields
+- `maps/bonk_WDB__No_Mapshake__716916.json` — Simple format, grappleMultiplier, no special fields
 - `maps/bonk_WDB__No_Mapshake__716916.json` — Full export with all fields
 - `maps/bonk_Desert_Bridge_289838.json` — Polygon bodies, noPhysics
 - `maps/bonk_Simple_1v1_123.json` — Basic rect/circle only
