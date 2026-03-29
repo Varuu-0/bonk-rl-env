@@ -534,17 +534,29 @@ export class PhysicsEngine {
         // Force-unlock the world — if Step() crashed mid-execution, m_lock
         // stays true and all Destroy* calls silently no-op, leaving the world
         // in a corrupted state for subsequent use.
-        try { (this.world as any).m_lock = false; } catch {}
+        try {
+            (this.world as any).m_lock = false;
+        } catch (e: any) {
+            console.warn('[PhysicsEngine] reset: failed to force-unlock world:', e?.message || e);
+        }
 
         // Destroy grapple joints first (before destroying bodies)
         for (const [playerId, joint] of this.playerGrappleJoints) {
-            try { this.world.DestroyJoint(joint); } catch {}
+            try {
+                this.world.DestroyJoint(joint);
+            } catch (e: any) {
+                console.warn(`[PhysicsEngine] reset: failed to destroy grapple joint for player ${playerId}:`, e?.message || e);
+            }
         }
         this.playerGrappleJoints.clear();
 
         // Destroy all player bodies
         for (const [_id, body] of this.playerBodies) {
-            try { this.world.DestroyBody(body); } catch {}
+            try {
+                this.world.DestroyBody(body);
+            } catch (e: any) {
+                console.warn(`[PhysicsEngine] reset: failed to destroy player body ${_id}:`, e?.message || e);
+            }
         }
         this.playerBodies.clear();
         this.playerHeavyState.clear();
@@ -552,7 +564,11 @@ export class PhysicsEngine {
 
         // Destroy all platform bodies
         for (const body of this.platformBodies) {
-            try { this.world.DestroyBody(body); } catch {}
+            try {
+                this.world.DestroyBody(body);
+            } catch (e: any) {
+                console.warn('[PhysicsEngine] reset: failed to destroy platform body:', e?.message || e);
+            }
         }
         this.platformBodies = [];
 

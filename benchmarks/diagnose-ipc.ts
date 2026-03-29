@@ -62,7 +62,13 @@ async function main() {
   console.log(`\n=== Layer 4: Full ZMQ round-trip (${ZMQ_STEPS} steps, 2 envs) ===`);
 
   // Start the bridge server in background
-  bridge.start().catch(() => {}); // Will run until we close
+  bridge.start().catch((err: any) => {
+    if (err?.message?.includes('close') || err?.message?.includes('closed') || err?.code === 'ERR_ZMQ_OPERATION_FAILED') {
+        // Expected: ZMQ throws when socket is closed during shutdown
+        return;
+    }
+    console.error('[diagnose] Unexpected bridge error:', err);
+}); // Will run until we close
   // Give it a moment to bind
   await new Promise(r => setTimeout(r, 200));
 
