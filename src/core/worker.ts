@@ -45,7 +45,6 @@ function observationToArray(obs: Observation): number[] {
 
 parentPort.on('message', (msg) => {
     try {
-        console.log(`[Worker] Received message: ${JSON.stringify(msg).substring(0, 100)}`);
         if (msg.type === 'init') {
             const numEnvsParam = msg.numEnvs;
             const config = msg.config || {};
@@ -113,7 +112,7 @@ parentPort.on('message', (msg) => {
             });
 
             stepCounter++;
-            if (stepCounter % 100 === 0) {
+            if (stepCounter % 1000 === 0) {
                 globalProfiler.recordMemory();
             }
 
@@ -189,7 +188,6 @@ parentPort.on('message', (msg) => {
                 while (true) {
                     // Wait for main to signal
                     const waitResult = sharedMem.waitForActions();
-                    console.log(`[Worker ${globalOffset}] waitForActions returned: ${waitResult}`);
 
                     if (waitResult === 'timed-out') {
                         // Always notify parent about timeout and break the loop
@@ -229,7 +227,7 @@ parentPort.on('message', (msg) => {
                         });
 
                         stepCounter++;
-                        if (verbose && stepCounter % 100 === 0) {
+                        if (verbose && stepCounter % 1000 === 0) {
                             globalProfiler.recordMemory();
                         }
 

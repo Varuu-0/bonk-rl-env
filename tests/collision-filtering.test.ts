@@ -86,7 +86,7 @@ function makeWall(wallX: number, collides?: MapBodyDef["collides"]): MapBodyDef 
         x: wallX,
         y: 0,
         width: 20,
-        height: 600,
+        height: 2000,
         static: true,
         collides,
     };
@@ -500,7 +500,7 @@ function testMultipleBodiesDifferentCollides(): void {
         x: 30,
         y: 0,
         width: 20,
-        height: 600,
+        height: 2000,
         static: true,
         collides: { g1: true, g2: false, g3: false, g4: false },
     });
@@ -512,7 +512,7 @@ function testMultipleBodiesDifferentCollides(): void {
         x: 70,
         y: 0,
         width: 20,
-        height: 600,
+        height: 2000,
         static: true,
         collides: { g1: false, g2: true, g3: false, g4: false },
     });

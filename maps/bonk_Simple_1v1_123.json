@@ -1,0 +1,43 @@
+{
+  "name": "Simple 1v1",
+  "author": "GudStrat",
+  "dbid": 123,
+  "exportedAt": "2026-03-29T01:59:36.435Z",
+  "spawnPoints": {
+    "team_red": {
+      "x": 930,
+      "y": 450
+    }
+  },
+  "capZones": [],
+  "bodies": [
+    {
+      "name": "Unnamed Shape",
+      "surfaceName": "1v1 Platform",
+      "type": "rect",
+      "x": 730,
+      "y": 500.00000000000006,
+      "angle": 0,
+      "static": true,
+      "isLethal": false,
+      "noPhysics": false,
+      "noGrapple": false,
+      "innerGrapple": false,
+      "collidesWithPlayers": false,
+      "friction": 0.5,
+      "restitution": -1,
+      "density": 0.3,
+      "linearDamping": 0,
+      "angularDamping": 0,
+      "collides": {
+        "g1": true,
+        "g2": true,
+        "g3": true,
+        "g4": true
+      },
+      "color": 6929014,
+      "width": 1040,
+      "height": 80
+    }
+  ]
+}

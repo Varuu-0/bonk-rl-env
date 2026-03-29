@@ -1,6 +1,6 @@
 # Bonk.io Reinforcement Learning Environment
 
-A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 23,400 frames per second.
+A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 14,000 steps per second natively, or 76,000+ steps per minute through the ZMQ IPC bridge with a single environment.
 
 ## Overview
 
@@ -330,20 +330,42 @@ npm run typecheck
 | 11 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 |
 | 12 | `grapple-mechanics.test.ts` | Grapple & slingshot | 34 |
 | 13 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
-| 14 | `map-integration.test.ts` | Real map file loading | 78 |
+| 14 | `map-integration.test.ts` | Real map file loading (WDB map) | 64 |
 
-**Total: 374 test cases across 14 test suites**
+**Total: 361 test cases across 14 test suites (100% passing)**
 
 ## Performance Benchmarks
 
-Based on internal testing:
+Measured on a standard development machine (March 2026). All benchmarks use 2000 steps with warmup.
+
+### Native TypeScript Throughput
 
 | Metric | Value |
 |--------|-------|
-| Max FPS | 23,400 |
-| Tick Rate | 15/30/60 ticks/sec (configurable) |
-| Parallel Environments | 64+ |
-| IPC Latency | <1ms |
+| Raw PhysicsEngine TPS | ~14,500 |
+| BonkEnvironment SPS | ~40,000 |
+| WorkerPool SPS (N=1 env) | ~14,700 |
+| WorkerPool Env-SPS (N=16 envs) | ~80,600 |
+
+### ZMQ IPC Throughput (Python → TypeScript)
+
+| N (Envs) | SPS | Env-SPS | SPM |
+|:---------|:---:|:-------:|:---:|
+| 1 | 1,272 | 1,272 | 76,313 |
+| 2 | 1,111 | 2,222 | 66,652 |
+| 4 | 935 | 3,740 | 56,092 |
+| 8 | 617 | 4,937 | 37,025 |
+| 16 | 554 | 8,866 | 33,248 |
+| 32 | 389 | 12,454 | 23,350 |
+| 64 | 277 | 17,725 | 16,617 |
+
+### Telemetry Overhead
+
+| Configuration | Overhead | % of 33.3ms Frame |
+|:-------------|:--------:|:-----------------:|
+| Disabled | 0% | 0% |
+| Minimal | ~1,269 ns/tick | 0.004% |
+| Full (all 5 indices) | ~4,286 ns/tick | 0.013% |
 
 ## Contributing
 
