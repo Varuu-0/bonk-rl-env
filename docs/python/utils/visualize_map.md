@@ -88,7 +88,7 @@ import matplotlib.pyplot as plt
 from visualize_map import draw_map
 
 # Load map
-with open("maps/wdb.json", "r") as f:
+with open("maps/bonk_WDB__No_Mapshake__716916.json", "r") as f:
     map_data = json.load(f)
 
 # Create figure
@@ -119,7 +119,7 @@ def main()
 
 | Argument | Type | Default | Description |
 |:---------|:-----|:--------|:------------|
-| `--map` | `str` | `../../maps/wdb.json` | Path to the map JSON file |
+| `--map` | `str` | `../../maps/bonk_WDB__No_Mapshake__716916.json` | Path to the map JSON file |
 | `--log` | `str` | `logs/trajectory.csv` | Path to the CSV trajectory file |
 | `--save` | `str` | `trajectory.gif` | Path to save the generated animation |
 
@@ -128,7 +128,7 @@ def main()
 #### Display Static Map Only
 
 ```bash
-python visualize_map.py --map ../../maps/wdb.json
+python visualize_map.py --map ../../maps/bonk_WDB__No_Mapshake__716916.json
 ```
 
 This will display the map without any trajectory animation.
@@ -137,7 +137,7 @@ This will display the map without any trajectory animation.
 
 ```bash
 python visualize_map.py \
-    --map ../../maps/wdb.json \
+    --map ../../maps/bonk_WDB__No_Mapshake__716916.json \
     --log logs/trajectory.csv \
     --save trajectory.gif
 ```
@@ -238,7 +238,7 @@ subprocess.run(["python", "python/train_agent.py"])
 # Generate visualization
 subprocess.run([
     "python", "python/utils/visualize_map.py",
-    "--map", "maps/wdb.json",
+    "--map", "maps/bonk_WDB__No_Mapshake__716916.json",
     "--log", "logs/training.csv",
     "--save", "animations/training.gif"
 ])

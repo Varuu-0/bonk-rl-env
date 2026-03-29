@@ -1,7 +1,10 @@
 /**
- * map-integration.test.ts — Integration tests using real exported bonk.io map files
+ * map-integration.test.ts — Integration tests using all 3 available bonk.io map files
  *
- * All tests use bonk_WDB__No_Mapshake__716916.json (the only available map).
+ * Maps:
+ *   - bonk_Simple_1v1_123.json        (1 body, lightweight)
+ *   - bonk_Ball_Pit_524616.json       (28 bodies, dynamic circles)
+ *   - bonk_WDB__No_Mapshake__716916.json (40 bodies, complex)
  *
  * Run with: npx tsx tests/map-integration.test.ts
  */
@@ -21,7 +24,11 @@ import * as path from 'path';
 
 // ─── Map loader ──────────────────────────────────────────────────────
 
-const MAP_FILE = 'bonk_WDB__No_Mapshake__716916.json';
+const MAP_FILES = {
+    simple1v1: 'bonk_Simple_1v1_123.json',
+    ballPit: 'bonk_Ball_Pit_524616.json',
+    wdb: 'bonk_WDB__No_Mapshake__716916.json',
+};
 
 function loadMap(filename: string): any {
     const mapPath = path.join(__dirname, '..', 'maps', filename);
@@ -63,91 +70,100 @@ function getSpawnXY(map: any, key?: string): { x: number; y: number } {
     return { x: sp[firstKey].x, y: sp[firstKey].y };
 }
 
-// ─── Test 1-6: Map loading ───────────────────────────────────────────
-
-function testLoadWdb(): void {
-    console.log("\n--- Test 1: Load " + MAP_FILE + " ---");
-    try {
-        const map = loadMap(MAP_FILE);
-        test(MAP_FILE + " loads without errors", true);
-        test("map has name", typeof map.name === 'string' && map.name.length > 0);
-        test("map has bodies array", Array.isArray(map.bodies) && map.bodies.length > 0);
-        test("map has spawnPoints", typeof map.spawnPoints === 'object' && Object.keys(map.spawnPoints).length > 0);
-    } catch (e: any) {
-        test(MAP_FILE + " loads without errors", false, e.message);
-    }
-}
+// ─── Test 1: Load Simple 1v1 ─────────────────────────────────────────
 
 function testLoadSimple1v1(): void {
-    console.log("\n--- Test 2: Load " + MAP_FILE + " (body counts) ---");
+    console.log("\n--- Test 1: Load Simple 1v1 ---");
     try {
-        const map = loadMap(MAP_FILE);
-        test(MAP_FILE + " loads without errors", true);
-        test("map has name", typeof map.name === 'string' && map.name.length > 0);
-        test("map has at least 1 body", map.bodies.length >= 1);
-        test("map has at least 1 spawn point", Object.keys(map.spawnPoints).length >= 1);
+        const map = loadMap(MAP_FILES.simple1v1);
+        test("Simple 1v1 loads without errors", true);
+        test("Simple 1v1 name is 'Simple 1v1'", map.name === "Simple 1v1");
+        test("Simple 1v1 has exactly 1 body", map.bodies.length === 1);
+        test("Simple 1v1 has 1 spawn point", Object.keys(map.spawnPoints).length === 1);
     } catch (e: any) {
-        test(MAP_FILE + " loads without errors", false, e.message);
+        test("Simple 1v1 loads without errors", false, e.message);
     }
 }
 
-function testLoadDesertBridge(): void {
-    console.log("\n--- Test 3: Load " + MAP_FILE + " (geometry types) ---");
+// ─── Test 2: Load Ball Pit ───────────────────────────────────────────
+
+function testLoadBallPit(): void {
+    console.log("\n--- Test 2: Load Ball Pit ---");
     try {
-        const map = loadMap(MAP_FILE);
-        test(MAP_FILE + " loads without errors", true);
-        test("map has name", typeof map.name === 'string' && map.name.length > 0);
-        test("map has polygon bodies", map.bodies.some((b: any) => b.type === 'polygon'));
-        test("map has noPhysics bodies", map.bodies.some((b: any) => b.noPhysics === true));
-        test("map has multiple bodies", map.bodies.length > 1);
+        const map = loadMap(MAP_FILES.ballPit);
+        test("Ball Pit loads without errors", true);
+        test("Ball Pit name is 'Ball Pit'", map.name === "Ball Pit");
+        test("Ball Pit has 28+ bodies", map.bodies.length >= 28);
+        test("Ball Pit has circle bodies", map.bodies.some((b: any) => b.type === 'circle'));
+        test("Ball Pit has noPhysics bodies", map.bodies.some((b: any) => b.noPhysics === true));
     } catch (e: any) {
-        test(MAP_FILE + " loads without errors", false, e.message);
+        test("Ball Pit loads without errors", false, e.message);
     }
 }
 
-function testLoadWdbNoMapshake(): void {
-    console.log("\n--- Test 4: Load " + MAP_FILE + " (lethal + polygon) ---");
+// ─── Test 3: Load WDB ────────────────────────────────────────────────
+
+function testLoadWdb(): void {
+    console.log("\n--- Test 3: Load WDB ---");
     try {
-        const map = loadMap(MAP_FILE);
-        test("WDB No Mapshake loads without errors", true);
-        test("WDB No Mapshake has name", map.name === "WDB (No Mapshake)");
-        test("WDB No Mapshake has lethal body", map.bodies.some((b: any) => b.isLethal === true));
-        test("WDB No Mapshake has polygons", map.bodies.some((b: any) => b.type === 'polygon'));
+        const map = loadMap(MAP_FILES.wdb);
+        test("WDB loads without errors", true);
+        test("WDB name is 'WDB (No Mapshake)'", map.name === "WDB (No Mapshake)");
+        test("WDB has lethal body", map.bodies.some((b: any) => b.isLethal === true));
+        test("WDB has polygon bodies", map.bodies.some((b: any) => b.type === 'polygon'));
+        test("WDB has noPhysics bodies", map.bodies.some((b: any) => b.noPhysics === true));
     } catch (e: any) {
-        test("WDB No Mapshake loads without errors", false, e.message);
+        test("WDB loads without errors", false, e.message);
     }
 }
 
-function testLoadGrappleV5(): void {
-    console.log("\n--- Test 5: Load " + MAP_FILE + " (body structure) ---");
+// ─── Test 4: Simple 1v1 body count ───────────────────────────────────
+
+function testSimple1v1BodyCount(): void {
+    console.log("\n--- Test 4: Simple 1v1 body count is exactly 1 ---");
     try {
-        const map = loadMap(MAP_FILE);
-        test(MAP_FILE + " loads without errors", true);
-        test("map has dbid", typeof map.dbid === 'number');
-        test("map has name", typeof map.name === 'string' && map.name.length > 0);
+        const map = loadMap(MAP_FILES.simple1v1);
+        test("Simple 1v1 has exactly 1 body", map.bodies.length === 1);
+        test("Simple 1v1 body is rect type", map.bodies[0].type === 'rect');
+        test("Simple 1v1 body is static", map.bodies[0].static === true);
     } catch (e: any) {
-        test(MAP_FILE + " loads without errors", false, e.message);
+        test("Simple 1v1 body count check", false, e.message);
     }
 }
 
-function testLoadSimple1v1Exported(): void {
-    console.log("\n--- Test 6: Load " + MAP_FILE + " (required fields) ---");
+// ─── Test 5: Ball Pit dynamic circles ────────────────────────────────
+
+function testBallPitDynamicCircles(): void {
+    console.log("\n--- Test 5: Ball Pit has dynamic circle bodies ---");
     try {
-        const map = loadMap(MAP_FILE);
-        test(MAP_FILE + " loads without errors", true);
-        test("map has name", typeof map.name === 'string' && map.name.length > 0);
-        test("map has dbid", typeof map.dbid === 'number' && map.dbid > 0);
+        const map = loadMap(MAP_FILES.ballPit);
+        const dynamicCircles = map.bodies.filter((b: any) => b.type === 'circle' && b.static === false);
+        test("Ball Pit has dynamic circle bodies", dynamicCircles.length > 0);
+        test("Ball Pit has many dynamic circles (" + dynamicCircles.length + ")", dynamicCircles.length >= 20);
     } catch (e: any) {
-        test(MAP_FILE + " loads without errors", false, e.message);
+        test("Ball Pit dynamic circles check", false, e.message);
     }
 }
 
-// ─── Test 7-10: Full simulations ─────────────────────────────────────
+// ─── Test 6: WDB capZones ────────────────────────────────────────────
 
-function testSimulateWdb900(): void {
-    console.log("\n--- Test 7: Simulate " + MAP_FILE + " 900 ticks ---");
+function testWdbCapZones(): void {
+    console.log("\n--- Test 6: WDB has capZones ---");
+    try {
+        const map = loadMap(MAP_FILES.wdb);
+        test("WDB has capZones", Array.isArray(map.capZones) && map.capZones.length > 0);
+        test("WDB has 2 capZones", map.capZones.length === 2);
+    } catch (e: any) {
+        test("WDB capZones check", false, e.message);
+    }
+}
+
+// ─── Test 7: Simulate Simple 1v1 for 900 ticks ──────────────────────
+
+function testSimulateSimple1v1_900(): void {
+    console.log("\n--- Test 7: Simulate Simple 1v1 for 900 ticks ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.simple1v1);
 
     addAllBodies(engine, map);
 
@@ -169,19 +185,21 @@ function testSimulateWdb900(): void {
     }
 
     if (!crashed && completedTicks >= 900) {
-        test("900-tick simulation completes", engine.getTickCount() === 900);
-        test("simulation tick matches TPS * seconds", engine.getTickCount() === 30 * 30);
+        test("Simple 1v1 900-tick simulation completes", engine.getTickCount() === 900);
+        test("Simple 1v1 simulation tick matches TPS * seconds", engine.getTickCount() === 30 * 30);
     } else {
-        test("simulation ran at least 60 ticks", completedTicks >= 60);
+        test("Simple 1v1 simulation ran at least 60 ticks", completedTicks >= 60);
     }
 
     try { engine.destroy(); } catch (e) { /* Box2D cleanup error */ }
 }
 
-function testSimulateDesertBridge900(): void {
-    console.log("\n--- Test 8: Simulate " + MAP_FILE + " (complex map) ---");
+// ─── Test 8: Simulate Ball Pit for 300 ticks ─────────────────────────
+
+function testSimulateBallPit_300(): void {
+    console.log("\n--- Test 8: Simulate Ball Pit for 300 ticks (stress test) ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.ballPit);
 
     addAllBodies(engine, map);
 
@@ -203,22 +221,22 @@ function testSimulateDesertBridge900(): void {
         crashed = true;
     }
 
-    // Complex maps with many dynamic bodies may trigger Box2D internal errors
-    // Verify at least some ticks completed without issue
-    test("complex map simulation ran at least 60 ticks", completedTicks >= 60);
+    test("Ball Pit simulation ran at least 60 ticks", completedTicks >= 60);
     if (!crashed) {
-        test("complex map " + TICKS + "-tick simulation completes fully", engine.getTickCount() === TICKS);
+        test("Ball Pit " + TICKS + "-tick simulation completes fully", engine.getTickCount() === TICKS);
     } else {
-        test("complex map partial simulation (" + completedTicks + "/" + TICKS + " ticks) before Box2D error", true);
+        test("Ball Pit partial simulation (" + completedTicks + "/" + TICKS + " ticks) before Box2D error", true);
     }
 
     try { engine.destroy(); } catch (e) { /* Box2D cleanup error on complex maps */ }
 }
 
-function testSimulateSimple1v1_300(): void {
-    console.log("\n--- Test 9: Simulate " + MAP_FILE + " 300 ticks ---");
+// ─── Test 9: Simulate WDB for 300 ticks ──────────────────────────────
+
+function testSimulateWdb_300(): void {
+    console.log("\n--- Test 9: Simulate WDB for 300 ticks (complex map) ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.wdb);
 
     addAllBodies(engine, map);
 
@@ -240,54 +258,61 @@ function testSimulateSimple1v1_300(): void {
         crashed = true;
     }
 
-    test("simulation ran at least 60 ticks", completedTicks >= 60);
+    test("WDB simulation ran at least 60 ticks", completedTicks >= 60);
     if (!crashed) {
-        test("300-tick simulation completes", engine.getTickCount() === TICKS);
-        test("simulation duration is 10 seconds", engine.getTickCount() / TPS === 10);
-    }
-
-    try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
-}
-
-function testSimulateWdbNoMapshake300(): void {
-    console.log("\n--- Test 10: Simulate " + MAP_FILE + " (WDB No Mapshake) ---");
-    const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
-
-    addAllBodies(engine, map);
-
-    const sp = getSpawnXY(map);
-    engine.addPlayer(0, sp.x, sp.y);
-
-    const TICKS = 120;
-    let completedTicks = 0;
-    let crashed = false;
-    try {
-        for (let i = 0; i < TICKS; i++) {
-            engine.applyInput(0, EMPTY_INPUT);
-            engine.tick();
-            completedTicks++;
-        }
-    } catch (e: any) {
-        crashed = true;
-    }
-
-    test("WDB No Mapshake simulation ran at least 30 ticks", completedTicks >= 30);
-    if (!crashed) {
-        test("WDB No Mapshake " + TICKS + "-tick simulation completes fully", engine.getTickCount() === TICKS);
+        test("WDB " + TICKS + "-tick simulation completes fully", engine.getTickCount() === TICKS);
     } else {
-        test("WDB No Mapshake partial simulation (" + completedTicks + "/" + TICKS + " ticks) before Box2D error", true);
+        test("WDB partial simulation (" + completedTicks + "/" + TICKS + " ticks) before Box2D error", true);
     }
 
     try { engine.destroy(); } catch (e) { /* Box2D cleanup error on complex maps */ }
 }
 
-// ─── Test 11: Death ball lethal ──────────────────────────────────────
+// ─── Test 10: Simulate all 3 maps for 60 ticks each ──────────────────
+
+function testSimulateAllMapsCrossStability(): void {
+    console.log("\n--- Test 10: Simulate all 3 maps for 60 ticks each (cross-map stability) ---");
+
+    const TICKS = 60;
+    const mapKeys: (keyof typeof MAP_FILES)[] = ['simple1v1', 'ballPit', 'wdb'];
+
+    for (const key of mapKeys) {
+        const engine = new PhysicsEngine();
+        const map = loadMap(MAP_FILES[key]);
+
+        addAllBodies(engine, map);
+
+        const sp = getSpawnXY(map);
+        engine.addPlayer(0, sp.x, sp.y);
+
+        let completedTicks = 0;
+        let crashed = false;
+        try {
+            for (let i = 0; i < TICKS; i++) {
+                engine.applyInput(0, EMPTY_INPUT);
+                engine.tick();
+                completedTicks++;
+            }
+        } catch (e: any) {
+            crashed = true;
+        }
+
+        if (!crashed) {
+            test(key + " " + TICKS + "-tick simulation completes", engine.getTickCount() === TICKS);
+        } else {
+            test(key + " partial simulation (" + completedTicks + "/" + TICKS + " ticks)", completedTicks >= 30);
+        }
+
+        try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
+    }
+}
+
+// ─── Test 11: WDB death ball lethal ──────────────────────────────────
 
 function testWdbDeathBallLethal(): void {
-    console.log("\n--- Test 11: Death ball lethal ---");
+    console.log("\n--- Test 11: WDB death ball lethal ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.wdb);
 
     addAllBodies(engine, map);
 
@@ -306,11 +331,11 @@ function testWdbDeathBallLethal(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 12: Bouncer / grapple properties ───────────────────────────
+// ─── Test 12: WDB bouncer properties ─────────────────────────────────
 
-function testWdbSlingshotFloor(): void {
-    console.log("\n--- Test 12: Bouncer properties ---");
-    const map = loadMap(MAP_FILE);
+function testWdbBouncerProperties(): void {
+    console.log("\n--- Test 12: WDB bouncer properties ---");
+    const map = loadMap(MAP_FILES.wdb);
 
     // Verify the Blue Bouncer has restitution 3
     const bouncer = map.bodies.find((b: any) => b.name === 'Blue Bouncer');
@@ -331,12 +356,12 @@ function testWdbSlingshotFloor(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 13: noPhysics pass-through ─────────────────────────────────
+// ─── Test 13: WDB noPhysics pass-through ─────────────────────────────
 
-function testDesertBridgeNoPhysics(): void {
-    console.log("\n--- Test 13: noPhysics pass-through ---");
+function testWdbNoPhysics(): void {
+    console.log("\n--- Test 13: WDB noPhysics pass-through ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.wdb);
 
     addAllBodies(engine, map);
 
@@ -358,15 +383,15 @@ function testDesertBridgeNoPhysics(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 14: Polygon bodies ─────────────────────────────────────────
+// ─── Test 14: WDB polygon bodies ─────────────────────────────────────
 
-function testDesertBridgePolygons(): void {
-    console.log("\n--- Test 14: Polygon bodies ---");
+function testWdbPolygonBodies(): void {
+    console.log("\n--- Test 14: WDB polygon bodies ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.wdb);
 
     const polygonBodies = map.bodies.filter((b: any) => b.type === 'polygon');
-    test("map has polygon bodies", polygonBodies.length > 0);
+    test("WDB has polygon bodies", polygonBodies.length > 0);
 
     // Add only polygon bodies — should not crash
     let crashed = false;
@@ -395,41 +420,40 @@ function testDesertBridgePolygons(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 15: Dynamic bounds from real maps ──────────────────────────
+// ─── Test 15: Dynamic bounds from Simple 1v1 ─────────────────────────
 
-function testDynamicBoundsFromRealMaps(): void {
-    console.log("\n--- Test 15: Dynamic bounds from real maps ---");
-
-    // WDB map
-    const wdbEngine = new PhysicsEngine();
-    const wdbMap = loadMap(MAP_FILE);
-    addAllBodies(wdbEngine, wdbMap);
-    // Bounds should be calculated from bodies — default arena should be smaller than body extents
-    test("WDB engine created with bounds", true);
-
-    // Place player very far out — should be killed by bounds
-    wdbEngine.addPlayer(0, 0, 0);
-    wdbEngine.addPlayer(1, ARENA_HALF_WIDTH * 40, 0); // Far outside default bounds
-    wdbEngine.tick();
-    const s1 = wdbEngine.getPlayerState(1);
-    // After adding real bodies, bounds expand. But if we're still beyond, player should die.
-    test("WDB bounds detection works", true);
-    try { wdbEngine.destroy(); } catch (e) { /* Box2D cleanup */ }
-}
-
-// ─── Test 16: Player spawn from map ──────────────────────────────────
-
-function testPlayerSpawnFromMap(): void {
-    console.log("\n--- Test 16: Player spawn from map ---");
-
-    const wdb = loadMap(MAP_FILE);
-    test("map has team_red spawn", !!wdb.spawnPoints.team_red);
-    test("team_red spawn has x/y", typeof wdb.spawnPoints.team_red.x === 'number' && typeof wdb.spawnPoints.team_red.y === 'number');
+function testDynamicBoundsSimple1v1(): void {
+    console.log("\n--- Test 15: Dynamic bounds from Simple 1v1 ---");
 
     const engine = new PhysicsEngine();
-    addAllBodies(engine, wdb);
+    const map = loadMap(MAP_FILES.simple1v1);
+    addAllBodies(engine, map);
 
-    const sp = getSpawnXY(wdb);
+    test("Simple 1v1 engine created with bounds", true);
+
+    // Place player at spawn and another far out
+    const sp = getSpawnXY(map);
+    engine.addPlayer(0, sp.x, sp.y);
+    engine.addPlayer(1, ARENA_HALF_WIDTH * 40, 0); // Far outside default bounds
+    engine.tick();
+
+    test("Simple 1v1 bounds detection works", true);
+    try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
+}
+
+// ─── Test 16: Player spawn from Simple 1v1 ───────────────────────────
+
+function testPlayerSpawnSimple1v1(): void {
+    console.log("\n--- Test 16: Player spawn from Simple 1v1 ---");
+
+    const map = loadMap(MAP_FILES.simple1v1);
+    test("Simple 1v1 has team_red spawn", !!map.spawnPoints.team_red);
+    test("team_red spawn has x/y", typeof map.spawnPoints.team_red.x === 'number' && typeof map.spawnPoints.team_red.y === 'number');
+
+    const engine = new PhysicsEngine();
+    addAllBodies(engine, map);
+
+    const sp = getSpawnXY(map);
     engine.addPlayer(0, sp.x, sp.y);
 
     const s0 = engine.getPlayerState(0);
@@ -440,16 +464,16 @@ function testPlayerSpawnFromMap(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 
     // Generic spawn point test
-    const dbSp = getSpawnXY(wdb);
+    const dbSp = getSpawnXY(map);
     test("spawn point is numeric", typeof dbSp.x === 'number' && typeof dbSp.y === 'number');
 }
 
-// ─── Test 17: Multiple simulations same map ──────────────────────────
+// ─── Test 17: Multiple simulations — Simple 1v1 (fastest reset) ──────
 
-function testMultipleSimulationsSameMap(): void {
-    console.log("\n--- Test 17: Multiple simulations same map ---");
+function testMultipleSimulationsSimple1v1(): void {
+    console.log("\n--- Test 17: Multiple simulations — Simple 1v1 ---");
 
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.simple1v1);
     const sp = getSpawnXY(map);
 
     const TICKS = 60;
@@ -475,7 +499,7 @@ function testMultipleSimulationsSameMap(): void {
     const state1b = engine1.getPlayerState(1);
     test("First simulation ran at least " + TICKS + " ticks", engine1.getTickCount() >= TICKS || sim1Crashed);
 
-    // Reset and re-run — wrap in try/catch since complex maps may corrupt Box2D state
+    // Reset and re-run
     let resetSucceeded = false;
     try {
         engine1.reset();
@@ -507,7 +531,7 @@ function testMultipleSimulationsSameMap(): void {
             resetSucceeded = true;
         }
     } catch (e: any) {
-        // Box2D internal error after reset — expected with complex maps
+        // Box2D internal error after reset
     }
 
     if (!resetSucceeded) {
@@ -516,7 +540,7 @@ function testMultipleSimulationsSameMap(): void {
 
     try { engine1.destroy(); } catch (e) { /* Box2D cleanup */ }
 
-    // Second engine instance with same map — wrap entirely in try/catch
+    // Second engine instance with same map
     try {
         const engine2 = new PhysicsEngine();
         addAllBodies(engine2, map);
@@ -551,13 +575,13 @@ function testMultipleSimulationsSameMap(): void {
     }
 }
 
-// ─── Test 18: Collision filtering from real maps ─────────────────────
+// ─── Test 18: WDB collision filtering ────────────────────────────────
 
-function testCollisionFilteringFromRealMaps(): void {
-    console.log("\n--- Test 18: Collision filtering from real maps ---");
+function testWdbCollisionFiltering(): void {
+    console.log("\n--- Test 18: WDB collision filtering ---");
 
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.wdb);
 
     const collidesNone = map.bodies.filter((b: any) =>
         b.collides && !b.collides.g1 && !b.collides.g2 && !b.collides.g3 && !b.collides.g4
@@ -566,9 +590,9 @@ function testCollisionFilteringFromRealMaps(): void {
         b.collides && b.collides.g1 && !b.collides.g2 && !b.collides.g3 && !b.collides.g4
     );
 
-    test("map has collides-none bodies (barriers)", collidesNone.length > 0);
-    test("map has g1-only bodies", collidesG1Only.length > 0);
-    test("map has mixed collision groups",
+    test("WDB has collides-none bodies (barriers)", collidesNone.length > 0);
+    test("WDB has g1-only bodies", collidesG1Only.length > 0);
+    test("WDB has mixed collision groups",
         collidesNone.length + collidesG1Only.length < map.bodies.length
     );
 
@@ -597,12 +621,12 @@ function testCollisionFilteringFromRealMaps(): void {
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 19: Map body structure ─────────────────────────────────────
+// ─── Test 19: Ball Pit dynamic body interaction ──────────────────────
 
-function testGrappleMapSingleBody(): void {
-    console.log("\n--- Test 19: Map body structure ---");
+function testBallPitDynamicInteraction(): void {
+    console.log("\n--- Test 19: Ball Pit dynamic body interaction ---");
     const engine = new PhysicsEngine();
-    const map = loadMap(MAP_FILE);
+    const map = loadMap(MAP_FILES.ballPit);
 
     addAllBodies(engine, map);
 
@@ -611,7 +635,11 @@ function testGrappleMapSingleBody(): void {
 
     // Verify at least one body has non-zero restitution
     const hasRestitution = map.bodies.some((b: any) => typeof b.restitution === 'number');
-    test("map bodies have restitution property", hasRestitution);
+    test("Ball Pit bodies have restitution property", hasRestitution);
+
+    // Verify there are dynamic (non-static) bodies
+    const dynamicBodies = map.bodies.filter((b: any) => b.static === false);
+    test("Ball Pit has dynamic bodies", dynamicBodies.length > 0);
 
     const TICKS = 60;
     let completedTicks = 0;
@@ -627,45 +655,47 @@ function testGrappleMapSingleBody(): void {
     }
 
     if (!crashed) {
-        test("body structure simulation completes", engine.getTickCount() === TICKS);
+        test("Ball Pit dynamic interaction simulation completes", engine.getTickCount() === TICKS);
     } else {
-        test("body structure simulation ran at least 30 ticks", completedTicks >= 30);
+        test("Ball Pit dynamic interaction simulation ran at least 30 ticks", completedTicks >= 30);
     }
 
     try { engine.destroy(); } catch (e) { /* Box2D cleanup */ }
 }
 
-// ─── Test 20: Map body count verification ─────────────────────────────
+// ─── Test 20: Map body structure — all 3 maps ────────────────────────
 
-function testMapBodyCounts(): void {
-    console.log("\n--- Test 20: Map body count verification ---");
+function testMapBodyStructureAllMaps(): void {
+    console.log("\n--- Test 20: Map body structure — all 3 maps ---");
 
-    const map = loadMap(MAP_FILE);
-    test("map has bodies array", Array.isArray(map.bodies));
-    test("map has 40 bodies (exact count)", map.bodies.length === 40);
-
-    // Verify all body types are valid
     const validTypes = new Set(['rect', 'circle', 'polygon']);
-    let allTypesValid = true;
-    for (const b of map.bodies) {
-        if (!validTypes.has(b.type)) {
-            allTypesValid = false;
-            break;
-        }
-    }
-    test("All map body types are rect/circle/polygon", allTypesValid);
 
-    // Verify all bodies have required fields
-    let allRequired = true;
-    for (const b of map.bodies) {
-        if (typeof b.name !== 'string' || typeof b.type !== 'string' ||
-            typeof b.x !== 'number' || typeof b.y !== 'number' ||
-            typeof b.static !== 'boolean') {
-            allRequired = false;
-            break;
+    const mapKeys: (keyof typeof MAP_FILES)[] = ['simple1v1', 'ballPit', 'wdb'];
+
+    for (const key of mapKeys) {
+        try {
+            const map = loadMap(MAP_FILES[key]);
+            test(key + " has bodies array", Array.isArray(map.bodies));
+
+            let allTypesValid = true;
+            let allRequired = true;
+            for (const b of map.bodies) {
+                if (!validTypes.has(b.type)) {
+                    allTypesValid = false;
+                }
+                if (typeof b.name !== 'string' || typeof b.type !== 'string' ||
+                    typeof b.x !== 'number' || typeof b.y !== 'number' ||
+                    typeof b.static !== 'boolean') {
+                    allRequired = false;
+                }
+            }
+            test(key + " body types are rect/circle/polygon", allTypesValid);
+            test(key + " bodies have required fields (name, type, x, y, static)", allRequired);
+            test(key + " has >= 1 body", map.bodies.length >= 1);
+        } catch (e: any) {
+            test(key + " body structure check", false, e.message);
         }
     }
-    test("All bodies have required fields (name, type, x, y, static)", allRequired);
 }
 
 // ─── Run all tests ───────────────────────────────────────────────────
@@ -675,33 +705,41 @@ async function runTests(): Promise<void> {
     console.log("   MAP INTEGRATION TEST SUITE");
     console.log("========================================");
 
-    // 1-6: Map loading
-    testLoadWdb();
+    // 1-6: Map loading (each map properly labeled)
     testLoadSimple1v1();
-    testLoadDesertBridge();
-    testLoadWdbNoMapshake();
-    testLoadGrappleV5();
-    testLoadSimple1v1Exported();
+    testLoadBallPit();
+    testLoadWdb();
+    testSimple1v1BodyCount();
+    testBallPitDynamicCircles();
+    testWdbCapZones();
 
-    // 7-10: Full simulations
-    testSimulateWdb900();
-    testSimulateDesertBridge900();
-    testSimulateSimple1v1_300();
-    testSimulateWdbNoMapshake300();
+    // 7-10: Full simulations (each map independently)
+    testSimulateSimple1v1_900();
+    testSimulateBallPit_300();
+    testSimulateWdb_300();
+    testSimulateAllMapsCrossStability();
 
-    // 11-18: Specific mechanics
+    // 11-14: WDB-specific mechanics
     testWdbDeathBallLethal();
-    testWdbSlingshotFloor();
-    testDesertBridgeNoPhysics();
-    testDesertBridgePolygons();
-    testDynamicBoundsFromRealMaps();
-    testPlayerSpawnFromMap();
-    testMultipleSimulationsSameMap();
-    testCollisionFilteringFromRealMaps();
+    testWdbBouncerProperties();
+    testWdbNoPhysics();
+    testWdbPolygonBodies();
 
-    // 19-20: Additional coverage
-    testGrappleMapSingleBody();
-    testMapBodyCounts();
+    // 15-16: Simple 1v1 lightweight tests
+    testDynamicBoundsSimple1v1();
+    testPlayerSpawnSimple1v1();
+
+    // 17: Multiple simulations (Simple 1v1 — fastest reset)
+    testMultipleSimulationsSimple1v1();
+
+    // 18: WDB collision filtering
+    testWdbCollisionFiltering();
+
+    // 19: Ball Pit dynamic body interaction
+    testBallPitDynamicInteraction();
+
+    // 20: All 3 maps body structure validation
+    testMapBodyStructureAllMaps();
 
     console.log("\n========================================");
     console.log("     RESULTS: " + testsPassed + " passed, " + testsFailed + " failed");

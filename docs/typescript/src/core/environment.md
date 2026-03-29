@@ -149,7 +149,7 @@ import { Environment } from './environment';
 import * as fs from 'fs';
 
 // Load map
-const mapData = JSON.parse(fs.readFileSync('maps/wdb.json', 'utf8'));
+const mapData = JSON.parse(fs.readFileSync('maps/bonk_WDB__No_Mapshake__716916.json', 'utf8'));
 
 // Create environment
 const env = new Environment(mapData);

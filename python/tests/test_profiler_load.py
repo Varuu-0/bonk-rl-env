@@ -35,7 +35,7 @@ What this script does:
 
 If you consistently see the same worker flagged as Lagging in Terminal 1,
 that worker is likely handling an environment that sits in a \"heavy\" part
-of your map (e.g., dense collision clusters in wdb.json).
+of your map (e.g., dense collision clusters in bonk_WDB__No_Mapshake__716916.json).
 """
 
 import time

@@ -52,7 +52,42 @@ export class WorkerPool {
     private maxEnvsPerWorker: number = 0;
     private _stepCount: number = 0;
 
+    // Pre-allocated observation templates for zero-GC extraction
+    private _obsPool: any[] = [];
+    private _obsPoolSize: number = 0;
+
+    // Pre-allocated finished buffer for step/reset
+    private _finished: Uint8Array = new Uint8Array(0);
+
+    // Shared sync buffer for completion counter (all workers share this)
+    private _syncBuffer: SharedArrayBuffer | null = null;
+
     constructor(private numWorkers: number = Math.min(os.cpus().length, 8)) {
+    }
+
+    private initObsPool(totalEnvs: number): void {
+        this._obsPool = [];
+        for (let i = 0; i < totalEnvs; i++) {
+            this._obsPool.push({
+                playerX: 0,
+                playerY: 0,
+                playerVelX: 0,
+                playerVelY: 0,
+                playerAngle: 0,
+                playerAngularVel: 0,
+                playerIsHeavy: false,
+                opponents: [{
+                    x: 0,
+                    y: 0,
+                    velX: 0,
+                    velY: 0,
+                    isHeavy: false,
+                    alive: false,
+                }],
+                tick: 0,
+            });
+        }
+        this._obsPoolSize = totalEnvs;
     }
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
@@ -70,6 +105,9 @@ export class WorkerPool {
 
         // Ensure we don't start more workers than environment instances
         const activeWorkers = Math.min(this.numWorkers, totalEnvs);
+
+        // Create shared sync buffer for completion counter
+        this._syncBuffer = new SharedArrayBuffer(4);
 
         const baseEnvsPerWorker = Math.floor(totalEnvs / activeWorkers);
         let remainder = totalEnvs % activeWorkers;
@@ -112,7 +150,8 @@ export class WorkerPool {
                         startId: currentStartId,
                         config,
                         sharedBuffer: shm.getBuffer(),
-                        ringSize: this.ringSize
+                        ringSize: this.ringSize,
+                        syncBuffer: this._syncBuffer!
                     }).then(res => {
                         // After successful init, trigger the wait-for-action loop
                         worker.postMessage({ type: 'wait-for-action', config });
@@ -136,6 +175,10 @@ export class WorkerPool {
         for (let i = 0; i < this.workers.length; i++) {
             this.actionBufferPool.push(new Uint8Array(this.workerEnvs[i]));
         }
+
+        // Pre-allocate observation pool and finished buffer
+        this.initObsPool(totalEnvs);
+        this._finished = new Uint8Array(this.workers.length);
 
         // Check if workers actually support shared memory mode
         if (this.useSharedMemory) {
@@ -176,6 +219,11 @@ export class WorkerPool {
         if (this.useSharedMemory) {
             // 1. Send reset command to all workers
             let seedIdx = 0;
+
+            // Reset shared completion counter before signaling workers
+            const completedArr = new Int32Array(this._syncBuffer!);
+            Atomics.store(completedArr, 0, 0);
+
             for (let i = 0; i < this.workers.length; i++) {
                 const wEnvs = this.workerEnvs[i];
                 const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : new Array(wEnvs).fill(0);
@@ -186,10 +234,11 @@ export class WorkerPool {
                 shm.sendCommand(1); // RESET command
             }
 
-            // 2. Wait for reset completion using Atomics.wait (no polling overhead)
+            // 2. Wait for reset completion using shared completion counter
             const timeoutMs = 30000;
             const startTime = Date.now();
-            const finished = new Uint8Array(this.workers.length);
+            const finished = this._finished;
+            finished.fill(0);  // Reset from previous step
 
             // First pass: check if any workers already done
             for (let i = 0; i < this.workers.length; i++) {
@@ -199,15 +248,28 @@ export class WorkerPool {
                 }
             }
 
-            // Second pass: Atomics.wait on unfinished workers
+            // Wait for ALL workers to complete using shared completion counter
+            {
+                const elapsed = Date.now() - startTime;
+                const remaining = Math.max(1, timeoutMs - elapsed);
+                const numWorkers = this.workers.length;
+                let waitVal = Atomics.load(completedArr, 0);
+                while (waitVal < numWorkers) {
+                    Atomics.wait(completedArr, 0, waitVal, remaining);
+                    waitVal = Atomics.load(completedArr, 0);
+                    if (Date.now() - startTime >= timeoutMs) break;
+                }
+            }
+
+            // All workers done — consume their signals
             for (let i = 0; i < this.workers.length; i++) {
                 if (finished[i]) continue;
                 const shm = this.sharedMemManagers[i]!;
-                const ctrl = shm.getControl();
-                const elapsed = Date.now() - startTime;
-                const remaining = Math.max(1, timeoutMs - elapsed);
-                Atomics.wait(ctrl.mainReady, 0, 0, remaining);
-                shm.consumeResultsSignal();
+                try {
+                    shm.consumeResultsSignal();
+                } catch (e: any) {
+                    console.warn(`[WorkerPool] reset: worker ${i} failed during consume:`, e.message);
+                }
                 finished[i] = 1;
             }
 
@@ -215,9 +277,17 @@ export class WorkerPool {
             const observations: any[] = [];
             for (let i = 0; i < this.workers.length; i++) {
                 const wEnvs = this.workerEnvs[i];
-                const res = this.sharedMemManagers[i]!.readResults();
-                for (let j = 0; j < wEnvs; j++) {
-                    observations.push(this.extractObservation(res.observations, j));
+                try {
+                    const res = this.sharedMemManagers[i]!.readResults();
+                    for (let j = 0; j < wEnvs; j++) {
+                        observations.push(this.extractObservation(res.observations, j));
+                    }
+                } catch (e: any) {
+                    console.warn(`[WorkerPool] reset: worker ${i} failed to read results:`, e.message);
+                    // Push zeroed observations so the array length stays consistent
+                    for (let j = 0; j < wEnvs; j++) {
+                        observations.push(null);
+                    }
                 }
             }
             return observations;
@@ -228,7 +298,13 @@ export class WorkerPool {
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
             const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : undefined;
-            promises.push(this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds }));
+            promises.push(
+                this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds })
+                    .catch(e => {
+                        console.warn(`[WorkerPool] reset: worker ${i} failed:`, e.message);
+                        return new Array(wEnvs).fill(null);
+                    })
+            );
             seedIdx += wEnvs;
         }
         const results = await Promise.all(promises);
@@ -254,15 +330,19 @@ export class WorkerPool {
 
         // 1. Encode actions and signal all workers in parallel
         let actionIdx = 0;
+
+        // Reset shared completion counter before signaling workers
+        const completedArr = new Int32Array(this._syncBuffer!);
+        Atomics.store(completedArr, 0, 0);
+
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
-            const wActions = actions.slice(actionIdx, actionIdx + wEnvs);
-            actionIdx += wEnvs;
 
             const encodedActions = this.actionBufferPool[i];
-            for (let j = 0; j < wActions.length; j++) {
-                encodedActions[j] = this.encodeAction(wActions[j]);
+            for (let j = 0; j < wEnvs; j++) {
+                encodedActions[j] = this.encodeAction(actions[actionIdx + j]);
             }
+            actionIdx += wEnvs;
 
             const shm = this.sharedMemManagers[i]!;
             shm.writeActionsQuiet(encodedActions);
@@ -272,7 +352,8 @@ export class WorkerPool {
         // 2. Wait for results from all workers using Atomics.wait (no polling overhead)
         const timeoutMs = 5000;
         const startTime = Date.now();
-        const finished = new Uint8Array(this.workers.length);
+        const finished = this._finished;
+        finished.fill(0);  // Reset from previous step
 
         // First pass: check if any workers already done (non-blocking)
         for (let i = 0; i < this.workers.length; i++) {
@@ -284,14 +365,23 @@ export class WorkerPool {
             }
         }
 
-        // Second pass: Atomics.wait on unfinished workers
+        // Wait for ALL workers to complete using shared completion counter
+        {
+            const elapsed = Date.now() - startTime;
+            const remaining = Math.max(1, timeoutMs - elapsed);
+            const numWorkers = this.workers.length;
+            let waitVal = Atomics.load(completedArr, 0);
+            while (waitVal < numWorkers) {
+                Atomics.wait(completedArr, 0, waitVal, remaining);
+                waitVal = Atomics.load(completedArr, 0);
+                if (Date.now() - startTime >= timeoutMs) break;
+            }
+        }
+
+        // All workers done — consume their signals
         for (let i = 0; i < this.workers.length; i++) {
             if (finished[i]) continue;
             const shm = this.sharedMemManagers[i]!;
-            const ctrl = shm.getControl();
-            const elapsed = Date.now() - startTime;
-            const remaining = Math.max(1, timeoutMs - elapsed);
-            Atomics.wait(ctrl.mainReady, 0, 0, remaining);
             shm.consumeResultsSignal();
             returnTimes[i] = process.hrtime.bigint();
             finished[i] = 1;
@@ -425,24 +515,47 @@ export class WorkerPool {
      */
     private extractObservation(obs: Float32Array, idx: number): any {
         const offset = idx * 14;
-        return {
-            playerX: obs[offset + 0],
-            playerY: obs[offset + 1],
-            playerVelX: obs[offset + 2],
-            playerVelY: obs[offset + 3],
-            playerAngle: obs[offset + 4],
-            playerAngularVel: obs[offset + 5],
-            playerIsHeavy: obs[offset + 6] === 1,
-            opponents: [{
-                x: obs[offset + 7],
-                y: obs[offset + 8],
-                velX: obs[offset + 9],
-                velY: obs[offset + 10],
-                isHeavy: obs[offset + 11] === 1,
-                alive: obs[offset + 12] === 1
-            }],
-            tick: obs[offset + 13]
-        };
+        const template = this._obsPool[idx];
+        if (!template) {
+            return {
+                playerX: obs[offset + 0],
+                playerY: obs[offset + 1],
+                playerVelX: obs[offset + 2],
+                playerVelY: obs[offset + 3],
+                playerAngle: obs[offset + 4],
+                playerAngularVel: obs[offset + 5],
+                playerIsHeavy: obs[offset + 6] === 1,
+                opponents: [{
+                    x: obs[offset + 7],
+                    y: obs[offset + 8],
+                    velX: obs[offset + 9],
+                    velY: obs[offset + 10],
+                    isHeavy: obs[offset + 11] === 1,
+                    alive: obs[offset + 12] === 1,
+                }],
+                tick: obs[offset + 13],
+            };
+        }
+
+        template.playerX = obs[offset + 0];
+        template.playerY = obs[offset + 1];
+        template.playerVelX = obs[offset + 2];
+        template.playerVelY = obs[offset + 3];
+        template.playerAngle = obs[offset + 4];
+        template.playerAngularVel = obs[offset + 5];
+        template.playerIsHeavy = obs[offset + 6] === 1;
+
+        const opp = template.opponents[0];
+        opp.x = obs[offset + 7];
+        opp.y = obs[offset + 8];
+        opp.velX = obs[offset + 9];
+        opp.velY = obs[offset + 10];
+        opp.isHeavy = obs[offset + 11] === 1;
+        opp.alive = obs[offset + 12] === 1;
+
+        template.tick = obs[offset + 13];
+
+        return template;
     }
 
     /**

@@ -136,11 +136,11 @@ export class BonkEnvironment {
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = path.join(__dirname, '..', '..', 'maps', 'wdb.json');
+            const mapPath = path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
             } catch (e) {
-                console.warn("Could not load maps/wdb.json, using fallback box");
+                console.warn("Could not load default map, using fallback box");
                 mapDef = getDefaultMap();
             }
         }
@@ -172,7 +172,15 @@ export class BonkEnvironment {
             this.config.seed = seed;
             this.rng.setSeed(seed);
         }
-        this.physics.reset();
+        // Clean up old physics engine, recover if corrupted
+        try {
+            this.physics.reset();
+        } catch (e: any) {
+            console.warn('[BonkEnvironment] reset: physics reset failed, creating fresh engine:', e?.message || e);
+        }
+
+        // Create fresh physics engine
+        this.physics = new PhysicsEngine();
 
         // Re-add platforms after physics reset (they were destroyed by physics.reset())
         for (const body of this.config.mapData.bodies) {
@@ -276,20 +284,21 @@ export class BonkEnvironment {
         // Step physics by exactly 1 tick
         this.physics.tick();
 
+        // Cache player states to avoid repeated lookups
+        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+        const opponentStates = this.opponentIds.map(id => this.physics.getPlayerState(id));
+
         // Calculate reward
-        const reward = this.calculateReward();
+        const reward = this.calculateReward(aiState, opponentStates);
 
         // Update previous alive state for next reward calculation
-        for (const [id, body] of [[this.aiPlayerId], ...this.opponentIds.map(i => [i])]) {
-            const playerId = id as number;
-            this.previousAliveState.set(playerId, this.physics.getPlayerState(playerId).alive);
+        this.previousAliveState.set(this.aiPlayerId, aiState.alive);
+        for (let i = 0; i < this.opponentIds.length; i++) {
+            this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
         }
 
         // Check for terminal state (death or maxTicks)
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
-        const allOpponentsDead = this.opponentIds.every(
-            id => !this.physics.getPlayerState(id).alive,
-        );
+        const allOpponentsDead = opponentStates.every(s => !s.alive);
         const terminated = !aiState.alive || allOpponentsDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 
@@ -304,7 +313,10 @@ export class BonkEnvironment {
         // Reset frame skip counter for next action after completing the cycle
         if (this.frameSkipTicks >= this.config.frameSkip) {
             this.frameSkipTicks = 0;
-            this.terminalReached = false;
+            // Only clear terminalReached if we're not in a terminal state
+            if (!terminated && !truncated) {
+                this.terminalReached = false;
+            }
         }
 
         const observation = this.getObservation();
@@ -316,10 +328,8 @@ export class BonkEnvironment {
             truncated,
             info: {
                 tick: this.physics.getTickCount(),
-                aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
-                opponentsAlive: this.opponentIds.filter(
-                    id => this.physics.getPlayerState(id).alive,
-                ).length,
+                aiAlive: aiState.alive,
+                opponentsAlive: opponentStates.filter(s => s.alive).length,
                 terminated,
                 frameSkip: this.config.frameSkip,
             },
@@ -330,7 +340,11 @@ export class BonkEnvironment {
      * Close the environment and release resources.
      */
     close(): void {
-        this.physics.destroy();
+        try {
+            this.physics.destroy();
+        } catch (e: any) {
+            console.warn('[BonkEnvironment] close: physics destroy failed:', e?.message || e);
+        }
     }
 
     // ─── Private helpers ─────────────────────────────────────────────
@@ -379,20 +393,19 @@ export class BonkEnvironment {
      *   -1.0  — AI player knocked off the map (death)
      *   -0.001 — time penalty (encourages action)
      */
-    private calculateReward(): number {
+    private calculateReward(aiState: PlayerState, opponentStates: PlayerState[]): number {
         let reward = 0;
 
         // Check if AI just died this tick
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
         const aiWasAlive = this.previousAliveState.get(this.aiPlayerId) ?? true;
         if (aiWasAlive && !aiState.alive) {
             reward -= 1.0;
         }
 
         // Check if any opponent just died this tick
-        for (const opId of this.opponentIds) {
-            const opState = this.physics.getPlayerState(opId);
-            const opWasAlive = this.previousAliveState.get(opId) ?? true;
+        for (let i = 0; i < this.opponentIds.length; i++) {
+            const opState = opponentStates[i];
+            const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
             if (opWasAlive && !opState.alive) {
                 reward += 1.0;
             }
