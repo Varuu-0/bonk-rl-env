@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Bonk RL Viewer</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #1a1a2e; }
+  body { display: flex; align-items: center; justify-content: center; }
+  canvas#game { display: block; }
+  #hud {
+    position: fixed; top: 12px; left: 12px;
+    color: #eee; font: 13px/1.6 'Courier New', monospace;
+    pointer-events: none; z-index: 10;
+    text-shadow: 0 1px 3px rgba(0,0,0,0.8);
+    background: rgba(0,0,0,0.45); padding: 8px 12px; border-radius: 6px;
+  }
+  #hud .label { color: #888; }
+  #hud .value { color: #fff; }
+  #hud .disconnected { color: #ff4444; font-weight: bold; }
+  #hud .controls { color: #666; font-size: 11px; margin-top: 4px; border-top: 1px solid rgba(255,255,255,0.1); padding-top: 4px; }
+</style>
+</head>
+<body>
+<canvas id="game" width="800" height="600"></canvas>
+<div id="hud">
+  <div><span class="label">FPS:</span> <span class="value" id="fps">0</span></div>
+  <div><span class="label">Tick:</span> <span class="value" id="tick">-</span></div>
+  <div><span class="label">Players:</span> <span class="value" id="players">0</span></div>
+  <div><span class="label">Status:</span> <span class="value" id="status">Connecting...</span></div>
+  <div class="controls">WASD=Move | Shift=Heavy | Z=Grapple</div>
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const hudFps = document.getElementById('fps');
+  const hudTick = document.getElementById('tick');
+  const hudPlayers = document.getElementById('players');
+  const hudStatus = document.getElementById('status');
+
+  let mapDef = null;
+  let frameData = null;
+  let camera = { x: 0, y: 0, scale: 1 };
+
+  /* ---------- helpers ---------- */
+
+  function intToHex(c) {
+    return '#' + c.toString(16).padStart(6, '0');
+  }
+
+  /* ---------- resize ---------- */
+
+  function resize() {
+    const w = window.innerWidth - 24;
+    const h = window.innerHeight - 24;
+    canvas.width = w;
+    canvas.height = h;
+    if (mapDef) computeCamera();
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  /* ---------- camera ---------- */
+
+  const ARENA_HALF_WIDTH = 25;
+  const ARENA_HALF_HEIGHT = 20;
+  const SCALE = 30;
+  const ARENA_W = ARENA_HALF_WIDTH * 2 * SCALE;
+  const ARENA_H = ARENA_HALF_HEIGHT * 2 * SCALE;
+  const PADDING = 40;
+
+  function computeCamera() {
+    let minX = 0, minY = 0, maxX = ARENA_W, maxY = ARENA_H;
+
+    if (mapDef && mapDef.bodies) {
+      for (const b of mapDef.bodies) {
+        let bx = b.x, by = b.y, bw = 0, bh = 0;
+        if (b.type === 'rect') {
+          bw = (b.width || 0); bh = (b.height || 0);
+        } else if (b.type === 'circle') {
+          bw = bh = (b.radius || 0) * 2;
+        } else if (b.type === 'polygon' && b.vertices) {
+          for (const v of b.vertices) {
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y < minY) minY = v.y;
+            if (v.y > maxY) maxY = v.y;
+          }
+          continue;
+        }
+        if (bx - bw / 2 < minX) minX = bx - bw / 2;
+        if (bx + bw / 2 > maxX) maxX = bx + bw / 2;
+        if (by - bh / 2 < minY) minY = by - bh / 2;
+        if (by + bh / 2 > maxY) maxY = by + bh / 2;
+      }
+    }
+
+    const mapW = maxX - minX;
+    const mapH = maxY - minY;
+    const scaleX = (canvas.width - PADDING * 2) / mapW;
+    const scaleY = (canvas.height - PADDING * 2) / mapH;
+    camera.scale = Math.min(scaleX, scaleY);
+    camera.x = (canvas.width - mapW * camera.scale) / 2 - minX * camera.scale;
+    camera.y = (canvas.height - mapH * camera.scale) / 2 - minY * camera.scale;
+  }
+
+  /* ---------- socket ---------- */
+
+  const socket = io();
+
+  socket.on('connect', () => {
+    hudStatus.textContent = 'Connected';
+    hudStatus.classList.remove('disconnected');
+  });
+
+  socket.on('disconnect', () => {
+    hudStatus.textContent = 'Disconnected';
+    hudStatus.classList.add('disconnected');
+  });
+
+  socket.on('map', (m) => {
+    mapDef = m;
+    computeCamera();
+  });
+
+  socket.on('state', (f) => {
+    frameData = f;
+    if (hudTick) hudTick.textContent = f.tick;
+    if (hudPlayers && f.players) hudPlayers.textContent = f.players.filter(p => p.alive).length;
+  });
+
+  // ─── Input Manager ──────────────────────────────────────────
+  const keys = new Set();
+  window.addEventListener('keydown', (e) => {
+    if (e.repeat) return;
+    keys.add(e.code);
+    e.preventDefault();
+  });
+  window.addEventListener('keyup', (e) => {
+    keys.delete(e.code);
+  });
+  window.addEventListener('blur', () => {
+    keys.clear();
+  });
+
+  function getPlayerInput() {
+    return {
+      left: keys.has('KeyA') || keys.has('ArrowLeft'),
+      right: keys.has('KeyD') || keys.has('ArrowRight'),
+      up: keys.has('KeyW') || keys.has('ArrowUp'),
+      down: keys.has('KeyS') || keys.has('ArrowDown'),
+      heavy: keys.has('ShiftLeft') || keys.has('ShiftRight'),
+      grapple: keys.has('KeyZ'),
+    };
+  }
+
+  /* ---------- FPS counter ---------- */
+
+  let fpsFrames = 0;
+  let fpsLast = performance.now();
+
+  function updateFps() {
+    fpsFrames++;
+    const now = performance.now();
+    if (now - fpsLast >= 1000) {
+      hudFps.textContent = fpsFrames;
+      fpsFrames = 0;
+      fpsLast = now;
+    }
+  }
+
+  /* ---------- drawing ---------- */
+
+  function drawBody(body) {
+    ctx.save();
+
+    const isSensor = body.noPhysics === true;
+    const isLethal = body.isLethal === true;
+    const color = body.color != null ? intToHex(body.color) : '#555555';
+    const strokeColor = isLethal ? '#ff0000' : '#000000';
+    const lineWidth = isLethal ? 3 : 2;
+
+    if (isSensor) ctx.globalAlpha = 0.3;
+
+    ctx.fillStyle = color;
+    ctx.strokeStyle = strokeColor;
+    ctx.lineWidth = lineWidth;
+
+    if (body.type === 'rect') {
+      ctx.save();
+      ctx.translate(body.x, body.y);
+      ctx.rotate(body.angle || 0);
+      ctx.fillRect(-body.width / 2, -body.height / 2, body.width, body.height);
+      ctx.strokeRect(-body.width / 2, -body.height / 2, body.width, body.height);
+      ctx.restore();
+    } else if (body.type === 'circle') {
+      ctx.beginPath();
+      ctx.arc(body.x, body.y, body.radius, 0, Math.PI * 2);
+      ctx.fill();
+      ctx.stroke();
+    } else if (body.type === 'polygon' && body.vertices && body.vertices.length > 0) {
+      ctx.beginPath();
+      ctx.moveTo(body.vertices[0].x, body.vertices[0].y);
+      for (let i = 1; i < body.vertices.length; i++) {
+        ctx.lineTo(body.vertices[i].x, body.vertices[i].y);
+      }
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawPlayer(p, index) {
+    if (!p.alive) return;
+    const r = 30;
+    const color = index === 0 ? '#4A90D9' : '#D94A4A';
+
+    ctx.fillStyle = color;
+    ctx.strokeStyle = '#000000';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(p.x, p.y, r, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.stroke();
+
+    if (p.isHeavy) {
+      ctx.strokeStyle = '#FFD700';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(p.x, p.y, 35, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+  }
+
+  function render() {
+    updateFps();
+
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.fillStyle = '#1a1a2e';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+    if (!mapDef) {
+      ctx.fillStyle = '#888';
+      ctx.font = '24px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('Waiting for map...', canvas.width / 2, canvas.height / 2);
+      requestAnimationFrame(render);
+      return;
+    }
+
+    ctx.setTransform(camera.scale, 0, 0, camera.scale, camera.x, camera.y);
+
+    // arena bounds
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.lineWidth = 2 / camera.scale;
+    ctx.strokeRect(0, 0, ARENA_W, ARENA_H);
+
+    // map bodies
+    for (const body of mapDef.bodies) {
+      drawBody(body);
+    }
+
+    if (!frameData) {
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.fillStyle = '#888';
+      ctx.font = '20px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText('Waiting for state...', canvas.width / 2, canvas.height / 2);
+      requestAnimationFrame(render);
+      return;
+    }
+
+    // players
+    for (let i = 0; i < frameData.players.length; i++) {
+      drawPlayer(frameData.players[i], i);
+    }
+
+    drawKeyOverlay();
+
+    requestAnimationFrame(render);
+  }
+
+  requestAnimationFrame(render);
+
+  // Send input to server at 30 TPS
+  setInterval(() => {
+    if (socket.connected) {
+      socket.emit('input', getPlayerInput());
+    }
+  }, 1000 / 30);
+
+  /* ---------- key overlay ---------- */
+
+  const KEY_LABELS = {
+    KeyW: 'W', KeyA: 'A', KeyS: 'S', KeyD: 'D',
+    ArrowUp: '↑', ArrowDown: '↓', ArrowLeft: '←', ArrowRight: '→',
+    ShiftLeft: 'Shift', ShiftRight: 'Shift',
+    KeyZ: 'Z',
+  };
+
+  function drawKeyOverlay() {
+    const input = getPlayerInput();
+    const allKeys = [...keys].filter(k => KEY_LABELS[k]);
+    if (allKeys.length === 0) return;
+
+    const padding = 8;
+    const fontSize = 14;
+    ctx.save();
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.font = `bold ${fontSize}px 'Courier New', monospace`;
+
+    let x = canvas.width - padding;
+    const y = canvas.height - padding;
+
+    for (let i = allKeys.length - 1; i >= 0; i--) {
+      const label = KEY_LABELS[allKeys[i]];
+      const w = ctx.measureText(label).width + padding * 2;
+      x -= w + 4;
+
+      ctx.fillStyle = 'rgba(255,255,255,0.15)';
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 1;
+      const rx = x;
+      const ry = y - fontSize - padding;
+      const rh = fontSize + padding * 2;
+      const rw = w;
+      const r = 4;
+      ctx.beginPath();
+      ctx.moveTo(rx + r, ry);
+      ctx.lineTo(rx + rw - r, ry);
+      ctx.quadraticCurveTo(rx + rw, ry, rx + rw, ry + r);
+      ctx.lineTo(rx + rw, ry + rh - r);
+      ctx.quadraticCurveTo(rx + rw, ry + rh, rx + rw - r, ry + rh);
+      ctx.lineTo(rx + r, ry + rh);
+      ctx.quadraticCurveTo(rx, ry + rh, rx, ry + rh - r);
+      ctx.lineTo(rx, ry + r);
+      ctx.quadraticCurveTo(rx, ry, rx + r, ry);
+      ctx.closePath();
+      ctx.fill();
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      ctx.fillText(label, rx + rw / 2, ry + rh / 2);
+    }
+    ctx.restore();
+  }
+})();
+</script>
+</body>
+</html>

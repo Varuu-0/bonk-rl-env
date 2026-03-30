@@ -412,12 +412,12 @@ function testDefaultFriction(): void {
 
     const settleState = engine.getPlayerState(0);
 
-    // Player circle radius=0.5m, SCALE=30 → 15px radius
-    // Floor top at y=185, so circle center rests at y=185-15=170
+    // Player circle radius=1.0m, SCALE=30 → 30px radius
+    // Floor top at y=185, so circle center rests at y=185-30=155
     test(
         "Player settles on default-friction floor",
-        settleState.y >= 165 && settleState.y <= 180,
-        `y=${settleState.y.toFixed(2)} expected ~170`
+        settleState.y >= 145 && settleState.y <= 165,
+        `y=${settleState.y.toFixed(2)} expected ~155`
     );
 
     // Apply rightward input for 30 ticks

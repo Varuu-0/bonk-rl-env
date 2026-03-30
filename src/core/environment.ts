@@ -127,6 +127,24 @@ export class BonkEnvironment {
     private frameSkipTicks: number = 0;
     private terminalReached: boolean = false;
 
+    // Pre-allocated objects for zero-allocation hot path
+    private _cachedObservation: Observation = {
+        playerX: 0, playerY: 0, playerVelX: 0, playerVelY: 0,
+        playerAngle: 0, playerAngularVel: 0, playerIsHeavy: false,
+        opponents: [],
+        arenaHalfWidth: 0, arenaHalfHeight: 0, tick: 0,
+    };
+    private _cachedStepResult: StepResult = {
+        observation: null as any,
+        reward: 0, done: false, truncated: false,
+        info: {},
+    };
+    private _cachedInfo: Record<string, any> = {
+        tick: 0, aiAlive: false, opponentsAlive: 0, terminated: false, frameSkip: 1,
+    };
+    private _cachedOpInput: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+    private _cachedDecodeInput: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case
         const frameSkip = config.frameSkip !== undefined ? config.frameSkip : (config as any).frame_skip;
@@ -156,6 +174,12 @@ export class BonkEnvironment {
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
+
+        // Pre-allocate opponent entries in cached observation
+        this._cachedObservation.opponents = [];
+        for (let i = 0; i < this.config.numOpponents; i++) {
+            this._cachedObservation.opponents.push({ x: 0, y: 0, velX: 0, velY: 0, isHeavy: false, alive: false });
+        }
 
         for (const body of this.config.mapData.bodies) {
             this.physics.addBody(body);
@@ -247,22 +271,21 @@ export class BonkEnvironment {
                 this.frameSkipTicks = 0;
                 this.terminalReached = false;
             }
-            const observation = this.getObservation();
-            return {
-                observation,
-                reward: 0,
-                done: true,
-                truncated: false,
-                info: {
-                    tick: this.physics.getTickCount(),
-                    aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
-                    opponentsAlive: this.opponentIds.filter(
-                        id => this.physics.getPlayerState(id).alive,
-                    ).length,
-                    terminated: true,
-                    frameSkip: this.config.frameSkip,
-                },
-            };
+            // Terminal path: fetch fresh states since cached ones aren't available
+            const termAiState = this.physics.getPlayerState(this.aiPlayerId);
+            const termOpStates = this.opponentIds.map(id => this.physics.getPlayerState(id));
+            const observation = this.getObservation(termAiState, termOpStates);
+            this._cachedInfo.tick = this.physics.getTickCount();
+            this._cachedInfo.aiAlive = termAiState.alive;
+            this._cachedInfo.opponentsAlive = termOpStates.filter(s => s.alive).length;
+            this._cachedInfo.terminated = true;
+            this._cachedInfo.frameSkip = this.config.frameSkip;
+            this._cachedStepResult.observation = observation;
+            this._cachedStepResult.reward = 0;
+            this._cachedStepResult.done = true;
+            this._cachedStepResult.truncated = false;
+            this._cachedStepResult.info = this._cachedInfo;
+            return this._cachedStepResult;
         }
 
         // If starting a new frame skip cycle, update the stored action
@@ -319,21 +342,19 @@ export class BonkEnvironment {
             }
         }
 
-        const observation = this.getObservation();
+        const observation = this.getObservation(aiState, opponentStates);
 
-        return {
-            observation,
-            reward,
-            done: terminated || truncated,
-            truncated,
-            info: {
-                tick: this.physics.getTickCount(),
-                aiAlive: aiState.alive,
-                opponentsAlive: opponentStates.filter(s => s.alive).length,
-                terminated,
-                frameSkip: this.config.frameSkip,
-            },
-        };
+        this._cachedInfo.tick = this.physics.getTickCount();
+        this._cachedInfo.aiAlive = aiState.alive;
+        this._cachedInfo.opponentsAlive = opponentStates.filter(s => s.alive).length;
+        this._cachedInfo.terminated = terminated;
+        this._cachedInfo.frameSkip = this.config.frameSkip;
+        this._cachedStepResult.observation = observation;
+        this._cachedStepResult.reward = reward;
+        this._cachedStepResult.done = terminated || truncated;
+        this._cachedStepResult.truncated = truncated;
+        this._cachedStepResult.info = this._cachedInfo;
+        return this._cachedStepResult;
     }
 
     /**
@@ -354,14 +375,13 @@ export class BonkEnvironment {
      */
     private decodeAction(action: Action): PlayerInput {
         if (typeof action === 'number') {
-            return {
-                left: !!(action & 1),
-                right: !!(action & 2),
-                up: !!(action & 4),
-                down: !!(action & 8),
-                heavy: !!(action & 16),
-                grapple: !!(action & 32),
-            };
+            this._cachedDecodeInput.left = !!(action & 1);
+            this._cachedDecodeInput.right = !!(action & 2);
+            this._cachedDecodeInput.up = !!(action & 4);
+            this._cachedDecodeInput.down = !!(action & 8);
+            this._cachedDecodeInput.heavy = !!(action & 16);
+            this._cachedDecodeInput.grapple = !!(action & 32);
+            return this._cachedDecodeInput;
         }
         return action;
     }
@@ -371,18 +391,23 @@ export class BonkEnvironment {
      */
     private getOpponentInput(opId: number): PlayerInput {
         if (!this.config.randomOpponent) {
-            return { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+            this._cachedOpInput.left = false;
+            this._cachedOpInput.right = false;
+            this._cachedOpInput.up = false;
+            this._cachedOpInput.down = false;
+            this._cachedOpInput.heavy = false;
+            this._cachedOpInput.grapple = false;
+            return this._cachedOpInput;
         }
 
         // Simple random policy: each direction has x% chance per tick
-        return {
-            left: this.rng.next() < 0.2,
-            right: this.rng.next() < 0.2,
-            up: this.rng.next() < 0.15,
-            down: this.rng.next() < 0.1,
-            heavy: this.rng.next() < 0.05,
-            grapple: this.rng.next() < 0.05,
-        };
+        this._cachedOpInput.left = this.rng.next() < 0.2;
+        this._cachedOpInput.right = this.rng.next() < 0.2;
+        this._cachedOpInput.up = this.rng.next() < 0.15;
+        this._cachedOpInput.down = this.rng.next() < 0.1;
+        this._cachedOpInput.heavy = this.rng.next() < 0.05;
+        this._cachedOpInput.grapple = this.rng.next() < 0.05;
+        return this._cachedOpInput;
     }
 
     /**
@@ -420,33 +445,36 @@ export class BonkEnvironment {
     /**
      * Build the observation object from current physics state.
      */
-    private getObservation(): Observation {
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+    private getObservation(aiState?: PlayerState, opponentStates?: PlayerState[]): Observation {
+        if (!aiState) {
+            aiState = this.physics.getPlayerState(this.aiPlayerId);
+        }
+        if (!opponentStates) {
+            opponentStates = this.opponentIds.map(id => this.physics.getPlayerState(id));
+        }
 
-        const opponents = this.opponentIds.map(id => {
-            const s = this.physics.getPlayerState(id);
-            return {
-                x: s.x,
-                y: s.y,
-                velX: s.velX,
-                velY: s.velY,
-                isHeavy: s.isHeavy,
-                alive: s.alive,
-            };
-        });
+        this._cachedObservation.playerX = aiState.x;
+        this._cachedObservation.playerY = aiState.y;
+        this._cachedObservation.playerVelX = aiState.velX;
+        this._cachedObservation.playerVelY = aiState.velY;
+        this._cachedObservation.playerAngle = aiState.angle;
+        this._cachedObservation.playerAngularVel = aiState.angularVel;
+        this._cachedObservation.playerIsHeavy = aiState.isHeavy;
+        this._cachedObservation.arenaHalfWidth = ARENA_HALF_WIDTH * SCALE;
+        this._cachedObservation.arenaHalfHeight = ARENA_HALF_HEIGHT * SCALE;
+        this._cachedObservation.tick = this.physics.getTickCount();
 
-        return {
-            playerX: aiState.x,
-            playerY: aiState.y,
-            playerVelX: aiState.velX,
-            playerVelY: aiState.velY,
-            playerAngle: aiState.angle,
-            playerAngularVel: aiState.angularVel,
-            playerIsHeavy: aiState.isHeavy,
-            opponents,
-            arenaHalfWidth: ARENA_HALF_WIDTH * SCALE,
-            arenaHalfHeight: ARENA_HALF_HEIGHT * SCALE,
-            tick: this.physics.getTickCount(),
-        };
+        for (let i = 0; i < opponentStates.length; i++) {
+            const s = opponentStates[i];
+            const op = this._cachedObservation.opponents[i];
+            op.x = s.x;
+            op.y = s.y;
+            op.velX = s.velX;
+            op.velY = s.velY;
+            op.isHeavy = s.isHeavy;
+            op.alive = s.alive;
+        }
+
+        return this._cachedObservation;
     }
 }

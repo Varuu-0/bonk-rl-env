@@ -505,11 +505,11 @@ function testMultipleBodiesDifferentCollides(): void {
         collides: { g1: true, g2: false, g3: false, g4: false },
     });
 
-    // Wall at x=70: only blocks g2
+    // Wall at x=130: only blocks g2 (far enough for large PLAYER_RADIUS to clear g1 wall)
     engine.addBody({
         name: "g2_wall",
         type: "rect",
-        x: 70,
+        x: 130,
         y: 0,
         width: 20,
         height: 2000,
@@ -545,8 +545,8 @@ function testMultipleBodiesDifferentCollides(): void {
     );
 
     test(
-        "Player 1 blocked by g2 wall at x=70",
-        p1.x < 75,
+        "Player 1 blocked by g2 wall at x=130",
+        p1.x < 135,
         `finalX=${p1.x.toFixed(2)}`
     );
 

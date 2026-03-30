@@ -29,6 +29,7 @@
     "bench:telemetry": "npx tsx benchmarks/telemetry.ts",
     "bench:all": "npx tsx benchmarks/quick-2000-step.ts && npx tsx benchmarks/step-throughput.ts && npx tsx benchmarks/telemetry.ts",
     "start": "tsx src/main.ts",
+    "visualize": "npx tsx src/visualize.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
@@ -50,6 +51,7 @@
     "express": "^4.18.2",
     "moment": "^2.30.1",
     "socket.io": "^4.7.4",
+    "socket.io-client": "^4.8.3",
     "word-wrap": "^1.2.5",
     "zeromq": "^6.5.0"
   },
