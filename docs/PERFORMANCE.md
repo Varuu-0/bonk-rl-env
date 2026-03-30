@@ -48,8 +48,8 @@ The physics engine itself is fast — **38.6 µs per tick** on a single thread. 
 │      • PRNG-driven random opponent policy                   │
 ├──────────────────────────────────────────────────────────────┤
 │  PhysicsEngine  (src/core/physics-engine.ts)                │
-│    • box2d-node (Box2DFlash v2.0 JS port)                  │
-│    • world.Step(1/30, 5 iterations) per tick               │
+│    • box2d-node (Box2DFlash v2.0 JS port)                   │
+│    • world.Step(1/30, 5 iterations) per tick                │
 │    • AABB broadphase with monkey-patched guards             │
 │    • Contact listener for lethal collision detection        │
 └──────────────────────────────────────────────────────────────┘

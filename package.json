@@ -56,7 +56,6 @@
   "devDependencies": {
     "@types/columnify": "^1.5.4",
     "@types/express": "^4.17.21",
-    "socket.io-client": "^4.8.3",
     "tsx": "^4.21.0",
     "typescript": "^5.3.3"
   }
