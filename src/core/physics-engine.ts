@@ -31,14 +31,15 @@ const {
   b2FilterData,
 } = box2d;
 
-// Monkey-patch b2BroadPhase.Query to guard against undefined bounds entries.
-// The box2d JS port (Box2DFlash v2.0) can leave stale/undefined entries in
-// the bounds array during DestroyProxy, causing "Cannot read properties of
-// undefined (reading 'IsLower')" crashes during Step → Solve → SynchronizeShapes.
+// ─── Box2D Broadphase Corruption Guards ───────────────────────────────
+// The box2d JS port (Box2DFlash v2.0) has bugs in its broadphase array
+// management that cause crashes during b2World.Step(). The bounds array
+// can contain undefined entries after DestroyProxy/CreateProxy shifts,
+// causing TypeError crashes in Query, DestroyProxy, and CreateProxy.
+// We patch all affected methods to swallow these errors gracefully.
 (() => {
   const b2BroadPhase = box2d.b2BroadPhase;
 
-  // Guard Query (original fix)
   const _origQuery = b2BroadPhase.prototype.Query;
   b2BroadPhase.prototype.Query = function (
     lowerQueryOut: any, upperQueryOut: any,
@@ -56,46 +57,72 @@ const {
     }
   };
 
-  // Guard TestOverlap
   const _origTestOverlap = b2BroadPhase.prototype.TestOverlap;
   b2BroadPhase.prototype.TestOverlap = function (proxyA: number, proxyB: number) {
     try {
       return _origTestOverlap.call(this, proxyA, proxyB);
     } catch (e: any) {
       if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        return false;  // Treat corrupted broadphase as no overlap
+        return false;
       }
       throw e;
     }
   };
 
-  // Guard MoveProxy
   const _origMoveProxy = b2BroadPhase.prototype.MoveProxy;
   b2BroadPhase.prototype.MoveProxy = function (proxyId: number, aabb: any, displacement: any) {
     try {
       _origMoveProxy.call(this, proxyId, aabb, displacement);
     } catch (e: any) {
       if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        // Broadphase corrupted — skip this move to prevent cascading failures
+        // Broadphase corrupted — skip this move
       } else {
         throw e;
       }
     }
   };
 
-  // Guard DestroyProxy
   const _origDestroyProxy = b2BroadPhase.prototype.DestroyProxy;
   b2BroadPhase.prototype.DestroyProxy = function (proxyId: number) {
     try {
       _origDestroyProxy.call(this, proxyId);
     } catch (e: any) {
       if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        // Broadphase corrupted — skip this destroy to prevent cascading failures
+        // Broadphase corrupted — skip this destroy
       } else {
         throw e;
       }
     }
   };
+
+  const _origCreateProxy = b2BroadPhase.prototype.CreateProxy;
+  b2BroadPhase.prototype.CreateProxy = function (aabb: number, userData: any) {
+    try {
+      return _origCreateProxy.call(this, aabb, userData);
+    } catch (e: any) {
+      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
+        // Broadphase corrupted — skip this create
+        return -1;
+      }
+      throw e;
+    }
+  };
+
+  // Guard SynchronizeShapes so one corrupted shape doesn't kill the rest
+  const _origSynchronizeShapes = box2d.b2Body?.prototype?.SynchronizeShapes;
+  if (_origSynchronizeShapes) {
+    box2d.b2Body.prototype.SynchronizeShapes = function () {
+      try {
+        _origSynchronizeShapes.call(this);
+      } catch (e: any) {
+        if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower") || e.message.includes("undefined"))) {
+          // Broadphase corrupted — skip shape sync for this body
+        } else {
+          throw e;
+        }
+      }
+    };
+  }
 })();
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -199,6 +226,7 @@ export class PhysicsEngine {
   private playerAlive: Map<number, boolean> = new Map();
   private playerGrappleJoints: Map<number, any> = new Map();
   private platformBodies: any[] = [];
+  private mapBodyDefs: MapBodyDef[] = [];
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
@@ -315,6 +343,7 @@ export class PhysicsEngine {
     body.SetMassFromShapes();
     body.SetUserData(def); // Stores isLethal and grappleMultiplier
     this.platformBodies.push(body);
+    this.mapBodyDefs.push(def);
     this.calculateArenaBounds();
   }
 
@@ -531,7 +560,16 @@ export class PhysicsEngine {
    */
     tick(): void {
         if (!this.world) return;
-        this.world.Step(DT, SOLVER_ITERATIONS);
+        try {
+            this.world.Step(DT, SOLVER_ITERATIONS);
+        } catch (e: any) {
+            if (e instanceof TypeError) {
+                console.warn('[PhysicsEngine] tick: broadphase corruption, recovering:', e?.message || e);
+                this._recoverWorld();
+                return;
+            }
+            throw e;
+        }
     this.tickCount++;
 
     // Check for players out of bounds (dead)
@@ -600,6 +638,64 @@ export class PhysicsEngine {
   }
 
   /**
+   * Recover from broadphase corruption by recreating the world and
+   * restoring player positions, velocities, and alive states.
+   */
+  private _recoverWorld(): void {
+    // Save current player states
+    const savedPlayers = new Map<number, { x: number; y: number; velX: number; velY: number; angle: number; angularVel: number; alive: boolean; heavy: boolean }>();
+    for (const [id, body] of this.playerBodies) {
+      const pos = body.GetPosition();
+      const vel = body.GetLinearVelocity();
+      savedPlayers.set(id, {
+        x: pos.x,
+        y: pos.y,
+        velX: vel.x,
+        velY: vel.y,
+        angle: body.GetAngle(),
+        angularVel: body.GetAngularVelocity(),
+        alive: this.playerAlive.get(id) || false,
+        heavy: this.playerHeavyState.get(id) || false,
+      });
+    }
+
+    // Create a fresh world
+    const worldAABB = new b2AABB();
+    worldAABB.lowerBound.Set(-1000, -1000);
+    worldAABB.upperBound.Set(1000, 1000);
+    const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
+    this.world = new b2World(worldAABB, gravity, true);
+
+    // Re-setup contact listener
+    this.setupContactListener();
+
+    // Re-add all map bodies
+    const defs = this.mapBodyDefs;
+    this.mapBodyDefs = [];
+    this.platformBodies = [];
+    for (const def of defs) {
+      this.addBody(def);
+    }
+
+    // Re-add all player bodies with saved state
+    this.playerBodies.clear();
+    this.playerHeavyState.clear();
+    this.playerAlive.clear();
+    this.playerGrappleJoints.clear();
+    for (const [id, state] of savedPlayers) {
+      this.addPlayer(id, state.x * SCALE, state.y * SCALE);
+      const body = this.playerBodies.get(id);
+      if (body) {
+        body.SetLinearVelocity(new b2Vec2(state.velX, state.velY));
+        body.SetAngle(state.angle);
+        body.SetAngularVelocity(state.angularVel);
+      }
+      this.playerAlive.set(id, state.alive);
+      this.playerHeavyState.set(id, state.heavy);
+    }
+  }
+
+  /**
    * Reset the world — discard the old world entirely and create a fresh one.
    * This avoids box2d broadphase corruption that occurs when destroying many
    * bodies (especially polygons and dynamic bodies) individually.
@@ -619,6 +715,7 @@ export class PhysicsEngine {
     this.playerAlive.clear();
     this.playerGrappleJoints.clear();
     this.platformBodies = [];
+    this.mapBodyDefs = [];
     this.tickCount = 0;
   }
 
