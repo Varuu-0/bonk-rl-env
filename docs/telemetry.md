@@ -164,7 +164,6 @@ When `--telemetry` is not specified:
 The telemetry system is fully backward compatible:
 
 - **Default behavior unchanged**: Telemetry is opt-in; existing deployments continue to work without modification
-- **Config file support**: The existing `config.ts` telemetry configuration remains supported
 - **Graceful degradation**: Invalid flag values fall back to defaults with a warning
 - **No breaking changes**: All existing CLI arguments and environment variables continue to work
 

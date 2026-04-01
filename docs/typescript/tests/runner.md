@@ -2,7 +2,7 @@
 
 ## Module Overview
 
-The test runner (`tests/runner.ts`) is a CLI-based test execution framework that runs all 14 test suites and generates a consolidated summary report.
+The test runner (`tests/runner.ts`) is a CLI-based test execution framework that runs all 12 test suites and generates a consolidated summary report.
 
 ## Registered Test Suites
 
@@ -13,15 +13,13 @@ The test runner (`tests/runner.ts`) is a CLI-based test execution framework that
 | 3 | `bonk-env.test.ts` | Gymnasium API |
 | 4 | `frame-skip.test.ts` | Frame skip action repetition |
 | 5 | `shared-memory.ts` | SharedArrayBuffer IPC |
-| 6 | `shutdown.ts` | Signal handlers and scripts |
-| 7 | `telemetry.ts` | Profiling system |
-| 8 | `env-manager.test.ts` | Environment pool management |
-| 9 | `map-body-types.test.ts` | Map body types (rect/circle/polygon) |
-| 10 | `collision-filtering.test.ts` | Collision group filtering |
-| 11 | `nophysics-friction.test.ts` | Sensor bodies and friction |
-| 12 | `grapple-mechanics.test.ts` | Grapple and slingshot mechanics |
-| 13 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds expansion |
-| 14 | `map-integration.test.ts` | Real map loading and integration |
+| 6 | `env-manager.test.ts` | Environment pool management |
+| 7 | `map-body-types.test.ts` | Map body types (rect/circle/polygon) |
+| 8 | `collision-filtering.test.ts` | Collision group filtering |
+| 9 | `nophysics-friction.test.ts` | Sensor bodies and friction |
+| 10 | `grapple-mechanics.test.ts` | Grapple and slingshot mechanics |
+| 11 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds expansion |
+| 12 | `map-integration.test.ts` | Real map loading and integration |
 
 ## Usage
 

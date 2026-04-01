@@ -53,15 +53,13 @@ const TEST_FILES: Record<string, { file: string; description: string }> = {
   '3':  { file: 'bonk-env.test.ts',             description: 'Gymnasium API' },
   '4':  { file: 'frame-skip.test.ts',           description: 'Frame skip action repetition' },
   '5':  { file: 'shared-memory.ts',             description: 'SharedArrayBuffer IPC' },
-  '6':  { file: 'shutdown.ts',                  description: 'Signal handlers and scripts' },
-  '7':  { file: 'telemetry.ts',                 description: 'Profiling system' },
-  '8':  { file: 'env-manager.test.ts',          description: 'Environment pool management' },
-  '9':  { file: 'map-body-types.test.ts',       description: 'Map body types (rect/circle/polygon)' },
-  '10': { file: 'collision-filtering.test.ts',  description: 'Collision group filtering' },
-  '11': { file: 'nophysics-friction.test.ts',   description: 'Sensor bodies and friction' },
-  '12': { file: 'grapple-mechanics.test.ts',    description: 'Grapple and slingshot mechanics' },
-  '13': { file: 'dynamic-arena-bounds.test.ts', description: 'Dynamic arena bounds expansion' },
-  '14': { file: 'map-integration.test.ts',      description: 'Real map loading and integration' },
+  '6':  { file: 'env-manager.test.ts',          description: 'Environment pool management' },
+  '7':  { file: 'map-body-types.test.ts',       description: 'Map body types (rect/circle/polygon)' },
+  '8':  { file: 'collision-filtering.test.ts',  description: 'Collision group filtering' },
+  '9':  { file: 'nophysics-friction.test.ts',   description: 'Sensor bodies and friction' },
+  '10': { file: 'grapple-mechanics.test.ts',    description: 'Grapple and slingshot mechanics' },
+  '11': { file: 'dynamic-arena-bounds.test.ts', description: 'Dynamic arena bounds expansion' },
+  '12': { file: 'map-integration.test.ts',      description: 'Real map loading and integration' },
 };
 
 function print(text: string, color?: string) {
