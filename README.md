@@ -299,8 +299,6 @@ npm run test:prng       # PRNG tests
 npm run test:env        # Environment tests
 npm run test:frameskip  # Frame skip tests
 npm run test:shared     # Shared memory tests
-npm run test:shutdown   # Shutdown handler tests
-npm run test:telemetry  # Telemetry tests
 npm run test:manager    # Env manager tests
 npm run test:map-types    # Map body type tests
 npm run test:collision    # Collision filtering tests  
@@ -321,18 +319,16 @@ npm run typecheck
 | 2 | `prng.test.ts` | Deterministic RNG | 11 |
 | 3 | `bonk-env.test.ts` | Gymnasium API | 24 |
 | 4 | `frame-skip.test.ts` | Action repetition | 22 |
-| 5 | `shared-memory.ts` | Zero-copy IPC | 6 |
-| 6 | `shutdown.ts` | Signal handlers | 17 |
-| 7 | `telemetry.ts` | Profiling system | 16 |
-| 8 | `env-manager.test.ts` | Pool management | 24 |
-| 9 | `map-body-types.test.ts` | Map body types & properties | 34 |
-| 10 | `collision-filtering.test.ts` | Collision group filtering | 33 |
-| 11 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 |
-| 12 | `grapple-mechanics.test.ts` | Grapple & slingshot | 34 |
-| 13 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
-| 14 | `map-integration.test.ts` | Real map file loading (WDB map) | 64 |
+| 5 | `shared-memory.ts` | Zero-copy IPC | 7 |
+| 6 | `env-manager.test.ts` | Pool management | 24 |
+| 7 | `map-body-types.test.ts` | Map body types & properties | 34 |
+| 8 | `collision-filtering.test.ts` | Collision group filtering | 33 |
+| 9 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 |
+| 10 | `grapple-mechanics.test.ts` | Grapple & slingshot | 34 |
+| 11 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
+| 12 | `map-integration.test.ts` | Real map file loading (WDB map) | 72 |
 
-**Total: 361 test cases across 14 test suites (100% passing)**
+**Total: 336 test cases across 12 test suites (100% passing)**
 
 ## Performance Benchmarks
 

@@ -18,14 +18,12 @@ TypeScript test suites for the Bonk.io RL Environment. 361 test cases across 14 
 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 | `noPhysics` flag, `sensor` bodies, friction coefficient behavior |
 | `physics-engine.test.ts` | Box2D physics | 25 | `addBody`, `addPlayer`, `tick`, gravity, velocity, angular motion |
 | `prng.test.ts` | Deterministic RNG | 11 | `XorShift128`, determinism, seed replay, distribution |
-| `shared-memory.ts` | Zero-copy IPC | 6 | `SharedArrayBuffer` action ring buffer, worker synchronization |
-| `shutdown.ts` | Signal handlers | 17 | `registerShutdownHandlers`, idempotency, `isShuttingDown` flag |
-| `telemetry.ts` | Profiling system | 16 | `TelemetryBuffer`, CLI flags, zero-allocation hot path |
+| `shared-memory.ts` | Zero-copy IPC | 7 | `SharedArrayBuffer` action ring buffer, worker synchronization |
 
 ## Running Tests
 
 ```sh
-# All tests (361 cases)
+# All tests (336 cases)
 npm test
 
 # Interactive runner (menu-based selection)
@@ -40,15 +38,13 @@ npm run test:prng           # suite 2  — Deterministic RNG
 npm run test:env            # suite 3  — Gymnasium API
 npm run test:frameskip      # suite 4  — Frame skip
 npm run test:shared         # suite 5  — Shared memory
-npm run test:shutdown       # suite 6  — Signal handlers
-npm run test:telemetry      # suite 7  — Profiling system
-npm run test:manager        # suite 8  — Pool management
-npm run test:map-types      # suite 9  — Map body types
-npm run test:collision      # suite 10 — Collision filtering
-npm run test:nophysics      # suite 11 — Sensor bodies & friction
-npm run test:grapple        # suite 12 — Grapple mechanics
-npm run test:bounds         # suite 13 — Dynamic arena bounds
-npm run test:integration    # suite 14 — Real map loading
+npm run test:manager        # suite 6  — Pool management
+npm run test:map-types      # suite 7  — Map body types
+npm run test:collision      # suite 8  — Collision filtering
+npm run test:nophysics      # suite 9  — Sensor bodies & friction
+npm run test:grapple        # suite 10 — Grapple mechanics
+npm run test:bounds         # suite 11 — Dynamic arena bounds
+npm run test:integration    # suite 12 — Real map loading
 ```
 
 ## Output Format
