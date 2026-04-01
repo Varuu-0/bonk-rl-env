@@ -88,8 +88,6 @@ nul
 # Project-specific runtime data
 chatlogs/
 banlist.json
-plans/sharedarraybuffer-implementation.md
-.kilocode/setup-script
 
 # AI agent tooling (not for production)
 .kilocode/
@@ -98,8 +96,6 @@ plans/sharedarraybuffer-implementation.md
 .agent/
 .codex/
 .dsp/
-hooks/
-dsp-cli.py
 AGENTS.md
 
 # Temporary files
