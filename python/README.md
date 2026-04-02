@@ -9,7 +9,7 @@ The `python/` directory contains the Python client and ML pipeline for the Bonk.
 | [`envs/`](envs/) | Gymnasium-compatible `BonkVecEnv` wrapping the Node.js physics backend via ZMQ IPC |
 | [`reward/`](reward/) | Custom reward functions: navigation, curiosity, count-based exploration, composite rewards |
 | [`utils/`](utils/) | Training logger (CSV trajectory recording) and map visualization (static + animated) |
-| [`benchmarks/`](benchmarks/) | Performance benchmarking: FPS, IPC latency profiling, throughput (SPM/SPS) |
+| [`benchmarks/`](benchmarks/) | Performance benchmarking: IPC throughput, latency profiling, stress testing |
 | [`tests/`](tests/) | Test suite for environment API, profiler loading, and reward validation |
 
 ## Quick Start

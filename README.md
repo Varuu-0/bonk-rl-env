@@ -1,6 +1,6 @@
 # Bonk.io Reinforcement Learning Environment
 
-A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 14,000 steps per second natively, or 76,000+ steps per minute through the ZMQ IPC bridge with a single environment.
+A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 22,000 ticks per second natively, or 43,000+ env-steps per second through the shared memory worker pool at 16 parallel environments.
 
 ## Overview
 
@@ -328,32 +328,58 @@ npm run typecheck
 | 11 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
 | 12 | `map-integration.test.ts` | Real map file loading (WDB map) | 72 |
 
-**Total: 336 test cases across 12 test suites (100% passing)**
+**Total: 284 test cases across 12 test suites (99.3% passing)**
 
 ## Performance Benchmarks
 
-Measured on a standard development machine (March 2026). All benchmarks use 2000 steps with warmup.
+Measured on a standard development machine (April 2026). All benchmarks use 2000 steps with warmup.
+See [PERFORMANCE.md](docs/PERFORMANCE.md) for the full detailed performance report.
+
+### Running Benchmarks
+
+```bash
+# Run all benchmarks with consolidated report
+npm run bench:all
+
+# List available benchmark layers
+npm run bench:list
+
+# Run individual layers
+npm run bench:layer1    # Primitives: Atomics, TypedArray latencies
+npm run bench:layer2    # Raw Physics: Box2D tick throughput
+npm run bench:layer3    # Environment: step throughput (no IPC)
+npm run bench:layer4    # Worker Pool: SharedArrayBuffer IPC scaling
+npm run bench:layer5    # Memory: heap stability and reset leaks
+npm run bench:layer6    # Stability: long-running throughput variance
+```
 
 ### Native TypeScript Throughput
 
 | Metric | Value |
 |--------|-------|
-| Raw PhysicsEngine TPS | ~14,500 |
-| BonkEnvironment SPS | ~40,000 |
-| WorkerPool SPS (N=1 env) | ~14,700 |
-| WorkerPool Env-SPS (N=16 envs) | ~80,600 |
+| Raw PhysicsEngine TPS | 22,612 |
+| BonkEnvironment SPS (1 AI + 1 opponent) | 28,255 |
+| BonkEnvironment SPS (frameSkip=3) | 68,565 |
+| WorkerPool SPS (N=1 env) | 15,252 |
+| WorkerPool Env-SPS (N=16 envs) | 43,487 |
+| Peak sustained (100K steps) | 615,526 SPS |
 
-### ZMQ IPC Throughput (Python → TypeScript)
+### Worker Pool Scaling (Shared Memory)
 
-| N (Envs) | SPS | Env-SPS | SPM |
-|:---------|:---:|:-------:|:---:|
-| 1 | 1,272 | 1,272 | 76,313 |
-| 2 | 1,111 | 2,222 | 66,652 |
-| 4 | 935 | 3,740 | 56,092 |
-| 8 | 617 | 4,937 | 37,025 |
-| 16 | 554 | 8,866 | 33,248 |
-| 32 | 389 | 12,454 | 23,350 |
-| 64 | 277 | 17,725 | 16,617 |
+| N (Envs) | SPS (per-env) | Env-SPS (aggregate) | Latency |
+|:---------|:-------------|:--------------------|:--------|
+| 1 | 15,252 | 15,252 | 0.066 ms |
+| 2 | 8,303 | 16,607 | 0.120 ms |
+| 4 | 6,813 | 27,251 | 0.147 ms |
+| 8 | 4,780 | 38,238 | 0.209 ms |
+| 16 | 2,718 | 43,487 | 0.368 ms |
+
+### Memory Stability
+
+| Test | Result | Notes |
+|------|--------|-------|
+| Step loop (50K steps) | 2.18 MB growth | Stable — GC collects objects |
+| Reset cycles (200 resets) | -0.33 MB growth | No leak — engine reuse on reset |
 
 ### Telemetry Overhead
 

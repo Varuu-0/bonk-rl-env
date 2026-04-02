@@ -13,18 +13,7 @@
 
 import { TelemetryFlags, TelemetryConfig } from '../types/index.d';
 import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from './flags';
-import { globalProfiler, TelemetryBuffer, TelemetryIndices, setLatestWorkerTelemetry } from './profiler';
-
-// Pre-frozen defaults for fast-path access
-const FROZEN_DEFAULTS = Object.freeze<TelemetryFlags>({
-  enableTelemetry: false,
-  profileLevel: 'standard',
-  debugLevel: 'none',
-  outputFormat: 'console',
-  dashboardPort: 3001,
-  reportInterval: 5000,
-  retentionDays: 7,
-});
+import { globalProfiler, setLatestWorkerTelemetry } from './profiler';
 
 // Cached flags - set once at initialization
 let cachedFlags: TelemetryFlags | null = null;
