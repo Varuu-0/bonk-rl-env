@@ -203,12 +203,6 @@ export class PhysicsEngine {
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
   private _tempForce = new b2Vec2(0, 0);
-  private _cachedStates: Map<number, PlayerState> = new Map();
-  private _deadState: PlayerState = {
-    x: 0, y: 0, velX: 0, velY: 0,
-    angle: 0, angularVel: 0,
-    isHeavy: false, alive: false,
-  };
 
   constructor() {
     // Create world with AABB and gravity
@@ -383,11 +377,6 @@ export class PhysicsEngine {
     this.playerBodies.set(id, body);
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
-    this._cachedStates.set(id, {
-      x: 0, y: 0, velX: 0, velY: 0,
-      angle: 0, angularVel: 0,
-      isHeavy: false, alive: true,
-    });
   }
 
   /**
@@ -544,23 +533,26 @@ export class PhysicsEngine {
   getPlayerState(playerId: number): PlayerState {
     const body = this.playerBodies.get(playerId);
     if (!body) {
-      return this._deadState;
+      return {
+        x: 0, y: 0, velX: 0, velY: 0,
+        angle: 0, angularVel: 0,
+        isHeavy: false, alive: false,
+      };
     }
 
     const pos = body.GetPosition();
     const vel = body.GetLinearVelocity();
-    const cached = this._cachedStates.get(playerId);
-    if (!cached) return this._deadState;
 
-    cached.x = pos.x * SCALE;
-    cached.y = pos.y * SCALE;
-    cached.velX = vel.x * SCALE;
-    cached.velY = vel.y * SCALE;
-    cached.angle = body.GetAngle();
-    cached.angularVel = body.GetAngularVelocity();
-    cached.isHeavy = this.playerHeavyState.get(playerId) || false;
-    cached.alive = this.playerAlive.get(playerId) || false;
-    return cached;
+    return {
+      x: pos.x * SCALE,
+      y: pos.y * SCALE,
+      velX: vel.x * SCALE,
+      velY: vel.y * SCALE,
+      angle: body.GetAngle(),
+      angularVel: body.GetAngularVelocity(),
+      isHeavy: this.playerHeavyState.get(playerId) || false,
+      alive: this.playerAlive.get(playerId) || false,
+    };
   }
 
   /**
@@ -595,7 +587,6 @@ export class PhysicsEngine {
     this.playerHeavyState.clear();
     this.playerAlive.clear();
     this.playerGrappleJoints.clear();
-    this._cachedStates.clear();
 
     // Destroy platform/map bodies
     for (const body of this.platformBodies) {

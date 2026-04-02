@@ -111,18 +111,18 @@ function testSlingshot(): void {
     }));
     engine.addPlayer(0, 0, 0);
 
-    // Capture initial velocity value (copy, not reference, since getPlayerState caches)
-    const velYBefore = engine.getPlayerState(0).velY;
+    // Capture initial velocity
+    const beforeState = engine.getPlayerState(0);
 
     // Fire grapple — should apply upward impulse
     engine.applyInput(0, grappleInput());
     engine.tick();
 
-    const velYAfter = engine.getPlayerState(0).velY;
+    const afterState = engine.getPlayerState(0);
 
     // Velocity should have upward component (negative y in screen coords)
-    test("Player has upward velocity after slingshot", velYAfter < velYBefore, "before=" + velYBefore + " after=" + velYAfter);
-    test("Player is not dead after slingshot", engine.getPlayerState(0).alive === true);
+    test("Player has upward velocity after slingshot", afterState.velY < beforeState.velY, "before=" + beforeState.velY + " after=" + afterState.velY);
+    test("Player is not dead after slingshot", afterState.alive === true);
 
     engine.destroy();
 }
@@ -284,18 +284,18 @@ function testGrappleRelease(): void {
     engine.applyInput(0, grappleInput());
     for (let i = 0; i < 10; i++) engine.tick();
 
-    const attachedY = engine.getPlayerState(0).y;
+    const attachedState = engine.getPlayerState(0);
 
     // Release grapple
     engine.applyInput(0, noInput());
     for (let i = 0; i < 30; i++) engine.tick();
 
-    const releasedY = engine.getPlayerState(0).y;
+    const releasedState = engine.getPlayerState(0);
 
     // After release + gravity, player should have moved downward
-    test("Player y increases after release (gravity)", releasedY > attachedY,
-        "attached=" + attachedY + " released=" + releasedY);
-    test("Player is alive after release", engine.getPlayerState(0).alive === true);
+    test("Player y increases after release (gravity)", releasedState.y > attachedState.y,
+        "attached=" + attachedState.y + " released=" + releasedState.y);
+    test("Player is alive after release", releasedState.alive === true);
 
     engine.destroy();
 }
