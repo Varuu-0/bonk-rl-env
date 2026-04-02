@@ -87,8 +87,8 @@ export class IpcBridge {
                     if (this.stepCount % 5000 === 0) {
                         globalProfiler.recordMemory();
 
-                        const config = require('../../config').default;
-                        if (config.verboseTelemetry) {
+                        const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
+                        if (telemetryEnabled) {
                             const snapshots = await this.pool.getTelemetrySnapshots();
                             setLatestWorkerTelemetry(snapshots);
                             globalProfiler.report(5000);

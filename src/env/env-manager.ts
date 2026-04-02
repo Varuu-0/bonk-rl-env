@@ -6,7 +6,7 @@
  */
 
 import { BonkEnv, BonkEnvConfig } from './bonk-env';
-import { PortManager, getGlobalPortManager } from '../utils/port-manager';
+import { PortManager } from '../utils/port-manager';
 
 export interface EnvManagerOptions {
     /** Port manager options */

@@ -109,5 +109,6 @@ temp/
 
 # Benchmark outputs
 benchmarks/results/
+benchmarks/_archived/
 *.csv
 maps/bonk_WDB__No_Mapshake__716916.json

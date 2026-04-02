@@ -3,18 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { globalProfiler } from '../telemetry/profiler';
 import { SharedMemoryManager } from '../ipc/shared-memory';
-
-/**
- * Player input action interface for encoding to shared memory
- */
-interface PlayerInput {
-    left?: boolean;
-    right?: boolean;
-    up?: boolean;
-    down?: boolean;
-    heavy?: boolean;
-    grapple?: boolean;
-}
+import type { PlayerInput } from './physics-engine';
 
 /**
  * Observation data structure extracted from shared memory

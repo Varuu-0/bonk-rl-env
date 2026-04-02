@@ -1,6 +1,6 @@
 # Bonk.io Reinforcement Learning Environment
 
-A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 14,000 steps per second natively, or 76,000+ steps per minute through the ZMQ IPC bridge with a single environment.
+A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 25,000 ticks per second natively, or 76,000+ steps per minute through the ZMQ IPC bridge with a single environment.
 
 ## Overview
 
@@ -333,15 +333,16 @@ npm run typecheck
 ## Performance Benchmarks
 
 Measured on a standard development machine (March 2026). All benchmarks use 2000 steps with warmup.
+See [PERFORMANCE.md](docs/PERFORMANCE.md) for the full detailed performance report.
 
 ### Native TypeScript Throughput
 
 | Metric | Value |
 |--------|-------|
-| Raw PhysicsEngine TPS | ~14,500 |
-| BonkEnvironment SPS | ~40,000 |
-| WorkerPool SPS (N=1 env) | ~14,700 |
-| WorkerPool Env-SPS (N=16 envs) | ~80,600 |
+| Raw PhysicsEngine TPS | ~25,926 |
+| BonkEnvironment SPS | ~67,175 |
+| WorkerPool SPS (N=1 env) | ~18,335 |
+| WorkerPool Env-SPS (N=64 envs) | ~42,679 |
 
 ### ZMQ IPC Throughput (Python → TypeScript)
 

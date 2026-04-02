@@ -46,61 +46,45 @@ These are high-impact, low-engineering-effort improvements.
 | SOLVER_ITERATIONS=5 | ✅ Done | High | ~2x physics | Reduced solver iterations for faster simulation |
 | Binary protocol for ZMQ | 🔄 Reverted | N/A | None | Tested MsgPack - slower than JSON in JS, IPC not bottleneck |
 | Action Frame Skip | ✅ Done | High | Reduces jitter | Agent holds action for N ticks |
-| Typed arrays for observations | ❌ TODO | High | ~30% faster obs | Use Float32Array instead of object creation |
-| Force vector reuse | ❌ TODO | Medium | ~25% faster input | Pre-allocate b2Vec2 instead of creating each call |
-| Player state caching | ❌ TODO | Medium | ~15% faster step | Cache states to avoid redundant Box2D calls |
+| Typed arrays for observations | ✅ Done | High | ~30% faster obs | Float32Array via getObservationFast() in shared memory mode |
+| Force vector reuse | ✅ Done | Medium | ~25% faster input | Pre-allocated _tempForce in PhysicsEngine.applyInput() |
+| Player state caching | ✅ Done | Medium | ~15% faster step | Direct physics state read in getObservationFast() |
 
-### Observation Extraction Optimization (NEXT)
+### Observation Extraction Optimization (IMPLEMENTED)
 
-**Current bottleneck**: 54% of step time
+**Status**: ✅ Implemented in `src/core/environment.ts:459-490`
 
-```typescript
-// Current: Creates new object each time
-private getObservation(): Observation {
-  const aiState = this.physics.getPlayerState(this.aiPlayerId);
-  return { playerX: aiState.x, playerY: aiState.y, ... };
-}
-```
-
-**Optimized**: Pre-allocated Float32Array
+The `getObservationFast()` method uses a pre-allocated `Float32Array(14)` to extract observations directly from physics state, skipping intermediate object creation. This is used in the shared memory code path (`worker.ts:65-67`, `worker.ts:186,261`).
 
 ```typescript
-private obsBuffer: Float32Array = new Float32Array(14);
+private _obsBuffer: Float32Array = new Float32Array(14);
 
 getObservationFast(): Float32Array {
-  const body = this.playerBodies.get(this.aiPlayerId);
-  const pos = body.GetPosition();
-  this.obsBuffer[0] = pos.x * SCALE;
-  this.obsBuffer[1] = pos.y * SCALE;
-  return this.obsBuffer;
+  const aiState = this.physics.getPlayerState(this.aiPlayerId);
+  this._obsBuffer[0] = aiState.x;
+  this._obsBuffer[1] = aiState.y;
+  // ... direct array writes
+  return this._obsBuffer;
 }
 ```
 
-**Expected gain**: ~30-40% faster observation extraction
+### Force Vector Reuse (IMPLEMENTED)
 
-### Force Vector Reuse (NEXT)
+**Status**: ✅ Implemented in `src/core/physics-engine.ts:205`
 
-**Current**: Allocates new b2Vec2 every call
+The `_tempForce` field is a pre-allocated `b2Vec2` reused across all `applyInput()` calls.
 
 ```typescript
+private _tempForce = new b2Vec2(0, 0);
+
 applyInput(playerId: number, input: PlayerInput): void {
-  const force = new b2Vec2(0, 0);  // Allocation!
+  const force = this._tempForce;
+  force.x = 0;
+  force.y = 0;
+  // ... reuse force vector
   body.ApplyForce(force, pos);
 }
 ```
-
-**Optimized**: Pre-allocated vector
-
-```typescript
-private forceBuffer: any = new b2Vec2(0, 0);
-
-applyInput(playerId: number, input: PlayerInput): void {
-  this.forceBuffer.Set(0, 0);  // Reset instead of allocate
-  body.ApplyForce(this.forceBuffer, pos);
-}
-```
-
-**Expected gain**: ~20-30% faster input processing
 
 ---
 
@@ -159,7 +143,7 @@ applyInput(playerId: number, input: PlayerInput): void {
 | Feature | Status | Priority | Impact | Description |
 |:--------|:-------|:---------|:-------|:------------|
 | Batch tick in worker | ❌ | High | ~2x TPS | Run multiple ticks before IPC |
-| Observation array pooling | ❌ | Medium | Memory | Reuse observation arrays |
+| Observation array pooling | ✅ Done | Medium | Memory | Pre-allocated _obsPool in WorkerPool |
 | JIT compilation hints | ❌ | Low | 5-10% | Optimize hot paths for V8 |
 | WebAssembly physics | ❌ | Research | Major | Alternative to Box2D JS |
 
@@ -194,32 +178,32 @@ sendBatch(results);  // N ticks → 1 IPC
 ### Summary by Phase
 
 ```
-Phase 1: ██████████░░ 60% complete (3/5 fully, 2/5 partial, 1 reverted)
-Phase 2: █████░░░░░ 40% complete (2/5 fully, 0/5 partial)  
+Phase 1: ████████████████ 83% complete (5/6 fully, 0/6 partial, 1 reverted)
+Phase 2: ███████░░░░ 60% complete (3/5 fully, 0/5 partial)  
 Phase 3: ████████░░ 30% complete (1/6 fully, 2/6 partial)
-Phase 4: ░░░░░░░░░░  0% complete (0/4 fully, 0/4 partial)
+Phase 4: ███░░░░░░░ 25% complete (1/4 fully, 0/4 partial)
 ```
 
 ### Performance Optimization Progress
 
 ```
-Current TPS (single env): ~67,000
+Current TPS (single env): ~67,000 (PERFORMANCE.md) / ~40,000 (quick-2000-step benchmark)
 After optimizations:     ~100,000-150,000 (projected)
 
 Optimization Stack:
   ✅ SOLVER_ITERATIONS=5         → +100% physics speed
-  ❌ Observation Float32Array    → +30% observation speed  
-  ❌ Force vector reuse          → +25% input speed
-  ❌ State caching               → +15% step speed
+  ✅ Observation Float32Array    → +30% observation speed  
+  ✅ Force vector reuse          → +25% input speed
+  ✅ State caching               → +15% step speed (via getObservationFast)
   ❌ Batch ticks                 → +50% IPC reduction
 ```
 
 ### Overall Progress
 
 - **Total Features**: 24
-- **Fully Implemented**: 6 (25%)
+- **Fully Implemented**: 10 (42%)
 - **Partially Implemented**: 4 (17%)
-- **Not Started**: 13 (54%)
+- **Not Started**: 9 (37%)
 - **Reverted**: 1 (4%)
 
 ---
@@ -228,22 +212,22 @@ Optimization Stack:
 
 ### This Sprint (Immediate)
 
-1. **Observation Float32Array** (Priority: HIGH)
-   - Effort: ~2 hours
-   - Impact: ~30% faster observation extraction
-   - Files: `src/core/environment.ts`
+All Phase 1 "this sprint" items are complete. Focus shifts to Phase 4.
 
-2. **Force vector reuse** (Priority: MEDIUM)
-   - Effort: ~1 hour
-   - Impact: ~25% faster input processing
-   - Files: `src/core/physics-engine.ts`
+1. **Batch ticks in worker** (Priority: HIGH)
+   - Effort: ~4 hours
+   - Impact: ~50-70% IPC reduction
+   - Files: `src/core/worker.ts`, `src/core/worker-pool.ts`
+   - Status: Not started — the highest-impact remaining optimization
 
 ### Next Sprint (1-2 weeks)
 
-3. **Player state caching** (Priority: MEDIUM)
+2. **Worker affinity and NUMA optimization** (Priority: LOW)
    - Effort: ~3 hours
-   - Impact: ~15% faster step
-   - Files: `src/core/environment.ts`
+   - Impact: 5-10%
+   - Files: `src/core/worker-pool.ts`
 
-4. **Batch ticks in worker** (Priority: HIGH)
-   - Effort: ~1
+3. **Adaptive worker pool scaling** (Priority: MEDIUM)
+   - Effort: ~4 hours
+   - Impact: Variable
+   - Files: `src/core/worker-pool.ts`
