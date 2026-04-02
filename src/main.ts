@@ -8,48 +8,13 @@
  */
 
 import { startServer, stopServer } from './server';
+import { loadConfig, AppConfig } from './config/config-loader';
 import * as readline from 'readline';
 
 let isShuttingDown = false;
 
 // Readline interface for Windows Ctrl+C handling
 let rl: readline.Interface | null = null;
-
-/**
- * Get the IPC bridge port from environment variable or default.
- */
-function getPort(): number {
-    const portStr = process.env.PORT ?? '5555';
-    const port = parseInt(portStr, 10);
-    
-    if (isNaN(port)) {
-        throw new Error(`Invalid PORT value: "${portStr}". PORT must be a valid integer.`);
-    }
-    
-    if (port < 1 || port > 65535) {
-        throw new Error(`Invalid PORT value: ${port}. PORT must be between 1 and 65535.`);
-    }
-    
-    return port;
-}
-
-/**
- * Parse --max-runtime CLI argument.
- * @returns Max runtime in seconds, or undefined if not specified
- */
-function getMaxRuntime(): number | undefined {
-    const args = process.argv.slice(2);
-    const maxRuntimeIndex = args.findIndex(arg => arg === '--max-runtime');
-    
-    if (maxRuntimeIndex !== -1 && args[maxRuntimeIndex + 1]) {
-        const value = parseInt(args[maxRuntimeIndex + 1], 10);
-        if (!isNaN(value) && value > 0) {
-            return value;
-        }
-    }
-    
-    return undefined;
-}
 
 /**
  * Performs graceful shutdown.
@@ -103,30 +68,11 @@ function registerShutdownHandlers(): void {
 async function main(): Promise<void> {
     console.log('=== Bonk.io Headless RL Environment ===');
     
-    // Get port from environment variable or use default
-    const port = getPort();
-    console.log(`Server running on port ${port}`);
+    const config = loadConfig();
     
-    // Check for TEST_MODE
-    const testMode = process.env.TEST_MODE === '1';
+    console.log(`Config: port=${config.server.port}, telemetry=${config.telemetry.enabled}, numWorkers=${config.workerPool.numWorkers}`);
     
-    // Check for --max-runtime CLI flag
-    const maxRuntime = getMaxRuntime();
-    
-    // Determine the effective timeout (use shorter of TEST_MODE or --max-runtime)
-    let effectiveTimeout: number | undefined;
-    
-    if (testMode && maxRuntime !== undefined) {
-        effectiveTimeout = Math.min(2, maxRuntime);
-    } else if (testMode) {
-        effectiveTimeout = 2;
-    } else if (maxRuntime !== undefined) {
-        effectiveTimeout = maxRuntime;
-    }
-    
-    if (testMode) {
-        console.log('TEST_MODE enabled');
-    }
+    const effectiveTimeout = config.server.maxRuntimeSeconds > 0 ? config.server.maxRuntimeSeconds : undefined;
     
     // Register shutdown handlers
     registerShutdownHandlers();
@@ -139,7 +85,7 @@ async function main(): Promise<void> {
     }
     
     // Start the server
-    await startServer(port);
+    await startServer(config);
     
     if (!effectiveTimeout) {
         console.log('Press Ctrl+C to stop the server.');

@@ -92,6 +92,8 @@ export interface EnvironmentConfig {
     seed?: number;
     /** Number of ticks to hold each action before requesting new decision (default 1) */
     frameSkip?: number;
+    /** Optional physics override: pixels-per-metre scale factor */
+    ppm?: number;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -121,12 +123,17 @@ export class BonkEnvironment {
     private config: Required<EnvironmentConfig>;
     private aiPlayerId: number = 0;
     private opponentIds: number[] = [];
+    private aiTeam: string = 'blue';
+    private scoreBlue: number = 0;
+    private scoreRed: number = 0;
     private previousAliveState: Map<number, boolean> = new Map();
     private rng: PRNG;
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
     private terminalReached: boolean = false;
     private _obsBuffer: Float32Array = new Float32Array(14);
+    private ppm: number = 30;
+    private capZones: Array<{ index: number; owner: string; type: number }> = [];
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case
@@ -146,6 +153,10 @@ export class BonkEnvironment {
             }
         }
 
+        // Read map-level physics overrides
+        this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 30;
+        this.capZones = (mapDef as any).capZones ?? [];
+
         this.config = {
             numOpponents: config.numOpponents ?? 1,
             maxTicks: config.maxTicks ?? MAX_TICKS,
@@ -153,13 +164,60 @@ export class BonkEnvironment {
             mapData: mapDef,
             seed: config.seed ?? Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
+            ppm: this.ppm,
         };
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
 
+        // Set PPM before adding bodies
+        if (typeof (this.physics as any).setScale === 'function') {
+            (this.physics as any).setScale(this.ppm);
+        }
+
         for (const body of this.config.mapData.bodies) {
             this.physics.addBody(body);
+        }
+
+        // Add joints if defined
+        if ((mapDef as any).joints && (mapDef as any).joints.length > 0) {
+            const bodyMap = (this.physics as any).getBodyMap?.();
+            if (bodyMap) {
+                for (const j of (mapDef as any).joints) {
+                    (this.physics as any).addJoint(j, bodyMap);
+                }
+            }
+        }
+
+        // Add capZone sensors from map data
+        if (mapDef.capZones && mapDef.capZones.length > 0) {
+            for (const zone of mapDef.capZones) {
+                const fixtureDef = mapDef.bodies.find(b => b.name === zone.fixture);
+                if (fixtureDef) {
+                    let cx = fixtureDef.x;
+                    let cy = fixtureDef.y;
+                    let w = 0, h = 0;
+                    if (fixtureDef.type === 'rect') {
+                        w = fixtureDef.width || 0;
+                        h = fixtureDef.height || 0;
+                    } else if (fixtureDef.type === 'circle') {
+                        w = (fixtureDef.radius || 0) * 2;
+                        h = w;
+                    }
+                    if (typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                    }
+                } else {
+                    console.warn(`CapZone fixture "${zone.fixture}" not found`);
+                }
+            }
+        }
+
+        // Set explicit map bounds if provided
+        if ((mapDef as any).physics?.bounds) {
+            if (typeof (this.physics as any).setMapBounds === 'function') {
+                this.physics.setMapBounds((mapDef as any).physics.bounds.width, (mapDef as any).physics.bounds.height);
+            }
         }
 
         this.reset();
@@ -173,6 +231,8 @@ export class BonkEnvironment {
             this.config.seed = seed;
             this.rng.setSeed(seed);
         }
+        this.scoreBlue = 0;
+        this.scoreRed = 0;
         // Reuse existing engine — destroy bodies on the same world, don't
         // create a new PhysicsEngine (eliminates ~160 KB allocation per reset)
         this.physics.destroyAllBodies();
@@ -180,6 +240,38 @@ export class BonkEnvironment {
         // Re-add platforms to the existing world
         for (const body of this.config.mapData.bodies) {
             this.physics.addBody(body);
+        }
+
+        // Re-add joints if defined
+        if ((this.config.mapData as any).joints && (this.config.mapData as any).joints.length > 0) {
+            const bodyMap = (this.physics as any).getBodyMap?.();
+            if (bodyMap) {
+                for (const j of (this.config.mapData as any).joints) {
+                    (this.physics as any).addJoint(j, bodyMap);
+                }
+            }
+        }
+
+        // Re-add capZone sensors
+        if (this.config.mapData.capZones && this.config.mapData.capZones.length > 0) {
+            for (const zone of this.config.mapData.capZones) {
+                const fixtureDef = this.config.mapData.bodies.find(b => b.name === zone.fixture);
+                if (fixtureDef) {
+                    let cx = fixtureDef.x;
+                    let cy = fixtureDef.y;
+                    let w = 0, h = 0;
+                    if (fixtureDef.type === 'rect') {
+                        w = fixtureDef.width || 0;
+                        h = fixtureDef.height || 0;
+                    } else if (fixtureDef.type === 'circle') {
+                        w = (fixtureDef.radius || 0) * 2;
+                        h = w;
+                    }
+                    if (typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                    }
+                }
+            }
         }
 
         // Extract spawn positions from map
@@ -205,6 +297,14 @@ export class BonkEnvironment {
                 teamR.y,
             );
             this.opponentIds.push(id);
+        }
+
+        // Set team assignments
+        if (typeof (this.physics as any).setPlayerTeam === 'function') {
+            (this.physics as any).setPlayerTeam(this.aiPlayerId, this.aiTeam);
+            for (const id of this.opponentIds) {
+                (this.physics as any).setPlayerTeam(id, this.aiTeam === 'blue' ? 'red' : 'blue');
+            }
         }
 
         // Track initial alive states
@@ -256,6 +356,10 @@ export class BonkEnvironment {
                     ).length,
                     terminated: true,
                     frameSkip: this.config.frameSkip,
+                    capZones: this.capZones,
+                    scoreBlue: this.scoreBlue,
+                    scoreRed: this.scoreRed,
+                    aiTeam: this.aiTeam,
                 },
             };
         }
@@ -327,6 +431,10 @@ export class BonkEnvironment {
                 opponentsAlive: opponentStates.filter(s => s.alive).length,
                 terminated,
                 frameSkip: this.config.frameSkip,
+                capZones: this.capZones,
+                scoreBlue: this.scoreBlue,
+                scoreRed: this.scoreRed,
+                aiTeam: this.aiTeam,
             },
         };
     }
@@ -403,6 +511,22 @@ export class BonkEnvironment {
             const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
             if (opWasAlive && !opState.alive) {
                 reward += 1.0;
+            }
+        }
+
+        // Check capZone scoring
+        if (typeof (this.physics as any).getTeamScored === 'function') {
+            const scoredTeam = (this.physics as any).getTeamScored();
+            if (scoredTeam) {
+                if (scoredTeam === this.aiTeam) {
+                    reward += 1.0;
+                    this.scoreBlue += (this.aiTeam === 'blue' ? 1 : 0);
+                    this.scoreRed += (this.aiTeam === 'red' ? 1 : 0);
+                } else {
+                    reward -= 1.0;
+                    this.scoreBlue += (scoredTeam === 'blue' ? 1 : 0);
+                    this.scoreRed += (scoredTeam === 'red' ? 1 : 0);
+                }
             }
         }
 

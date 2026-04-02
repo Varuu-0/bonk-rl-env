@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import { globalProfiler } from '../telemetry/profiler';
 import { SharedMemoryManager } from '../ipc/shared-memory';
+import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 
 /**
@@ -58,7 +59,7 @@ export class WorkerPool {
     // Shared sync buffer for completion counter (all workers share this)
     private _syncBuffer: SharedArrayBuffer | null = null;
 
-    constructor(private numWorkers: number = Math.min(os.cpus().length, 8)) {
+    constructor(private numWorkers: number = getConfig().workerPool.numWorkers) {
     }
 
     private initObsPool(totalEnvs: number): void {
@@ -94,10 +95,10 @@ export class WorkerPool {
 
         // Determine if we should use shared memory
         const sharedMemorySupported = SharedMemoryManager.isSupported();
-        this.useSharedMemory = useSharedMemory !== undefined ? useSharedMemory : sharedMemorySupported;
+        this.useSharedMemory = useSharedMemory !== undefined ? useSharedMemory : (getConfig().workerPool.useSharedMemory && sharedMemorySupported);
 
         // Set default ring size
-        this.ringSize = 16;
+        this.ringSize = getConfig().workerPool.ringBufferSize;
 
         // Ensure we don't start more workers than environment instances
         const activeWorkers = Math.min(this.numWorkers, totalEnvs);

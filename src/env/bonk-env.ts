@@ -8,6 +8,7 @@
 
 import { WorkerPool } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
+import { getConfig } from '../config/config-loader';
 
 export interface BonkEnvConfig {
     /** Number of environments to create internally (default: 1) */
@@ -79,10 +80,11 @@ export class BonkEnv {
         this.pool = new WorkerPool();
         
         // Initialize the worker pool with the configured number of envs
+        const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
         await this.pool.init(
             this.config.numEnvs ?? 1,
-            this.config.config ?? {},
-            this.config.useSharedMemory
+            getConfig().environment,
+            useSharedMemory
         );
         
         this.isRunning = true;
