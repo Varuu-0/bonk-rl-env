@@ -406,23 +406,30 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
         const poolSps = getMetric(layer4_1.suite!.results, 'WorkerPool.step() N=1', 'SPS (per-env)');
 
         if (rawTps && envSps && poolSps) {
-            const envOverhead = ((1 - envSps / rawTps) * 100);
-            const ipcOverhead = ((1 - poolSps / envSps) * 100);
-            const totalOverhead = ((1 - poolSps / rawTps) * 100);
+            // Note: L2 simulates 2 players, L3 simulates 1 AI + 1 opponent.
+            // Compare per-step latency rather than raw SPS for meaningful overhead.
+            const envStepUs = 1_000_000 / envSps;
+            const rawStepUs = 1_000_000 / rawTps;
+            const ipcStepUs = 1_000_000 / poolSps;
+            const envOverheadUs = envStepUs - rawStepUs;
+            const ipcOverheadUs = ipcStepUs - envStepUs;
 
-            print(`\n  Layer                Throughput        Overhead     Cost`, colors.bright + colors.white);
-            print(`  ${'\u2500'.repeat(62)}`);
-            print(`  Raw Physics (L2)     ${padLeft(rawTps.toLocaleString(), 10)} TPS      baseline`);
-            print(`  + Env overhead (L3)  ${padLeft(envSps.toLocaleString(), 10)} SPS     ${padLeft(envOverhead.toFixed(1) + '%', 7)}    obs+reward+decode`);
-            print(`  + IPC overhead (L4)  ${padLeft(poolSps.toLocaleString(), 10)} SPS     ${padLeft(ipcOverhead.toFixed(1) + '%', 7)}    Atomics sync`);
-            print(`  ${'\u2500'.repeat(62)}`);
-            print(`  Total (L2 -> L4)                                  ${padLeft(totalOverhead.toFixed(1) + '%', 7)}`, colors.bright);
+            print(`\n  Layer              Latency       Throughput    Overhead    Breakdown`, colors.bright + colors.white);
+            print(`  ${'\u2500'.repeat(72)}`);
+            print(`  Raw Physics (L2)   ${padLeft(rawStepUs.toFixed(1) + 'us', 8)}     ${padLeft(rawTps.toLocaleString(), 10)} TPS  (baseline)`);
+            print(`  + Env (L3)         ${padLeft(envStepUs.toFixed(1) + 'us', 8)}     ${padLeft(envSps.toLocaleString(), 10)} SPS  +${padLeft(envOverheadUs.toFixed(1) + 'us', 8)} obs+reward+decode+frame-skip`);
+            print(`  + IPC (L4)         ${padLeft(ipcStepUs.toFixed(1) + 'us', 8)}     ${padLeft(poolSps.toLocaleString(), 10)} SPS  +${padLeft(ipcOverheadUs.toFixed(1) + 'us', 8)} Atomics sync+serial wait`);
+            print(`  ${'\u2500'.repeat(72)}`);
+            print(`  Total step cost:   ${padLeft(ipcStepUs.toFixed(1) + 'us', 8)}     ${padLeft(poolSps.toLocaleString(), 10)} SPS`, colors.bright);
 
-            // Show frame skip benefit
             const frameSkipSps = getMetric(layer3.suite!.results, 'BonkEnvironment.step() (frameSkip=3)', 'SPS');
             if (frameSkipSps) {
-                print(`\n  frameSkip=3:         ${padLeft(frameSkipSps.toLocaleString(), 10)} SPS     ${padLeft(((1 - frameSkipSps / rawTps) * 100).toFixed(1) + '%', 7)}    physics skipped on 2/3 ticks`, colors.dim);
+                const fsStepUs = 1_000_000 / frameSkipSps;
+                print(`\n  frameSkip=3:       ${padLeft(fsStepUs.toFixed(1) + 'us', 8)}     ${padLeft(frameSkipSps.toLocaleString(), 10)} SPS  (skips physics on 2/3 ticks)`, colors.dim);
             }
+
+            print(`\n  Note: L2 uses 2 players, L3 uses 1 AI + 1 opponent. Per-step overhead is`, colors.dim);
+            print(`  comparable but absolute throughput differs due to player count.`, colors.dim);
         }
     }
 
@@ -469,15 +476,19 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
         print(hr);
 
         for (const bench of layer6.suite.results) {
-            const cv = bench.metrics.find(m => m.label === 'CV')?.value ?? 0;
+            const cvAll = bench.metrics.find(m => m.label === 'CV (all)')?.value ?? 0;
+            const cvStable = bench.metrics.find(m => m.label === 'CV (stable)')?.value ?? cvAll;
             const tag = bench.status === 'PASS' ? '\u2713' : '\u2717';
             const tagColor = bench.status === 'PASS' ? colors.green : colors.red;
-            const interpretation = cv < 10 ? 'stable' : cv < 20 ? 'moderate variance (JIT warmup)' : 'high variance (GC pauses / JIT deoptimization)';
+            const interpretation = cvStable < 10 ? 'stable' : cvStable < 20 ? 'moderate variance' : 'high variance (GC pauses / straggler workers)';
             print(`\n  ${tagColor}${tag} ${bench.name}${colors.reset}`);
-            print(`    CV: ${cv.toFixed(1)}% — ${interpretation}`, colors.dim);
+            print(`    CV (all segments):  ${cvAll.toFixed(1)}%`, colors.dim);
+            print(`    CV (stable):        ${cvStable.toFixed(1)}% — ${interpretation}`, colors.dim);
 
-            if (cv >= 10) {
-                print(`    Min-Max range: ${bench.metrics.find(m => m.label === 'Min segment SPS')?.value?.toLocaleString() ?? 'N/A'} - ${bench.metrics.find(m => m.label === 'Max segment SPS')?.value?.toLocaleString() ?? 'N/A'} SPS`, colors.gray);
+            const minSps = bench.metrics.find(m => m.label === 'Min segment SPS')?.value;
+            const maxSps = bench.metrics.find(m => m.label === 'Max segment SPS')?.value;
+            if (minSps !== undefined && maxSps !== undefined) {
+                print(`    Min-Max range: ${minSps.toLocaleString()} - ${maxSps.toLocaleString()} SPS`, colors.gray);
             }
         }
     }
@@ -519,17 +530,14 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
             let recommendation = '';
 
             if (bench.name.includes('Atomics.wait blocking')) {
-                rootCause = 'Cross-thread Atomics.wait round-trip is inherently expensive (~90us per ping-pong)';
+                rootCause = 'Cross-thread Atomics.wait round-trip is inherently expensive (~40ms per ping-pong)';
                 recommendation = 'This is expected; blocking Atomics.wait is for synchronization, not throughput. Accept the cost.';
             } else if (bench.name.includes('Reset cycles')) {
                 rootCause = 'BonkEnvironment.reset() allocates new PhysicsEngine + PRNG each call instead of reusing';
                 recommendation = 'Implement destroyAllBodies() in PhysicsEngine to clear and reuse the existing world';
-            } else if (bench.name.includes('CV')) {
-                rootCause = 'High coefficient of variation indicates JIT warmup, GC pauses, or straggler workers';
-                recommendation = 'Increase warmup steps; consider --expose-gc for deterministic GC timing';
-            } else if (bench.name.includes('Native env stability')) {
-                rootCause = 'First 10K segment much slower than later segments (JIT compilation)';
-                recommendation = 'JIT warmup effect; discard first segment or increase WARMUP to 5K';
+            } else if (bench.name.includes('stability')) {
+                rootCause = 'High coefficient of variation even after excluding JIT warmup segment';
+                recommendation = 'GC pauses or straggler workers causing intermittent slowdowns; consider --expose-gc flag';
             } else {
                 rootCause = 'See metrics above for details';
                 recommendation = 'Review benchmark-specific thresholds';

@@ -203,6 +203,12 @@ export class PhysicsEngine {
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
   private _tempForce = new b2Vec2(0, 0);
+  private _cachedStates: Map<number, PlayerState> = new Map();
+  private _deadState: PlayerState = {
+    x: 0, y: 0, velX: 0, velY: 0,
+    angle: 0, angularVel: 0,
+    isHeavy: false, alive: false,
+  };
 
   constructor() {
     // Create world with AABB and gravity
@@ -377,6 +383,11 @@ export class PhysicsEngine {
     this.playerBodies.set(id, body);
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
+    this._cachedStates.set(id, {
+      x: 0, y: 0, velX: 0, velY: 0,
+      angle: 0, angularVel: 0,
+      isHeavy: false, alive: true,
+    });
   }
 
   /**
@@ -448,55 +459,29 @@ export class PhysicsEngine {
     globalProfiler.increment('grapple_fire');
 
     const startPos = body.GetPosition();
-    const vel = body.GetLinearVelocity();
 
-    // Cast ray in direction of velocity, or straight down if stationary
-    let dx = vel.x;
-    let dy = vel.y;
-    if (Math.abs(dx) < 0.1 && Math.abs(dy) < 0.1) {
-      dx = 0;
-      dy = 1;
-    }
-
-    // Normalize and extend ray to 600 pixels (20m)
-    const len = Math.sqrt(dx * dx + dy * dy);
-    dx = (dx / len) * 20;
-    dy = (dy / len) * 20;
-
-    const endPos = new b2Vec2(startPos.x + dx, startPos.y + dy);
-
-    // Box2D v2.0 RayCast (Returns the shape it hit)
-    // In b2World, it's RaycastOne in JS ports, or we iterate bodies
-    // The safest method in older ports is filtering shapes via intersection 
-    // or using the broadphase. Let's do a basic distance search against platforms since arenas are small.
-
+    // Find the nearest platform within 10m (Bonk.io grapple radius)
+    // The grapple always hooks to the closest surface, not in the velocity direction
     let closestPlatform: any = null;
-    let minDiff = Infinity;
+    let closestDist = Infinity;
 
     for (const pBody of this.platformBodies) {
       const pPos = pBody.GetPosition();
-      const dist = Math.sqrt((pPos.x - startPos.x) * (pPos.x - startPos.x) + (pPos.y - startPos.y) * (pPos.y - startPos.y));
+      const dx = pPos.x - startPos.x;
+      const dy = pPos.y - startPos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
 
-      // Very basic "raycast" stand-in: grab the closest platform in a 10m radius if velocity is directed towards it loosely
-      if (dist < 10 && dist < minDiff) {
-        minDiff = dist;
+      if (dist < 10 && dist < closestDist) {
+        const ud = pBody.GetUserData() || {};
+        // Skip noGrapple and innerGrapple surfaces early
+        if (ud.noGrapple || ud.innerGrapple) continue;
+        closestDist = dist;
         closestPlatform = pBody;
       }
     }
 
     if (closestPlatform) {
       const ud = closestPlatform.GetUserData() || {};
-
-      // Skip platforms marked as noGrapple
-      if (ud.noGrapple) {
-        return; // Cannot grapple this surface
-      }
-
-      // innerGrapple: only grapple from inside (simplified implementation)
-      // For now, skip innerGrapple bodies as they need special handling
-      if (ud.innerGrapple) {
-        return;
-      }
 
       // Slingshot check (WDB mechanic)
       if (ud.grappleMultiplier === 99999) {
@@ -559,26 +544,23 @@ export class PhysicsEngine {
   getPlayerState(playerId: number): PlayerState {
     const body = this.playerBodies.get(playerId);
     if (!body) {
-      return {
-        x: 0, y: 0, velX: 0, velY: 0,
-        angle: 0, angularVel: 0,
-        isHeavy: false, alive: false,
-      };
+      return this._deadState;
     }
 
     const pos = body.GetPosition();
     const vel = body.GetLinearVelocity();
+    const cached = this._cachedStates.get(playerId);
+    if (!cached) return this._deadState;
 
-    return {
-      x: pos.x * SCALE,
-      y: pos.y * SCALE,
-      velX: vel.x * SCALE,
-      velY: vel.y * SCALE,
-      angle: body.GetAngle(),
-      angularVel: body.GetAngularVelocity(),
-      isHeavy: this.playerHeavyState.get(playerId) || false,
-      alive: this.playerAlive.get(playerId) || false,
-    };
+    cached.x = pos.x * SCALE;
+    cached.y = pos.y * SCALE;
+    cached.velX = vel.x * SCALE;
+    cached.velY = vel.y * SCALE;
+    cached.angle = body.GetAngle();
+    cached.angularVel = body.GetAngularVelocity();
+    cached.isHeavy = this.playerHeavyState.get(playerId) || false;
+    cached.alive = this.playerAlive.get(playerId) || false;
+    return cached;
   }
 
   /**
@@ -597,6 +579,30 @@ export class PhysicsEngine {
    */
   getTickCount(): number {
     return this.tickCount;
+  }
+
+  /**
+   * Destroy all bodies on the existing world without replacing it.
+   * Reuses the same b2World and b2BroadPhase — only the bodies and
+   * their associated fixtures/shapes are removed and re-created.
+   */
+  destroyAllBodies(): void {
+    // Destroy player bodies
+    for (const [, body] of this.playerBodies) {
+      try { this.world.DestroyBody(body); } catch { /* broadphase edge case */ }
+    }
+    this.playerBodies.clear();
+    this.playerHeavyState.clear();
+    this.playerAlive.clear();
+    this.playerGrappleJoints.clear();
+    this._cachedStates.clear();
+
+    // Destroy platform/map bodies
+    for (const body of this.platformBodies) {
+      try { this.world.DestroyBody(body); } catch { /* broadphase edge case */ }
+    }
+    this.platformBodies = [];
+    this.tickCount = 0;
   }
 
   /**

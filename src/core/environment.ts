@@ -173,17 +173,11 @@ export class BonkEnvironment {
             this.config.seed = seed;
             this.rng.setSeed(seed);
         }
-        // Clean up old physics engine, recover if corrupted
-        try {
-            this.physics.reset();
-        } catch (e: any) {
-            console.warn('[BonkEnvironment] reset: physics reset failed, creating fresh engine:', e?.message || e);
-        }
+        // Reuse existing engine — destroy bodies on the same world, don't
+        // create a new PhysicsEngine (eliminates ~160 KB allocation per reset)
+        this.physics.destroyAllBodies();
 
-        // Create fresh physics engine
-        this.physics = new PhysicsEngine();
-
-        // Re-add platforms after physics reset (they were destroyed by physics.reset())
+        // Re-add platforms to the existing world
         for (const body of this.config.mapData.bodies) {
             this.physics.addBody(body);
         }
