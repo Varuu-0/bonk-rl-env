@@ -207,7 +207,7 @@ export class SharedMemoryManager {
     }
 
     readActions(slot: number) {
-        return this.views.actions.slice(slot * this.numEnvs, (slot + 1) * this.numEnvs);
+        return this.views.actions.subarray(slot * this.numEnvs, (slot + 1) * this.numEnvs);
     }
 
     reset() {

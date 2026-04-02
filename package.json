@@ -23,6 +23,7 @@
     "bench:native": "npx tsx benchmarks/quick-2000-step.ts",
     "bench:pool": "npx tsx benchmarks/step-throughput.ts",
     "bench:all": "npx tsx benchmarks/quick-2000-step.ts && npx tsx benchmarks/step-throughput.ts",
+    "bench:long": "npx tsx benchmarks/long-running.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit"
   },

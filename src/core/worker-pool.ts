@@ -59,6 +59,13 @@ export class WorkerPool {
     // Pre-allocated finished buffer for step/reset
     private _finished: Uint8Array = new Uint8Array(0);
 
+    // Pre-allocated return times buffer (avoids per-step array allocation)
+    private _returnTimes: BigUint64Array = new BigUint64Array(0);
+
+    // Pre-allocated result objects pool (avoids per-step object allocation)
+    private _resultPool: any[] = [];
+    private _convertedResults: any[] = [];
+
     // Shared sync buffer for completion counter (all workers share this)
     private _syncBuffer: SharedArrayBuffer | null = null;
 
@@ -180,6 +187,21 @@ export class WorkerPool {
         this.initObsPool(totalEnvs);
         this._finished = new Uint8Array(this.workers.length);
 
+        // Pre-allocate return times buffer
+        this._returnTimes = new BigUint64Array(this.workers.length);
+
+        // Pre-allocate result objects pool
+        this._resultPool = [];
+        for (let i = 0; i < totalEnvs; i++) {
+            this._resultPool.push({
+                observation: null,
+                reward: 0,
+                done: false,
+                truncated: false,
+                info: { tick: 0 }
+            });
+        }
+
         // Check if workers actually support shared memory mode
         if (this.useSharedMemory) {
             const allSupportShared = results.every((r: any) => r && r.mode === 'shared');
@@ -250,11 +272,11 @@ export class WorkerPool {
 
             // Wait for ALL workers to complete using shared completion counter
             {
-                const elapsed = Date.now() - startTime;
-                const remaining = Math.max(1, timeoutMs - elapsed);
                 const numWorkers = this.workers.length;
                 let waitVal = Atomics.load(completedArr, 0);
                 while (waitVal < numWorkers) {
+                    const elapsed = Date.now() - startTime;
+                    const remaining = Math.max(1, timeoutMs - elapsed);
                     Atomics.wait(completedArr, 0, waitVal, remaining);
                     waitVal = Atomics.load(completedArr, 0);
                     if (Date.now() - startTime >= timeoutMs) break;
@@ -326,7 +348,8 @@ export class WorkerPool {
      */
     private async stepSharedMemory(actions: any[]): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
-        const returnTimes: bigint[] = new Array(this.workers.length).fill(BigInt(0));
+        this._returnTimes.fill(BigInt(0));
+        const returnTimes = this._returnTimes;
 
         // 1. Encode actions and signal all workers in parallel
         let actionIdx = 0;
@@ -367,11 +390,11 @@ export class WorkerPool {
 
         // Wait for ALL workers to complete using shared completion counter
         {
-            const elapsed = Date.now() - startTime;
-            const remaining = Math.max(1, timeoutMs - elapsed);
             const numWorkers = this.workers.length;
             let waitVal = Atomics.load(completedArr, 0);
             while (waitVal < numWorkers) {
+                const elapsed = Date.now() - startTime;
+                const remaining = Math.max(1, timeoutMs - elapsed);
                 Atomics.wait(completedArr, 0, waitVal, remaining);
                 waitVal = Atomics.load(completedArr, 0);
                 if (Date.now() - startTime >= timeoutMs) break;
@@ -410,7 +433,7 @@ export class WorkerPool {
         }
 
         // Convert shared memory results to observation objects
-        const convertedResults: any[] = [];
+        this._convertedResults.length = 0;
         actionIdx = 0;
 
         for (let i = 0; i < this.workers.length; i++) {
@@ -431,17 +454,18 @@ export class WorkerPool {
 
             // Extract results for each environment in this worker
             for (let j = 0; j < wEnvs; j++) {
-                convertedResults.push({
-                    observation: this.extractObservation(obs, j),
-                    reward: rewards[j],
-                    done: dones[j] === 1,
-                    truncated: truncated[j] === 1,
-                    info: { tick: ticks[j] }
-                });
+                const resultIdx = actionIdx + j;
+                const resultObj = this._resultPool[resultIdx];
+                resultObj.observation = this.extractObservation(obs, j);
+                resultObj.reward = rewards[j];
+                resultObj.done = dones[j] === 1;
+                resultObj.truncated = truncated[j] === 1;
+                resultObj.info.tick = ticks[j];
+                this._convertedResults.push(resultObj);
             }
         }
 
-        return convertedResults;
+        return this._convertedResults;
     }
 
     /**
