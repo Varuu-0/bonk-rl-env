@@ -62,6 +62,10 @@ function observationToArray(obs: Observation): Float32Array {
     return _obsBuffer;
 }
 
+function observationFastToArray(env: BonkEnvironment): Float32Array {
+    return env.getObservationFast();
+}
+
 parentPort.on('message', (msg) => {
     try {
         if (msg.type === 'init') {
@@ -179,7 +183,7 @@ parentPort.on('message', (msg) => {
             // Write results directly to shared memory
             if (sharedMem) {
                 results.forEach((res, i) => {
-                    sharedMem!.writeObservation(i, observationToArray(res.observation));
+                    sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
                     sharedMem!.writeReward(i, res.reward);
                     sharedMem!.writeDone(i, res.done ? 1 : 0);
                     sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
@@ -254,7 +258,7 @@ parentPort.on('message', (msg) => {
                         }
 
                         results.forEach((res, i) => {
-                            sharedMem!.writeObservation(i, observationToArray(res.observation));
+                            sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
                             sharedMem!.writeReward(i, res.reward);
                             sharedMem!.writeDone(i, res.done ? 1 : 0);
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);

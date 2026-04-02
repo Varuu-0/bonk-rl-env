@@ -126,6 +126,7 @@ export class BonkEnvironment {
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
     private terminalReached: boolean = false;
+    private _obsBuffer: Float32Array = new Float32Array(14);
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case
@@ -448,5 +449,43 @@ export class BonkEnvironment {
             arenaHalfHeight: ARENA_HALF_HEIGHT * SCALE,
             tick: this.physics.getTickCount(),
         };
+    }
+
+    /**
+     * Fast observation extraction — returns a pre-allocated Float32Array(14)
+     * directly from physics state, skipping intermediate object creation.
+     * Layout matches worker.ts observationToArray() output.
+     */
+    getObservationFast(): Float32Array {
+        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+        const oppId = this.opponentIds[0];
+        const oppState = oppId !== undefined ? this.physics.getPlayerState(oppId) : null;
+
+        this._obsBuffer[0] = aiState.x;
+        this._obsBuffer[1] = aiState.y;
+        this._obsBuffer[2] = aiState.velX;
+        this._obsBuffer[3] = aiState.velY;
+        this._obsBuffer[4] = aiState.angle;
+        this._obsBuffer[5] = aiState.angularVel;
+        this._obsBuffer[6] = aiState.isHeavy ? 1 : 0;
+
+        if (oppState) {
+            this._obsBuffer[7] = oppState.x;
+            this._obsBuffer[8] = oppState.y;
+            this._obsBuffer[9] = oppState.velX;
+            this._obsBuffer[10] = oppState.velY;
+            this._obsBuffer[11] = oppState.isHeavy ? 1 : 0;
+            this._obsBuffer[12] = oppState.alive ? 1 : 0;
+        } else {
+            this._obsBuffer[7] = 0;
+            this._obsBuffer[8] = 0;
+            this._obsBuffer[9] = 0;
+            this._obsBuffer[10] = 0;
+            this._obsBuffer[11] = 0;
+            this._obsBuffer[12] = 0;
+        }
+
+        this._obsBuffer[13] = this.physics.getTickCount();
+        return this._obsBuffer;
     }
 }
