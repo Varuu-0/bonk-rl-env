@@ -6,6 +6,7 @@
  */
 
 import { IpcBridge } from './ipc/ipc-bridge';
+import { AppConfig, getConfig } from './config/config-loader';
 
 // Module-level server instance
 let bridge: IpcBridge | null = null;
@@ -17,12 +18,14 @@ let bridge: IpcBridge | null = null;
  * @returns Promise that resolves when the server is started
  * @throws Error if server is already running
  */
-export async function startServer(port: number = 5555): Promise<void> {
+export async function startServer(config?: AppConfig): Promise<void> {
     if (bridge !== null) {
         throw new Error('Server is already running. Call stopServer() first.');
     }
     
-    bridge = new IpcBridge(port);
+    const appConfig = config || getConfig();
+    console.log(`Starting server on port ${appConfig.server.port} (config: ${config ? 'provided' : 'cached'})`);
+    bridge = new IpcBridge(appConfig);
     await bridge.start();
 }
 

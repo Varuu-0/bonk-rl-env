@@ -1,6 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
+import { getConfig, type AppConfig } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -12,8 +13,8 @@ export class IpcBridge {
     private stepCount: number = 0;
     private _closed: boolean = false;
 
-    constructor(port: number = 5555) {
-        this.port = port;
+    constructor(config?: Partial<AppConfig>) {
+        this.port = (config as any)?.server?.port ?? getConfig().server.port;
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 
@@ -46,7 +47,7 @@ export class IpcBridge {
         }
     }
 
-    private async handleRequest(identity: Buffer, rawMsg: string) {
+    async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         try {
             const payload = parseJson(rawMsg);
@@ -58,8 +59,10 @@ export class IpcBridge {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive number" };
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
-                    console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(payload.config || {})}, useSharedMemory=${useSharedMemory}`);
-                    await this.pool.init(numEnvs, payload.config || {}, useSharedMemory);
+                    const envDefaults = getConfig().environment;
+                    const mergedConfig = { ...envDefaults, ...(payload.config || {}) };
+                    console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
+                    await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
                     response = { status: "ok" };
                 }
             } else if (command === "reset") {

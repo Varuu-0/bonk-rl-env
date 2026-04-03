@@ -4,7 +4,16 @@
   "description": "High-performance Bonk.io RL environment with ZeroMQ IPC bridge",
   "main": "src/main.ts",
   "scripts": {
-    "test": "npx tsx tests/runner.ts all",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "test:unit": "vitest run tests/unit/",
+    "test:integration": "vitest run tests/integration/",
+    "test:e2e": "vitest run tests/e2e/ --testTimeout=60000",
+    "test:security": "vitest run tests/security/ --testTimeout=60000",
+    "test:perf": "vitest run tests/perf/ --testTimeout=120000",
+    "test:all": "vitest run && vitest run tests/e2e/ --testTimeout=60000 && vitest run tests/security/ --testTimeout=60000",
+    "test:legacy": "npx tsx tests/runner.ts all",
     "test:runner": "npx tsx tests/runner.ts",
     "test:list": "npx tsx tests/runner.ts list",
     "test:physics": "npx tsx tests/runner.ts 1",
@@ -50,7 +59,10 @@
     "zeromq": "^6.5.0"
   },
   "devDependencies": {
+    "@vitest/coverage-v8": "^4.1.2",
+    "fast-check": "^4.6.0",
     "tsx": "^4.21.0",
-    "typescript": "^5.3.3"
+    "typescript": "^5.3.3",
+    "vitest": "^4.1.2"
   }
 }

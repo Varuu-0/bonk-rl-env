@@ -91,4 +91,16 @@ if [[ ${#ERRORS[@]} -gt 0 || ${#WARNINGS[@]} -gt 0 ]]; then
   echo ""
 fi
 
+# Run fast unit test subset
+echo "Running fast test subset..."
+npx vitest run tests/unit/ --reporter=dot 2>/dev/null
+if [ $? -ne 0 ]; then
+  echo ""
+  echo "WARNING: Unit tests failed. Commit anyway? (y/n)"
+  read -r answer
+  if [ "$answer" != "y" ]; then
+    exit 1
+  fi
+fi
+
 exit 0

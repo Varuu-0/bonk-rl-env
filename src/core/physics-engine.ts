@@ -178,6 +178,12 @@ export interface MapBodyDef {
   };
   color?: number;                // Visual color (RGB as integer)
   surfaceName?: string;          // Surface type name
+  linearDamping?: number;        // Body linear velocity drag
+  angularDamping?: number;       // Body angular velocity drag
+  linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
+  angularVelocity?: number;      // Starting rotational velocity
+  collidesWithPlayers?: boolean; // If false, exclude player categories from maskBits
+  aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
 }
 
 export interface MapSpawnPoints {
@@ -188,6 +194,9 @@ export interface MapDef {
   name: string;
   spawnPoints: MapSpawnPoints;
   bodies: MapBodyDef[];
+  capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string }>;
+  joints?: Array<{ type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number }; length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }>;
+  physics?: { ppm?: number; bounds?: { width: number; height: number } };
 }
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
@@ -198,7 +207,11 @@ export class PhysicsEngine {
   private playerHeavyState: Map<number, boolean> = new Map();
   private playerAlive: Map<number, boolean> = new Map();
   private playerGrappleJoints: Map<number, any> = new Map();
+  private playerTeams: Map<number, string> = new Map();
+  private capZoneSensors: any[] = [];
+  private lastScoredTeam: string | null = null;
   private platformBodies: any[] = [];
+  private platformBodyMap: Map<string, any> = new Map();
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
@@ -239,6 +252,15 @@ export class PhysicsEngine {
 
         this.checkLethalCollision(ud1, ud2);
         this.checkLethalCollision(ud2, ud1);
+
+        // CapZone scoring: detect when a dynamic (non-static, non-player) body enters a zone sensor
+        if (ud1.isCapZone && ud2.playerId === undefined && !ud2.isCapZone) {
+          if (ud1.zoneType === 2) this.lastScoredTeam = 'blue';
+          else if (ud1.zoneType === 3) this.lastScoredTeam = 'red';
+        } else if (ud2.isCapZone && ud1.playerId === undefined && !ud1.isCapZone) {
+          if (ud2.zoneType === 2) this.lastScoredTeam = 'blue';
+          else if (ud2.zoneType === 3) this.lastScoredTeam = 'red';
+        }
       } catch (e) {
         // Ignore contact errors — some TOI contacts lack valid shapes
       }
@@ -261,6 +283,8 @@ export class PhysicsEngine {
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(def.x / SCALE, def.y / SCALE);
     if (def.angle) bodyDef.angle = def.angle;
+    bodyDef.linearDamping = def.linearDamping ?? 0;
+    bodyDef.angularDamping = def.angularDamping ?? 0;
 
     const body = this.world.CreateBody(bodyDef);
 
@@ -300,22 +324,75 @@ export class PhysicsEngine {
       }
 
       // Apply collision filtering if specified
-      if (def.collides) {
+      if (def.collides || def.collidesWithPlayers === false) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
-        filter.maskBits = 0x0000; // Start with no collision
-        if (def.collides.g1) filter.maskBits |= 0x0002;
-        if (def.collides.g2) filter.maskBits |= 0x0004;
-        if (def.collides.g3) filter.maskBits |= 0x0008;
-        if (def.collides.g4) filter.maskBits |= 0x0010;
+        filter.maskBits = 0xFFFF; // Start with collide-all
+        
+        if (def.collides) {
+          filter.maskBits = 0x0000;
+          if (def.collides.g1) filter.maskBits |= 0x0002;
+          if (def.collides.g2) filter.maskBits |= 0x0004;
+          if (def.collides.g3) filter.maskBits |= 0x0008;
+          if (def.collides.g4) filter.maskBits |= 0x0010;
+        }
+        
+        // collidesWithPlayers=false → exclude player categories from mask
+        if (def.collidesWithPlayers === false) {
+          filter.maskBits &= ~0x0002; // exclude g1 (player 0)
+          filter.maskBits &= ~0x0004; // exclude g2 (player 1+)
+        }
+        
         shapeDef.filter = filter;
       }
 
     body.CreateShape(shapeDef);
     body.SetMassFromShapes();
     body.SetUserData(def); // Stores isLethal and grappleMultiplier
+
+    // Set initial velocity for dynamic bodies
+    if (!def.static) {
+      if (def.linearVelocity) {
+        body.SetLinearVelocity(new b2Vec2(def.linearVelocity.x, def.linearVelocity.y));
+      }
+      if (def.angularVelocity !== undefined) {
+        body.SetAngularVelocity(def.angularVelocity);
+      }
+    }
+
     this.platformBodies.push(body);
+    if (def.name) this.platformBodyMap.set(def.name, body);
     this.calculateArenaBounds();
+  }
+
+  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string }, x: number, y: number, width: number, height: number): void {
+    const bodyDef = new b2BodyDef();
+    bodyDef.position.Set(x / SCALE, y / SCALE);
+
+    const body = this.world.CreateBody(bodyDef);
+
+    const shapeDef = new b2PolygonDef();
+    shapeDef.SetAsBox((width / 2) / SCALE, (height / 2) / SCALE);
+    shapeDef.density = 0;
+    shapeDef.isSensor = true;
+
+    body.CreateShape(shapeDef);
+    body.SetUserData({ isCapZone: true, zoneType: zone.type, zoneIndex: zone.index, owner: zone.owner });
+    this.capZoneSensors.push(body);
+  }
+
+  setPlayerTeam(playerId: number, team: string): void {
+    this.playerTeams.set(playerId, team);
+  }
+
+  getPlayerTeam(playerId: number): string | undefined {
+    return this.playerTeams.get(playerId);
+  }
+
+  getTeamScored(): string | null {
+    const scored = this.lastScoredTeam;
+    this.lastScoredTeam = null;
+    return scored;
   }
 
   /**
@@ -342,6 +419,48 @@ export class PhysicsEngine {
       const margin = 5; // 5 metres extra buffer
       this.arenaHalfWidth = Math.max(Math.abs(minX), Math.abs(maxX)) + margin;
       this.arenaHalfHeight = Math.max(Math.abs(minY), Math.abs(maxY)) + margin;
+    }
+  }
+
+  /**
+   * Set explicit map bounds from the map's physics.bounds.
+   * Overrides dynamically calculated arena bounds.
+   */
+  setMapBounds(widthMetres: number, heightMetres: number): void {
+    this.arenaHalfWidth = widthMetres / 2;
+    this.arenaHalfHeight = heightMetres / 2;
+  }
+
+  getBodyMap(): Map<string, any> {
+    return this.platformBodyMap;
+  }
+
+  /**
+   * Add a joint between two named bodies from the map definition.
+   * Looks up bodies by name in the platformBodyMap.
+   */
+  addJoint(def: { type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }, bodyMap: Map<string, any>): void {
+    const bodyA = bodyMap.get(def.bodyA);
+    const bodyB = bodyMap.get(def.bodyB);
+    if (!bodyA || !bodyB) {
+      console.warn(`Joint references unknown body: ${def.bodyA} or ${def.bodyB}`);
+      return;
+    }
+    
+    const anchorA = def.anchorA
+      ? new b2Vec2(def.anchorA.x / SCALE, def.anchorA.y / SCALE)
+      : bodyA.GetPosition();
+    const anchorB = def.anchorB
+      ? new b2Vec2(def.anchorB.x / SCALE, def.anchorB.y / SCALE)
+      : bodyB.GetPosition();
+    
+    if (def.type === 'distance' || def.type === 'lpj') {
+      const jd = new b2DistanceJointDef();
+      jd.Initialize(bodyA, bodyB, anchorA, anchorB);
+      jd.collideConnected = def.collideConnected ?? false;
+      jd.frequencyHz = def.frequencyHz ?? 0;
+      jd.dampingRatio = def.dampingRatio ?? 0;
+      this.world.CreateJoint(jd);
     }
   }
 
@@ -593,6 +712,9 @@ export class PhysicsEngine {
       try { this.world.DestroyBody(body); } catch { /* broadphase edge case */ }
     }
     this.platformBodies = [];
+    this.platformBodyMap.clear();
+    this.capZoneSensors = [];
+    this.lastScoredTeam = null;
     this.tickCount = 0;
   }
 
@@ -615,7 +737,11 @@ export class PhysicsEngine {
     this.playerHeavyState.clear();
     this.playerAlive.clear();
     this.playerGrappleJoints.clear();
+    this.playerTeams.clear();
+    this.capZoneSensors = [];
+    this.lastScoredTeam = null;
     this.platformBodies = [];
+    this.platformBodyMap = new Map();
     this.tickCount = 0;
   }
 
