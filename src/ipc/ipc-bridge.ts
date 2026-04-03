@@ -47,7 +47,7 @@ export class IpcBridge {
         }
     }
 
-    private async handleRequest(identity: Buffer, rawMsg: string) {
+    async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         try {
             const payload = parseJson(rawMsg);

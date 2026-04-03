@@ -130,6 +130,15 @@ export class TelemetryController {
   }
 
   /**
+   * Update telemetry flags by merging new values.
+   * Only provided flags are updated; others remain unchanged.
+   */
+  updateFlags(flags: Partial<TelemetryFlags>): void {
+    const current = this.getFlags();
+    cachedFlags = { ...current, ...flags };
+  }
+
+  /**
    * Get the profile level setting.
    */
   getProfileLevel(): 'minimal' | 'standard' | 'detailed' {

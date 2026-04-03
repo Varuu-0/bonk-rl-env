@@ -188,6 +188,59 @@ export class Profiler {
     }
 
     /**
+     * Get a snapshot of current metrics without resetting.
+     */
+    getSnapshot() {
+        const bufferCopy = new BigUint64Array(TelemetryBuffer.length);
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            bufferCopy[i] = TelemetryBuffer[i];
+        }
+        return {
+            timeMetrics: new Map(this.timeMetrics),
+            counters: new Map(this.counters),
+            gauges: new Map(this.gauges),
+            telemetryBuffer: bufferCopy,
+            currentTick: this.currentTick,
+        };
+    }
+
+    /**
+     * Format current metrics as a human-readable report string.
+     */
+    formatReport(): string {
+        const lines: string[] = [];
+        lines.push('=== Telemetry Report ===');
+        lines.push('');
+
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            const totalNs = TelemetryBuffer[i];
+            if (totalNs === BigInt(0)) continue;
+            const label = TelemetryLabels[i];
+            if (!label) continue;
+            const ms = Number(totalNs) / 1_000_000;
+            lines.push(`${label}: ${ms.toFixed(3)} ms`);
+        }
+
+        if (this.counters.size > 0) {
+            lines.push('');
+            lines.push('--- Counters ---');
+            this.counters.forEach((val, label) => {
+                lines.push(`${label}: ${val}`);
+            });
+        }
+
+        if (this.gauges.size > 0) {
+            lines.push('');
+            lines.push('--- Gauges ---');
+            this.gauges.forEach((val, label) => {
+                lines.push(`${label}: ${val.toFixed(2)}`);
+            });
+        }
+
+        return lines.join('\n');
+    }
+
+    /**
      * Reset metrics for the next window.
      */
     reset() {
@@ -340,3 +393,22 @@ export class Profiler {
 }
 
 export const globalProfiler = new Profiler();
+
+// ─── Collection interval helpers ─────────────────────────────────────────
+
+let collectionInterval: ReturnType<typeof setInterval> | null = null;
+
+export function startCollection(intervalMs: number = 1000) {
+    stopCollection();
+    collectionInterval = setInterval(() => {
+        globalProfiler.recordMemory();
+    }, intervalMs);
+}
+
+export function stopCollection() {
+    if (collectionInterval !== null) {
+        clearInterval(collectionInterval);
+        collectionInterval = null;
+    }
+}
+

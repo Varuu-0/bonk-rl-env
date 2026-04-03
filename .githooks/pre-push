@@ -40,4 +40,20 @@ echo "[DSP] Graph stats:"
 echo "$stats"
 echo ""
 
+# Run full test suite
+echo "Running full test suite..."
+npx vitest run 2>/dev/null
+if [ $? -ne 0 ]; then
+  echo "ERROR: Tests failed. Push rejected."
+  exit 1
+fi
+
+# Run type check
+echo "Running type check..."
+npm run typecheck 2>/dev/null
+if [ $? -ne 0 ]; then
+  echo "ERROR: Type check failed. Push rejected."
+  exit 1
+fi
+
 exit 0
