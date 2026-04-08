@@ -41,6 +41,7 @@
     "bench:ipc-profile": "python python/benchmarks/layer7-ipc-latency.py",
     "bench:ipc-stress": "python python/benchmarks/layer7-ipc-stress.py",
     "start": "tsx src/main.ts",
+    "orchestrator": "python scripts/orchestrator.py",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [
