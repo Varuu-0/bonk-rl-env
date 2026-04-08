@@ -7,6 +7,53 @@ Shared utility modules used across the Bonk.io RL environment.
 | File | Purpose |
 |------|---------|
 | `port-manager.ts` | Dynamic port allocation — sequential allocation with wraparound, collision avoidance |
+| `test-validation.ts` | Test runner, regression tracking, and failure retry loop |
+
+## TestValidation API
+
+```typescript
+class TestRunner {
+  runTests(testPaths: string[], config?: { timeout?: number; retry?: RetryConfig }): Promise<TestSuiteResult>
+  cancel(): void
+}
+
+class RegressionTracker {
+  createBaseline(name: string, testPath: string, runner: TestRunner): Promise<RegressionBaseline>
+  checkRegression(name: string, testPath: string, runner: TestRunner): Promise<{ passed: boolean; regression?: RegressionFailureError }>
+  setThreshold(name: string, threshold: number): void
+}
+
+class RetryLoop {
+  execute<T>(id: string, fn: () => Promise<T>, onFailure?: (attempt: number, error: Error) => void): Promise<{ success: boolean; result?: T; attempts: number; errors: Error[] }>
+  reset(id: string): void
+}
+```
+
+## Usage
+
+Run tests with retry logic:
+```typescript
+const runner = createTestRunner();
+const result = await runner.runTests(['tests/unit/foo.test.ts'], {
+  timeout: 30000,
+  retry: { maxRetries: 3, retryDelay: 1000, backoffMultiplier: 2 }
+});
+```
+
+Track performance regressions:
+```typescript
+const tracker = createRegressionTracker();
+await tracker.createBaseline('perf-baseline', 'tests/perf/foo.test.ts', runner);
+const { passed, regression } = await tracker.checkRegression('perf-baseline', 'tests/perf/foo.test.ts', runner);
+```
+
+Retry loop for flaky operations:
+```typescript
+const loop = createRetryLoop(5);
+const { success, result, attempts } = await loop.execute('operation-id', async () => {
+  // flaky operation
+});
+```
 
 ## PortManager API
 

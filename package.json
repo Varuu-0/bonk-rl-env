@@ -8,7 +8,7 @@
     "test:watch": "vitest",
     "test:coverage": "vitest run --coverage",
     "test:unit": "vitest run tests/unit/",
-    "test:integration": "vitest run tests/integration/",
+    "test:integration": "npx tsx tests/runner.ts 12",
     "test:e2e": "vitest run tests/e2e/ --testTimeout=60000",
     "test:security": "vitest run tests/security/ --testTimeout=60000",
     "test:perf": "vitest run tests/perf/ --testTimeout=120000",
@@ -27,7 +27,6 @@
     "test:nophysics": "npx tsx tests/runner.ts 9",
     "test:grapple": "npx tsx tests/runner.ts 10",
     "test:bounds": "npx tsx tests/runner.ts 11",
-    "test:integration": "npx tsx tests/runner.ts 12",
     "bench:all": "npx tsx benchmarks/runner.ts all",
     "bench:runner": "npx tsx benchmarks/runner.ts",
     "bench:list": "npx tsx benchmarks/runner.ts --list",
@@ -59,6 +58,7 @@
     "zeromq": "^6.5.0"
   },
   "devDependencies": {
+    "@types/node": "^25.5.2",
     "@vitest/coverage-v8": "^4.1.2",
     "fast-check": "^4.6.0",
     "tsx": "^4.21.0",
