@@ -192,7 +192,7 @@ class NavigationReward(BaseRewardFunction):
         potential_current = -current_distance * self.distance_scale
         potential_next = -next_distance * self.distance_scale
         
-        shaping_reward = self.gamma * potential_next - potential_current
+        shaping_reward = potential_current - self.gamma * potential_next
         
         return shaping_reward
     
