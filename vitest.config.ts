@@ -15,9 +15,12 @@ export default defineConfig({
     ],
     testTimeout: 30000,
     hookTimeout: 30000,
-    pool: 'threads',
+    // Native modules (zeromq, box2d) crash with an access violation during
+    // worker-thread teardown, which prevented full-suite runs from ever
+    // completing. Forks isolate native handles per process.
+    pool: 'forks',
     isolate: true,
-    maxThreads: 4,
+    maxForks: 4,
     server: {
       deps: {
         inline: ['box2d'],
