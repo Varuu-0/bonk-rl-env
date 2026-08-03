@@ -27,12 +27,12 @@ function signalSyncCompleted() {
 
 /**
  * Converts an Observation to a flat number array for shared memory storage
- * Uses 14 values: playerX, playerY, playerVelX, playerVelY, playerAngle, 
+ * Uses 16 values: playerX, playerY, playerVelX, playerVelY, playerAngle,
  * playerAngularVel, playerIsHeavy, opponentX, opponentY, opponentVelX, 
- * opponentVelY, opponentIsHeavy, opponentAlive, tick
+ * opponentVelY, opponentIsHeavy, opponentAlive, arenaHalfWidth, arenaHalfHeight, tick
  */
 // Pre-allocated buffer for zero-allocation observation conversion
-const _obsBuffer = new Float32Array(14);
+const _obsBuffer = new Float32Array(16);
 
 function observationToArray(obs: Observation): Float32Array {
     const opp = obs.opponents[0];
@@ -58,7 +58,9 @@ function observationToArray(obs: Observation): Float32Array {
         _obsBuffer[11] = 0;
         _obsBuffer[12] = 0;
     }
-    _obsBuffer[13] = obs.tick;
+    _obsBuffer[13] = obs.arenaHalfWidth;
+    _obsBuffer[14] = obs.arenaHalfHeight;
+    _obsBuffer[15] = obs.tick;
     return _obsBuffer;
 }
 
@@ -183,6 +185,12 @@ parentPort.on('message', (msg) => {
             // Write results directly to shared memory
             if (sharedMem) {
                 results.forEach((res, i) => {
+                    if (res.done) {
+                        sharedMem!.writeTerminalObservation(i, observationToArray(res.info.terminal_observation));
+                        sharedMem!.writeHasTerminalObs(i, 1);
+                    } else {
+                        sharedMem!.writeHasTerminalObs(i, 0);
+                    }
                     sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
                     sharedMem!.writeReward(i, res.reward);
                     sharedMem!.writeDone(i, res.done ? 1 : 0);
@@ -227,7 +235,10 @@ parentPort.on('message', (msg) => {
                     if (cmd === 1) {
                         // RESET COMMAND
                         const seedsView = sharedMem.readSeeds();
-                        const obs = envs.map((env, i) => env.reset(seedsView[i] || undefined));
+                        const obs = envs.map((env, i) => {
+                            const s = seedsView[i];
+                            return env.reset(s === 0 ? undefined : s - 1);
+                        });
 
                         obs.forEach((o, i) => sharedMem!.writeObservation(i, observationToArray(o)));
 
@@ -258,6 +269,12 @@ parentPort.on('message', (msg) => {
                         }
 
                         results.forEach((res, i) => {
+                            if (res.done) {
+                                sharedMem!.writeTerminalObservation(i, observationToArray(res.info.terminal_observation));
+                                sharedMem!.writeHasTerminalObs(i, 1);
+                            } else {
+                                sharedMem!.writeHasTerminalObs(i, 0);
+                            }
                             sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
                             sharedMem!.writeReward(i, res.reward);
                             sharedMem!.writeDone(i, res.done ? 1 : 0);

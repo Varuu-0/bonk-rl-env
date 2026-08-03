@@ -100,6 +100,32 @@ describe('Worker thread integration', () => {
       }
     });
 
+    it('preserves dynamic map bounds in shared-memory observations', async () => {
+      if (WorkerPool.isSupported()) {
+        await pool.init(1, {
+          mapData: {
+            name: 'wide-shared-map',
+            spawnPoints: { team_blue: { x: 0, y: 0 } },
+            bodies: [{ name: 'far-platform', type: 'rect', x: 1200, y: 0, width: 100, height: 100, static: true }],
+          },
+          numOpponents: 0,
+        }, true);
+        const [obs] = await pool.reset([1]);
+        expect(obs.arenaHalfWidth).toBeGreaterThan(1000);
+        expect(obs.arenaHalfHeight).toBeGreaterThan(0);
+      }
+    });
+
+    it('rejects out-of-range seeds instead of colliding with the no-seed sentinel', async () => {
+      if (WorkerPool.isSupported()) {
+        await pool.init(2, {}, true);
+        await expect(pool.reset([0xFFFFFFFF, 1])).rejects.toThrow(/out of supported range/);
+        await expect(pool.reset([-1, 1])).rejects.toThrow(/out of supported range/);
+        // Boundary values remain valid
+        await expect(pool.reset([0, 0xFFFFFFFE])).resolves.toHaveLength(2);
+      }
+    });
+
     it('worker processes step in shared memory mode', async () => {
       if (WorkerPool.isSupported()) {
         await pool.init(2, {}, true);
