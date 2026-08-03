@@ -12,6 +12,7 @@ import { loadConfig, AppConfig } from './config/config-loader';
 import * as readline from 'readline';
 
 let isShuttingDown = false;
+let autoTimeoutHandle: ReturnType<typeof setTimeout> | null = null;
 
 // Readline interface for Windows Ctrl+C handling
 let rl: readline.Interface | null = null;
@@ -24,23 +25,29 @@ async function shutdown(signal: string, isError = false): Promise<void> {
         return;
     }
     isShuttingDown = true;
-    
+
     const exitCode = isError ? 1 : 0;
     console.log(`\nShutting down...`);
-    
+
     try {
         // Close readline interface on Windows
         if (rl) {
             rl.close();
             rl = null;
         }
-        
+
+        // Clear auto-timeout if pending
+        if (autoTimeoutHandle) {
+            clearTimeout(autoTimeoutHandle);
+            autoTimeoutHandle = null;
+        }
+
         await stopServer();
     } catch (error) {
         console.error('Error during shutdown:', error);
         process.exit(1);
     }
-    
+
     process.exit(exitCode);
 }
 
@@ -51,14 +58,14 @@ function registerShutdownHandlers(): void {
     // Register signal handlers
     process.on('SIGINT', () => shutdown('SIGINT'));
     process.on('SIGTERM', () => shutdown('SIGTERM'));
-    
+
     // Windows-specific: Handle Ctrl+C via readline
     if (process.platform === 'win32') {
         rl = readline.createInterface({
             input: process.stdin,
             output: process.stdout
         });
-        
+
         rl.on('SIGINT', () => {
             shutdown('SIGINT (Windows)');
         });
@@ -67,26 +74,27 @@ function registerShutdownHandlers(): void {
 
 async function main(): Promise<void> {
     console.log('=== Bonk.io Headless RL Environment ===');
-    
+
     const config = loadConfig();
-    
+
     console.log(`Config: port=${config.server.port}, telemetry=${config.telemetry.enabled}, numWorkers=${config.workerPool.numWorkers}`);
-    
+
     const effectiveTimeout = config.server.maxRuntimeSeconds > 0 ? config.server.maxRuntimeSeconds : undefined;
-    
+
     // Register shutdown handlers
     registerShutdownHandlers();
-    
+
     // Set up auto-shutdown if needed BEFORE starting the server
     if (effectiveTimeout !== undefined) {
-        setTimeout(async () => {
+        autoTimeoutHandle = setTimeout(async () => {
+            autoTimeoutHandle = null;
             await shutdown('auto-timeout');
         }, effectiveTimeout * 1000);
     }
-    
+
     // Start the server
     await startServer(config);
-    
+
     if (!effectiveTimeout) {
         console.log('Press Ctrl+C to stop the server.');
     }
