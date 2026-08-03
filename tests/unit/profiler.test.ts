@@ -319,7 +319,8 @@ describe('Profiler', () => {
         const snapshot2 = globalProfiler.getAndResetMetrics();
         expect(snapshot2.counters.length).toBe(0);
         expect(snapshot2.timeMetrics.length).toBe(0);
-        // Gauges are persistent and not cleared by getAndResetMetrics
+        // reset() (called by getAndResetMetrics) clears gauges too.
+        expect(snapshot2.gauges.length).toBe(0);
       });
 
       it('resets TelemetryBuffer as well', () => {
@@ -349,10 +350,10 @@ describe('Profiler', () => {
         expect((globalProfiler as any).counters.size).toBe(0);
       });
 
-      it('does not clear gauges', () => {
+      it('clears gauges', () => {
         globalProfiler.gauge('temp', 72);
         globalProfiler.reset();
-        expect((globalProfiler as any).gauges.size).toBeGreaterThan(0);
+        expect((globalProfiler as any).gauges.size).toBe(0);
       });
 
       it('updates startTick to currentTick', () => {

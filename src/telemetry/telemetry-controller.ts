@@ -12,7 +12,7 @@
  */
 
 import { TelemetryFlags, TelemetryConfig } from '../types/index.d';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from './flags';
+import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys } from './flags';
 import { globalProfiler, setLatestWorkerTelemetry } from './profiler';
 
 // Cached flags - set once at initialization
@@ -80,7 +80,7 @@ export class TelemetryController {
     flags = applyEnvOverrides(flags);
 
     // Merge with config file settings (CLI has precedence)
-    flags = mergeConfigWithFlags(configTelemetry, flags);
+    flags = mergeConfigWithFlags(configTelemetry, flags, getExplicitFlagKeys());
 
     // Check for legacy verboseTelemetry config
     // If verboseTelemetry is true in config, enable telemetry
@@ -215,11 +215,26 @@ export class TelemetryController {
 
     const flags = this.getFlags();
 
-    // Gather worker telemetry if available
+    // Gather worker telemetry if available, then emit the report.
+    // When a worker pool is set, the gather is async — we must wait for it
+    // before calling globalProfiler.report() so worker stats are included.
+    // When no worker pool, emit synchronously to preserve sync tick() behavior.
     if (this.workerPoolRef && flags.profileLevel !== 'minimal') {
-      this.gatherWorkerTelemetry();
+        this.gatherWorkerTelemetry()
+          .then(() => this.emitReport(flags))
+          .catch((error) => {
+            console.warn('[Telemetry] Failed to gather worker snapshots:', error);
+            this.emitReport(flags);
+          });
+    } else {
+      this.emitReport(flags);
     }
+  }
 
+  /**
+   * Emit the profiler report and optional file output.
+   */
+  private emitReport(flags: TelemetryFlags): void {
     // Generate the report using the existing profiler
     globalProfiler.report(flags.reportInterval);
 
