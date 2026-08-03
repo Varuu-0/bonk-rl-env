@@ -107,8 +107,21 @@ temp/
 *.backup
 *.orig
 
+# Scratch / verification artifacts
+err-verify.txt
+drift-tmp/
+python/repro-hang.py
+
+# Bun lockfile (project uses npm; package-lock.json is the source of truth)
+bun.lock
+
 # Benchmark outputs
 benchmarks/results/
 benchmarks/_archived/
 *.csv
 maps/bonk_WDB__No_Mapshake__716916.json
+.kilo/Rules.md
+
+# Playwright MCP tool artifacts
+.playwright-mcp/
+.deobf/
