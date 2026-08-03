@@ -31,13 +31,15 @@ def run_throughput_benchmark(num_envs, max_steps=500000):
             if step % report_interval == 0 or step == max_steps:
                 elapsed = time.time() - start_time
                 sps = step / elapsed if elapsed > 0 else 0
+                env_sps = (step * num_envs) / elapsed if elapsed > 0 else 0
                 pct = (step / max_steps) * 100
-                print(f"  [N={num_envs}] {step}/{max_steps} steps ({pct:.0f}%) | SPS={sps:.0f} | Elapsed={elapsed:.2f}s")
+                print(f"  [N={num_envs}] {step}/{max_steps} steps ({pct:.0f}%) | SPS={sps:.0f} | Env-Steps/sec={env_sps:.0f} | Elapsed={elapsed:.2f}s")
 
         end_time = time.time()
         elapsed = end_time - start_time
         total_env_steps = max_steps * num_envs
         sps = max_steps / elapsed if elapsed > 0 else 0
+        env_sps = total_env_steps / elapsed if elapsed > 0 else 0
         spm = sps * 60
 
         env.close()
@@ -48,6 +50,7 @@ def run_throughput_benchmark(num_envs, max_steps=500000):
             "Total Env Steps": total_env_steps,
             "Duration (s)": round(elapsed, 4),
             "SPS": round(sps, 2),
+            "Env-Steps/sec": round(env_sps, 2),
             "SPM": round(spm, 2),
         }
     except Exception as e:
@@ -80,17 +83,17 @@ def main():
         res = run_throughput_benchmark(n, max_steps=max_steps)
         if res:
             results.append(res)
-            print(f"  N={n} => {res['SPS']:.2f} SPS, {res['SPM']:.2f} SPM, {res['Duration (s)']:.2f}s")
+            print(f"  N={n} => {res['SPS']:.2f} SPS, {res['Env-Steps/sec']:.2f} Env-Steps/sec, {res['SPM']:.2f} SPM, {res['Duration (s)']:.2f}s")
         print()
         time.sleep(cooldown)
 
     print("\n" + "=" * 75)
     print("Benchmark Results:")
-    print(f"{'N':>4} | {'Steps':>10} | {'Total Env Steps':>16} | {'Duration (s)':>12} | {'SPS':>12} | {'SPM':>12}")
-    print("-" * 75)
+    print(f"{'N':>4} | {'Steps':>10} | {'Total Env Steps':>16} | {'Duration (s)':>12} | {'SPS':>12} | {'Env-Steps/sec':>14} | {'SPM':>12}")
+    print("-" * 98)
     for r in results:
         print(
-            f"{r['N']:>4} | {r['Steps']:>10} | {r['Total Env Steps']:>16,} | {r['Duration (s)']:>12.4f} | {r['SPS']:>12.2f} | {r['SPM']:>12.2f}"
+            f"{r['N']:>4} | {r['Steps']:>10} | {r['Total Env Steps']:>16,} | {r['Duration (s)']:>12.4f} | {r['SPS']:>12.2f} | {r['Env-Steps/sec']:>14.2f} | {r['SPM']:>12.2f}"
         )
     print("=" * 75)
 

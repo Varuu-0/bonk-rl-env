@@ -49,17 +49,18 @@ socket.send_json({"command": "step", "actions": actions})
 t1 = time.time()
 send_ms = (t1 - t0) * 1000
 
-# 2b: recv_json
-msg = socket.recv_json()
+# 2b: recv (raw bytes over network)
+raw = socket.recv()
 t2 = time.time()
 recv_ms = (t2 - t1) * 1000
 
-# 2c: parse response
-data = msg["data"]
+# 2c: json.loads (actual JSON parsing)
+msg = json.loads(raw)
 t3 = time.time()
-parse_ms = (t3 - t2) * 1000
+json_parse_ms = (t3 - t2) * 1000
 
 # 2d: convert observations
+data = msg["data"]
 for d in data:
     obs = np.zeros(14, dtype=np.float32)
     obs[0] = d["observation"]["playerX"]
@@ -91,8 +92,8 @@ arrays_ms = (t5 - t4) * 1000
 
 total_ms = (t5 - t0) * 1000
 print(f"  send_json:       {send_ms:.2f} ms")
-print(f"  recv_json:       {recv_ms:.2f} ms  <-- NETWORK + TS PROCESSING")
-print(f"  JSON access:     {parse_ms:.2f} ms")
+print(f"  recv:            {recv_ms:.2f} ms  <-- NETWORK + TS PROCESSING")
+print(f"  json.loads:      {json_parse_ms:.2f} ms")
 print(f"  obs conversion:  {convert_ms:.2f} ms")
 print(f"  array building:  {arrays_ms:.2f} ms")
 print(f"  TOTAL:           {total_ms:.2f} ms ({1000/total_ms:.0f} SPS)")

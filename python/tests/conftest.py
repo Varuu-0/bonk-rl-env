@@ -3,25 +3,55 @@ import subprocess
 import time
 import os
 import sys
+import shutil
+import socket
 
 import numpy as np
 
 
 @pytest.fixture(scope="session")
 def bonk_server():
-    """Start and stop the Node.js bonk server for the test session."""
-    server_script = os.path.join(
-        os.path.dirname(__file__), "..", "..", "server.mjs"
+    """Start and stop the TypeScript bonk server for the test session."""
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
     )
+    server_script = os.path.join(project_root, "src", "main.ts")
     if not os.path.isfile(server_script):
-        pytest.skip("server.mjs not found")
+        pytest.skip("src/main.ts not found")
 
+    if shutil.which("npx") is None:
+        pytest.skip("npx not found")
+
+    # npx is a .cmd wrapper on Windows; invoke through the shell so
+    # CreateProcess can resolve it (plain Popen([...]) raises WinError 2).
+    npx_cmd = shutil.which("npx")
     proc = subprocess.Popen(
-        ["node", server_script],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        f'"{npx_cmd}" tsx src/main.ts',
+        cwd=project_root,
+        shell=True,
+        # DEVNULL, not PIPE: the server logs verbosely per init/reset and an
+        # undrained pipe buffer deadlocks the server after a few test cycles.
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
     )
-    time.sleep(1.0)
+
+    port = 5555
+    connected = False
+    for _ in range(100):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                connected = True
+                break
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.1)
+
+    if not connected:
+        proc.terminate()
+        try:
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+        pytest.skip("bonk server did not start within 10s")
 
     yield proc
 

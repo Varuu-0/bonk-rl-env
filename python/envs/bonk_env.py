@@ -50,6 +50,9 @@ class BonkVecEnv(VecEnv):
         if message.get("status") != "ok":
             raise RuntimeError(f"Error initializing environments: {message.get('error')}")
 
+        self._episode_returns = np.zeros(num_envs, dtype=np.float64)
+        self._episode_lengths = np.zeros(num_envs, dtype=np.int64)
+
     def _convert_obs(self, data):
         """Convert JSON observation data to numpy array.
         
@@ -100,6 +103,9 @@ class BonkVecEnv(VecEnv):
         if message.get("status") != "ok":
             raise RuntimeError(f"Error resetting environment: {message.get('error')}")
             
+        self._episode_returns[:] = 0.0
+        self._episode_lengths[:] = 0
+
         obs_data = message["data"]["observation"]
         obs_array = np.array([self._convert_obs(o) for o in obs_data])
         
@@ -141,7 +147,7 @@ class BonkVecEnv(VecEnv):
         truncated = []
         infos = []
         
-        for d in data:
+        for idx, d in enumerate(data):
             obs_list.append(self._convert_obs(d["observation"]))
             rewards.append(float(d["reward"]))
             
@@ -167,7 +173,7 @@ class BonkVecEnv(VecEnv):
                 # Determine terminated vs truncated based on tick count
                 is_done = bool(d.get("done", False))
                 tick = d.get("observation", {}).get("tick", 0)
-                max_ticks = d.get("max_ticks", 1000)
+                max_ticks = d.get("max_ticks", 900)
                 
                 # If done and at max ticks, it is truncated (not terminated)
                 is_terminated = is_done and tick < max_ticks
@@ -188,6 +194,17 @@ class BonkVecEnv(VecEnv):
                 "terminated": is_terminated,
                 "truncated": is_truncated,
             }
+
+            self._episode_returns[idx] += float(d["reward"])
+            self._episode_lengths[idx] += 1
+
+            if is_terminated or is_truncated:
+                info["episode"] = {
+                    "r": float(self._episode_returns[idx]),
+                    "l": int(self._episode_lengths[idx]),
+                }
+                self._episode_returns[idx] = 0.0
+                self._episode_lengths[idx] = 0
             
             infos.append(info)
         
@@ -201,6 +218,12 @@ class BonkVecEnv(VecEnv):
 
     def close(self):
         """Close the environment and cleanup resources."""
+        try:
+            self.socket.setsockopt(zmq.RCVTIMEO, 500)
+            self.socket.send_json({"command": "close"})
+            self.socket.recv_json()
+        except Exception:
+            pass
         self.socket.close()
         self.context.term()
 

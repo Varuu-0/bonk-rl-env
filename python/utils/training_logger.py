@@ -11,6 +11,7 @@ class TrainingLogger:
         self.f = open(self.filepath, 'w', newline='')
         self.writer = csv.writer(self.f)
         self.writer.writerow(["episode", "tick", "playerX", "playerY", "opX", "opY", "reward", "done"])
+        self.f.flush()
             
     def log_step(self, episode, tick, obs, reward, done):
         """
@@ -24,6 +25,20 @@ class TrainingLogger:
         opY = obs[8]
         
         self.writer.writerow([episode, tick, playerX, playerY, opX, opY, reward, done])
+        self.f.flush()
         
     def close(self):
-        self.f.close()
+        if not self.f.closed:
+            self.f.close()
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.close()
+
+    def __del__(self):
+        try:
+            self.close()
+        except Exception:
+            pass
