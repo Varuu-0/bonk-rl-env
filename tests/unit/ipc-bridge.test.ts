@@ -176,20 +176,22 @@ describe('IpcBridge handleRequest', () => {
       expect(response.error).toContain('Invalid actions');
     });
 
-    it('handles step without init returns empty ok', async () => {
+    it('handles step before init as error', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0] }));
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
-      expect(response.status).toBe('ok');
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Worker pool not initialized');
     });
 
-    it('handles reset without init returns empty ok', async () => {
+    it('handles reset before init as error', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'reset' }));
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
-      expect(response.status).toBe('ok');
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Worker pool not initialized');
     });
 
     it('handles full init-reset-step lifecycle', async () => {

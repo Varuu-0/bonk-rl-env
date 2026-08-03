@@ -5,6 +5,7 @@ import { globalProfiler } from '../telemetry/profiler';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
+import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
 
 /**
  * Observation data structure extracted from shared memory
@@ -29,7 +30,11 @@ interface SharedObservation {
 export class WorkerPool {
     private workers: Worker[] = [];
     private workerEnvs: number[] = [];
-    private callbacks: Map<number, { resolve: Function, reject: Function }> = new Map();
+    private callbacks: Map<number, {
+        resolve: Function;
+        reject: Function;
+        timeout: ReturnType<typeof setTimeout>;
+    }> = new Map();
     private msgId = 0;
 
     // Shared memory state
@@ -44,6 +49,8 @@ export class WorkerPool {
 
     // Pre-allocated observation templates for zero-GC extraction
     private _obsPool: any[] = [];
+    // Terminal observations must not reuse the live-observation templates.
+    private _terminalObsPool: any[] = [];
     private _obsPoolSize: number = 0;
 
     // Pre-allocated finished buffer for step/reset
@@ -64,8 +71,9 @@ export class WorkerPool {
 
     private initObsPool(totalEnvs: number): void {
         this._obsPool = [];
+        this._terminalObsPool = [];
         for (let i = 0; i < totalEnvs; i++) {
-            this._obsPool.push({
+            const createTemplate = () => ({
                 playerX: 0,
                 playerY: 0,
                 playerVelX: 0,
@@ -81,14 +89,18 @@ export class WorkerPool {
                     isHeavy: false,
                     alive: false,
                 }],
+                arenaHalfWidth: ARENA_HALF_WIDTH * SCALE,
+                arenaHalfHeight: ARENA_HALF_HEIGHT * SCALE,
                 tick: 0,
             });
+            this._obsPool.push(createTemplate());
+            this._terminalObsPool.push(createTemplate());
         }
         this._obsPoolSize = totalEnvs;
     }
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
-        this.close(); // Clean up existing if re-initialized
+        await this.close(); // Clean up existing if re-initialized
         this.workers = [];
         this.workerEnvs = [];
         this.sharedMemManagers = [];
@@ -126,6 +138,7 @@ export class WorkerPool {
                     const cb = this.callbacks.get(msg.id);
                     if (cb) {
                         this.callbacks.delete(msg.id);
+                        clearTimeout(cb.timeout);
                         if (msg.status === 'error') cb.reject(new Error(msg.error));
                         else cb.resolve(msg.data);
                     }
@@ -188,6 +201,7 @@ export class WorkerPool {
                 reward: 0,
                 done: false,
                 truncated: false,
+                terminated: false,
                 info: { tick: 0 }
             });
         }
@@ -214,7 +228,6 @@ export class WorkerPool {
     private sendMessage(worker: Worker, msg: any): Promise<any> {
         return new Promise((resolve, reject) => {
             const id = this.msgId++;
-            this.callbacks.set(id, { resolve, reject });
             // Set a timeout to reject if no response
             const timeout = setTimeout(() => {
                 if (this.callbacks.has(id)) {
@@ -223,6 +236,7 @@ export class WorkerPool {
                     reject(new Error(`Message ${id} timed out`));
                 }
             }, 30000);  // 30 second timeout for init/other messages
+            this.callbacks.set(id, { resolve, reject, timeout });
             worker.postMessage({ id, ...msg });
         });
     }
@@ -238,7 +252,15 @@ export class WorkerPool {
 
             for (let i = 0; i < this.workers.length; i++) {
                 const wEnvs = this.workerEnvs[i];
-                const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : new Array(wEnvs).fill(0);
+                const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs).map(s => {
+                    // SAB transport encodes "no seed" as 0 and real seeds as
+                    // seed+1 in a Uint32Array. Range-check here so a wrapping
+                    // seed can never silently collide with the sentinel.
+                    if (!Number.isInteger(s) || s < 0 || s > 0xFFFFFFFE) {
+                        throw new Error(`Seed ${s} out of supported range [0, 4294967294] for shared-memory reset`);
+                    }
+                    return s + 1;
+                }) : new Array(wEnvs).fill(0);
                 seedIdx += wEnvs;
 
                 const shm = this.sharedMemManagers[i]!;
@@ -287,18 +309,21 @@ export class WorkerPool {
 
             // 3. Extract observations
             const observations: any[] = [];
+            let globalEnvIdx = 0;
             for (let i = 0; i < this.workers.length; i++) {
                 const wEnvs = this.workerEnvs[i];
                 try {
                     const res = this.sharedMemManagers[i]!.readResults();
                     for (let j = 0; j < wEnvs; j++) {
-                        observations.push(this.extractObservation(res.observations, j));
+                        observations.push(this.extractObservation(res.observations, j, globalEnvIdx));
+                        globalEnvIdx++;
                     }
                 } catch (e: any) {
                     console.warn(`[WorkerPool] reset: worker ${i} failed to read results:`, e.message);
                     // Push zeroed observations so the array length stays consistent
                     for (let j = 0; j < wEnvs; j++) {
                         observations.push(null);
+                        globalEnvIdx++;
                     }
                 }
             }
@@ -441,18 +466,32 @@ export class WorkerPool {
             const dones = rawResults.dones;
             const truncated = rawResults.truncated;
             const ticks = rawResults.ticks;
+            const terminalObs = rawResults.terminalObservations;
+            const hasTerminalObs = rawResults.hasTerminalObs;
 
             // Extract results for each environment in this worker
             for (let j = 0; j < wEnvs; j++) {
                 const resultIdx = actionIdx + j;
                 const resultObj = this._resultPool[resultIdx];
-                resultObj.observation = this.extractObservation(obs, j);
+                const done = dones[j] === 1;
+                const trunc = truncated[j] === 1;
+                resultObj.observation = this.extractObservation(obs, j, resultIdx);
                 resultObj.reward = rewards[j];
-                resultObj.done = dones[j] === 1;
-                resultObj.truncated = truncated[j] === 1;
+                resultObj.done = done;
+                resultObj.truncated = trunc;
+                resultObj.terminated = done && !trunc;
                 resultObj.info.tick = ticks[j];
+                resultObj.info.terminated = done && !trunc;
+                if (hasTerminalObs[j] === 1) {
+                    resultObj.info.terminal_observation = this.extractObservation(
+                        terminalObs, j, resultIdx, this._terminalObsPool,
+                    );
+                } else {
+                    resultObj.info.terminal_observation = undefined;
+                }
                 this._convertedResults.push(resultObj);
             }
+            actionIdx += wEnvs;
         }
 
         return this._convertedResults;
@@ -501,7 +540,18 @@ export class WorkerPool {
             globalProfiler.gauge('Sync Gap (ms)', gapMs);
         }
 
-        return results.flat();
+        // Normalize termination flags in place (no per-result spreads) so
+        // message mode reports the same values as the SAB path: a truncation
+        // is never a natural termination, in both modes.
+        const flat = results.flat();
+        for (const result of flat) {
+            const terminated = Boolean(result.done && !result.truncated);
+            result.terminated = result.terminated ?? terminated;
+            if (result.info) {
+                result.info.terminated = terminated;
+            }
+        }
+        return flat;
     }
 
     /**
@@ -525,11 +575,12 @@ export class WorkerPool {
     /**
      * Extracts observation data from shared memory Float32Array
      * @param obs Float32Array containing all observations
-     * @param idx Environment index
+     * @param sabIdx Worker-local index for SAB float offset
+     * @param poolIdx Global env index for _obsPool template
      */
-    private extractObservation(obs: Float32Array, idx: number): any {
-        const offset = idx * 14;
-        const template = this._obsPool[idx];
+    private extractObservation(obs: Float32Array, sabIdx: number, poolIdx: number, pool = this._obsPool): any {
+        const offset = sabIdx * 16;
+        const template = pool[poolIdx];
         if (!template) {
             return {
                 playerX: obs[offset + 0],
@@ -547,7 +598,9 @@ export class WorkerPool {
                     isHeavy: obs[offset + 11] === 1,
                     alive: obs[offset + 12] === 1,
                 }],
-                tick: obs[offset + 13],
+                arenaHalfWidth: obs[offset + 13],
+                arenaHalfHeight: obs[offset + 14],
+                tick: obs[offset + 15],
             };
         }
 
@@ -567,7 +620,9 @@ export class WorkerPool {
         opp.isHeavy = obs[offset + 11] === 1;
         opp.alive = obs[offset + 12] === 1;
 
-        template.tick = obs[offset + 13];
+        template.arenaHalfWidth = obs[offset + 13];
+        template.arenaHalfHeight = obs[offset + 14];
+        template.tick = obs[offset + 15];
 
         return template;
     }
@@ -585,10 +640,15 @@ export class WorkerPool {
         return snapshots as BigUint64Array[];
     }
 
-    close() {
-        for (const worker of this.workers) {
-            worker.terminate();
+    async close() {
+        for (const callback of this.callbacks.values()) {
+            clearTimeout(callback.timeout);
+            callback.reject(new Error('Worker pool closed'));
         }
+        this.callbacks.clear();
+
+        const terminatePromises = this.workers.map(w => w.terminate());
+        await Promise.all(terminatePromises);
 
         // Properly dispose of SharedMemoryManager instances to prevent memory leaks
         for (const shm of this.sharedMemManagers) {
@@ -601,6 +661,8 @@ export class WorkerPool {
         this.workerEnvs = [];
         this.sharedMemManagers = [];
         this.actionBufferPool = [];
+        this._obsPool = [];
+        this._terminalObsPool = [];
     }
 
     /**

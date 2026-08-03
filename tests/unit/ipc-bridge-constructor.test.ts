@@ -232,6 +232,9 @@ describe('IpcBridge close() (lines 159-173)', () => {
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
   async function simulateSteps(bridge: IpcBridge, count: number) {
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    // B9 fix: step/reset before init now correctly return an error, so the
+    // bridge must be initialized before any steps can be counted.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     for (let i = 0; i < count; i++) {
       await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
     }

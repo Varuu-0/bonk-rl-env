@@ -1,7 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
-import { getConfig, type AppConfig } from '../config/config-loader';
+import { getConfig, type AppConfig, deepMerge } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -12,6 +12,8 @@ export class IpcBridge {
     private port: number;
     private stepCount: number = 0;
     private _closed: boolean = false;
+    private _initialized: boolean = false;
+    private _shouldClose: boolean = false;
 
     constructor(config?: Partial<AppConfig>) {
         this.port = (config as any)?.server?.port ?? getConfig().server.port;
@@ -60,27 +62,34 @@ export class IpcBridge {
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
-                    const mergedConfig = { ...envDefaults, ...(payload.config || {}) };
+                    const mergedConfig = deepMerge(envDefaults as any, payload.config || {});
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
                     await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                    this._initialized = true;
                     response = { status: "ok" };
                 }
             } else if (command === "reset") {
-                console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
-                const obs = await this.pool.reset(payload.seeds);
-                console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
-                response = {
-                    status: "ok",
-                    data: {
-                        observation: obs
-                    }
-                };
+                if (!this._initialized) {
+                    response = { status: "error", error: "Worker pool not initialized" };
+                } else {
+                    console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
+                    const obs = await this.pool.reset(payload.seeds);
+                    console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
+                    response = {
+                        status: "ok",
+                        data: {
+                            observation: obs
+                        }
+                    };
+                }
             } else if (command === "step") {
                 const actions = payload.actions;
                 if (!Array.isArray(actions)) {
                     response = { status: "error", error: "Invalid actions: must be an array" };
                 } else if (actions.length === 0) {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
+                } else if (!this._initialized) {
+                    response = { status: "error", error: "Worker pool not initialized" };
                 } else {
                     const results = await this.pool.step(actions);
 
@@ -103,6 +112,19 @@ export class IpcBridge {
                         data: results
                     };
                 }
+            } else if (command === "close") {
+                if (payload.shutdown === true) {
+                    // Full server shutdown: close the Router after replying.
+                    response = { status: "ok" };
+                    this._shouldClose = true;
+                } else {
+                    // Session close (default): free the client's env state but
+                    // keep the server listening so other envs/tests on the same
+                    // server keep working.
+                    await this.pool.close();
+                    this._initialized = false;
+                    response = { status: "ok" };
+                }
             } else {
                 response = { status: "error", error: `Unknown command: ${command}` };
             }
@@ -116,6 +138,11 @@ export class IpcBridge {
         } catch (sendError) {
             console.error("[IPC] Error sending response:", sendError);
         }
+
+        if (this._shouldClose) {
+            this._shouldClose = false;
+            await this.close();
+        }
     }
 
     /**
@@ -124,6 +151,7 @@ export class IpcBridge {
      */
     async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
         await this.pool.init(numEnvs, config, useSharedMemory);
+        this._initialized = true;
     }
 
     /**
@@ -161,6 +189,7 @@ export class IpcBridge {
             return;
         }
         this._closed = true;
+        this._initialized = false;
         
         // Close the socket to break out of the for await loop
         try {
@@ -169,6 +198,6 @@ export class IpcBridge {
             // Ignore close errors
         }
         
-        this.pool.close();
+        await this.pool.close();
     }
 }

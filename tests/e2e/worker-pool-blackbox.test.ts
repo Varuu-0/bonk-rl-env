@@ -113,11 +113,17 @@ describe('WorkerPool black-box', () => {
       }
     });
 
-    it('observations are arrays of 14 numbers', async () => {
+    it('observations are structured objects with expected fields', async () => {
       const results = await pool.step([0, 0, 0]);
       for (const r of results) {
-        expect(Array.isArray(r.observation)).toBe(true);
-        expect(r.observation).toHaveLength(14);
+        expect(r.observation).not.toBeNull();
+        expect(typeof r.observation).toBe('object');
+        expect(Array.isArray(r.observation)).toBe(false);
+        expect(r.observation).toHaveProperty('playerX');
+        expect(r.observation).toHaveProperty('playerY');
+        expect(r.observation).toHaveProperty('opponents');
+        expect(Array.isArray(r.observation.opponents)).toBe(true);
+        expect(r.observation).toHaveProperty('tick');
       }
     });
 

@@ -161,13 +161,13 @@ describe('SharedMemoryManager', () => {
     });
 
     it('writeObservation for multiple envs', () => {
-      const obs0 = new Float32Array(14).fill(1.0);
-      const obs1 = new Float32Array(14).fill(2.0);
+      const obs0 = new Float32Array(16).fill(1.0);
+      const obs1 = new Float32Array(16).fill(2.0);
       shm.writeObservation(0, obs0);
       shm.writeObservation(1, obs1);
       const results = shm.readResults();
       expect(results.observations[0]).toBeCloseTo(1.0);
-      expect(results.observations[14]).toBeCloseTo(2.0);
+      expect(results.observations[16]).toBeCloseTo(2.0);
     });
   });
 
@@ -404,7 +404,7 @@ describe('SharedMemoryManager', () => {
   describe('multiple envs', () => {
     it('write/read for env 0, 1, 2, 3', () => {
       for (let i = 0; i < 4; i++) {
-        shm.writeObservation(i, new Float32Array(14).fill(i + 1));
+        shm.writeObservation(i, new Float32Array(16).fill(i + 1));
         shm.writeReward(i, i * 0.5);
         shm.writeDone(i, i % 2);
         shm.writeTruncated(i, (i + 1) % 2);
@@ -412,7 +412,7 @@ describe('SharedMemoryManager', () => {
       }
       const results = shm.readResults();
       for (let i = 0; i < 4; i++) {
-        expect(results.observations[i * 14]).toBeCloseTo(i + 1);
+        expect(results.observations[i * 16]).toBeCloseTo(i + 1);
         expect(results.rewards[i]).toBeCloseTo(i * 0.5);
         expect(results.dones[i]).toBe(i % 2);
         expect(results.truncated[i]).toBe((i + 1) % 2);
@@ -433,7 +433,7 @@ describe('SharedMemoryManager', () => {
   describe('reset', () => {
     it('clears all data', () => {
       shm.writeActions(new Uint8Array([1, 2, 3, 4]));
-      shm.writeObservation(0, new Float32Array(14).fill(99));
+      shm.writeObservation(0, new Float32Array(16).fill(99));
       shm.writeReward(0, 1.5);
       shm.writeDone(0, 1);
       shm.writeTruncated(0, 1);
@@ -599,6 +599,32 @@ describe('IpcBridge lifecycle', () => {
       expect(response.error).toContain('Unknown command');
     });
 
+    it('session close keeps the server listening (not a full shutdown)', async () => {
+      const bridge = createBridge(portCounter++);
+      const { sentMessages } = captureSend(bridge);
+
+      // Client closes its session after work — mirrors BonkVecEnv.close().
+      await callHandleRequest(bridge, JSON.stringify({ command: 'close' }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      expect(bridge.isClosed()).toBe(false); // Router still serving
+
+      // A new session can init and step on the same bridge.
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 2, config: {} }));
+      expect(JSON.parse(sentMessages[1]).status).toBe('ok');
+      await callHandleRequest(bridge, JSON.stringify({ command: 'reset', seeds: [1, 2] }));
+      expect(JSON.parse(sentMessages[2]).status).toBe('ok');
+      await bridge.close(); // cleanup worker threads spawned by the real init
+    });
+
+    it('shutdown:true performs the full server shutdown', async () => {
+      const bridge = createBridge(portCounter++);
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'close', shutdown: true }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      await new Promise(r => setTimeout(r, 25));
+      expect(bridge.isClosed()).toBe(true);
+    });
+
     it('handles init with missing numEnvs', async () => {
       const bridge = createBridge(portCounter++);
       const { sentMessages } = captureSend(bridge);
@@ -639,22 +665,24 @@ describe('IpcBridge lifecycle', () => {
       expect(response.error).toContain('Invalid numEnvs');
     });
 
-    it('handles reset before init', async () => {
+    it('handles reset before init as error', async () => {
       const bridge = createBridge(portCounter++);
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'reset' }));
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
-      expect(response.status).toBe('ok');
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Worker pool not initialized');
     });
 
-    it('handles step before init', async () => {
+    it('handles step before init as error', async () => {
       const bridge = createBridge(portCounter++);
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0] }));
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
-      expect(response.status).toBe('ok');
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Worker pool not initialized');
     });
 
     it('handles step with non-array actions', async () => {
