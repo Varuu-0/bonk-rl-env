@@ -53,7 +53,7 @@ def draw_map(ax, map_data):
 
 def main():
     parser = argparse.ArgumentParser(description="Bonk.io Headless RL Visualizer")
-    parser.add_argument("--map", type=str, default="../../maps/bonk_WDB__No_Mapshake__716916.json", help="Path to map JSON")
+    parser.add_argument("--map", type=str, default="../../maps/bonk_Simple_1v1_123.json", help="Path to map JSON")
     parser.add_argument("--log", type=str, default="logs/trajectory.csv", help="Path to csv trajectory containing playerX, playerY")
     parser.add_argument("--save", type=str, default="trajectory.gif", help="Path to save the generated animation")
     args = parser.parse_args()
