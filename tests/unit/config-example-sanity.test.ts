@@ -16,9 +16,8 @@ describe('config.example.json verified physics values', () => {
     expect(config.physics.gravityY).toBe(20.0);
   });
 
-  it('solverIterations is 2 and positionIterations is 6', () => {
+  it('solverIterations is 2', () => {
     expect(config.physics.solverIterations).toBe(2);
-    expect(config.physics.positionIterations).toBe(6);
   });
 
   it('player friction is 0 and restitution is 0.8', () => {
@@ -30,8 +29,9 @@ describe('config.example.json verified physics values', () => {
     expect(config.player.moveForce).toBe(12.0);
   });
 
-  it('grapple maxDistance is 500 map units', () => {
-    expect(config.grapple.maxDistance).toBe(500.0);
+  it('documents grapple maxDistance as an inert compatibility field', () => {
+    expect(config.grapple.maxDistance).toBe(10.0);
+    expect(config.grapple._doc_maxDistance).toContain('not consumed');
   });
 
   it('heavyMassMultiplier is a force multiplier of 0.7 (not mass)', () => {

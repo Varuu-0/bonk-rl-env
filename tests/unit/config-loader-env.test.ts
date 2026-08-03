@@ -147,6 +147,13 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.enabled).toBe(false);
         });
 
+        it('invalid MANIFOLD_TELEMETRY does not override config.json', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+            process.env.MANIFOLD_TELEMETRY = 'maybe';
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.enabled).toBe(true);
+        });
+
         it('MANIFOLD_TELEMETRY_OUTPUT sets output format', () => {
             process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
             const cfg = loadConfig(testDir);
@@ -855,11 +862,11 @@ describe('config-loader env vars and CLI', () => {
 
             expect(example.physics.gravityY).toBe(20);
             expect(example.physics.solverIterations).toBe(2);
-            expect(example.physics.positionIterations).toBe(6);
+            expect(example.physics.positionIterations).toBeUndefined();
             expect(example.player.friction).toBe(0);
             expect(example.player.restitution).toBe(0.8);
             expect(example.player.moveForce).toBe(12);
-            expect(example.grapple.maxDistance).toBe(500);
+            expect(example.grapple.maxDistance).toBe(10);
         });
 
         it('returns the default config object', () => {

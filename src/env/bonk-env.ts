@@ -81,11 +81,18 @@ export class BonkEnv {
         
         // Initialize the worker pool with the configured number of envs
         const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
-        await this.pool.init(
-            this.config.numEnvs ?? 1,
-            getConfig().environment,
-            useSharedMemory
-        );
+        try {
+            await this.pool.init(
+                this.config.numEnvs ?? 1,
+                getConfig().environment,
+                useSharedMemory
+            );
+        } catch (error) {
+            // init() can spawn workers before rejecting. Always release both
+            // the partially created pool and the port reserved in the constructor.
+            await this.stop();
+            throw error;
+        }
         
         this.isRunning = true;
         console.log(`[BonkEnv:${this.id}] Started successfully`);
@@ -96,7 +103,10 @@ export class BonkEnv {
      * @returns Promise that resolves when the environment is stopped
      */
     async stop(): Promise<void> {
-        if (!this.isRunning || !this.pool) {
+        if (!this.pool) {
+            // Releasing is idempotent and covers a start failure before a
+            // worker pool was fully initialized.
+            this.portManager.release(this.port);
             console.log(`[BonkEnv:${this.id}] Already stopped`);
             return;
         }

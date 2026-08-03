@@ -165,6 +165,11 @@ export class Profiler {
         this.gauges.set(label, value);
     }
 
+    /** Clear current-value gauges when a caller explicitly needs a fresh set. */
+    clearGauges() {
+        this.gauges.clear();
+    }
+
     /**
      * Record current process memory usage.
      */
@@ -246,7 +251,6 @@ export class Profiler {
     reset() {
         this.timeMetrics.clear();
         this.counters.clear();
-        this.gauges.clear();
         this.startTick = this.currentTick;
 
         // Also reset the global telemetry accumulator.

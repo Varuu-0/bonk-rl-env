@@ -301,14 +301,13 @@ describe('CollisionFiltering', () => {
         collides: { g1: false, g2: true, g3: false, g4: false },
       });
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, 0, 0);
-      for (let i = 0; i < 8; i++) {
+      for (let i = 0; i < 20; i++) {
         engine.applyInput(0, RIGHT_INPUT);
-        engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
       }
       const p0 = engine.getPlayerState(0);
-      expect(p0.x < 35).toBe(true);
+      // A broken g1 filter lets the disc pass x=35 within this interval.
+      expect(p0.x).toBeLessThan(20);
     });
 
     it('player 1 passes through g1 wall at x=30', () => {
@@ -333,10 +332,8 @@ describe('CollisionFiltering', () => {
         static: true,
         collides: { g1: false, g2: true, g3: false, g4: false },
       });
-      engine.addPlayer(0, 0, 0);
       engine.addPlayer(1, 0, 0);
       for (let i = 0; i < 12; i++) {
-        engine.applyInput(0, RIGHT_INPUT);
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
       }
@@ -366,15 +363,14 @@ describe('CollisionFiltering', () => {
         static: true,
         collides: { g1: false, g2: true, g3: false, g4: false },
       });
-      engine.addPlayer(0, 0, 0);
       engine.addPlayer(1, 40, 0);
-      for (let i = 0; i < 8; i++) {
-        engine.applyInput(0, RIGHT_INPUT);
+      for (let i = 0; i < 20; i++) {
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
       }
       const p1 = engine.getPlayerState(1);
-      expect(p1.x < 75).toBe(true);
+      // A broken g2 filter lets the disc move well beyond the wall at x=70.
+      expect(p1.x).toBeLessThan(60);
     });
   });
 

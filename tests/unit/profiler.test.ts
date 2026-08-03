@@ -16,6 +16,7 @@ describe('Profiler', () => {
       TelemetryBuffer[i] = BigInt(0);
     }
     globalProfiler.reset();
+    globalProfiler.clearGauges();
     setLatestWorkerTelemetry(null);
   });
 
@@ -319,8 +320,8 @@ describe('Profiler', () => {
         const snapshot2 = globalProfiler.getAndResetMetrics();
         expect(snapshot2.counters.length).toBe(0);
         expect(snapshot2.timeMetrics.length).toBe(0);
-        // reset() (called by getAndResetMetrics) clears gauges too.
-        expect(snapshot2.gauges.length).toBe(0);
+        // Gauges are current values, so reporting-window resets preserve them.
+        expect(snapshot2.gauges).toEqual([['fps', 60]]);
       });
 
       it('resets TelemetryBuffer as well', () => {
@@ -350,10 +351,10 @@ describe('Profiler', () => {
         expect((globalProfiler as any).counters.size).toBe(0);
       });
 
-      it('clears gauges', () => {
+      it('preserves gauges across reporting windows', () => {
         globalProfiler.gauge('temp', 72);
         globalProfiler.reset();
-        expect((globalProfiler as any).gauges.size).toBe(0);
+        expect((globalProfiler as any).gauges.get('temp')).toBe(72);
       });
 
       it('updates startTick to currentTick', () => {

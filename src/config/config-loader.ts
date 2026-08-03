@@ -27,7 +27,6 @@ export interface ServerConfig {
 export interface PhysicsConfig {
     ticksPerSecond: number;
     solverIterations: number;
-    positionIterations: number;
     scale: number;
     gravityX: number;
     gravityY: number;
@@ -166,7 +165,6 @@ const DEFAULTS: AppConfig = {
     physics: {
         ticksPerSecond: 30,
         solverIterations: 2,
-        positionIterations: 6,
         scale: 30.0,
         gravityX: 0.0,
         gravityY: 20.0,
@@ -338,7 +336,11 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     // Telemetry
     if (env.MANIFOLD_TELEMETRY !== undefined) {
         const v = env.MANIFOLD_TELEMETRY.toLowerCase();
-        config.telemetry.enabled = v === 'true' || v === '1' || v === 'yes';
+        if (v === 'true' || v === '1' || v === 'yes') {
+            config.telemetry.enabled = true;
+        } else if (v === 'false' || v === '0' || v === 'no') {
+            config.telemetry.enabled = false;
+        }
     }
     if (env.MANIFOLD_TELEMETRY_OUTPUT !== undefined) {
         const v = env.MANIFOLD_TELEMETRY_OUTPUT;
@@ -367,12 +369,6 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (env.USE_SHARED_MEMORY !== undefined) {
         const v = env.USE_SHARED_MEMORY.toLowerCase();
         config.workerPool.useSharedMemory = v !== 'false' && v !== '0' && v !== 'no';
-    }
-
-    // Physics
-    if (env.POSITION_ITERATIONS !== undefined) {
-        const v = parseInt(env.POSITION_ITERATIONS, 10);
-        if (!isNaN(v) && v >= 0) config.physics.positionIterations = v;
     }
 
     // Environment
@@ -477,16 +473,6 @@ function parseCliFlags(config: AppConfig): AppConfig {
 
             case '--no-shared-mem':
                 config.workerPool.useSharedMemory = false;
-                break;
-
-            case '--position-iterations':
-                if (next) {
-                    const v = parseInt(next, 10);
-                    if (!isNaN(v) && v >= 0) {
-                        config.physics.positionIterations = v;
-                        i++;
-                    }
-                }
                 break;
 
             case '--seed':
