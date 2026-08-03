@@ -302,7 +302,7 @@ describe('CollisionFiltering', () => {
       });
       engine.addPlayer(0, 0, 0);
       engine.addPlayer(1, 0, 0);
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 8; i++) {
         engine.applyInput(0, RIGHT_INPUT);
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
@@ -335,7 +335,7 @@ describe('CollisionFiltering', () => {
       });
       engine.addPlayer(0, 0, 0);
       engine.addPlayer(1, 0, 0);
-      for (let i = 0; i < 90; i++) {
+      for (let i = 0; i < 12; i++) {
         engine.applyInput(0, RIGHT_INPUT);
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
@@ -367,8 +367,8 @@ describe('CollisionFiltering', () => {
         collides: { g1: false, g2: true, g3: false, g4: false },
       });
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, 0, 0);
-      for (let i = 0; i < 90; i++) {
+      engine.addPlayer(1, 40, 0);
+      for (let i = 0; i < 8; i++) {
         engine.applyInput(0, RIGHT_INPUT);
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();

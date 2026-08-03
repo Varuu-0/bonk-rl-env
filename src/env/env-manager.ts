@@ -52,7 +52,12 @@ export class EnvManager {
         };
         
         const env = new BonkEnv(envConfig);
-        await env.start();
+        try {
+            await env.start();
+        } catch (error) {
+            await env.stop();
+            throw error;
+        }
         this.environments.set(env.id, env);
         
         console.log(`[EnvManager] Created environment ${env.id} on port ${env.port}`);

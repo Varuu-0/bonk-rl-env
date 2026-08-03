@@ -8,7 +8,7 @@
  *   - NO real-time clock. tick() is called manually by the RL loop.
  *   - Each tick() advances the world by exactly 1/30th of a second (30 TPS).
  *   - Player bodies are circles with configurable radius/density.
- *   - "Heavy" state doubles mass and applies downward force.
+ *   - "Heavy" state reduces player input force without changing mass.
  */
 
 // @ts-ignore — box2d has no type declarations
@@ -24,9 +24,10 @@ const {
   b2BodyDef,
   b2CircleDef,
   b2PolygonDef,
-  b2MassData,
   b2Body,
   b2DistanceJointDef,
+  b2RevoluteJointDef,
+  b2PrismaticJointDef,
   b2ContactListener,
   b2FilterData,
 } = box2d;
@@ -103,31 +104,38 @@ const {
 export const TPS = 30;
 export const DT = 1 / TPS;
 
-/** Box2D solver iterations per step (matches bonk defaults) */
-export const SOLVER_ITERATIONS = 5;
+/** Bonk's default low-quality solver configuration. */
+export const VELOCITY_ITERATIONS = 2;
+export const POSITION_ITERATIONS = 6;
 
-/** Physics scale: pixels → metres (bonk uses ~30px per metre) */
+/** Conversion used by the bundled Box2D JS port for exported map coordinates. */
 export const SCALE = 30;
 
 /** Gravity in m/s² (bonk.io default) */
 export const GRAVITY_X = 0;
-export const GRAVITY_Y = 10;
+export const GRAVITY_Y = 20;
 
 /** Default player circle radius in metres */
-export const PLAYER_RADIUS = 0.5;
+export const DEFAULT_PPM = 12;
 
 /** Default player density */
 export const PLAYER_DENSITY = 1.0;
 
-/** Heavy-state mass multiplier */
-export const HEAVY_MASS_MULTIPLIER = 3.0; // triples mass
+/** Heavy/action reduces applied movement force; it does not change disc mass. */
+export const HEAVY_FORCE_MULTIPLIER = 0.7;
 
 /** Arena bounds (in metres). Players outside these are considered dead. */
 export const ARENA_HALF_WIDTH = 25;
 export const ARENA_HALF_HEIGHT = 20;
 
-/** Movement force magnitude (Newtons applied per input direction) */
-export const MOVE_FORCE = 8.0;
+/** Bonk's default movement force before scale-ratio and balance modifiers. */
+export const MOVE_FORCE = 12.0;
+
+/** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
+export const OUT_OF_BOUNDS_DISTANCE = 850;
+
+/** Verified last-hit timer (`lht`): 120 ticks = 4 seconds at 30 TPS. */
+export const LAST_HIT_TIMER_TICKS = 120;
 
 // ─── Types ───────────────────────────────────────────────────────────
 
@@ -140,6 +148,7 @@ export interface PlayerState {
   angularVel: number;
   isHeavy: boolean;
   alive: boolean;
+  deathType: number;
 }
 
 export interface PlayerInput {
@@ -165,7 +174,10 @@ export interface MapBodyDef {
   restitution?: number;
   angle?: number;
   isLethal?: boolean;
+  /** Map passthrough only — no engine behavior reads this; kept for map-data fidelity, not a mechanic. */
   grappleMultiplier?: number;
+  frequencyHz?: number;
+  dampingRatio?: number;
   noPhysics?: boolean;           // When true, body should be a sensor (no collision response)
   noGrapple?: boolean;           // When true, cannot be grappled
   innerGrapple?: boolean;        // Inner grapple behavior
@@ -194,7 +206,7 @@ export interface MapDef {
   name: string;
   spawnPoints: MapSpawnPoints;
   bodies: MapBodyDef[];
-  capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string }>;
+  capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
   joints?: Array<{ type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number }; length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }>;
   physics?: { ppm?: number; bounds?: { width: number; height: number } };
 }
@@ -215,18 +227,37 @@ export class PhysicsEngine {
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
+  private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
+  private playerDeathType: Map<number, number> = new Map();
+  private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> = new Map();
+  private capZoneTouches: Array<{ zoneIndex: number; playerId: number; team: string }> = [];
+  /** True when the game has teams enabled (native game setting `tea`). */
+  private teamsEnabled: boolean = false;
+  /** True for the native no-collision physics mode (`nc`). */
+  private noCollide: boolean = false;
+  /** Disc IDs whose grapple joint must be destroyed after this step (native swingCollideDestroyEvents). */
+  private pendingSwingDestroy: Set<number> = new Set();
+  /** Native lhid: last disc that touched each player. */
+  private lastHitBy: Map<number, number> = new Map();
+  /** Native lht: remaining attribution ticks (starts at 120 = 4s at 30 TPS). */
+  private lastHitTicks: Map<number, number> = new Map();
+  /** Cached squared OOB radius so tick() avoids per-player Math.sqrt. */
+  private oobRadiusSquared: number = Math.pow(OUT_OF_BOUNDS_DISTANCE / SCALE, 2);
+  /** Reused by getArenaBounds so the zero-GC observation path allocates nothing per step. */
+  private _arenaBoundsCache: { halfWidth: number; halfHeight: number } = { halfWidth: 0, halfHeight: 0 };
 
   constructor() {
     // Create world with AABB and gravity
     const worldAABB = new b2AABB();
-    worldAABB.lowerBound.Set(-1000, -1000);
-    worldAABB.upperBound.Set(1000, 1000);
+    worldAABB.lowerBound.Set(-5000, -5000);
+    worldAABB.upperBound.Set(5000, 5000);
 
     const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
     this.world = new b2World(worldAABB, gravity, true /* doSleep */);
+    this.world.SetWarmStarting(false);
 
-    // Set up collision listener for WDB lethal objects
+    // Set up collision listener for verified contact rules
     this.setupContactListener();
   }
 
@@ -235,44 +266,175 @@ export class PhysicsEngine {
    */
   private setupContactListener(): void {
     const listener = new b2ContactListener();
+
+    // Reused scratch object — the listener callbacks are sequential and
+    // synchronous within a Step, so a single allocation serves every contact.
+    const scratch = { ud1: null as any, ud2: null as any };
+    const extractContact = (contact: any): { ud1: any; ud2: any } | null => {
+      const shape1 = contact.shape1 || (contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.());
+      const shape2 = contact.shape2 || (contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.());
+      if (!shape1 || !shape2) return null;
+      const body1 = shape1.GetBody();
+      const body2 = shape2.GetBody();
+      if (!body1 || !body2) return null;
+      scratch.ud1 = body1.GetUserData() || {};
+      scratch.ud2 = body2.GetUserData() || {};
+      return scratch;
+    };
+
     listener.Add = (contact: any) => {
       try {
         globalProfiler.increment('collision_events');
-
-        const shape1 = contact.shape1 || (contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.());
-        const shape2 = contact.shape2 || (contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.());
-        if (!shape1 || !shape2) return;
-
-        const body1 = shape1.GetBody();
-        const body2 = shape2.GetBody();
-        if (!body1 || !body2) return;
-
-        const ud1 = body1.GetUserData() || {};
-        const ud2 = body2.GetUserData() || {};
+        const info = extractContact(contact);
+        if (!info) return;
+        const { ud1, ud2 } = info;
 
         this.checkLethalCollision(ud1, ud2);
         this.checkLethalCollision(ud2, ud1);
-
-        // CapZone scoring: detect when a dynamic (non-static, non-player) body enters a zone sensor
-        if (ud1.isCapZone && ud2.playerId === undefined && !ud2.isCapZone) {
-          if (ud1.zoneType === 2) this.lastScoredTeam = 'blue';
-          else if (ud1.zoneType === 3) this.lastScoredTeam = 'red';
-        } else if (ud2.isCapZone && ud1.playerId === undefined && !ud1.isCapZone) {
-          if (ud2.zoneType === 2) this.lastScoredTeam = 'blue';
-          else if (ud2.zoneType === 3) this.lastScoredTeam = 'red';
-        }
+        this.registerCapZoneContact(ud1, ud2, true);
+        this.registerDiscContact(ud1, ud2);
       } catch (e) {
         // Ignore contact errors — some TOI contacts lack valid shapes
+      }
+    };
+
+    listener.Persist = (contact: any) => {
+      try {
+        // Persisting contacts only matter for timed-zone touch tracking;
+        // skip the extraction entirely when the map has no zones.
+        if (this.capZoneSensors.length === 0) return;
+        const info = extractContact(contact);
+        if (!info) return;
+        this.registerCapZoneContact(info.ud1, info.ud2, false);
+      } catch (e) {
+        // Ignore persist errors
       }
     };
 
     this.world.SetContactListener(listener);
   }
 
+  /**
+   * Contact-filter rules verified from the native client (DEOBFUSCATION
+   * BeginContact case 6): `nc` mode disables every disc-disc contact, and
+   * with teams on (`tea`) discs on the same team never collide.
+   *
+   * Port note: this Box2D v2.0 JS port never invokes SetContactFilter
+   * callbacks, so the rules are enforced with per-disc category/mask data
+   * updated dynamically. Team mode maps teams onto the native g1-g4
+   * collision-group slots (red=g1, blue=g2, green=g3, yellow=g4) and
+   * removes the disc's own team bit from its mask. Everything else falls
+   * back to the default category/mask behaviour. (DEOBFUSCATION_FIX_TRACKER C4)
+   */
+  static readonly PLAYER_TEAM_BITS: Record<string, number> = {
+    red: 0x0002,
+    blue: 0x0004,
+    green: 0x0008,
+    yellow: 0x0010,
+  };
+  private static readonly ALL_PLAYER_BITS = 0x0002 | 0x0004 | 0x0008 | 0x0010;
+
+  /** Recompute a disc's filter data from the current team's / nc settings. */
+  private updatePlayerFilter(playerId: number): void {
+    const body = this.playerBodies.get(playerId);
+    const shape = body ? body.GetShapeList() : null;
+    if (!shape) return;
+
+    const filter = new b2FilterData();
+    if (this.noCollide) {
+      filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+      filter.maskBits = 0xFFFF & ~PhysicsEngine.ALL_PLAYER_BITS;
+    } else if (this.teamsEnabled) {
+      const team = this.playerTeams.get(playerId);
+      const teamBit = team !== undefined ? PhysicsEngine.PLAYER_TEAM_BITS[team] : undefined;
+      if (teamBit !== undefined) {
+        filter.categoryBits = teamBit;
+        filter.maskBits = 0xFFFF & ~teamBit;
+      } else {
+        filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+        filter.maskBits = 0xFFFF;
+      }
+    } else {
+      filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+      filter.maskBits = 0xFFFF;
+    }
+    shape.SetFilterData(filter);
+    this.world.Refilter(shape);
+  }
+
+  private updateAllPlayerFilters(): void {
+    for (const id of this.playerBodies.keys()) {
+      this.updatePlayerFilter(id);
+    }
+  }
+
+  /**
+   * Verified disc-disc contact side effects (native BeginContact case 6):
+   * a disc in swing state is queued for grapple-destroy after the step, and
+   * both discs record last-hit attribution (`lhid`, `lht = 120` ticks).
+   * Contacts disabled by the nc/team filter never reach this handler, which
+   * matches the native else-branch semantics.
+   */
+  private registerDiscContact(ud1: any, ud2: any): void {
+    if (ud1.playerId === undefined || ud2.playerId === undefined) return;
+    const a: number = ud1.playerId;
+    const b: number = ud2.playerId;
+    if (this.playerGrappleJoints.has(a)) this.pendingSwingDestroy.add(a);
+    if (this.playerGrappleJoints.has(b)) this.pendingSwingDestroy.add(b);
+    this.lastHitBy.set(a, b);
+    this.lastHitBy.set(b, a);
+    this.lastHitTicks.set(a, LAST_HIT_TIMER_TICKS);
+    this.lastHitTicks.set(b, LAST_HIT_TIMER_TICKS);
+  }
+
   private checkLethalCollision(playerData: any, staticData: any): void {
     if (playerData.playerId !== undefined && staticData.isLethal) {
       this.playerAlive.set(playerData.playerId, false);
+      this.playerDeathType.set(playerData.playerId, 1);
       globalProfiler.increment('collision_lethal');
+    }
+  }
+
+  private registerCapZoneContact(ud1: any, ud2: any, isBegin: boolean): void {
+    let zoneUd: any = null;
+    let otherUd: any = null;
+    if (ud1.isCapZone) { zoneUd = ud1; otherUd = ud2; }
+    else if (ud2.isCapZone) { zoneUd = ud2; otherUd = ud1; }
+    if (!zoneUd) return;
+
+    if (zoneUd.zoneType === 1) {
+      if (otherUd.playerId !== undefined) {
+        const team = this.playerTeams.get(otherUd.playerId) ?? '';
+        this.capZoneTouches.push({ zoneIndex: zoneUd.zoneIndex, playerId: otherUd.playerId, team });
+      }
+    } else if (isBegin) {
+      // Native teamGoalEvent fires once on contact BEGIN; a body dwelling in
+      // the zone must not re-score on every persisting tick.
+      if (otherUd.playerId === undefined && !otherUd.isCapZone && otherUd.static === false) {
+        this.triggerInstantGoal(zoneUd.zoneType);
+      }
+    }
+  }
+
+  private capTypeToTeam(capType: number): string | null {
+    switch (capType) {
+      case 2: return 'red';
+      case 3: return 'blue';
+      case 4: return 'green';
+      case 5: return 'yellow';
+      default: return null;
+    }
+  }
+
+  private triggerInstantGoal(capType: number): void {
+    const winnerTeam = this.capTypeToTeam(capType);
+    if (!winnerTeam) return;
+    this.lastScoredTeam = winnerTeam;
+    for (const [id, team] of this.playerTeams) {
+      if (team !== winnerTeam) {
+        this.playerAlive.set(id, false);
+        this.playerDeathType.set(id, 3);
+      }
     }
   }
 
@@ -315,7 +477,7 @@ export class PhysicsEngine {
 
      shapeDef.density = def.static ? 0 : (def.density ?? 1.0);
      shapeDef.friction = def.friction ?? 0.3;
-     const restitutionValue = def.restitution === -1 ? 0.4 : (def.restitution ?? 0.4);
+      const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
      shapeDef.restitution = restitutionValue;
 
       // Handle noPhysics: true → make body a sensor (no collision response, but still triggers contact events)
@@ -348,7 +510,7 @@ export class PhysicsEngine {
 
     body.CreateShape(shapeDef);
     body.SetMassFromShapes();
-    body.SetUserData(def); // Stores isLethal and grappleMultiplier
+    body.SetUserData(def); // Stores isLethal and other map passthrough fields
 
     // Set initial velocity for dynamic bodies
     if (!def.static) {
@@ -365,7 +527,7 @@ export class PhysicsEngine {
     this.calculateArenaBounds();
   }
 
-  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string }, x: number, y: number, width: number, height: number): void {
+  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / SCALE, y / SCALE);
 
@@ -379,10 +541,52 @@ export class PhysicsEngine {
     body.CreateShape(shapeDef);
     body.SetUserData({ isCapZone: true, zoneType: zone.type, zoneIndex: zone.index, owner: zone.owner });
     this.capZoneSensors.push(body);
+
+    if (zone.type === 1) {
+      const limit = (zone.l ?? 3) * 30;
+      this.capZoneState.set(zone.index, {
+        ty: zone.type,
+        p: 0,
+        l: limit,
+        i: zone.index,
+        o: -1,
+        ot: '',
+        f: -1,
+      });
+    }
+  }
+
+  /** Enable/disable native team-mode (`tea`) disc-collision rules. */
+  setTeamsEnabled(enabled: boolean): void {
+    this.teamsEnabled = enabled;
+    this.updateAllPlayerFilters();
+  }
+
+  /** Enable/disable the native no-collision (`nc`) physics mode. */
+  setNoCollide(enabled: boolean): void {
+    this.noCollide = enabled;
+    this.updateAllPlayerFilters();
+  }
+
+  /**
+   * Native last-hit attribution (`lhid`/`lht`) for a player.
+   * Returns null once the 120-tick attribution window has expired.
+   */
+  getLastHit(playerId: number): { attackerId: number; ticksRemaining: number } | null {
+    const ticks = this.lastHitTicks.get(playerId);
+    const attacker = this.lastHitBy.get(playerId);
+    if (ticks === undefined || ticks <= 0 || attacker === undefined) return null;
+    return { attackerId: attacker, ticksRemaining: ticks };
+  }
+
+  /** Whether the player currently has an active grapple joint (native `swing`). */
+  hasGrappleJoint(playerId: number): boolean {
+    return this.playerGrappleJoints.has(playerId);
   }
 
   setPlayerTeam(playerId: number, team: string): void {
     this.playerTeams.set(playerId, team);
+    this.updatePlayerFilter(playerId);
   }
 
   getPlayerTeam(playerId: number): string | undefined {
@@ -431,6 +635,30 @@ export class PhysicsEngine {
     this.arenaHalfHeight = heightMetres / 2;
   }
 
+  /**
+   * Per-map arena bounds in map coordinates (metres × SCALE).
+   * Returns a cached object — callers must treat it as read-only.
+   */
+  getArenaBounds(): { halfWidth: number; halfHeight: number } {
+    this._arenaBoundsCache.halfWidth = this.arenaHalfWidth * SCALE;
+    this._arenaBoundsCache.halfHeight = this.arenaHalfHeight * SCALE;
+    return this._arenaBoundsCache;
+  }
+
+  /**
+   * Sets the map's player-disc radius setting before players are created.
+   * Exported map coordinates are converted through SCALE for this Box2D port.
+   */
+  setScale(ppm: number): void {
+    if (Number.isFinite(ppm) && ppm > 0) {
+      this.ppm = ppm;
+      // OOB stays 850/SCALE: the native 850/ppm rule is in native world units
+      // (px/ppm); the map-coordinate death circle is exactly 850 px for every
+      // map, so in this port's px/SCALE world the ppm cancels. (DEOBFUSCATION
+      // §"Death Type 4", tracked in DEOBFUSCATION_FIX_TRACKER.)
+    }
+  }
+
   getBodyMap(): Map<string, any> {
     return this.platformBodyMap;
   }
@@ -454,12 +682,24 @@ export class PhysicsEngine {
       ? new b2Vec2(def.anchorB.x / SCALE, def.anchorB.y / SCALE)
       : bodyB.GetPosition();
     
-    if (def.type === 'distance' || def.type === 'lpj') {
+    if (def.type === 'distance') {
       const jd = new b2DistanceJointDef();
       jd.Initialize(bodyA, bodyB, anchorA, anchorB);
       jd.collideConnected = def.collideConnected ?? false;
       jd.frequencyHz = def.frequencyHz ?? 0;
       jd.dampingRatio = def.dampingRatio ?? 0;
+      this.world.CreateJoint(jd);
+    } else if (def.type === 'rv') {
+      const jd = new b2RevoluteJointDef();
+      jd.Initialize(bodyA, bodyB, anchorA);
+      jd.collideConnected = def.collideConnected ?? false;
+      this.world.CreateJoint(jd);
+    } else if (def.type === 'lpj') {
+      const jd = new b2PrismaticJointDef();
+      const axisDef = (def as any).axis;
+      const axisVec = axisDef ? new b2Vec2(axisDef.x, axisDef.y) : new b2Vec2(1, 0);
+      jd.Initialize(bodyA, bodyB, anchorA, axisVec);
+      jd.collideConnected = def.collideConnected ?? false;
       this.world.CreateJoint(jd);
     }
   }
@@ -475,10 +715,10 @@ export class PhysicsEngine {
     const body = this.world.CreateBody(bodyDef);
 
     const circleDef = new b2CircleDef();
-    circleDef.radius = PLAYER_RADIUS;
+    circleDef.radius = this.ppm / SCALE;
     circleDef.density = PLAYER_DENSITY;
-    circleDef.friction = 0.3;
-    circleDef.restitution = 0.5;
+    circleDef.friction = 0;
+    circleDef.restitution = 0.8;
 
     // Assign collision category based on player ID
     // Player 0 = team g1 (category 0x0002), Player 1+ = team g2 (category 0x0004)
@@ -494,8 +734,10 @@ export class PhysicsEngine {
     body.SetUserData({ playerId: id });
 
     this.playerBodies.set(id, body);
+    this.updatePlayerFilter(id);
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
+    this.playerDeathType.set(id, 0);
   }
 
   /**
@@ -515,15 +757,9 @@ export class PhysicsEngine {
     if (input.up) force.y -= MOVE_FORCE;
     if (input.down) force.y += MOVE_FORCE;
 
+    if (input.heavy) force.Multiply(HEAVY_FORCE_MULTIPLIER);
     body.ApplyForce(force, pos);
-
-    // Handle heavy state toggle
-    const wasHeavy = this.playerHeavyState.get(playerId) || false;
-    if (input.heavy && !wasHeavy) {
-      this.setHeavy(playerId, true);
-    } else if (!input.heavy && wasHeavy) {
-      this.setHeavy(playerId, false);
-    }
+    this.playerHeavyState.set(playerId, input.heavy);
 
     // Handle grapple toggle
     const hasGrapple = this.playerGrappleJoints.has(playerId);
@@ -535,30 +771,10 @@ export class PhysicsEngine {
   }
 
   /**
-   * Toggle heavy state: multiplies mass and applies downward force.
-   */
-  private setHeavy(playerId: number, heavy: boolean): void {
-    const body = this.playerBodies.get(playerId);
-    if (!body) return;
-
-    this.playerHeavyState.set(playerId, heavy);
-
-    if (heavy) {
-      // Increase mass by multiplying density effect
-      const massData = new b2MassData();
-      massData.mass = body.GetMass() * HEAVY_MASS_MULTIPLIER;
-      massData.center = body.GetLocalCenter();
-      massData.I = body.GetInertia() * HEAVY_MASS_MULTIPLIER;
-      body.SetMass(massData);
-    } else {
-      // Reset mass from shape definitions
-      body.SetMassFromShapes();
-    }
-  }
-
-  /**
-   * Fires a grapple raycast to attach to the nearest platform.
-   * If it hits a grappleMultiplier surface, it acts as a slingshot instead.
+   * Fires a grapple to attach to the closest eligible platform.
+   * The verified native max reach is 500 map coordinates, converted through
+   * this port's export scale. The invented "slingshot" mechanic was removed —
+   * it has no native evidence.
    */
   private fireGrapple(playerId: number): void {
     const body = this.playerBodies.get(playerId);
@@ -568,7 +784,7 @@ export class PhysicsEngine {
 
     const startPos = body.GetPosition();
 
-    // Find the nearest platform within 10m (Bonk.io grapple radius)
+    // Exported map coordinates are converted through SCALE for this Box2D port.
     // The grapple always hooks to the closest surface, not in the velocity direction
     let closestPlatform: any = null;
     let closestDist = Infinity;
@@ -579,7 +795,7 @@ export class PhysicsEngine {
       const dy = pPos.y - startPos.y;
       const dist = Math.sqrt(dx * dx + dy * dy);
 
-      if (dist < 10 && dist < closestDist) {
+      if (dist < 500 / SCALE && dist < closestDist) {
         const ud = pBody.GetUserData() || {};
         // Skip noGrapple and innerGrapple surfaces early
         if (ud.noGrapple || ud.innerGrapple) continue;
@@ -591,19 +807,12 @@ export class PhysicsEngine {
     if (closestPlatform) {
       const ud = closestPlatform.GetUserData() || {};
 
-      // Slingshot check (WDB mechanic)
-      if (ud.grappleMultiplier === 99999) {
-        body.ApplyImpulse(new b2Vec2(0, -50), startPos);
-        return;
-      }
-
       // Attach joint
       const jointDef = new b2DistanceJointDef();
       jointDef.Initialize(body, closestPlatform, startPos, closestPlatform.GetPosition());
       jointDef.collideConnected = true;
-      // Bonk.io rope behaves like a somewhat elastic distance joint
-      jointDef.frequencyHz = 4.0;
-      jointDef.dampingRatio = 0.5;
+      jointDef.frequencyHz = ud.frequencyHz ?? 4.0;
+      jointDef.dampingRatio = ud.dampingRatio ?? 0.5;
 
       const joint = this.world.CreateJoint(jointDef);
       this.playerGrappleJoints.set(playerId, joint);
@@ -624,25 +833,129 @@ export class PhysicsEngine {
    */
     tick(): void {
         if (!this.world) return;
-        this.world.Step(DT, SOLVER_ITERATIONS);
+        // This bundled Box2D v2.0 port accepts only one iteration count and
+        // ignores the third argument. The real client uses Step(dt, 2, 6).
+    // Count down last-hit attribution timers (native lht) before the step so
+    // contacts created during this Step keep their full 120-tick window.
+    for (const [id, ticks] of this.lastHitTicks) {
+      if (ticks <= 1) {
+        this.lastHitTicks.delete(id);
+        this.lastHitBy.delete(id);
+      } else {
+        this.lastHitTicks.set(id, ticks - 1);
+      }
+    }
+
+        this.world.Step(DT, VELOCITY_ITERATIONS, POSITION_ITERATIONS);
     this.tickCount++;
 
-    // Check for players out of bounds (dead)
+    // Process cap-zone completion countdowns (before this tick's touches)
+    this.processCapZoneCountdowns();
+
+    // Process cap-zone touches collected during Step
+    this.processCapZoneTouches();
+    this.capZoneTouches.length = 0;
+
+    // Process verified swingCollideDestroyEvents: discs that collided while
+    // swinging lose their grapple joint after the step.
+    if (this.pendingSwingDestroy.size > 0) {
+      for (const id of this.pendingSwingDestroy) {
+        this.releaseGrapple(id);
+      }
+      this.pendingSwingDestroy.clear();
+    }
+
+    // Check for players out of bounds (dead). Squared comparison avoids a
+    // per-player Math.sqrt on every tick; the threshold is identical.
     for (const [id, body] of this.playerBodies) {
       if (!this.playerAlive.get(id)) continue;
 
       const pos = body.GetPosition();
-      if (
-        Math.abs(pos.x) > this.arenaHalfWidth ||
-        Math.abs(pos.y) > this.arenaHalfHeight
-      ) {
+      if (pos.x * pos.x + pos.y * pos.y > this.oobRadiusSquared) {
         this.playerAlive.set(id, false);
+        this.playerDeathType.set(id, 4);
         globalProfiler.increment('death_out_of_bounds');
       }
     }
 
     if (isTelemetryEnabled()) {
       globalProfiler.gauge('active_joints', this.playerGrappleJoints.size);
+    }
+  }
+
+  private processCapZoneCountdowns(): void {
+    for (const [, state] of this.capZoneState) {
+      if (state.f > 0) {
+        state.f--;
+        if (state.f === 0) {
+          const ownerTeam = state.ot;
+          for (const [id, team] of this.playerTeams) {
+            if (team !== ownerTeam) {
+              this.playerAlive.set(id, false);
+              this.playerDeathType.set(id, 3);
+            }
+          }
+          this.lastScoredTeam = ownerTeam || null;
+          state.p = 0;
+          state.o = -1;
+          state.ot = '';
+          state.f = -1;
+        }
+      }
+    }
+  }
+
+  private processCapZoneTouches(): void {
+    if (this.capZoneTouches.length === 0) return;
+
+    const touchesByZone = new Map<number, Array<{ playerId: number; team: string }>>();
+    for (const touch of this.capZoneTouches) {
+      let arr = touchesByZone.get(touch.zoneIndex);
+      if (!arr) { arr = []; touchesByZone.set(touch.zoneIndex, arr); }
+      arr.push({ playerId: touch.playerId, team: touch.team });
+    }
+
+    for (const [zoneIndex, touches] of touchesByZone) {
+      const state = this.capZoneState.get(zoneIndex);
+      if (!state || state.ty !== 1) continue;
+
+      const touchesByTeam = new Map<string, number[]>();
+      for (const t of touches) {
+        let arr = touchesByTeam.get(t.team);
+        if (!arr) { arr = []; touchesByTeam.set(t.team, arr); }
+        arr.push(t.playerId);
+      }
+
+      const teams = Array.from(touchesByTeam.keys());
+
+      if (teams.length === 1) {
+        const team = teams[0];
+        const playerIds = touchesByTeam.get(team)!;
+        const playerId = playerIds[0];
+
+        if (state.o === -1 || state.ot === '') {
+          state.p = 1;
+          state.o = playerId;
+          state.ot = team;
+        } else if (state.ot === team) {
+          state.p = Math.min(state.p + playerIds.length, state.l);
+        } else {
+          state.p -= playerIds.length;
+          if (state.p <= 0) {
+            state.p = 0;
+            state.o = playerId;
+            state.ot = team;
+          }
+        }
+      } else {
+        let totalCount = 0;
+        for (const [, ids] of touchesByTeam) totalCount += ids.length;
+        state.p = Math.max(state.p - totalCount, 0);
+      }
+
+      if (state.p >= state.l && state.f < 0) {
+        state.f = 20;
+      }
     }
   }
 
@@ -655,7 +968,7 @@ export class PhysicsEngine {
       return {
         x: 0, y: 0, velX: 0, velY: 0,
         angle: 0, angularVel: 0,
-        isHeavy: false, alive: false,
+        isHeavy: false, alive: false, deathType: 0,
       };
     }
 
@@ -671,6 +984,7 @@ export class PhysicsEngine {
       angularVel: body.GetAngularVelocity(),
       isHeavy: this.playerHeavyState.get(playerId) || false,
       alive: this.playerAlive.get(playerId) || false,
+      deathType: this.playerDeathType.get(playerId) || 0,
     };
   }
 
@@ -705,7 +1019,11 @@ export class PhysicsEngine {
     this.playerBodies.clear();
     this.playerHeavyState.clear();
     this.playerAlive.clear();
+    this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
+    this.pendingSwingDestroy.clear();
+    this.lastHitBy.clear();
+    this.lastHitTicks.clear();
 
     // Destroy platform/map bodies
     for (const body of this.platformBodies) {
@@ -714,6 +1032,8 @@ export class PhysicsEngine {
     this.platformBodies = [];
     this.platformBodyMap.clear();
     this.capZoneSensors = [];
+    this.capZoneState.clear();
+    this.capZoneTouches = [];
     this.lastScoredTeam = null;
     this.tickCount = 0;
   }
@@ -727,19 +1047,27 @@ export class PhysicsEngine {
     // Don't try to destroy bodies one-by-one — box2d broadphase gets corrupted
     // on complex maps. Just create a fresh world and let the old one be GC'd.
     const worldAABB = new b2AABB();
-    worldAABB.lowerBound.Set(-1000, -1000);
-    worldAABB.upperBound.Set(1000, 1000);
+    worldAABB.lowerBound.Set(-5000, -5000);
+    worldAABB.upperBound.Set(5000, 5000);
     const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
     this.world = new b2World(worldAABB, gravity, true);
+    this.world.SetWarmStarting(false);
+    this.setupContactListener();
 
     // Clear all state
     this.playerBodies.clear();
     this.playerHeavyState.clear();
     this.playerAlive.clear();
+    this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
     this.playerTeams.clear();
     this.capZoneSensors = [];
+    this.capZoneState.clear();
+    this.capZoneTouches = [];
     this.lastScoredTeam = null;
+    this.pendingSwingDestroy.clear();
+    this.lastHitBy.clear();
+    this.lastHitTicks.clear();
     this.platformBodies = [];
     this.platformBodyMap = new Map();
     this.tickCount = 0;

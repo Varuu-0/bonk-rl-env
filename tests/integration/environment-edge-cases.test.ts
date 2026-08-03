@@ -26,7 +26,7 @@ describe('BonkEnvironment edge cases', () => {
   }
 
   describe('capZone scoring', () => {
-    it('scores when player enters capzone (type 2 = blue)', async () => {
+    it('processes an instant capzone definition (type 2 = red)', async () => {
       const mapData: MapDef = makeMap({
         capZones: [
           { index: 0, owner: 'neutral', type: 2, fixture: 'floor', shapeType: 'bx' },
@@ -45,7 +45,7 @@ describe('BonkEnvironment edge cases', () => {
       expect(env).toBeDefined();
     });
 
-    it('scores when player enters capzone (type 3 = red)', async () => {
+    it('processes an instant capzone definition (type 3 = blue)', async () => {
       const mapData: MapDef = makeMap({
         capZones: [
           { index: 0, owner: 'neutral', type: 3, fixture: 'floor', shapeType: 'bx' },
@@ -74,6 +74,22 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.info.capZones).toBeDefined();
       expect(result.info.capZones.length).toBe(1);
       expect(result.info.capZones[0].type).toBe(2);
+    });
+
+    it('physics.bounds survives the constructor-internal reset and episode resets', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const obs = env.reset();
+      expect(obs.arenaHalfWidth).toBe(30 * 30);  // width/2 (30m) × SCALE(30)
+      expect(obs.arenaHalfHeight).toBe(20 * 30);
+
+      for (let i = 0; i < 5; i++) env.step(0);
+
+      const obs2 = env.reset();
+      expect(obs2.arenaHalfWidth).toBe(30 * 30);
+      expect(obs2.arenaHalfHeight).toBe(20 * 30);
     });
 
     it('capZones empty array when no capZones in map', async () => {
@@ -342,19 +358,19 @@ describe('BonkEnvironment edge cases', () => {
   });
 
   describe('getObservationFast', () => {
-    it('returns Float32Array of length 14', async () => {
+    it('returns Float32Array of length 16', async () => {
       env = new BonkEnvironment({ maxTicks: 1000, numOpponents: 1 });
       env.reset();
       const fastObs = env.getObservationFast();
       expect(fastObs).toBeInstanceOf(Float32Array);
-      expect(fastObs.length).toBe(14);
+      expect(fastObs.length).toBe(16);
     });
 
     it('fast obs values are numbers', async () => {
       env = new BonkEnvironment({ maxTicks: 1000, numOpponents: 1 });
       env.reset();
       const fastObs = env.getObservationFast();
-      for (let i = 0; i < 14; i++) {
+      for (let i = 0; i < 16; i++) {
         expect(typeof fastObs[i]).toBe('number');
       }
     });
@@ -377,14 +393,16 @@ describe('BonkEnvironment edge cases', () => {
       expect(fastObs[8]).not.toBe(0);
     });
 
-    it('fast obs tick is at index 13', async () => {
+    it('fast obs keeps dynamic arena bounds before the tick at index 15', async () => {
       env = new BonkEnvironment({ maxTicks: 1000, numOpponents: 0 });
       env.reset();
       const fastObs = env.getObservationFast();
-      expect(fastObs[13]).toBe(0);
+      expect(fastObs[13]).toBeGreaterThan(0);
+      expect(fastObs[14]).toBeGreaterThan(0);
+      expect(fastObs[15]).toBe(0);
       env.step(0);
       const fastObs2 = env.getObservationFast();
-      expect(fastObs2[13]).toBe(1);
+      expect(fastObs2[15]).toBe(1);
     });
 
     it('fast obs returns same buffer reference', async () => {

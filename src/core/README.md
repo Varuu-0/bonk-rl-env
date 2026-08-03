@@ -16,24 +16,49 @@ The heart of the Bonk.io RL environment. Contains the physics engine, RL environ
 ## Key Constants
 
 ```typescript
-TPS              = 30        // Ticks per second
-DT               = 1/30      // Delta time per tick (0.0333s)
-SOLVER_ITERATIONS = 5        // Box2D constraint solver iterations
-SCALE            = 30        // Physics scale: pixels → metres
-ARENA_HALF_WIDTH = 25        // Arena half-width in metres
-ARENA_HALF_HEIGHT = 20       // Arena half-height in metres
-MAX_TICKS        = 900       // 30 seconds at 30 TPS (truncation limit)
-MOVE_FORCE       = 8.0       // Newtons per input direction
-PLAYER_RADIUS    = 0.5       // Player circle radius in metres
-GRAVITY_Y        = 10        // Gravity in m/s²
+TPS                 = 30        // Ticks per second
+DT                  = 1/30      // Delta time per tick (0.0333s)
+VELOCITY_ITERATIONS = 2         // Verified native low-quality velocity solver count
+POSITION_ITERATIONS = 6         // Verified native position solver count
+SCALE               = 30        // Exported map coordinate conversion for this JS port
+DEFAULT_PPM         = 12        // Native default player ppm
+MOVE_FORCE          = 12.0      // Native base movement force
+HEAVY_FORCE_MULTIPLIER = 0.7    // Heavy reduces force; it does not change mass
+GRAVITY_Y           = 20        // Native gravity in m/s²
+OUT_OF_BOUNDS_DISTANCE = 850    // Circular boundary: 850 map units (world radius = 850 / SCALE)
+MAX_TICKS           = 900       // 30 seconds at 30 TPS (truncation limit)
 ```
+
+The installed `box2d` port accepts `Step(dt, iterations)` only. It therefore
+cannot reproduce Bonk's separate native `Step(dt, 2, 6)` solver counts exactly.
+Player radius is `ppm / SCALE`, not a fixed constant. The local simulator uses
+the verified circular death boundary: the native rule `dist > 850 / ppm` is in
+native world units (px/ppm), so the circle is exactly 850 map units for every
+map; this port applies it as `850 / SCALE` world units, independent of ppm.
+
+## Verified Contact Rules (DEOBFUSCATION BeginContact case 6)
+
+| Rule | Engine API | Notes |
+|------|-----------|-------|
+| Same-team discs don't collide (`tea`) | `setTeamsEnabled(true)` + `setPlayerTeam(id, team)` | Enforced via per-disc category/mask bits: teams map to the native g1-g4 slots (red, blue, green, yellow) and a disc's mask excludes its own team bit. The port never calls `SetContactFilter` callbacks, so mask data is the enforcement path |
+| No-collision mode (`nc`) | `setNoCollide(true)` | Removes all player bits from every disc mask |
+| Swing destroy (`swingCollideDestroyEvents`) | automatic | A disc-disc contact while a grapple joint is active destroys the grapple after the step |
+| Last-hit attribution (`lhid`/`lht`) | `getLastHit(playerId)` | Records both directions; `LAST_HIT_TIMER_TICKS = 120` (4s at 30 TPS); countdown runs before each Step |
+
+`BonkEnvironment` exposes `teamsEnabled` and `noCollide` config options
+(map-level `physics.teams` / `physics.nc` act as defaults).
+
+The grapple reach is the verified 500 map units converted through this port's
+exported-map coordinate scale (`500 / SCALE`; DEOBFUSCATION line 2531). The
+native surface-point anchor and `disc.a1a` accumulation remain unresolved and
+are intentionally not invented.
 
 ## Physics Pipeline
 
 Each `tick()` advances the world through:
 
 1. **Input Processing** — Apply forces from `PlayerInput` (left/right/up/down/heavy/grapple)
-2. **Physics Step** — `world.Step(DT, SOLVER_ITERATIONS)` advances by exactly 1/30s
+2. **Physics Step** — `world.Step(DT, 2, 6)` is requested; this port applies only the velocity count
 3. **Observation Extraction** — Read player positions, velocities, angles, alive state
 4. **Reward Calculation** — +1.0 for opponent kill, -1.0 for death, -0.001 time penalty
 5. **Terminal Check** — Out-of-bounds death, lethal collision, or `MAX_TICKS` reached

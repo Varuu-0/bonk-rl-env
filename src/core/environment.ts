@@ -21,8 +21,6 @@ import {
     PlayerState,
     MapDef,
     MapBodyDef,
-    ARENA_HALF_WIDTH,
-    ARENA_HALF_HEIGHT,
     SCALE,
     TPS,
 } from './physics-engine';
@@ -94,6 +92,18 @@ export interface EnvironmentConfig {
     frameSkip?: number;
     /** Optional physics override: pixels-per-metre scale factor */
     ppm?: number;
+    /** Optional path to a map JSON file, used when mapData is absent */
+    mapPath?: string;
+    /** Opponent random-policy probabilities */
+    oppMoveProb?: number;
+    oppUpProb?: number;
+    oppDownProb?: number;
+    oppHeavyProb?: number;
+    oppGrappleProb?: number;
+    /** Native team mode (`tea`): same-team discs do not collide (default false) */
+    teamsEnabled?: boolean;
+    /** Native no-collision physics mode (`nc`): discs never collide (default false) */
+    noCollide?: boolean;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -131,9 +141,10 @@ export class BonkEnvironment {
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
     private terminalReached: boolean = false;
-    private _obsBuffer: Float32Array = new Float32Array(14);
-    private ppm: number = 30;
+    private _obsBuffer: Float32Array = new Float32Array(16);
+    private ppm: number = 12;
     private capZones: Array<{ index: number; owner: string; type: number }> = [];
+    private mapBounds: { width: number; height: number } | null = null;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case
@@ -144,7 +155,7 @@ export class BonkEnvironment {
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+            const mapPath = config.mapPath || path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
             } catch (e) {
@@ -154,7 +165,7 @@ export class BonkEnvironment {
         }
 
         // Read map-level physics overrides
-        this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 30;
+        this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 12;
         this.capZones = (mapDef as any).capZones ?? [];
 
         this.config = {
@@ -162,13 +173,25 @@ export class BonkEnvironment {
             maxTicks: config.maxTicks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? true,
             mapData: mapDef,
-            seed: config.seed ?? Math.floor(Math.random() * 1000000),
+            seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
+            mapPath: config.mapPath ?? '',
+            oppMoveProb: config.oppMoveProb ?? 0.2,
+            oppUpProb: config.oppUpProb ?? 0.15,
+            oppDownProb: config.oppDownProb ?? 0.1,
+            oppHeavyProb: config.oppHeavyProb ?? 0.05,
+            oppGrappleProb: config.oppGrappleProb ?? 0.05,
+            teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
+            noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
         };
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
+
+        // Apply verified native game settings before adding bodies
+        this.physics.setTeamsEnabled(this.config.teamsEnabled);
+        this.physics.setNoCollide(this.config.noCollide);
 
         // Set PPM before adding bodies
         if (typeof (this.physics as any).setScale === 'function') {
@@ -213,12 +236,9 @@ export class BonkEnvironment {
             }
         }
 
-        // Set explicit map bounds if provided
-        if ((mapDef as any).physics?.bounds) {
-            if (typeof (this.physics as any).setMapBounds === 'function') {
-                this.physics.setMapBounds((mapDef as any).physics.bounds.width, (mapDef as any).physics.bounds.height);
-            }
-        }
+        // Cache explicit map bounds — reset() re-adds bodies, which recomputes
+        // dynamic bounds, so the override must be re-applied after every reset.
+        this.mapBounds = (mapDef as any).physics?.bounds ?? null;
 
         this.reset();
     }
@@ -274,10 +294,11 @@ export class BonkEnvironment {
             }
         }
 
-        // Extract spawn positions from map
-        const spawnVals = Object.values(this.config.mapData.spawnPoints);
-        const teamB = spawnVals[0] || { x: -200, y: -100 };
-        const teamR = spawnVals[1] || { x: 200, y: -100 };
+        // Extract spawn positions from map using team keys
+        const spawnPoints = this.config.mapData.spawnPoints;
+        const spawnKeys = Object.keys(spawnPoints);
+        const teamB = spawnPoints.team_blue || (spawnKeys.length > 0 ? spawnPoints[spawnKeys[0]] : null) || { x: -200, y: -100 };
+        const teamR = spawnPoints.team_red || { x: 200, y: -100 };
 
         // Add AI player
         this.aiPlayerId = 0;
@@ -312,6 +333,12 @@ export class BonkEnvironment {
         this.previousAliveState.set(this.aiPlayerId, true);
         for (const id of this.opponentIds) {
             this.previousAliveState.set(id, true);
+        }
+
+        // Re-apply explicit map bounds last — body re-adds above recomputed
+        // dynamic bounds and would otherwise clobber the override every reset.
+        if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
+            this.physics.setMapBounds(this.mapBounds.width, this.mapBounds.height);
         }
 
         // Reset frame skip state
@@ -479,12 +506,12 @@ export class BonkEnvironment {
 
         // Simple random policy: each direction has x% chance per tick
         return {
-            left: this.rng.next() < 0.2,
-            right: this.rng.next() < 0.2,
-            up: this.rng.next() < 0.15,
-            down: this.rng.next() < 0.1,
-            heavy: this.rng.next() < 0.05,
-            grapple: this.rng.next() < 0.05,
+            left: this.rng.next() < this.config.oppMoveProb,
+            right: this.rng.next() < this.config.oppMoveProb,
+            up: this.rng.next() < this.config.oppUpProb,
+            down: this.rng.next() < this.config.oppDownProb,
+            heavy: this.rng.next() < this.config.oppHeavyProb,
+            grapple: this.rng.next() < this.config.oppGrappleProb,
         };
     }
 
@@ -494,14 +521,18 @@ export class BonkEnvironment {
      * Reward structure:
      *   +1.0  — opponent knocked off the map (killed)
      *   -1.0  — AI player knocked off the map (death)
+     *   ±1.0  — cap-zone capture for/against the AI team (single reward for
+     *           the event; cap-zone eliminations (deathType 3) do NOT also
+     *           count as kills)
      *   -0.001 — time penalty (encourages action)
      */
     private calculateReward(aiState: PlayerState, opponentStates: PlayerState[]): number {
         let reward = 0;
 
-        // Check if AI just died this tick
+        // Check if AI just died this tick (cap-zone eliminations score via the
+        // capture branch below instead of double-counting as a death)
         const aiWasAlive = this.previousAliveState.get(this.aiPlayerId) ?? true;
-        if (aiWasAlive && !aiState.alive) {
+        if (aiWasAlive && !aiState.alive && aiState.deathType !== 3) {
             reward -= 1.0;
         }
 
@@ -509,7 +540,7 @@ export class BonkEnvironment {
         for (let i = 0; i < this.opponentIds.length; i++) {
             const opState = opponentStates[i];
             const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
-            if (opWasAlive && !opState.alive) {
+            if (opWasAlive && !opState.alive && opState.deathType !== 3) {
                 reward += 1.0;
             }
         }
@@ -554,6 +585,8 @@ export class BonkEnvironment {
             };
         });
 
+        const arenaBounds = this.physics.getArenaBounds();
+
         return {
             playerX: aiState.x,
             playerY: aiState.y,
@@ -563,14 +596,14 @@ export class BonkEnvironment {
             playerAngularVel: aiState.angularVel,
             playerIsHeavy: aiState.isHeavy,
             opponents,
-            arenaHalfWidth: ARENA_HALF_WIDTH * SCALE,
-            arenaHalfHeight: ARENA_HALF_HEIGHT * SCALE,
+            arenaHalfWidth: arenaBounds.halfWidth,
+            arenaHalfHeight: arenaBounds.halfHeight,
             tick: this.physics.getTickCount(),
         };
     }
 
     /**
-     * Fast observation extraction — returns a pre-allocated Float32Array(14)
+     * Fast observation extraction — returns a pre-allocated Float32Array(16)
      * directly from physics state, skipping intermediate object creation.
      * Layout matches worker.ts observationToArray() output.
      */
@@ -603,7 +636,10 @@ export class BonkEnvironment {
             this._obsBuffer[12] = 0;
         }
 
-        this._obsBuffer[13] = this.physics.getTickCount();
+        const arenaBounds = this.physics.getArenaBounds();
+        this._obsBuffer[13] = arenaBounds.halfWidth;
+        this._obsBuffer[14] = arenaBounds.halfHeight;
+        this._obsBuffer[15] = this.physics.getTickCount();
         return this._obsBuffer;
     }
 }

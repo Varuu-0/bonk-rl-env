@@ -7,7 +7,14 @@ import {
   ARENA_HALF_HEIGHT,
   TPS,
   DT,
-  HEAVY_MASS_MULTIPLIER,
+  HEAVY_FORCE_MULTIPLIER,
+  GRAVITY_Y,
+  MOVE_FORCE,
+  DEFAULT_PPM,
+  OUT_OF_BOUNDS_DISTANCE,
+  VELOCITY_ITERATIONS,
+  POSITION_ITERATIONS,
+  SCALE,
 } from '../../src/core/physics-engine';
 import { safeDestroy } from '../utils/test-helpers';
 
@@ -141,7 +148,7 @@ describe('PhysicsEngine', () => {
     it('player outside bounds is marked dead', () => {
       engine = new PhysicsEngine();
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, ARENA_HALF_WIDTH * 35, 0);
+      engine.addPlayer(1, 3000, 0);
       engine.tick();
       const state = engine.getPlayerState(1);
       expect(state.alive).toBe(false);
@@ -229,8 +236,67 @@ describe('PhysicsEngine', () => {
       expect(DT).toBeCloseTo(1 / 30, 3);
     });
 
-    it('HEAVY_MASS_MULTIPLIER is 3.0', () => {
-      expect(HEAVY_MASS_MULTIPLIER).toBe(3.0);
+    it('HEAVY_FORCE_MULTIPLIER is 0.7', () => {
+      expect(HEAVY_FORCE_MULTIPLIER).toBe(0.7);
+    });
+
+    // Verified native bonk.io physics constants (DEOBFUSCATION.md).
+    it('GRAVITY_Y is 20 (not 10)', () => {
+      expect(GRAVITY_Y).toBe(20);
+    });
+
+    it('MOVE_FORCE is 12', () => {
+      expect(MOVE_FORCE).toBe(12);
+    });
+
+    it('DEFAULT_PPM is 12', () => {
+      expect(DEFAULT_PPM).toBe(12);
+    });
+
+    it('VELOCITY_ITERATIONS is 2 and POSITION_ITERATIONS is 6', () => {
+      expect(VELOCITY_ITERATIONS).toBe(2);
+      expect(POSITION_ITERATIONS).toBe(6);
+    });
+
+    it('OUT_OF_BOUNDS_DISTANCE is 850 map units (consumed as 850/SCALE world units)', () => {
+      expect(OUT_OF_BOUNDS_DISTANCE).toBe(850);
+    });
+
+    it('SCALE is 30', () => {
+      expect(SCALE).toBe(30);
+    });
+  });
+
+  describe('out-of-bounds boundary', () => {
+    // Verified (DEOBFUSCATION Death Type 4): the native death circle is
+    // exactly 850 map-coordinate units — the 850/ppm world-unit formula cancels
+    // because native world = map px / ppm. This port converts px with SCALE,
+    // so the threshold is 850/SCALE = 28.33m world (= 850 map units).
+    it('player just inside the circular OOB radius survives', () => {
+      engine = new PhysicsEngine();
+      // 820 map units -> 27.33m < 28.33m threshold
+      engine.addPlayer(0, 820, 0);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+    });
+
+    it('player beyond the circular OOB radius is eliminated with deathType 4', () => {
+      engine = new PhysicsEngine();
+      // 900 map units -> 30.0m > 28.33m threshold (native kills at 850 px)
+      engine.addPlayer(0, 900, 0);
+      engine.tick();
+      const state = engine.getPlayerState(0);
+      expect(state.alive).toBe(false);
+      expect(state.deathType).toBe(4);
+    });
+
+    it('OOB radius is ppm-independent (same death circle after setScale)', () => {
+      engine = new PhysicsEngine();
+      engine.setScale(4);
+      // 900 map units with ppm=4: the ppm must not widen the death circle.
+      engine.addPlayer(0, 900, 0);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(false);
     });
   });
 
@@ -246,7 +312,7 @@ describe('PhysicsEngine', () => {
     it('contains alive player 0', () => {
       engine = new PhysicsEngine();
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, ARENA_HALF_WIDTH * 35, 0);
+      engine.addPlayer(1, 3000, 0);
       engine.addPlayer(2, 0, 0);
       engine.tick();
       const aliveIds = engine.getAlivePlayerIds();
@@ -256,7 +322,7 @@ describe('PhysicsEngine', () => {
     it('does not contain dead player 1', () => {
       engine = new PhysicsEngine();
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, ARENA_HALF_WIDTH * 35, 0);
+      engine.addPlayer(1, 3000, 0);
       engine.addPlayer(2, 0, 0);
       engine.tick();
       const aliveIds = engine.getAlivePlayerIds();

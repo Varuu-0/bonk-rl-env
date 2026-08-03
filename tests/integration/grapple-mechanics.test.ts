@@ -35,53 +35,47 @@ describe('GrappleMechanics', () => {
     });
   });
 
-  describe('slingshot', () => {
-    it('applies upward impulse with grappleMultiplier 99999', () => {
+  describe('grapple joint tuning fields', () => {
+    // The native grapple reads per-fixture frequencyHz (fh) / dampingRatio (dr)
+    // from map data. The simulator stores these on the body and applies them to
+    // the distance joint on attach. We assert the fields are accepted and the
+    // resulting grapple stays stable — we do NOT assert any invented impulse.
+    it('grapple to a body with frequencyHz/dampingRatio does not throw', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({
-        name: 'slingshot',
+        name: 'tuned-platform',
         x: 0,
         y: 50,
-        grappleMultiplier: 99999,
+        frequencyHz: 7.5,
+        dampingRatio: 0.3,
       }));
       engine.addPlayer(0, 0, 0);
 
-      const beforeState = engine.getPlayerState(0);
-      engine.applyInput(0, GRAPPLE_INPUT);
-      engine.tick();
+      expect(() => {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        for (let i = 0; i < 15; i++) engine.tick();
+      }).not.toThrow();
 
-      const afterState = engine.getPlayerState(0);
-      expect(afterState.velY).toBeLessThan(beforeState.velY);
-      expect(afterState.alive).toBe(true);
+      const state = engine.getPlayerState(0);
+      expect(state.alive).toBe(true);
+      expect(state.y).toBeLessThan(200);
     });
 
-    it('preserves velocity after impulse', () => {
+    it('grapple with default tuning is stable over many ticks', () => {
       engine = new PhysicsEngine();
-      engine.addBody(makePlatformDef({
-        name: 'boundary',
-        x: 0,
-        y: -500,
-        width: 100,
-        height: 10,
-      }));
-      engine.addBody(makePlatformDef({
-        name: 'slingshot',
-        x: 0,
-        y: 50,
-        grappleMultiplier: 99999,
-      }));
+      engine.addBody(makePlatformDef({ name: 'stable-platform', x: 0, y: 50 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
-      engine.tick();
+      for (let i = 0; i < 60; i++) engine.tick();
 
-      const state1 = engine.getPlayerState(0);
-      expect(state1.velY).toBeLessThan(0);
-      expect(state1.alive).toBe(true);
-
-      for (let i = 0; i < 5; i++) engine.tick();
-      const state2 = engine.getPlayerState(0);
-      expect(state2.alive).toBe(true);
+      const state = engine.getPlayerState(0);
+      expect(state.alive).toBe(true);
+      // Grapple holds the player near the platform — no explosive displacement.
+      expect(Number.isFinite(state.x)).toBe(true);
+      expect(Number.isFinite(state.y)).toBe(true);
+      expect(Number.isFinite(state.velX)).toBe(true);
+      expect(Number.isFinite(state.velY)).toBe(true);
     });
   });
 

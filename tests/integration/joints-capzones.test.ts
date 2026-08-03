@@ -221,7 +221,7 @@ describe('JointsCapZones', () => {
             expect(state1.alive).toBe(false);
         });
 
-        it('setMapBounds with small value kills player quickly', () => {
+        it('setMapBounds updates reported map bounds without changing native circular OOB', () => {
             engine = new PhysicsEngine();
 
             (engine as any).setMapBounds(0.2, 0.2);
@@ -231,7 +231,8 @@ describe('JointsCapZones', () => {
             for (let i = 0; i < 30; i++) engine.tick();
 
             const state = engine.getPlayerState(0);
-            expect(state.alive).toBe(false);
+            expect(state.alive).toBe(true);
+            expect((engine as any).getArenaBounds()).toEqual({ halfWidth: 3, halfHeight: 3 });
         });
     });
 
