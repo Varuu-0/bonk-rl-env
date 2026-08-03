@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { loadConfig, getConfig, resetConfig, getDefaults } from '../../src/config/config-loader';
+import { loadConfig, getConfig, resetConfig, getDefaults, deepMerge } from '../../src/config/config-loader';
 
 describe('Config injection resilience', () => {
   beforeEach(() => {
@@ -10,7 +10,7 @@ describe('Config injection resilience', () => {
     const config = getConfig();
     expect(config.server.port).toBe(5555);
     expect(config.physics.ticksPerSecond).toBe(30);
-    expect(config.player.radius).toBe(0.5);
+    expect(config.player.radius).toBe(0.4);
     expect(config.telemetry.enabled).toBe(false);
   });
 
@@ -23,13 +23,13 @@ describe('Config injection resilience', () => {
     expect(second).toEqual(first);
   });
 
-  it('deep partial config merges correctly', () => {
+  it('deep partial config merges correctly via production deepMerge', () => {
     const defaults = getDefaults();
     const partial = {
       server: { port: 9999 },
       physics: { gravityY: 20 },
     };
-    const merged = deepMergeTest(defaults, partial);
+    const merged = deepMerge(defaults, partial);
     expect(merged.server.port).toBe(9999);
     expect(merged.server.bindAddress).toBe('127.0.0.1');
     expect(merged.physics.gravityY).toBe(20);
@@ -39,34 +39,47 @@ describe('Config injection resilience', () => {
   it('does not pollute Object.prototype via __proto__', () => {
     const malicious = { __proto__: { polluted: true } } as any;
     const defaults = getDefaults();
-    const merged = deepMergeTest(defaults, malicious);
+    const merged = deepMerge(defaults, malicious);
     expect(({} as any).polluted).toBeUndefined();
     expect(Object.prototype.hasOwnProperty('polluted')).toBe(false);
+    // The dangerous key is dropped, not merged into the result.
+    expect(merged).not.toHaveProperty('__proto__');
   });
 
   it('does not pollute Object.prototype via constructor.prototype', () => {
     const malicious = { constructor: { prototype: { polluted: true } } } as any;
     const defaults = getDefaults();
-    const merged = deepMergeTest(defaults, malicious);
+    const merged = deepMerge(defaults, malicious);
     expect(({} as any).polluted).toBeUndefined();
+    expect(Object.prototype.hasOwnProperty('polluted')).toBe(false);
+    expect(merged).not.toHaveProperty('constructor');
+  });
+
+  it('does not pollute via a top-level prototype key', () => {
+    const malicious = { prototype: { polluted: true } } as any;
+    const defaults = getDefaults();
+    const merged = deepMerge(defaults, malicious);
+    expect(({} as any).polluted).toBeUndefined();
+    expect(merged).not.toHaveProperty('prototype');
+  });
+
+  it('nested __proto__ in a sub-object is also stripped', () => {
+    const malicious = {
+      server: { __proto__: { nested: true } },
+    } as any;
+    const defaults = getDefaults();
+    const merged = deepMerge(defaults, malicious);
+    expect(({} as any).nested).toBeUndefined();
+    expect(merged.server).not.toHaveProperty('__proto__');
+  });
+
+  it('deepMerge preserves real nested overrides while stripping dangerous keys', () => {
+    const defaults = getDefaults();
+    const override = {
+      server: { port: 1234, __proto__: { bad: true } },
+    } as any;
+    const merged = deepMerge(defaults, override);
+    expect(merged.server.port).toBe(1234);
+    expect(({} as any).bad).toBeUndefined();
   });
 });
-
-function isPlainObject(val: unknown): val is Record<string, unknown> {
-  return typeof val === 'object' && val !== null && !Array.isArray(val);
-}
-
-function deepMergeTest<T extends Record<string, any>>(base: T, override: Partial<T>): T {
-  const result: Record<string, any> = { ...base };
-  for (const key of Object.keys(override)) {
-    if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
-    const overrideVal = (override as Record<string, any>)[key];
-    if (overrideVal === undefined || overrideVal === null) continue;
-    if (isPlainObject(result[key]) && isPlainObject(overrideVal)) {
-      result[key] = deepMergeTest(result[key], overrideVal);
-    } else {
-      result[key] = overrideVal;
-    }
-  }
-  return result as T;
-}

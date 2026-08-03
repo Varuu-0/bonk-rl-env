@@ -632,7 +632,7 @@ describe('config-loader env vars and CLI', () => {
         it('getSection returns physics subsection', () => {
             const section = getSection('physics');
             expect(section.ticksPerSecond).toBe(30);
-            expect(section.gravityY).toBe(10.0);
+            expect(section.gravityY).toBe(20.0);
         });
 
         it('getSection returns telemetry subsection', () => {
@@ -849,6 +849,19 @@ describe('config-loader env vars and CLI', () => {
     // ─── getDefaults ─────────────────────────────────────────────────────
 
     describe('getDefaults', () => {
+        it('documents verified native physics values in config.example.json', () => {
+            const examplePath = path.resolve(__dirname, '..', '..', 'config.example.json');
+            const example = JSON.parse(fs.readFileSync(examplePath, 'utf8'));
+
+            expect(example.physics.gravityY).toBe(20);
+            expect(example.physics.solverIterations).toBe(2);
+            expect(example.physics.positionIterations).toBe(6);
+            expect(example.player.friction).toBe(0);
+            expect(example.player.restitution).toBe(0.8);
+            expect(example.player.moveForce).toBe(12);
+            expect(example.grapple.maxDistance).toBe(500);
+        });
+
         it('returns the default config object', () => {
             const defaults = getDefaults();
             expect(defaults.server.port).toBe(5555);
