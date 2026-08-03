@@ -413,9 +413,9 @@ export class PhysicsEngine {
     } else if (isBegin) {
       // Native teamGoalEvent fires once on contact BEGIN; a body dwelling in
       // the zone must not re-score on every persisting tick.
-      // addBody() treats an omitted static flag as dynamic, so instant zones
-      // must do the same. Player discs and explicitly static bodies never fire.
-      if (otherUd.playerId === undefined && !otherUd.isCapZone && otherUd.static !== true) {
+      // Keep this truthiness check aligned with addBody(): an omitted static
+      // flag is dynamic, while any truthy value makes the body static.
+      if (otherUd.playerId === undefined && !otherUd.isCapZone && !otherUd.static) {
         this.triggerInstantGoal(zoneUd.zoneType);
       }
     }

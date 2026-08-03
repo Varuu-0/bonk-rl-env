@@ -274,6 +274,20 @@ describe('CapZoneScoring', () => {
             expect(engine.getTeamScored()).toBe('red');
         });
 
+        it('does not score for a body with a truthy static value', () => {
+            engine = new PhysicsEngine();
+
+            // Map data can be hand-authored, so the contact guard must match
+            // addBody() and treat every truthy static value as static.
+            (engine as any).registerCapZoneContact(
+                { isCapZone: true, zoneType: 2, zoneIndex: 0 },
+                { static: 1 },
+                true,
+            );
+
+            expect(engine.getTeamScored()).toBe(null);
+        });
+
         it('player-disc contact does NOT trigger an instant zone', () => {
             engine = new PhysicsEngine();
 
