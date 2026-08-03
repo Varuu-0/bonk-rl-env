@@ -59,7 +59,7 @@ describe('CapZoneScoring', () => {
             engine = new PhysicsEngine();
             expect(() => {
                 engine!.addCapZone(
-                    { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
+                    { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                     0, 100, 200, 50,
                 );
             }).not.toThrow();
@@ -69,11 +69,11 @@ describe('CapZoneScoring', () => {
             engine = new PhysicsEngine();
             expect(() => {
                 engine!.addCapZone(
-                    { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
+                    { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                     0, -100, 200, 50,
                 );
                 engine!.addCapZone(
-                    { index: 1, owner: 'neutral', type: 3, fixture: 'Red', shapeType: 'bx' },
+                    { index: 1, owner: 'neutral', type: 3, fixture: 'zone', shapeType: 'bx' },
                     0, 300, 200, 50,
                 );
             }).not.toThrow();
@@ -81,7 +81,9 @@ describe('CapZoneScoring', () => {
     });
 
     describe('scoring detection', () => {
-        it('ball entering type 2 zone triggers blue score', () => {
+        // Verified native cap-zone team mapping (DEOBFUSCATION §30):
+        //   type 2 = red, type 3 = blue, type 4 = green, type 5 = yellow.
+        it('ball entering type 2 (red) zone triggers red score', () => {
             engine = new PhysicsEngine();
 
             engine.addBody({
@@ -91,29 +93,7 @@ describe('CapZoneScoring', () => {
             });
 
             engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
-                0, 190, 200, 100,
-            );
-
-            addBall(engine, 0, 50, 0, 0);
-
-            for (let i = 0; i < 100; i++) engine.tick();
-
-            const result = engine.getTeamScored();
-            expect(result).toBe('blue');
-        });
-
-        it('ball entering type 3 zone triggers red score', () => {
-            engine = new PhysicsEngine();
-
-            engine.addBody({
-                name: 'floor', type: 'rect',
-                x: 0, y: 500, width: 800, height: 30,
-                static: true,
-            });
-
-            engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 3, fixture: 'Red', shapeType: 'bx' },
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                 0, 190, 200, 100,
             );
 
@@ -123,6 +103,28 @@ describe('CapZoneScoring', () => {
 
             const result = engine.getTeamScored();
             expect(result).toBe('red');
+        });
+
+        it('ball entering type 3 (blue) zone triggers blue score', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 500, width: 800, height: 30,
+                static: true,
+            });
+
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 3, fixture: 'zone', shapeType: 'bx' },
+                0, 190, 200, 100,
+            );
+
+            addBall(engine, 0, 50, 0, 0);
+
+            for (let i = 0; i < 100; i++) engine.tick();
+
+            const result = engine.getTeamScored();
+            expect(result).toBe('blue');
         });
 
         it('getTeamScored returns null when no scoring', () => {
@@ -150,7 +152,7 @@ describe('CapZoneScoring', () => {
             });
 
             engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                 0, 190, 200, 100,
             );
 
@@ -161,7 +163,7 @@ describe('CapZoneScoring', () => {
             const first = engine.getTeamScored();
             const second = engine.getTeamScored();
 
-            expect(first).toBe('blue');
+            expect(first).toBe('red');
             expect(second).toBe(null);
         });
 
@@ -175,7 +177,7 @@ describe('CapZoneScoring', () => {
             });
 
             engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                 0, 190, 200, 100,
             );
 
@@ -198,7 +200,7 @@ describe('CapZoneScoring', () => {
             });
 
             engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 2, fixture: 'Blue', shapeType: 'bx' },
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                 0, 190, 200, 100,
             );
 
@@ -212,7 +214,186 @@ describe('CapZoneScoring', () => {
         });
     });
 
+    describe('instant-zone elimination', () => {
+        // Verified (DEOBFUSCATION §30): instant cap zones (type 2-5) are
+        // triggered ONLY by a dynamic non-player physics body entering the
+        // sensor. The winning team is derived from the zone type, and every
+        // disc NOT on the winning team is eliminated with deathType 3.
+        it('dynamic non-player body triggers instant zone and eliminates losers with deathType 3', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 500, width: 1600, height: 30,
+                static: true,
+            });
+
+            // type 2 = red instant zone
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
+                0, 190, 200, 100,
+            );
+
+            engine.addPlayer(0, 300, 50);   // blue team (loses)
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, -300, 50);  // red team (wins)
+            engine.setPlayerTeam(1, 'red');
+
+            // Dynamic non-player body falls into the instant zone.
+            addBall(engine, 0, 50, 0, 0);
+
+            for (let i = 0; i < 100; i++) engine.tick();
+
+            expect(engine.getTeamScored()).toBe('red');
+            const loser = engine.getPlayerState(0);
+            const winner = engine.getPlayerState(1);
+            expect(loser.alive).toBe(false);
+            expect(loser.deathType).toBe(3);
+            expect(winner.alive).toBe(true);
+            expect(winner.deathType).toBe(0);
+        });
+
+        it('player-disc contact does NOT trigger an instant zone', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 600, width: 1600, height: 30,
+                static: true,
+            });
+
+            // Large instant zone covering the resting spot of the player disc.
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 3, fixture: 'zone', shapeType: 'bx' },
+                0, 470, 400, 300,
+            );
+
+            engine.addPlayer(0, 0, 300);
+            engine.setPlayerTeam(0, 'blue');
+
+            for (let i = 0; i < 100; i++) engine.tick();
+
+            // A player disc contacting the sensor must not score or eliminate.
+            expect(engine.getTeamScored()).toBe(null);
+            expect(engine.getPlayerState(0).alive).toBe(true);
+        });
+    });
+
+    describe('instant-zone single-fire (native teamGoalEvent fires on contact begin)', () => {
+        it('a dwelling body does not re-score on persisting ticks', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 400, width: 1600, height: 30,
+                static: true,
+            });
+
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
+                0, 190, 200, 100,
+            );
+
+            engine.addPlayer(0, 300, 50);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, -300, 50);
+            engine.setPlayerTeam(1, 'red');
+
+            addBall(engine, 0, 50, 0, 0);
+
+            for (let i = 0; i < 100; i++) engine.tick();
+
+            // First read consumes the single goal.
+            expect(engine.getTeamScored()).toBe('red');
+            // The ball still rests in the zone — Persist must not re-fire it.
+            expect(engine.getTeamScored()).toBe(null);
+            expect(engine.getTeamScored()).toBe(null);
+        });
+    });
+
+    describe('timed-zone capture', () => {
+        // Verified (DEOBFUSCATION §30): a timed zone (type 1) accumulates
+        // progress `p` while a single team holds it, up to a limit of `l*30`.
+        // Once the limit is reached a `f=20` tick countdown begins, after
+        // which the holding team scores and non-holders are eliminated with
+        // deathType 3. Using l=0.1 keeps the limit at 3 ticks so the test
+        // exercises the countdown rather than 30 ticks of pure progress.
+        it('scores after l*30 progress and the f=20 countdown', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 600, width: 2000, height: 30,
+                static: true,
+            });
+
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 1, fixture: 'zone', shapeType: 'bx', l: 0.1 },
+                0, 540, 400, 300,
+            );
+
+            engine.addPlayer(0, 0, 400);    // red holder, rests inside the zone
+            engine.setPlayerTeam(0, 'red');
+            engine.addPlayer(1, 500, 400); // blue, outside the zone
+            engine.setPlayerTeam(1, 'blue');
+
+            // Progress fills (~3 ticks) and the f=20 countdown begins; no score yet.
+            for (let i = 0; i < 8; i++) engine.tick();
+            expect(engine.getTeamScored()).toBe(null);
+
+            // After the 20-tick countdown elapses the zone scores for red.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getTeamScored()).toBe('red');
+            expect(engine.getPlayerState(1).alive).toBe(false);
+            expect(engine.getPlayerState(1).deathType).toBe(3);
+            expect(engine.getPlayerState(0).alive).toBe(true);
+        });
+    });
+
     describe('environment integration', () => {
+        it('capzone capture scores exactly +1 (eliminations do not double-count as kill rewards)', () => {
+            const mapData: MapDef = {
+                name: 'capzone-reward',
+                spawnPoints: {
+                    team_blue: { x: -300, y: -100 },
+                    team_red: { x: 300, y: -100 },
+                },
+                bodies: [
+                    { name: 'floor', type: 'rect', x: 0, y: 400, width: 800, height: 30, static: true },
+                    // noPhysics fixture: geometry defines the zone sensor but
+                    // does not block the falling ball.
+                    { name: 'zone_fixture', type: 'rect', x: 0, y: 190, width: 200, height: 100, static: true, noPhysics: true },
+                    // Dynamic ball falls into the type-3 (blue) instant zone.
+                    { name: 'ball', type: 'circle', x: 0, y: 50, radius: 10, static: false, density: 1, restitution: 0, friction: 0 },
+                ],
+                capZones: [
+                    { index: 0, owner: 'neutral', type: 3, fixture: 'zone_fixture', shapeType: 'bx' },
+                ],
+            };
+
+            // Static opponent keeps the episode alive until the ball reaches
+            // the zone; the elimination lands on the same capture tick.
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
+            try {
+                let captureReward: number | null = null;
+                for (let i = 0; i < 300; i++) {
+                    const r = env.step(0);
+                    if ((r.info.scoreBlue ?? 0) > 0) {
+                        captureReward = r.reward;
+                        break;
+                    }
+                    if (r.done) break;
+                }
+
+                expect(captureReward).not.toBe(null);
+                // Exactly +1.0 capture, -0.001 time penalty. A double-count
+                // would read 1.999 (capture + elimination kill reward).
+                expect(captureReward!).toBeCloseTo(0.999, 3);
+            } finally {
+                env.close();
+            }
+        });
+
         it('BonkEnvironment with capZones map includes capZones in step info', () => {
             const mapData: MapDef = {
                 name: 'capzone-test',

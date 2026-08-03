@@ -61,6 +61,7 @@ describe('PhysicsEngine error paths', () => {
         angularVel: 0,
         isHeavy: false,
         alive: false,
+        deathType: 0,
       });
     });
   });

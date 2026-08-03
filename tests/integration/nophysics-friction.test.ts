@@ -69,7 +69,9 @@ describe('NoPhysicsFriction', () => {
       };
       engine.addBody(wall);
       engine.addPlayer(0, 0, 120);
-      for (let i = 0; i < 180; i++) {
+      // 30 ticks is enough to cross the sensor; sustained thrust for 180 ticks
+      // would carry the disc beyond the verified 850-map-unit OOB circle.
+      for (let i = 0; i < 30; i++) {
         engine.applyInput(0, inputUp);
         engine.tick();
       }
@@ -168,7 +170,10 @@ describe('NoPhysicsFriction', () => {
       ];
       for (const w of walls) engine.addBody(w);
       engine.addPlayer(0, 0, 130);
-      for (let i = 0; i < 180; i++) {
+      // Tuned for the verified 850-map-unit OOB circle: 80 ticks is enough to
+      // cross all three sensors while the disc stays inside the death circle
+      // (the old 180-tick duration relied on the incorrect ~2125-unit circle).
+      for (let i = 0; i < 80; i++) {
         engine.applyInput(0, inputUp);
         engine.tick();
       }

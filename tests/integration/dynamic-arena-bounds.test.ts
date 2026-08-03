@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { PhysicsEngine, MapBodyDef, ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from '../../src/core/physics-engine';
+import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { safeDestroy } from '../utils/test-helpers';
 
 describe('DynamicArenaBounds', () => {
@@ -10,7 +10,7 @@ describe('DynamicArenaBounds', () => {
     it('center player alive with no map bodies', () => {
       engine = new PhysicsEngine();
       engine.addPlayer(0, 0, 0);
-      engine.addPlayer(1, ARENA_HALF_WIDTH * SCALE + 10, 0);
+      engine.addPlayer(1, 2200, 0);
       engine.tick();
 
       const center = engine.getPlayerState(0);
@@ -75,13 +75,13 @@ describe('DynamicArenaBounds', () => {
   });
 
   describe('player death outside bounds', () => {
-    it('player outside dynamic bounds is dead', () => {
+    it('player outside the verified circular boundary is dead', () => {
       engine = new PhysicsEngine();
       engine.addBody({
         name: 'small', type: 'rect',
         x: 0, y: 0, width: 100, height: 30, static: true,
       });
-      engine.addPlayer(0, 900, 0);
+      engine.addPlayer(0, 2200, 0);
       engine.tick();
 
       const state = engine.getPlayerState(0);
@@ -109,8 +109,8 @@ describe('DynamicArenaBounds', () => {
         name: 'wdb-floor', type: 'rect',
         x: 1000, y: 0, width: 1825, height: 30, static: true,
       });
-      engine.addPlayer(0, 900, 0);
-      engine.addPlayer(1, 2100, 0);
+      engine.addPlayer(0, 800, 0);   // inside the verified 850-unit OOB circle
+      engine.addPlayer(1, 2300, 0);  // far outside it
       engine.tick();
 
       const inside = engine.getPlayerState(0);
@@ -139,17 +139,13 @@ describe('DynamicArenaBounds', () => {
   });
 
   describe('bounds recalculation', () => {
-    it('bounds recalculate on each addBody', () => {
+    it('reported bounds recalculate on each addBody', () => {
       engine = new PhysicsEngine();
       engine.addBody({
         name: 'near', type: 'rect',
         x: 0, y: 0, width: 100, height: 30, static: true,
       });
-      engine.addPlayer(0, 500, 0);
-      engine.tick();
-
-      const beforeState = engine.getPlayerState(0);
-      expect(beforeState.alive).toBe(false);
+      const beforeBounds = (engine as any).getArenaBounds();
 
       const engine2 = new PhysicsEngine();
       engine2.addBody({
@@ -160,26 +156,21 @@ describe('DynamicArenaBounds', () => {
         name: 'far', type: 'rect',
         x: 800, y: 0, width: 200, height: 30, static: true,
       });
-      engine2.addPlayer(0, 500, 0);
-      engine2.tick();
-
-      const afterState = engine2.getPlayerState(0);
-      expect(afterState.alive).toBe(true);
+      const afterBounds = (engine2 as any).getArenaBounds();
+      expect(afterBounds.halfWidth).toBeGreaterThan(beforeBounds.halfWidth);
 
       safeDestroy(engine2);
     });
 
-    it('reset preserves bound recalculation', () => {
+    it('reset preserves reported-bound recalculation', () => {
       engine = new PhysicsEngine();
       engine.addBody({
         name: 'far', type: 'rect',
         x: 500, y: 0, width: 200, height: 30, static: true,
       });
-      engine.addPlayer(0, 550, 0);
-      engine.tick();
-
-      const beforeReset = engine.getPlayerState(0);
-      expect(beforeReset.alive).toBe(true);
+      // getArenaBounds returns a cached object for the zero-GC observation
+      // path; snapshot values before mutating the world.
+      const beforeReset = { ...(engine as any).getArenaBounds() };
 
       engine.reset();
 
@@ -187,47 +178,30 @@ describe('DynamicArenaBounds', () => {
         name: 'small', type: 'rect',
         x: 0, y: 0, width: 100, height: 30, static: true,
       });
-      engine.addPlayer(0, 500, 0);
-      engine.tick();
-
-      const afterReset = engine.getPlayerState(0);
-      expect(afterReset.alive).toBe(false);
+      const afterReset = { ...(engine as any).getArenaBounds() };
+      expect(afterReset.halfWidth).toBeLessThan(beforeReset.halfWidth);
     });
   });
 
   describe('tall body', () => {
-    it('tall body expands arena half-height', () => {
+    it('tall body expands reported arena half-height', () => {
       engine = new PhysicsEngine();
       engine.addBody({
         name: 'wall', type: 'rect',
         x: 0, y: 600, width: 30, height: 300, static: true,
       });
-      engine.addPlayer(0, 0, 600);
-      engine.addPlayer(1, 0, 950);
-      engine.tick();
-
-      const inside = engine.getPlayerState(0);
-      const outside = engine.getPlayerState(1);
-      expect(inside.alive).toBe(true);
-      expect(outside.alive).toBe(false);
+      expect((engine as any).getArenaBounds().halfHeight).toBeGreaterThanOrEqual(900);
     });
   });
 
   describe('negative coordinates', () => {
-    it('negative coordinate bodies expand bounds correctly', () => {
+    it('negative coordinate bodies expand reported bounds correctly', () => {
       engine = new PhysicsEngine();
       engine.addBody({
         name: 'left-platform', type: 'rect',
         x: -600, y: 0, width: 200, height: 30, static: true,
       });
-      engine.addPlayer(0, -720, 0);
-      engine.addPlayer(1, -900, 0);
-      engine.tick();
-
-      const inside = engine.getPlayerState(0);
-      const outside = engine.getPlayerState(1);
-      expect(inside.alive).toBe(true);
-      expect(outside.alive).toBe(false);
+      expect((engine as any).getArenaBounds().halfWidth).toBeGreaterThanOrEqual(850);
     });
   });
 });

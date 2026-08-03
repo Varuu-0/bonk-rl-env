@@ -104,7 +104,7 @@ export class BonkEnv {
         console.log(`[BonkEnv:${this.id}] Stopping...`);
         
         try {
-            this.pool.close();
+            await this.pool.close();
         } catch (error) {
             console.error(`[BonkEnv:${this.id}] Error during shutdown:`, error);
         } finally {

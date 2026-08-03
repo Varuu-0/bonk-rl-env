@@ -16,6 +16,11 @@ const MAP_FILES = {
     ballPit: 'bonk_Ball_Pit_524616.json',
     wdb: 'bonk_WDB__No_Mapshake__716916.json',
 };
+const hasWdb = getMapFiles().includes(MAP_FILES.wdb);
+const describeWdb = hasWdb ? describe : describe.skip;
+const simulationMapKeys = hasWdb
+    ? (['simple1v1', 'ballPit', 'wdb'] as const)
+    : (['simple1v1', 'ballPit'] as const);
 
 const EMPTY_INPUT: PlayerInput = {
     left: false, right: false, up: false, down: false, heavy: false, grapple: false
@@ -108,7 +113,7 @@ describe('MapIntegration', () => {
             });
         });
 
-        describe('WDB', () => {
+        describeWdb('WDB', () => {
             it('loads without errors', () => {
                 const map = loadMap(MAP_FILES.wdb);
                 expect(map.name).toBeDefined();
@@ -194,7 +199,9 @@ describe('MapIntegration', () => {
 
     describe('map body structure', () => {
         const validTypes = new Set(['rect', 'circle', 'polygon']);
-        const mapKeys: (keyof typeof MAP_FILES)[] = ['simple1v1', 'ballPit', 'wdb'];
+        const mapKeys: (keyof typeof MAP_FILES)[] = hasWdb
+            ? ['simple1v1', 'ballPit', 'wdb']
+            : ['simple1v1', 'ballPit'];
 
         it.each(mapKeys)('%s has bodies array', (key) => {
             const map = loadMap(MAP_FILES[key]);
@@ -427,7 +434,7 @@ describe('MapIntegration', () => {
             });
         });
 
-        describe('WDB', () => {
+        describeWdb('WDB', () => {
             it('300-tick simulation (complex map)', () => {
                 engine = new PhysicsEngine();
                 const map = loadMap(MAP_FILES.wdb);
@@ -555,7 +562,7 @@ describe('MapIntegration', () => {
         });
 
         describe('cross-map stability', () => {
-            it.each(['simple1v1', 'ballPit', 'wdb'] as const)(
+            it.each(simulationMapKeys)(
                 '%s 60-tick simulation completes',
                 (key) => {
                     const e = new PhysicsEngine();
