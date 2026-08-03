@@ -3,7 +3,7 @@
 > **Generated**: 2026-04-01
 > **Platform**: Windows 10, Node.js >= 20
 > **Default Map**: Fallback box (WDB map excluded from repo)
-> **Physics**: Box2D (box2d-node, Box2DFlash v2.0 port), 30 TPS, 5 solver iterations
+> **Physics**: Box2D (box2d-node, Box2DFlash v2.0 port), 30 TPS, 2 velocity / 6 position solver iterations requested (port applies velocity count only)
 
 ---
 
@@ -63,7 +63,7 @@ Each worker allocates a single `SharedArrayBuffer` partitioned as:
 | Region          | Type        | Size (bytes)            |
 |-----------------|-------------|-------------------------|
 | Actions Ring    | `Uint8Array`| `numEnvs * ringSize`    |
-| Observations    | `Float32Array`| `numEnvs * 14 * 4`    |
+| Observations    | `Float32Array`| `numEnvs * 16 * 4`    |
 | Rewards         | `Float32Array`| `numEnvs * 4`         |
 | Dones           | `Uint8Array`| `numEnvs`               |
 | Truncated       | `Uint8Array`| `numEnvs`               |
@@ -333,3 +333,59 @@ The system scales to ~43,487 env-steps/sec at N=16, representing a **2.85x speed
 - GC and object allocation (~15%)
 
 Reaching closer to linear scaling would require architectural changes (e.g., batched Atomics, worker-to-worker communication, or a native physics engine compiled to WASM/asm).
+
+---
+
+## 8. Performance Log
+
+### 2026-07-29 — Contact-rule and tick-loop optimizations
+
+| Change | File | Impact |
+|---|---|---|
+| OOB death check uses cached squared radius (`oobRadiusSquared`) instead of per-player `Math.sqrt` | `src/core/physics-engine.ts` | Removes one sqrt per alive player per tick on the hot path; threshold value unchanged |
+| Team/`nc` filter recomputation is event-driven | `src/core/physics-engine.ts` | Filter data is rebuilt only when a team is assigned, a mode is toggled, or a disc is created — zero per-tick cost. The `SetContactFilter` callback path (that would have run per contact-pair) was abandoned after a repro proved this port never invokes it |
+| Swing-destroy queue uses a `Set` | `src/core/physics-engine.ts` | Deduplicates repeated disc-disc contacts within one step without extra allocation |
+| `lht` countdown moved before `world.Step` | `src/core/physics-engine.ts` | One map mutation pass per tick; fresh contacts keep their full 120-tick window without a second pass |
+
+### 2026-07-28 — Shared-memory layout
+
+- Observation region widened from 14 to 16 floats per env (dynamic arena bounds);
+  buffer size grows by `numEnvs * 2 * 4` bytes per worker — negligible (240 ? 256
+  bytes at 2 envs) and still a single contiguous allocation.
+- Response-timeout timers are now cleared on reply/close, eliminating up to 30s
+  of stray `setTimeout` handles per RPC (previously kept every worker-step
+  timer alive until natural expiry).
+
+### Identified opportunities (not yet done)
+
+- `extractContact` in the contact listener allocates `{ud1, ud2}` per callback;
+  pooling into a reusable scratch object would cut GC pressure on body-heavy
+  maps (Ball Pit, 28+ dynamic bodies).
+- `capZoneTouches` is reallocated (`this.capZoneTouches = []`) each tick; a
+  length-reset reusable array would avoid the churn when timed zones are active.
+- The broadphase `Query`/`TestOverlap`/`MoveProxy` monkey-patch guards add one
+  try/catch per call in the physics step; worth measuring whether the guard can
+  be applied only around the known-corrupt destroy path.
+
+### 2026-07-29 — Test-runner native-crash fix (vitest pool)
+
+- Root cause: `zeromq` (native addon) access-violates during vitest **thread**
+  worker teardown; every full-suite run died with `0xC0000005` after tests
+  finished. `pool: 'forks'` isolates native handles per process.
+- Effect: full suite now completes (44 files / 1094 passed / 0 failed, ~8.7s),
+  making entire-suite regression checks practical instead of targeted subsets.
+
+### 2026-07-29 — Review-driven hot-path allocations removed
+
+- `listener.Persist` early-exits before any extraction when the map has no
+  cap-zone sensors (eliminates per-contact-point work on every standard map).
+- Contact extraction reuses a single scratch `{ud1, ud2}` object across all
+  listener callbacks (they run sequentially within a Step) — no per-contact
+  allocation in `Add`/`Persist`.
+- `getArenaBounds()` returns a cached object refreshed per call; the
+  `getObservationFast` 16-float path no longer allocates one
+  `{halfWidth, halfHeight}` per env per step.
+- Message-passing step results normalize `terminated`/`info.terminated` in
+  place instead of spreading two objects per result.
+- `capZoneTouches` is cleared with `.length = 0` rather than reallocated
+  each tick.

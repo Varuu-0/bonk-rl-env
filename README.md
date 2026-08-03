@@ -19,9 +19,12 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 |:---------|:------|:------------|
 | TPS | 30 | Ticks per second |
 | DT | 0.0333... | Time per tick (1/30s) |
-| HEAVY_MASS_MULTIPLIER | 3.0 | Triples mass when heavy |
-| ARENA_HALF_WIDTH | 25m | Arena half-width |
-| ARENA_HALF_HEIGHT | 20m | Arena half-height |
+| Gravity | 20 | Native downward gravity |
+| Solver | 2 velocity / 6 position | Native low-quality solver request; installed port cannot apply separate position iterations |
+| Player PPM | 12 | Native default player scale; radius is `ppm / SCALE` |
+| Movement force | 12 | Native base movement force |
+| Heavy | 0.7x force | Heavy does not change player mass |
+| OOB radius | 850 map units (`850 / SCALE` world) | Native circular death boundary; native's `850/ppm` is in px/ppm world units so ppm cancels |
 | MAX_TICKS | 900 | Max episode (30s at 30 TPS) |
 
 ## Features

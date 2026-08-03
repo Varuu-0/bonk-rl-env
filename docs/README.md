@@ -20,6 +20,9 @@ Additional documents:
 | [workflow.md](workflow.md) | Development workflow and conventions |
 | [deprecated.md](deprecated.md) | Legacy features and migration notes |
 | [priority-recommendation.md](priority-recommendation.md) | Recommended development priorities |
+| [DEOBFUSCATION.md](DEOBFUSCATION.md) | Verified source findings and authoritative artifact inventory |
+| [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md) | Simulator discrepancies and implementation status derived from verified findings |
+| [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md) | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work |
 
 ## Subdirectories
 

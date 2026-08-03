@@ -54,10 +54,10 @@ These are high-impact, low-engineering-effort improvements.
 
 **Status**: ✅ Implemented in `src/core/environment.ts:459-490`
 
-The `getObservationFast()` method uses a pre-allocated `Float32Array(14)` to extract observations directly from physics state, skipping intermediate object creation. This is used in the shared memory code path (`worker.ts:65-67`, `worker.ts:186,261`).
+The `getObservationFast()` method uses a pre-allocated `Float32Array(16)` to extract observations directly from physics state, including dynamic map bounds while skipping intermediate object creation. This is used in the shared memory code path.
 
 ```typescript
-private _obsBuffer: Float32Array = new Float32Array(14);
+private _obsBuffer: Float32Array = new Float32Array(16);
 
 getObservationFast(): Float32Array {
   const aiState = this.physics.getPlayerState(this.aiPlayerId);
