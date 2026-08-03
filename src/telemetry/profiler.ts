@@ -246,6 +246,7 @@ export class Profiler {
     reset() {
         this.timeMetrics.clear();
         this.counters.clear();
+        this.gauges.clear();
         this.startTick = this.currentTick;
 
         // Also reset the global telemetry accumulator.

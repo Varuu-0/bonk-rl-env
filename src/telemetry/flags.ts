@@ -24,6 +24,19 @@ const DEFAULT_FLAGS: TelemetryFlags = {
 };
 
 /**
+ * Tracks which telemetry flag keys were EXPLICITLY provided via CLI args or env vars.
+ * Populated by parseFlags() and applyEnvOverrides(); consumed by mergeConfigWithFlags().
+ */
+let _explicitFlagKeys: Set<string> = new Set();
+
+/**
+ * Returns the set of explicitly-provided flag keys from the last parseFlags()/applyEnvOverrides() run.
+ */
+export function getExplicitFlagKeys(): Set<string> {
+  return _explicitFlagKeys;
+}
+
+/**
  * Valid CLI flag aliases and their mappings.
  * Format: [short, long] or [long] for single-form flags.
  */
@@ -124,6 +137,9 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
  * @returns Parsed TelemetryFlags with defaults applied
  */
 export function parseFlags(): TelemetryFlags {
+  // Reset explicit keys tracking
+  _explicitFlagKeys = new Set();
+
   // Start with defaults - no allocation needed
   const flags: TelemetryFlags = {
     enableTelemetry: DEFAULT_FLAGS.enableTelemetry,
@@ -155,6 +171,7 @@ export function parseFlags(): TelemetryFlags {
       // Boolean flags set to true
       if (key === 'enableTelemetry') {
         flags.enableTelemetry = true;
+        _explicitFlagKeys.add('enableTelemetry');
       }
       // Value flags need the next argument
       else if (
@@ -172,6 +189,7 @@ export function parseFlags(): TelemetryFlags {
           if (!nextArg.startsWith('-')) {
             const result = parseValueFlag(arg, nextArg);
             if (result) {
+              _explicitFlagKeys.add(result.key);
               // Use type-safe property assignments instead of `as any`
               switch (result.key) {
                 case 'profileLevel':
@@ -230,7 +248,7 @@ export function isAnyTelemetryEnabled(): boolean {
     }
 
     // Check for profile or debug flags (implies telemetry)
-    if (arg.startsWith('--profile') || arg.startsWith('--debug')) {
+    if (arg === '--profile' || arg.startsWith('--profile=') || arg === '--debug' || arg.startsWith('--debug=')) {
       return true;
     }
   }
@@ -249,6 +267,7 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   // Check for environment variable: MANIFOLD_TELEMETRY
   const envTelemetry = process.env.MANIFOLD_TELEMETRY;
   if (envTelemetry !== undefined) {
+    _explicitFlagKeys.add('enableTelemetry');
     if (envTelemetry === 'true' || envTelemetry === '1' || envTelemetry === 'yes') {
       flags.enableTelemetry = true;
     } else if (envTelemetry === 'false' || envTelemetry === '0' || envTelemetry === 'no') {
@@ -259,6 +278,7 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   // Check for environment variable: MANIFOLD_TELEMETRY_OUTPUT
   const envOutput = process.env.MANIFOLD_TELEMETRY_OUTPUT;
   if (envOutput !== undefined) {
+    _explicitFlagKeys.add('outputFormat');
     if (envOutput === 'console' || envOutput === 'file' || envOutput === 'both') {
       flags.outputFormat = envOutput;
     }
@@ -293,42 +313,49 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
  */
 export function mergeConfigWithFlags(
   configTelemetry: { enabled?: boolean; outputFormat?: string; retentionDays?: number; dashboardPort?: number; reportInterval?: number } | undefined,
-  cliFlags: TelemetryFlags
+  cliFlags: TelemetryFlags,
+  explicitKeys?: Set<string>
 ): TelemetryFlags {
   // Start with CLI flags (highest priority)
   const merged: TelemetryFlags = { ...cliFlags };
 
+  // Helper: determine if a key was explicitly set via CLI/env.
+  // When explicitKeys is provided (from parseFlags/applyEnvOverrides), use it directly.
+  // When not provided (e.g. manually constructed cliFlags in tests), fall back
+  // to comparing the CLI value against the default.
+  const notExplicit = (key: string, cliValue: unknown, defaultVal: unknown): boolean => {
+    if (explicitKeys && explicitKeys.size > 0) return !explicitKeys.has(key);
+    return cliValue === defaultVal;
+  };
+
   // Apply config file settings for values not explicitly set via CLI
-  // CLI flags have defaults, so we detect explicit overrides by checking
-  // if the CLI value differs from the DEFAULT_FLAGS
   if (configTelemetry) {
     // Only apply config settings if CLI didn't explicitly override them
-    // Check each setting against its default to detect if CLI set it
     
-    // enableTelemetry: if CLI kept default (false), apply config
-    if (cliFlags.enableTelemetry === DEFAULT_FLAGS.enableTelemetry && configTelemetry.enabled !== undefined) {
+    // enableTelemetry: if not explicitly set, apply config
+    if (notExplicit('enableTelemetry', cliFlags.enableTelemetry, DEFAULT_FLAGS.enableTelemetry) && configTelemetry.enabled !== undefined) {
       merged.enableTelemetry = configTelemetry.enabled;
     }
     
-    // outputFormat: if CLI kept default ('console'), apply config
-    if (cliFlags.outputFormat === DEFAULT_FLAGS.outputFormat && configTelemetry.outputFormat !== undefined) {
+    // outputFormat: if not explicitly set, apply config
+    if (notExplicit('outputFormat', cliFlags.outputFormat, DEFAULT_FLAGS.outputFormat) && configTelemetry.outputFormat !== undefined) {
       if (configTelemetry.outputFormat === 'console' || configTelemetry.outputFormat === 'file' || configTelemetry.outputFormat === 'both') {
         merged.outputFormat = configTelemetry.outputFormat;
       }
     }
     
-    // retentionDays: if CLI kept default (7), apply config
-    if (cliFlags.retentionDays === DEFAULT_FLAGS.retentionDays && configTelemetry.retentionDays !== undefined) {
+    // retentionDays: if not explicitly set, apply config
+    if (notExplicit('retentionDays', cliFlags.retentionDays, DEFAULT_FLAGS.retentionDays) && configTelemetry.retentionDays !== undefined) {
       merged.retentionDays = configTelemetry.retentionDays;
     }
     
-    // dashboardPort: if CLI kept default (3001), apply config
-    if (cliFlags.dashboardPort === DEFAULT_FLAGS.dashboardPort && configTelemetry.dashboardPort !== undefined) {
+    // dashboardPort: if not explicitly set, apply config
+    if (notExplicit('dashboardPort', cliFlags.dashboardPort, DEFAULT_FLAGS.dashboardPort) && configTelemetry.dashboardPort !== undefined) {
       merged.dashboardPort = configTelemetry.dashboardPort;
     }
     
-    // reportInterval: if CLI kept default (5000), apply config
-    if (cliFlags.reportInterval === DEFAULT_FLAGS.reportInterval && configTelemetry.reportInterval !== undefined) {
+    // reportInterval: if not explicitly set, apply config
+    if (notExplicit('reportInterval', cliFlags.reportInterval, DEFAULT_FLAGS.reportInterval) && configTelemetry.reportInterval !== undefined) {
       merged.reportInterval = configTelemetry.reportInterval;
     }
   }
