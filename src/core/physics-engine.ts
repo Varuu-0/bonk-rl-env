@@ -169,7 +169,8 @@ export interface MapBodyDef {
   height?: number;   // For rect
   radius?: number;   // For circle
   vertices?: { x: number; y: number }[]; // For polygon
-  static: boolean;
+  /** Omitted static defaults to a dynamic body. */
+  static?: boolean;
   density?: number;
   restitution?: number;
   angle?: number;
@@ -222,6 +223,8 @@ export class PhysicsEngine {
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
+  /** An instant goal ends the round; later sensor jitter must not re-score it. */
+  private instantGoalResolved: boolean = false;
   private platformBodies: any[] = [];
   private platformBodyMap: Map<string, any> = new Map();
   private tickCount: number = 0;
@@ -410,7 +413,9 @@ export class PhysicsEngine {
     } else if (isBegin) {
       // Native teamGoalEvent fires once on contact BEGIN; a body dwelling in
       // the zone must not re-score on every persisting tick.
-      if (otherUd.playerId === undefined && !otherUd.isCapZone && otherUd.static === false) {
+      // addBody() treats an omitted static flag as dynamic, so instant zones
+      // must do the same. Player discs and explicitly static bodies never fire.
+      if (otherUd.playerId === undefined && !otherUd.isCapZone && otherUd.static !== true) {
         this.triggerInstantGoal(zoneUd.zoneType);
       }
     }
@@ -427,8 +432,10 @@ export class PhysicsEngine {
   }
 
   private triggerInstantGoal(capType: number): void {
+    if (this.instantGoalResolved) return;
     const winnerTeam = this.capTypeToTeam(capType);
     if (!winnerTeam) return;
+    this.instantGoalResolved = true;
     this.lastScoredTeam = winnerTeam;
     for (const [id, team] of this.playerTeams) {
       if (team !== winnerTeam) {
@@ -1035,6 +1042,7 @@ export class PhysicsEngine {
     this.capZoneState.clear();
     this.capZoneTouches = [];
     this.lastScoredTeam = null;
+    this.instantGoalResolved = false;
     this.tickCount = 0;
   }
 
@@ -1065,6 +1073,7 @@ export class PhysicsEngine {
     this.capZoneState.clear();
     this.capZoneTouches = [];
     this.lastScoredTeam = null;
+    this.instantGoalResolved = false;
     this.pendingSwingDestroy.clear();
     this.lastHitBy.clear();
     this.lastHitTicks.clear();

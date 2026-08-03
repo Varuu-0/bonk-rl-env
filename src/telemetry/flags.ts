@@ -189,7 +189,9 @@ export function parseFlags(): TelemetryFlags {
           if (!nextArg.startsWith('-')) {
             const result = parseValueFlag(arg, nextArg);
             if (result) {
-              _explicitFlagKeys.add(result.key);
+              if (result.valid) {
+                _explicitFlagKeys.add(result.key);
+              }
               // Use type-safe property assignments instead of `as any`
               switch (result.key) {
                 case 'profileLevel':
@@ -210,6 +212,10 @@ export function parseFlags(): TelemetryFlags {
                 case 'retentionDays':
                   flags.retentionDays = result.value as number;
                   break;
+              }
+              if (result.valid && (result.key === 'profileLevel' || result.key === 'debugLevel')) {
+                flags.enableTelemetry = true;
+                _explicitFlagKeys.add('enableTelemetry');
               }
               i++; // Skip the value argument
             }
@@ -247,8 +253,15 @@ export function isAnyTelemetryEnabled(): boolean {
       }
     }
 
-    // Check for profile or debug flags (implies telemetry)
-    if (arg === '--profile' || arg.startsWith('--profile=') || arg === '--debug' || arg.startsWith('--debug=')) {
+    // Keep the fast path exactly aligned with parseFlags(): only the
+    // space-separated, valid-value forms imply telemetry.
+    const nextArg = argv[i + 1];
+    if ((arg === '--profile' || arg === '-p') &&
+        (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
+      return true;
+    }
+    if ((arg === '--debug' || arg === '-d') &&
+        (nextArg === 'none' || nextArg === 'error' || nextArg === 'verbose')) {
       return true;
     }
   }
@@ -267,20 +280,21 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   // Check for environment variable: MANIFOLD_TELEMETRY
   const envTelemetry = process.env.MANIFOLD_TELEMETRY;
   if (envTelemetry !== undefined) {
-    _explicitFlagKeys.add('enableTelemetry');
     if (envTelemetry === 'true' || envTelemetry === '1' || envTelemetry === 'yes') {
       flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
     } else if (envTelemetry === 'false' || envTelemetry === '0' || envTelemetry === 'no') {
       flags.enableTelemetry = false;
+      _explicitFlagKeys.add('enableTelemetry');
     }
   }
 
   // Check for environment variable: MANIFOLD_TELEMETRY_OUTPUT
   const envOutput = process.env.MANIFOLD_TELEMETRY_OUTPUT;
   if (envOutput !== undefined) {
-    _explicitFlagKeys.add('outputFormat');
     if (envOutput === 'console' || envOutput === 'file' || envOutput === 'both') {
       flags.outputFormat = envOutput;
+      _explicitFlagKeys.add('outputFormat');
     }
   }
 

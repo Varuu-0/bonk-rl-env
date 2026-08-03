@@ -253,6 +253,27 @@ describe('CapZoneScoring', () => {
             expect(winner.deathType).toBe(0);
         });
 
+        it('treats a body with omitted static as dynamic', () => {
+            engine = new PhysicsEngine();
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
+                0, 190, 200, 100,
+            );
+            engine.addPlayer(0, 300, 50);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, -300, 50);
+            engine.setPlayerTeam(1, 'red');
+            engine.addBody({
+                name: 'implicit-dynamic-ball', type: 'circle',
+                x: 0, y: 50, radius: 5, density: 1,
+                linearVelocity: { x: 0, y: 0 }, restitution: 0, friction: 0,
+            });
+
+            for (let i = 0; i < 100; i++) engine.tick();
+
+            expect(engine.getTeamScored()).toBe('red');
+        });
+
         it('player-disc contact does NOT trigger an instant zone', () => {
             engine = new PhysicsEngine();
 
@@ -285,7 +306,9 @@ describe('CapZoneScoring', () => {
 
             engine.addBody({
                 name: 'floor', type: 'rect',
-                x: 0, y: 400, width: 1600, height: 30,
+                // Floor top is inside the zone, so the ball continues to
+                // overlap the sensor after the first BeginContact event.
+                x: 0, y: 245, width: 1600, height: 30,
                 static: true,
             });
 
@@ -305,8 +328,9 @@ describe('CapZoneScoring', () => {
 
             // First read consumes the single goal.
             expect(engine.getTeamScored()).toBe('red');
-            // The ball still rests in the zone — Persist must not re-fire it.
-            expect(engine.getTeamScored()).toBe(null);
+            // The ball still rests in the zone — persist contacts must not
+            // produce a new score on later ticks.
+            for (let i = 0; i < 30; i++) engine.tick();
             expect(engine.getTeamScored()).toBe(null);
         });
     });

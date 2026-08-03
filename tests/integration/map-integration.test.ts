@@ -18,6 +18,9 @@ const MAP_FILES = {
 };
 const hasWdb = getMapFiles().includes(MAP_FILES.wdb);
 const describeWdb = hasWdb ? describe : describe.skip;
+if (!hasWdb) {
+    console.warn(`[MapIntegration] Optional WDB fixture ${MAP_FILES.wdb} is unavailable; WDB-specific tests are skipped.`);
+}
 const simulationMapKeys = hasWdb
     ? (['simple1v1', 'ballPit', 'wdb'] as const)
     : (['simple1v1', 'ballPit'] as const);

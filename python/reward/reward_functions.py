@@ -273,23 +273,22 @@ class CompositeReward(BaseRewardFunction):
         return final_reward
 
     def _normalize_reward(self, reward: float) -> float:
-        self._reward_buffer.append(reward)
+        # Normalize from prior statistics only. Updating after the result is
+        # computed keeps the current sample out of its own normalization.
+        normalized_reward = reward
+        if self._reward_buffer:
+            normalized_reward = (reward - self._running_mean) / np.sqrt(self._running_var + 1e-8)
 
+        self._reward_buffer.append(reward)
         if len(self._reward_buffer) > self.normalize_window:
             self._reward_buffer.pop(0)
 
-        if len(self._reward_buffer) > 1:
-            mean = np.mean(self._reward_buffer)
-            std = np.std(self._reward_buffer) + 1e-8
+        mean = np.mean(self._reward_buffer)
+        std = np.std(self._reward_buffer) + 1e-8
+        self._running_mean = 0.99 * self._running_mean + 0.01 * mean
+        self._running_var = 0.99 * self._running_var + 0.01 * (std ** 2)
 
-            self._running_mean = 0.99 * self._running_mean + 0.01 * mean
-            self._running_var = 0.99 * self._running_var + 0.01 * (std ** 2)
-
-            # Normalize with EMA stats (not the raw window) to avoid look-ahead bias:
-            # the current reward must not be in its own normalization statistics.
-            return (reward - self._running_mean) / np.sqrt(self._running_var + 1e-8)
-
-        return reward
+        return normalized_reward
 
     def set_weight(self, component_name: str, weight: float) -> None:
         if component_name not in self.weights:

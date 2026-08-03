@@ -145,21 +145,13 @@ describe('DynamicArenaBounds', () => {
         name: 'near', type: 'rect',
         x: 0, y: 0, width: 100, height: 30, static: true,
       });
-      const beforeBounds = (engine as any).getArenaBounds();
-
-      const engine2 = new PhysicsEngine();
-      engine2.addBody({
-        name: 'near', type: 'rect',
-        x: 0, y: 0, width: 100, height: 30, static: true,
-      });
-      engine2.addBody({
+      const beforeBounds = { ...(engine as any).getArenaBounds() };
+      engine.addBody({
         name: 'far', type: 'rect',
         x: 800, y: 0, width: 200, height: 30, static: true,
       });
-      const afterBounds = (engine2 as any).getArenaBounds();
+      const afterBounds = { ...(engine as any).getArenaBounds() };
       expect(afterBounds.halfWidth).toBeGreaterThan(beforeBounds.halfWidth);
-
-      safeDestroy(engine2);
     });
 
     it('reset preserves reported-bound recalculation', () => {

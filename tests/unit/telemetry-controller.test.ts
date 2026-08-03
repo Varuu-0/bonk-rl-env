@@ -432,6 +432,45 @@ describe('TelemetryController', () => {
       expect(reportSpy).toHaveBeenCalled();
       reportSpy.mockRestore();
     });
+
+    it('does not overlap reports while a worker snapshot is pending', async () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      let resolveSnapshots!: (value: BigUint64Array[]) => void;
+      const snapshots = new Promise<BigUint64Array[]>((resolve) => { resolveSnapshots = resolve; });
+      const mockPool = { getTelemetrySnapshots: vi.fn().mockReturnValue(snapshots) };
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+      controller.setWorkerPool(mockPool);
+
+      controller.tick();
+      controller.tick();
+      expect(mockPool.getTelemetrySnapshots).toHaveBeenCalledTimes(1);
+
+      resolveSnapshots([new BigUint64Array(5)]);
+      await snapshots;
+      await Promise.resolve();
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      reportSpy.mockRestore();
+    });
+
+    it('does not retry emission when report generation throws', async () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const mockPool = { getTelemetrySnapshots: vi.fn().mockResolvedValue([new BigUint64Array(5)]) };
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => { throw new Error('report failed'); });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      controller.setWorkerPool(mockPool);
+
+      controller.tick();
+      await Promise.resolve();
+      await Promise.resolve();
+
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      warnSpy.mockRestore();
+      reportSpy.mockRestore();
+    });
   });
 
   describe('gatherWorkerTelemetry error handling', () => {

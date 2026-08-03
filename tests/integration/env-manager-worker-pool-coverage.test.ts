@@ -40,6 +40,20 @@ describe('EnvManager uncovered paths', () => {
     });
   });
 
+  describe('failed startup cleanup', () => {
+    it('closes a partially initialized pool and releases its reserved port', async () => {
+      const initSpy = vi.spyOn(WorkerPool.prototype, 'init').mockRejectedValueOnce(new Error('init failed'));
+      const closeSpy = vi.spyOn(WorkerPool.prototype, 'close').mockResolvedValueOnce();
+
+      await expect(manager.createEnv()).rejects.toThrow('init failed');
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect(manager.getPortManager().getAllocatedCount()).toBe(0);
+      initSpy.mockRestore();
+      closeSpy.mockRestore();
+    });
+  });
+
   describe('resetAll non-array result handling (line ~202)', () => {
     it('handles non-array reset results by pushing directly', { timeout: 30000 }, async () => {
       const envs = await manager.createPool(1);

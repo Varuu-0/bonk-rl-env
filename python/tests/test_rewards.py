@@ -198,6 +198,22 @@ class TestCompositeReward:
             next_state = _make_state()
             composite.compute(state, 0, next_state, _make_info())
 
+    def test_normalization_uses_only_prior_statistics(self):
+        composite = CompositeReward(
+            components=[],
+            normalize=True,
+            normalize_window=10,
+        )
+
+        assert composite._normalize_reward(10.0) == 10.0
+        prior_mean = composite._running_mean
+        prior_var = composite._running_var
+
+        normalized = composite._normalize_reward(-5.0)
+        expected = (-5.0 - prior_mean) / np.sqrt(prior_var + 1e-8)
+
+        assert normalized == pytest.approx(expected)
+
     def test_disabled_component(self):
         nav = NavigationReward(
             goal_position=np.array([10.0, 10.0], dtype=np.float32),

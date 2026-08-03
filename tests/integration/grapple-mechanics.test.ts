@@ -51,10 +51,9 @@ describe('GrappleMechanics', () => {
       }));
       engine.addPlayer(0, 0, 0);
 
-      expect(() => {
-        engine.applyInput(0, GRAPPLE_INPUT);
-        for (let i = 0; i < 15; i++) engine.tick();
-      }).not.toThrow();
+      expect(() => engine.applyInput(0, GRAPPLE_INPUT)).not.toThrow();
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+      for (let i = 0; i < 15; i++) engine.tick();
 
       const state = engine.getPlayerState(0);
       expect(state.alive).toBe(true);

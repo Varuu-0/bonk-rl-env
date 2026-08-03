@@ -26,7 +26,7 @@ describe('BonkEnvironment edge cases', () => {
   }
 
   describe('capZone scoring', () => {
-    it('processes an instant capzone definition (type 2 = red)', async () => {
+    it('does not score an instant capzone from player-disc contact (type 2)', async () => {
       const mapData: MapDef = makeMap({
         capZones: [
           { index: 0, owner: 'neutral', type: 2, fixture: 'floor', shapeType: 'bx' },
@@ -42,10 +42,10 @@ describe('BonkEnvironment edge cases', () => {
           break;
         }
       }
-      expect(env).toBeDefined();
+      expect(scored).toBe(false);
     });
 
-    it('processes an instant capzone definition (type 3 = blue)', async () => {
+    it('does not score an instant capzone from player-disc contact (type 3)', async () => {
       const mapData: MapDef = makeMap({
         capZones: [
           { index: 0, owner: 'neutral', type: 3, fixture: 'floor', shapeType: 'bx' },
@@ -53,13 +53,15 @@ describe('BonkEnvironment edge cases', () => {
       });
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 200, seed: 42 });
       env.reset();
+      let scored = false;
       for (let i = 0; i < 150; i++) {
         const result = env.step(0);
         if (result.info.blueScore > 0 || result.info.redScore > 0) {
-          expect(true).toBe(true);
-          return;
+          scored = true;
+          break;
         }
       }
+      expect(scored).toBe(false);
     });
 
     it('capZones appear in step info', async () => {

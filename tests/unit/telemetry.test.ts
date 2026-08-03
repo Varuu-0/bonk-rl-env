@@ -12,7 +12,7 @@ import {
   getTelemetryController,
 } from '../../src/telemetry/telemetry-controller';
 import { globalProfiler, wrap, TelemetryIndices, TelemetryBuffer } from '../../src/telemetry/profiler';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from '../../src/telemetry/flags';
+import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys } from '../../src/telemetry/flags';
 import { resetConfig } from '../../src/config/config-loader';
 
 describe('TelemetryController', () => {
@@ -156,12 +156,14 @@ describe('TelemetryFlags parsing', () => {
       process.argv = ['node', 'script.js', '--profile', 'detailed'];
       const flags = parseFlags();
       expect(flags.profileLevel).toBe('detailed');
+      expect(flags.enableTelemetry).toBe(true);
     });
 
     it('parses --debug flag', () => {
       process.argv = ['node', 'script.js', '--debug', 'verbose'];
       const flags = parseFlags();
       expect(flags.debugLevel).toBe('verbose');
+      expect(flags.enableTelemetry).toBe(true);
     });
 
     it('parses --dashboard-port flag', () => {
@@ -177,6 +179,12 @@ describe('TelemetryFlags parsing', () => {
       warnSpy.mockRestore();
 
       expect(flags.profileLevel).toBe('standard');
+    });
+
+    it('does not accept equals-style profile and debug flags', () => {
+      process.argv = ['node', 'script.js', '--profile=detailed', '--debug=verbose'];
+      expect(parseFlags().enableTelemetry).toBe(false);
+      expect(isAnyTelemetryEnabled()).toBe(false);
     });
   });
 
@@ -203,6 +211,20 @@ describe('TelemetryFlags parsing', () => {
       process.env.MANIFOLD_DEBUG = 'error';
       const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
       expect(flags.debugLevel).toBe('error');
+    });
+
+    it('lets config values apply when telemetry environment values are invalid', () => {
+      process.env.MANIFOLD_TELEMETRY = 'maybe';
+      process.env.MANIFOLD_TELEMETRY_OUTPUT = 'xml';
+      const flags = applyEnvOverrides(parseFlags());
+      const merged = mergeConfigWithFlags(
+        { enabled: true, outputFormat: 'file' },
+        flags,
+        getExplicitFlagKeys(),
+      );
+
+      expect(merged.enableTelemetry).toBe(true);
+      expect(merged.outputFormat).toBe('file');
     });
   });
 

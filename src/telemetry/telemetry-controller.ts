@@ -34,6 +34,7 @@ export class TelemetryController {
   // Telemetry state
   private tickCount: number = 0;
   private lastReportTick: number = 0;
+  private reportInFlight: boolean = false;
 
   /**
    * Private constructor - use getInstance() instead
@@ -213,6 +214,12 @@ export class TelemetryController {
       return;
     }
 
+    // Worker snapshots are asynchronous. A second report while the current
+    // snapshot is pending would emit duplicate/out-of-order windows.
+    if (this.reportInFlight) {
+      return;
+    }
+
     const flags = this.getFlags();
 
     // Gather worker telemetry if available, then emit the report.
@@ -220,14 +227,30 @@ export class TelemetryController {
     // before calling globalProfiler.report() so worker stats are included.
     // When no worker pool, emit synchronously to preserve sync tick() behavior.
     if (this.workerPoolRef && flags.profileLevel !== 'minimal') {
-        this.gatherWorkerTelemetry()
-          .then(() => this.emitReport(flags))
-          .catch((error) => {
-            console.warn('[Telemetry] Failed to gather worker snapshots:', error);
-            this.emitReport(flags);
-          });
+        this.reportInFlight = true;
+        void this.gatherWorkerTelemetry()
+          .then(
+            () => {
+              try {
+                this.emitReport(flags);
+              } catch (error) {
+                // Do not retry emitReport here: an emit failure must not create a
+                // duplicate report after a successfully gathered snapshot.
+                console.warn('[Telemetry] Failed to generate report:', error);
+              }
+              this.reportInFlight = false;
+            },
+            (error) => {
+              console.warn('[Telemetry] Failed to generate report:', error);
+              this.reportInFlight = false;
+            },
+          );
     } else {
-      this.emitReport(flags);
+      try {
+        this.emitReport(flags);
+      } catch (error) {
+        console.warn('[Telemetry] Failed to generate report:', error);
+      }
     }
   }
 
@@ -313,6 +336,7 @@ export class TelemetryController {
   reset(): void {
     this.tickCount = 0;
     this.lastReportTick = 0;
+    this.reportInFlight = false;
     // Reset the profiler
     globalProfiler.reset();
   }

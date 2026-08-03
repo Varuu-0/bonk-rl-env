@@ -9,7 +9,8 @@
  *      last-hit attribution (`lhid`, `lht = 120` ticks = 4s at 30 TPS).
  */
 import { describe, it, expect, afterEach } from 'vitest';
-import { PhysicsEngine, LAST_HIT_TIMER_TICKS } from '../../src/core/physics-engine';
+import { PhysicsEngine, LAST_HIT_TIMER_TICKS, MapDef } from '../../src/core/physics-engine';
+import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
 
 const NO_INPUT = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
@@ -101,16 +102,32 @@ describe('TeamDiscCollision (verified contact rules)', () => {
     });
 
     describe('environment wiring', () => {
-        it('BonkEnvironment forwards teamsEnabled/noCollide to the engine', async () => {
-            const { BonkEnvironment } = await import('../../src/core/environment');
+        it('initializes a teams-enabled environment', () => {
             const env = new BonkEnvironment({ numOpponents: 1, teamsEnabled: true, seed: 7 });
             try {
-                // Engine internals are private; verify persisted flags by behavior:
-                // AI (blue) and opponent (red) are opposite teams, so they collide;
-                // two same-team discs created directly would not. Smoke check only.
                 env.reset();
                 const r = env.step(0);
                 expect(r.observation).toBeDefined();
+            } finally {
+                env.close();
+            }
+        });
+
+        it('forwards noCollide to observable disc contact behavior', () => {
+            const mapData: MapDef = {
+                name: 'overlapping-spawns',
+                spawnPoints: {
+                    team_blue: { x: 0, y: 0 },
+                    team_red: { x: 20, y: 0 },
+                },
+                bodies: [{ name: 'floor', type: 'rect', x: 0, y: 500, width: 1200, height: 30, static: true }],
+            };
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, noCollide: true, randomOpponent: false, seed: 7 });
+            try {
+                let result = env.reset();
+                for (let i = 0; i < 15; i++) result = env.step(0).observation;
+
+                expect(Math.abs(result.playerX - result.opponents[0].x)).toBeCloseTo(20, 5);
             } finally {
                 env.close();
             }
