@@ -27,6 +27,7 @@ export interface ServerConfig {
 export interface PhysicsConfig {
     ticksPerSecond: number;
     solverIterations: number;
+    positionIterations: number;
     scale: number;
     gravityX: number;
     gravityY: number;
@@ -164,20 +165,21 @@ const DEFAULTS: AppConfig = {
     },
     physics: {
         ticksPerSecond: 30,
-        solverIterations: 5,
+        solverIterations: 2,
+        positionIterations: 6,
         scale: 30.0,
         gravityX: 0.0,
-        gravityY: 10.0,
+        gravityY: 20.0,
         enableSleeping: true,
         worldAabbExtent: 1000.0,
     },
     player: {
-        radius: 0.5,
+        radius: 0.4,
         density: 1.0,
-        friction: 0.3,
-        restitution: 0.5,
-        moveForce: 8.0,
-        heavyMassMultiplier: 3.0,
+        friction: 0.0,
+        restitution: 0.8,
+        moveForce: 12.0,
+        heavyMassMultiplier: 0.7,
     },
     grapple: {
         maxDistance: 10.0,
@@ -268,9 +270,10 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
     return typeof val === 'object' && val !== null && !Array.isArray(val);
 }
 
-function deepMerge<T extends Record<string, any>>(base: T, override: Partial<T>): T {
+export function deepMerge<T extends Record<string, any>>(base: T, override: Partial<T>): T {
     const result: Record<string, any> = { ...base };
     for (const key of Object.keys(override)) {
+        if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;
         const overrideVal = (override as Record<string, any>)[key];
         if (overrideVal === undefined || overrideVal === null) continue;
         if (isPlainObject(result[key]) && isPlainObject(overrideVal)) {
@@ -364,6 +367,12 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (env.USE_SHARED_MEMORY !== undefined) {
         const v = env.USE_SHARED_MEMORY.toLowerCase();
         config.workerPool.useSharedMemory = v !== 'false' && v !== '0' && v !== 'no';
+    }
+
+    // Physics
+    if (env.POSITION_ITERATIONS !== undefined) {
+        const v = parseInt(env.POSITION_ITERATIONS, 10);
+        if (!isNaN(v) && v >= 0) config.physics.positionIterations = v;
     }
 
     // Environment
@@ -468,6 +477,16 @@ function parseCliFlags(config: AppConfig): AppConfig {
 
             case '--no-shared-mem':
                 config.workerPool.useSharedMemory = false;
+                break;
+
+            case '--position-iterations':
+                if (next) {
+                    const v = parseInt(next, 10);
+                    if (!isNaN(v) && v >= 0) {
+                        config.physics.positionIterations = v;
+                        i++;
+                    }
+                }
                 break;
 
             case '--seed':
