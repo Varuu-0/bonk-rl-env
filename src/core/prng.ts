@@ -7,6 +7,10 @@ const STATE_INCREMENT = 0x6D2B79F5;
  * This class implements the Mulberry32 algorithm, which is a fast, 
  * high-quality pseudorandom number generator suitable for applications 
  * requiring reproducible random sequences.
+ *
+ * next() always emits the canonical Mulberry32 sequence. nextInt() samples
+ * integers without modulo bias; see nextInt() for how rejection sampling
+ * affects stream consumption and backward-compatible outputs.
  */
 export class PRNG {
     /** 
@@ -60,7 +64,16 @@ export class PRNG {
      * @param max - The upper bound (inclusive). Will be floored to an integer.
      * @returns An integer in the range [min, max] (inclusive).
      * 
-     * @throws {Error} If min is greater than max after flooring or the inclusive
+     * Consumes exactly one raw 32-bit word when the inclusive range is a power
+     * of two, and the returned values are then identical to the previous
+     * float-scaled implementation. For every other range, rejection sampling
+     * may consume additional words and the returned values intentionally
+     * differ from the float-scaled implementation to remove modulo bias.
+     * Because draw consumption is data-dependent for such ranges, interleaving
+     * next() and nextInt() advances the shared stream by a variable number of
+* words; next() itself always emits the canonical sequence.
+ *
+ * @throws {Error} If min is greater than max after flooring or the inclusive
      *                 range contains more than 2^32 values.
      */
     nextInt(min: number, max: number): number {
@@ -83,6 +96,14 @@ export class PRNG {
             );
         }
 
+        // Powers of two evenly divide the uint32 space: one word is exactly
+        // uniform, and mapping it to the high bits matches the legacy
+        // float-scaled outputs exactly.
+        if ((range & (range - 1)) === 0) {
+            const value = this.next() * UINT32_SIZE;
+            return Math.floor(value / (UINT32_SIZE / range)) + _min;
+        }
+
         // Reject the incomplete high bucket so every result has the same number of preimages.
         const limit = UINT32_SIZE - (UINT32_SIZE % range);
         let value: number;
@@ -91,5 +112,25 @@ export class PRNG {
         } while (value >= limit);
 
         return (value % range) + _min;
+    }
+
+    /**
+     * Read the current internal state.
+     *
+     * Intended for tests and diagnostics; not part of the public API.
+     * @internal
+     */
+    getState(): number {
+        return this.a;
+    }
+
+    /**
+     * Overwrite the internal state, normalized to a 32-bit unsigned integer.
+     *
+     * Intended for tests and diagnostics; not part of the public API.
+     * @internal
+     */
+    setState(state: number): void {
+        this.a = state >>> 0;
     }
 }

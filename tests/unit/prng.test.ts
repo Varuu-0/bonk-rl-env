@@ -8,14 +8,6 @@ import { PRNG } from '../../src/core/prng';
 const UINT32_SIZE = 0x100000000;
 const STATE_INCREMENT = 0x6D2B79F5;
 
-function getState(prng: PRNG): number {
-    return (prng as unknown as { a: number }).a;
-}
-
-function setState(prng: PRNG, state: number): void {
-    (prng as unknown as { a: number }).a = state;
-}
-
 describe('PRNG', () => {
     describe('basic random generation', () => {
         it('generates numbers in [0,1)', () => {
@@ -101,7 +93,7 @@ describe('PRNG', () => {
             const prng = new PRNG(seed);
             const normalized = new PRNG(normalizedSeed);
 
-            expect(getState(prng)).toBe(normalizedSeed);
+            expect(prng.getState()).toBe(normalizedSeed);
             expect(Array.from({ length: 20 }, () => prng.next())).toEqual(
                 Array.from({ length: 20 }, () => normalized.next())
             );
@@ -113,7 +105,7 @@ describe('PRNG', () => {
 
             prng.setSeed(UINT32_SIZE + 42);
 
-            expect(getState(prng)).toBe(42);
+            expect(prng.getState()).toBe(42);
             expect(Array.from({ length: 20 }, () => prng.next())).toEqual(
                 Array.from({ length: 20 }, () => normalized.next())
             );
@@ -124,30 +116,30 @@ describe('PRNG', () => {
 
             prng.next();
 
-            expect(getState(prng)).toBe((0xFFFFFFFF + STATE_INCREMENT) >>> 0);
+            expect(prng.getState()).toBe((0xFFFFFFFF + STATE_INCREMENT) >>> 0);
         });
 
         it('preserves the final output before the legacy state loses precision', () => {
             const legacyStateBeforeFinalExactStep = 4_917_757 * STATE_INCREMENT;
             const prng = new PRNG(0);
             const normalized = new PRNG(legacyStateBeforeFinalExactStep >>> 0);
-            setState(prng, legacyStateBeforeFinalExactStep);
+            prng.setState(legacyStateBeforeFinalExactStep);
 
             expect(prng.next()).toBe(normalized.next());
-            expect(getState(prng)).toBe(getState(normalized));
+            expect(prng.getState()).toBe(normalized.getState());
         });
 
         it('normalizes a forced long-running state before precision can alter the wrap', () => {
             const legacyStateAtPrecisionBoundary = 4_917_758 * STATE_INCREMENT;
             const prng = new PRNG(0);
             const normalized = new PRNG(legacyStateAtPrecisionBoundary >>> 0);
-            setState(prng, legacyStateAtPrecisionBoundary);
+            prng.setState(legacyStateAtPrecisionBoundary);
 
             expect((legacyStateAtPrecisionBoundary + STATE_INCREMENT) >>> 0).not.toBe(
                 ((legacyStateAtPrecisionBoundary >>> 0) + STATE_INCREMENT) >>> 0
             );
             expect(prng.next()).toBe(normalized.next());
-            expect(getState(prng)).toBe(getState(normalized));
+            expect(prng.getState()).toBe(normalized.getState());
         });
     });
 
@@ -219,10 +211,19 @@ describe('PRNG', () => {
             ]);
         });
 
-        it('supports the full uint32-sized inclusive range', () => {
+it('supports the full uint32-sized inclusive range', () => {
             const prng = new PRNG(0);
 
             expect(prng.nextInt(-0x80000000, 0x7FFFFFFF)).toBe(-0x3BCB4B9E);
+        });
+
+        it('matches legacy float-scaled outputs for power-of-two ranges using one word', () => {
+            const prng = new PRNG(42);
+
+            expect(Array.from({ length: 10 }, () => prng.nextInt(0, 7))).toEqual([
+                4, 3, 6, 5, 1, 4, 2, 4, 6, 3,
+            ]);
+            expect(prng.next()).toBe(0x3FFB0079 / UINT32_SIZE);
         });
 
         it('deterministically rejects values in the incomplete high bucket', () => {
