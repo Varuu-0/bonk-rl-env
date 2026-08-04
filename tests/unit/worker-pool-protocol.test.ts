@@ -23,6 +23,7 @@ describe('WorkerPool message protocol', () => {
     expect(pool.callbacks.get(0xFFFFFFFF)).toBe(liveAtMax);
     expect(pool.callbacks.get(0)).toBe(liveAtZero);
 
+    expect(pool.callbacks.get(1)).toBeDefined();
     const callback = pool.callbacks.get(1);
     pool.callbacks.delete(1);
     clearTimeout(callback.timeout);

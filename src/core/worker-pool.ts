@@ -227,10 +227,17 @@ export class WorkerPool {
 
     private allocateMessageId(): number {
         const liveCallbacks = this.callbacks.size;
+        // Defensive invariant: a free uint32 id always exists below, so this
+        // guard can never fire unless the callback map holds 2^32 entries.
         if (liveCallbacks >= 0x100000000) {
             throw new Error('WorkerPool message ID space exhausted');
         }
 
+        // Probe `liveCallbacks + 1` distinct uint32 ids while only
+        // `liveCallbacks` can be occupied, so a free id is guaranteed to be
+        // found (pigeonhole principle) and a live callback is never overwritten.
+        // The map is bounded in practice by in-flight messages because replies
+        // and 30s timeouts both delete their callback entry.
         let id = this.msgId >>> 0;
         for (let attempt = 0; attempt <= liveCallbacks; attempt++) {
             this.msgId = (id + 1) >>> 0;
@@ -238,6 +245,7 @@ export class WorkerPool {
             id = this.msgId;
         }
 
+        // Unreachable; kept as a defensive guard for future allocator changes.
         throw new Error('WorkerPool could not allocate a message ID');
     }
 
