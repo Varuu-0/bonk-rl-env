@@ -38,6 +38,8 @@ def test_socket_uses_bounded_options_and_session_close(monkeypatch):
     assert socket.send_json.call_args_list[-1].args[0] == {"command": "close"}
     socket.close.assert_called_once_with(linger=67)
     context.term.assert_called_once_with()
+    assert env.socket is None
+    assert env.context is None
 
 
 @pytest.mark.parametrize(
@@ -72,6 +74,26 @@ def test_socket_creation_failure_terminates_the_context(monkeypatch):
     context.term.assert_called_once_with()
 
 
+def test_init_cleanup_failure_preserves_original_exception_and_nulls_transport(
+    monkeypatch,
+):
+    socket = MagicMock()
+    socket.recv_json.return_value = {"status": "error", "error": "original init failure"}
+    context = MagicMock()
+    context.socket.return_value = socket
+    context.term.side_effect = zmq.ZMQError("cleanup failed")
+    monkeypatch.setattr(bonk_env.zmq, "Context", MagicMock(return_value=context))
+    env = bonk_env.BonkVecEnv.__new__(bonk_env.BonkVecEnv)
+
+    with pytest.raises(RuntimeError, match="original init failure"):
+        env.__init__(linger_ms=0)
+
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+    assert env.socket is None
+    assert env.context is None
+
+
 @pytest.mark.parametrize(
     "kwargs",
     [
@@ -87,16 +109,37 @@ def test_transport_options_require_bounded_integer_values(kwargs):
         bonk_env.BonkVecEnv(**kwargs)
 
 
-def test_reset_receive_timeout_names_the_command(monkeypatch):
-    env, _, socket = _make_mocked_env(monkeypatch, timeout_ms=123)
+def test_reset_receive_timeout_invalidates_session_and_rejects_later_requests(monkeypatch):
+    env, context, socket = _make_mocked_env(monkeypatch, timeout_ms=123, linger_ms=0)
     socket.recv_json.side_effect = zmq.Again()
 
     with pytest.raises(TimeoutError, match="123 ms waiting for 'reset' response"):
         env.reset(seeds=[1])
 
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+    assert env.socket is None
+    assert env.context is None
+
+    # Even if the timed-out reply arrives late, no later request may consume it.
     socket.recv_json.side_effect = None
     socket.recv_json.return_value = {"status": "ok"}
+    socket.send_json.reset_mock()
+    socket.recv_json.reset_mock()
+
+    for operation in (
+        lambda: env.reset(seeds=[2]),
+        lambda: env.step_async([0]),
+        env.step_wait,
+    ):
+        with pytest.raises(RuntimeError, match="cannot use BonkVecEnv after a receive timeout"):
+            operation()
+
+    socket.send_json.assert_not_called()
+    socket.recv_json.assert_not_called()
     env.close()
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
 
 
 def test_step_send_and_receive_timeouts_name_the_command(monkeypatch):
@@ -142,6 +185,25 @@ def test_close_timeout_is_clear_bounded_and_idempotent(monkeypatch, operation, m
     context.term.assert_called_once_with()
 
 
+@pytest.mark.parametrize("operation", ["reset", "step_async", "step_wait"])
+def test_request_operations_after_close_raise_clear_runtime_error(monkeypatch, operation):
+    env, _, socket = _make_mocked_env(monkeypatch)
+    env.close()
+    socket.send_json.reset_mock()
+    socket.recv_json.reset_mock()
+
+    with pytest.raises(RuntimeError, match="cannot use BonkVecEnv after close"):
+        if operation == "reset":
+            env.reset(seeds=[1])
+        elif operation == "step_async":
+            env.step_async([0])
+        else:
+            env.step_wait()
+
+    socket.send_json.assert_not_called()
+    socket.recv_json.assert_not_called()
+
+
 def test_step_accepts_integer_actions_and_normalizes_numpy_values(monkeypatch):
     env, _, socket = _make_mocked_env(monkeypatch, num_envs=2)
     socket.send_json.reset_mock()
@@ -149,6 +211,55 @@ def test_step_accepts_integer_actions_and_normalizes_numpy_values(monkeypatch):
     env.step_async([np.int64(0), np.int32(63)])
 
     socket.send_json.assert_called_once_with({"command": "step", "actions": [0, 63]})
+    env.close()
+
+
+def test_reset_accepts_integer_seeds_and_normalizes_numpy_values(monkeypatch):
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=2)
+    socket.send_json.reset_mock()
+    socket.recv_json.side_effect = zmq.Again()
+
+    with pytest.raises(TimeoutError, match="waiting for 'reset' response"):
+        env.reset(seeds=np.array([np.uint32(0), np.uint64(0xFFFFFFFE)]))
+
+    socket.send_json.assert_called_once_with(
+        {"command": "reset", "seeds": [0, 4294967294], "options": {}}
+    )
+
+
+@pytest.mark.parametrize(
+    ("seeds", "error", "message"),
+    [
+        ([1.0], TypeError, "must be an integer"),
+        ([True], TypeError, "must be an integer"),
+        ([np.bool_(False)], TypeError, "must be an integer"),
+        ([-1], ValueError, "must be in \\[0, 4294967294\\]"),
+        ([0xFFFFFFFF], ValueError, "must be in \\[0, 4294967294\\]"),
+        (np.array([[0]]), ValueError, "one-dimensional"),
+        (0, TypeError, "must be a sequence"),
+    ],
+)
+def test_reset_rejects_non_integer_out_of_range_or_invalid_shape_seeds(
+    monkeypatch, seeds, error, message
+):
+    env, _, socket = _make_mocked_env(monkeypatch)
+    socket.send_json.reset_mock()
+
+    with pytest.raises(error, match=message):
+        env.reset(seeds=seeds)
+
+    socket.send_json.assert_not_called()
+    env.close()
+
+
+def test_reset_requires_one_seed_per_environment(monkeypatch):
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=2)
+    socket.send_json.reset_mock()
+
+    with pytest.raises(ValueError, match="exactly 2 values, got 1"):
+        env.reset(seeds=[1])
+
+    socket.send_json.assert_not_called()
     env.close()
 
 

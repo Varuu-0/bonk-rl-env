@@ -153,6 +153,17 @@ class TestBonkVecEnvMultipleReset:
         obs, _ = bonk_vec_env_single.reset()
         assert obs.shape == (1, 14)
 
+    def test_numpy_seed_transport_boundaries(self, bonk_vec_env_single):
+        obs, _ = bonk_vec_env_single.reset(seeds=np.array([np.uint64(0xFFFFFFFE)]))
+        assert obs.shape == (1, 14)
+
+    def test_invalid_seed_does_not_poison_the_live_session(self, bonk_vec_env_single):
+        with pytest.raises(ValueError, match="must be in \\[0, 4294967294\\]"):
+            bonk_vec_env_single.reset(seeds=[0xFFFFFFFF])
+
+        obs, _ = bonk_vec_env_single.reset(seeds=[0])
+        assert obs.shape == (1, 14)
+
 
 @pytest.mark.slow
 class TestBonkVecEnvConfigurableNumEnvs:
