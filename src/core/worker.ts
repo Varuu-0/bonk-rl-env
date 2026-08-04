@@ -17,12 +17,16 @@ let sharedMem: SharedMemoryManager | null = null;
 let numEnvs = 0;
 let globalOffset = 0;
 let syncCompleted: Int32Array | null = null;
+let syncWorkerIndex = 0;
 
-function signalSyncCompleted() {
-    if (syncCompleted) {
-        Atomics.add(syncCompleted, 0, 1);
-        Atomics.notify(syncCompleted, 0, 1);
-    }
+const WORKER_COMPLETE = 1;
+const WORKER_ERROR = -1;
+
+function signalSyncCompleted(status: number = WORKER_COMPLETE) {
+    if (!syncCompleted) return;
+    Atomics.store(syncCompleted, syncWorkerIndex + 1, status);
+    Atomics.add(syncCompleted, 0, 1);
+    Atomics.notify(syncCompleted, 0, 1);
 }
 
 /**
@@ -95,6 +99,7 @@ parentPort.on('message', (msg) => {
                 );
                 if (msg.syncBuffer) {
                     syncCompleted = new Int32Array(msg.syncBuffer);
+                    syncWorkerIndex = msg.workerIndex ?? 0;
                 }
                 parentPort!.postMessage({
                     id: msg.id,
@@ -298,6 +303,7 @@ parentPort.on('message', (msg) => {
                 }
                 } catch (e: any) {
                     console.error(`[Worker ${globalOffset}] wait-for-action crashed:`, e.message, e.stack);
+                    signalSyncCompleted(WORKER_ERROR);
                     parentPort!.postMessage({ id: msg.id, status: 'error', error: `worker-loop-crash: ${e.message}` });
                 }
             } else {

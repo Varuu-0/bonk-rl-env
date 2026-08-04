@@ -120,10 +120,11 @@ describe('WorkerPool uncovered lines', () => {
       // while useSharedMemory is still true — simulates a corrupted state
       (pool as any).sharedMemManagers[0] = null;
 
-      // Error occurs at line 361 (writeActionsQuiet) before the defensive check at 434
       await expect(pool.step([0])).rejects.toThrow(
-        "Cannot read properties of null (reading 'writeActionsQuiet')"
+        'Shared memory manager not initialized for worker 0'
       );
+
+      await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
     });
 
     it('throws error with correct worker index for multi-worker setup', async () => {
@@ -140,7 +141,7 @@ describe('WorkerPool uncovered lines', () => {
       (pool as any).sharedMemManagers[0] = null;
 
       await expect(pool.step([0, 0, 0, 0])).rejects.toThrow(
-        "Cannot read properties of null (reading 'writeActionsQuiet')"
+        'Shared memory manager not initialized for worker 0'
       );
     });
   });
