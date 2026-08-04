@@ -27,6 +27,20 @@ interface SharedObservation {
     tick: number;
 }
 
+export interface ResultOwnershipOptions {
+    /**
+     * `owned` returns caller-owned snapshots that remain stable across later
+     * calls. `borrowed` exposes the shared-memory extraction pools and is only
+     * valid until the next reset or step.
+     *
+     * Only the shared-memory transport is affected: message-passing results
+     * are structured-cloned by the worker transport and are always
+     * caller-owned, so the option is a no-op there (accepted for a symmetric
+     * API).
+     */
+    ownership?: 'owned' | 'borrowed';
+}
+
 type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
 
 const SYNC_COMPLETED_INDEX = 0;
@@ -302,7 +316,15 @@ export class WorkerPool {
         });
     }
 
-    async reset(seeds?: number[]): Promise<any[]> {
+    /**
+     * Reset all environments. Results are caller-owned by default.
+     * Borrowed results must be consumed before the next reset or step and must
+     * not be retained or mutated.
+     *
+     * Message-passing mode always returns caller-owned results; `ownership`
+     * only affects the shared-memory extraction path.
+     */
+    async reset(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('reset');
 
         if (this.useSharedMemory && seeds) {
@@ -356,7 +378,10 @@ export class WorkerPool {
                     const wEnvs = this.workerEnvs[i];
                     const res = this.requireSharedMemoryManager(i).readResults();
                     for (let j = 0; j < wEnvs; j++) {
-                        observations.push(this.extractObservation(res.observations, j, globalEnvIdx));
+                        const observation = this.extractObservation(res.observations, j, globalEnvIdx);
+                        observations.push(options.ownership === 'borrowed'
+                            ? observation
+                            : this.snapshotObservation(observation));
                         globalEnvIdx++;
                     }
                 }
@@ -371,6 +396,9 @@ export class WorkerPool {
                 promises.push(this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds }));
                 seedIdx += wEnvs;
             }
+            // Message-passing results are already caller-owned structured clones,
+            // so the ownership option only affects the shared-memory extraction
+            // path above.
             const results = await this.settleMessageBatch(promises);
             return results.flat();
         } catch (error) {
@@ -390,14 +418,23 @@ export class WorkerPool {
         }
     }
 
-    async step(actions: any[]): Promise<any[]> {
+    /**
+     * Step all environments. Results are caller-owned by default.
+     * Borrowed results preserve the zero-allocation extraction path but the
+     * entire returned graph is invalidated by the next reset or step.
+     *
+     * Message-passing mode always returns caller-owned structured clones, so
+     * `ownership` is a no-op there (accepted for a symmetric API).
+     */
+    async step(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('step');
         try {
-            // Use shared memory mode if enabled
+            // Shared memory mode honors `ownership`; message-passing mode always
+            // returns caller-owned structured clones.
             if (this.useSharedMemory) {
-                return await this.stepSharedMemory(actions);
+                return await this.stepSharedMemory(actions, options);
             }
-            return await this.stepMessagePassing(actions);
+            return await this.stepMessagePassing(actions, options);
         } catch (error) {
             if (this.state === 'closed') {
                 throw error;
@@ -419,7 +456,7 @@ export class WorkerPool {
      * Step using shared memory (zero-copy IPC)
      * Writes actions to shared memory, signals workers, and waits for results
      */
-    private async stepSharedMemory(actions: any[]): Promise<any[]> {
+    private async stepSharedMemory(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
         this._returnTimes.fill(BigInt(0));
         const returnTimes = this._returnTimes;
@@ -544,13 +581,26 @@ export class WorkerPool {
             actionIdx += wEnvs;
         }
 
-        return this._convertedResults;
+        if (options.ownership === 'borrowed') {
+            return this._convertedResults;
+        }
+
+        const ownedResults = new Array(this._convertedResults.length);
+        for (let i = 0; i < this._convertedResults.length; i++) {
+            ownedResults[i] = this.snapshotResult(this._convertedResults[i]);
+        }
+        return ownedResults;
     }
 
     /**
-     * Step using message passing (fallback mode)
+     * Step using message passing (fallback mode).
+     *
+     * Results are structured-cloned by the worker transport, so they are
+     * already caller-owned in both `owned` and `borrowed` modes. `options` is
+     * accepted for API symmetry with the shared-memory path and has no effect
+     * on allocation or retention semantics here.
      */
-    private async stepMessagePassing(actions: any[]): Promise<any[]> {
+    private async stepMessagePassing(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
         const returnTimes: bigint[] = [];
 
@@ -620,6 +670,107 @@ export class WorkerPool {
         if (action.heavy) encoded |= 16;
         if (action.grapple) encoded |= 32;
         return encoded;
+    }
+
+    /**
+     * Deep-copies a pooled observation/result graph so the caller owns every
+     * nested mutable field and buffer.
+     *
+     * Supported value contract: primitives; plain objects; arrays; Date,
+     * RegExp, Map, Set; typed arrays; Node Buffers (copied byte-for-byte via
+     * `Buffer.from`, because `Buffer.prototype.slice` aliases the source
+     * memory); DataView; ArrayBuffer; and SharedArrayBuffer-backed views
+     * (re-sliced into owned buffers, unlike `structuredClone`, which shares
+     * SABs). Other exotic structured-cloneable values (Error, URL, Blob, ...)
+     * are outside the contract: the pooled observation/result graphs are plain
+     * data, and such members degrade to `{}`.
+     *
+     * Plain objects and arrays preserve shared references and cycles via the
+     * `seen` map. Buffer, Date, RegExp, Map, Set, typed-array, DataView,
+     * ArrayBuffer, and SAB members are copied per occurrence (each occurrence
+     * gets an independent copy). A self-referential Map/Set resolves its
+     * back-reference to the in-progress copy instead of recursing, so
+     * self-referential Map/Set graphs terminate.
+     */
+    private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
+        if (value === null || typeof value !== 'object') return value;
+
+        if (value instanceof Date) return new Date(value.getTime());
+        if (value instanceof RegExp) return new RegExp(value.source, value.flags);
+        if (value instanceof Map) {
+            const inProgress = seen.get(value);
+            if (inProgress) return inProgress;
+            const copy = new Map();
+            seen.set(value, copy);
+            for (const [k, v] of value) copy.set(k, this.deepCopy(v, seen));
+            seen.delete(value);
+            return copy;
+        }
+        if (value instanceof Set) {
+            const inProgress = seen.get(value);
+            if (inProgress) return inProgress;
+            const copy = new Set();
+            seen.set(value, copy);
+            for (const v of value) copy.add(this.deepCopy(v, seen));
+            seen.delete(value);
+            return copy;
+        }
+        if (ArrayBuffer.isView(value)) {
+            if (value instanceof DataView) {
+                return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength);
+            }
+            const bufferCtor = (globalThis as any).Buffer;
+            if (bufferCtor && value instanceof bufferCtor) {
+                // Node Buffer#slice aliases the source memory, so copy the
+                // bytes into a fresh Buffer instead of slicing.
+                return bufferCtor.from(value);
+            }
+            // TypedArray#slice copies into a fresh buffer, so
+            // SharedArrayBuffer-backed views become owned rather than sharing
+            // the pool's SAB.
+            return value.slice();
+        }
+        if (value instanceof ArrayBuffer) {
+            return value.slice(0);
+        }
+        const sabCtor = (globalThis as any).SharedArrayBuffer;
+        if (sabCtor && value instanceof sabCtor) {
+            return value.slice(0);
+        }
+
+        const cached = seen.get(value);
+        if (cached) return cached;
+        const copy: any = Array.isArray(value) ? [] : {};
+        seen.set(value, copy);
+        for (const key of Object.keys(value)) {
+            copy[key] = this.deepCopy(value[key], seen);
+        }
+        return copy;
+    }
+
+    /**
+     * Materializes a caller-owned snapshot of a pooled observation/result
+     * graph. Delegates to {@link deepCopy}, which copies every nested buffer
+     * (including SharedArrayBuffer-backed views) instead of sharing them as
+     * `structuredClone` would.
+     */
+    private snapshotCopy(value: any): any {
+        return this.deepCopy(value);
+    }
+
+    /**
+     * Copies a pooled observation graph so the caller owns every nested
+     * mutable field (the `opponents` array and its objects today, and any
+     * nested objects `extractObservation` adds later). The structural guard in
+     * worker-pool-sharedmem-regression.test.ts fails if a nested field aliases
+     * a pooled template.
+     */
+    private snapshotObservation(observation: any): any {
+        return this.snapshotCopy(observation);
+    }
+
+    private snapshotResult(result: any): any {
+        return this.snapshotCopy(result);
     }
 
     /**

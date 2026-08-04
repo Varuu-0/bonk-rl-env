@@ -90,7 +90,8 @@ Atomics.notify(workerReady)
                                           signalMainReady()
 Atomics.wait(mainReady) ← wakes
 readResults() → observations, rewards…
-extractObservation() per env
+extractObservation() per env (pooled internally)
+snapshot caller-owned results (default) or return borrowed pools (opt-in)
 ```
 
 ---
@@ -243,12 +244,21 @@ The main thread **serially** waits on each worker. At N=128, this means up to 12
 
 **Location**: `src/core/worker-pool.ts:481-524`
 
-The `extractObservation()` method uses a pre-allocated object pool (`_obsPool`) to avoid creating new objects per step. However:
-- When the pool misses (index out of range), it falls back to allocating a new object with nested `opponents` array
-- The `stepSharedMemory()` method at line 378-409 creates a new `convertedResults` array per step, which contains N objects
-- Each result object has `observation`, `reward`, `done`, `truncated`, `info` fields — 5 new objects per env per step
+The shared-memory extraction path keeps `_obsPool`, `_terminalObsPool`,
+`_resultPool`, and `_convertedResults` pre-allocated. Public `reset()` and
+`step()` calls snapshot those pools by default so callers can retain results
+without later steps mutating them.
 
-At N=128, this is **640 new objects per step** (128 × 5), generating GC pressure at ~600 steps/sec = ~384,000 objects/sec.
+- A normal owned step allocates one result array and five objects per env:
+  result, info, observation, opponents array, and opponent object.
+- A terminal observation adds three objects for each terminal env.
+- An owned reset allocates one result array and three objects per env.
+- `{ ownership: 'borrowed' }` returns the pooled graph directly and avoids the
+  snapshot allocations. It is valid only until the next reset or step.
+
+The SharedArrayBuffer layout, worker writes, synchronization, and pooled
+extraction are identical in both ownership modes. The allocation tradeoff is
+confined to the caller boundary.
 
 ### 5.5 Action Encoding
 
@@ -275,7 +285,8 @@ Bit-flag encoding into a single `Uint8` is extremely cheap (~50 ns per action). 
 |---------------------------------------|-------------------------------|----------|
 | SharedArrayBuffer zero-copy IPC       | 1.5-2x vs message passing     | `src/ipc/shared-memory.ts` |
 | Action buffer pool (pre-allocated)    | Eliminates per-step allocation | `src/core/worker-pool.ts:168-170` |
-| Observation object pool               | Reduces GC on hot path         | `src/core/worker-pool.ts:56-88` |
+| Internal observation/result pools     | Zero-GC extraction; borrowed-result fast path | `src/core/worker-pool.ts` |
+| Caller-owned result snapshots         | Safe replay-buffer retention by default | `src/core/worker-pool.ts` |
 | Bit-flag action encoding (Uint8)      | Minimal serialization cost     | `src/core/worker-pool.ts:462-474` |
 | Float32Array observation buffer       | Zero-allocation obs→mem write  | `src/core/worker.ts:27-55` |
 | Ring buffer for action pipelining     | Reduces contention             | `src/ipc/shared-memory.ts:111-127` |
@@ -316,11 +327,16 @@ Bit-flag encoding into a single `Uint8` is extremely cheap (~50 ns per action). 
 | Throughput (N=8)        | 38,238 env-steps/sec  | ~15,000-20,000 (est.) |
 | Latency (N=8)           | 0.209 ms              | ~0.5-0.8 ms (est.)    |
 | Memory overhead         | Pre-allocated SAB     | Per-step allocations  |
-| GC pressure             | Low (pooled objects)  | High (structured clone) |
+| GC pressure             | Moderate (owned default), low (borrowed opt-in) | High (structured clone) |
 | Implementation complexity| Moderate             | Low                   |
 | Platform requirements   | SharedArrayBuffer support | None               |
 
-**Use shared memory** for any production training workload. The throughput advantage is 1.5-2x with significantly lower GC pressure.
+**Use shared memory** for any production training workload. It avoids
+structured-clone transport in both ownership modes. Use the caller-owned
+default when retaining trajectories or replay data; use borrowed results only
+when each batch is consumed synchronously before the next call. The Layer 4
+transport benchmark uses borrowed results so its historical measurements remain
+focused on SharedArrayBuffer transport rather than caller snapshot policy.
 
 **Use message passing** only for debugging, development, or environments where `SharedArrayBuffer` is unavailable (e.g., non-isolated browser contexts).
 
@@ -337,7 +353,18 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
 
 ## 8. Performance Log
 
-### 2026-07-29 � Contact-rule and tick-loop optimizations
+### 2026-08-04 — Caller-owned observation results
+
+- SharedArrayBuffer extraction remains internally pooled, while public
+  `reset`/`step` results are snapshotted by default so retained observations do
+  not mutate on later calls.
+- `{ ownership: 'borrowed' }` preserves the prior pooled, zero-allocation return
+  path for immediate consumers. The JSON IPC bridge uses it because
+  serialization is already an ownership boundary.
+- Default owned steps allocate `1 + 5N` objects/arrays, plus three per terminal
+  observation; borrowed steps add no result-materialization allocations.
+
+### 2026-07-29 — Contact-rule and tick-loop optimizations
 
 | Change | File | Impact |
 |---|---|---|
@@ -366,7 +393,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
   try/catch per call in the physics step; worth measuring whether the guard can
   be applied only around the known-corrupt destroy path.
 
-### 2026-07-29 � Test-runner native-crash fix (vitest pool)
+### 2026-07-29 — Test-runner native-crash fix (vitest pool)
 
 - Root cause: `zeromq` (native addon) access-violates during vitest **thread**
   worker teardown; every full-suite run died with `0xC0000005` after tests
@@ -374,7 +401,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
 - Effect: full suite now completes (44 files / 1094 passed / 0 failed, ~8.7s),
   making entire-suite regression checks practical instead of targeted subsets.
 
-### 2026-07-29 � Review-driven hot-path allocations removed
+### 2026-07-29 — Review-driven hot-path allocations removed
 
 - `listener.Persist` early-exits before any extraction when the map has no
   cap-zone sensors (eliminates per-contact-point work on every standard map).

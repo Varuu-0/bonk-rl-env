@@ -6,7 +6,7 @@
  * RL training.
  */
 
-import { WorkerPool } from '../core/worker-pool';
+import { WorkerPool, type ResultOwnershipOptions } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
 import { getConfig } from '../config/config-loader';
 
@@ -128,27 +128,29 @@ export class BonkEnv {
     /**
      * Reset the environment to initial state.
      * @param seeds Optional seeds for environment reset
+     * @param options Result ownership mode; caller-owned by default
      * @returns Initial observation(s)
      */
-    async reset(seeds?: number[]): Promise<any> {
+    async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any> {
         if (!this.isRunning || !this.pool) {
             throw new Error(`Environment ${this.id} is not running`);
         }
         
-        return this.pool.reset(seeds);
+        return this.pool.reset(seeds, options);
     }
 
     /**
      * Take a step in the environment with the given action(s).
      * @param actions Action(s) to apply
+     * @param options Result ownership mode; caller-owned by default
      * @returns Step result(s) containing observation, reward, done, truncated, info
      */
-    async step(actions: any[]): Promise<StepResult | StepResult[]> {
+    async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]> {
         if (!this.isRunning || !this.pool) {
             throw new Error(`Environment ${this.id} is not running`);
         }
         
-        return this.pool.step(actions);
+        return this.pool.step(actions, options);
     }
 
     /**

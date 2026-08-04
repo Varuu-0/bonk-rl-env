@@ -51,6 +51,9 @@ export class IpcBridge {
 
     async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
+        // Step responses are serialized eagerly so the borrowed pool graph is
+        // consumed before the telemetry branch awaits worker replies.
+        let serialized: string | null = null;
         try {
             const payload = parseJson(rawMsg);
             const command = payload.command;
@@ -73,7 +76,9 @@ export class IpcBridge {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else {
                     console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
-                    const obs = await this.pool.reset(payload.seeds);
+                    // JSON serialization below is the ownership boundary, so
+                    // avoid an otherwise redundant snapshot allocation here.
+                    const obs = await this.pool.reset(payload.seeds, { ownership: 'borrowed' });
                     console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
                     response = {
                         status: "ok",
@@ -91,7 +96,16 @@ export class IpcBridge {
                 } else if (!this._initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else {
-                    const results = await this.pool.step(actions);
+                    // Requests are serialized by the server loop, and the
+                    // borrowed graph below is only valid until the next pool
+                    // call, so serialize it before the telemetry branch awaits.
+                    const results = await this.pool.step(actions, { ownership: 'borrowed' });
+
+                    // JSON.stringify is the ownership boundary: it consumes the
+                    // borrowed `_convertedResults` graph immediately, before any
+                    // await in the telemetry branch below could let another
+                    // request (or a future pool reset/step there) mutate it.
+                    serialized = JSON.stringify({ status: "ok", data: results });
 
                     this.stepCount++;
                     globalProfiler.tick();
@@ -106,11 +120,6 @@ export class IpcBridge {
                             globalProfiler.report(5000);
                         }
                     }
-
-                    response = {
-                        status: "ok",
-                        data: results
-                    };
                 }
             } else if (command === "close") {
                 if (payload.shutdown === true) {
@@ -131,10 +140,11 @@ export class IpcBridge {
         } catch (e: any) {
             console.error("[IPC] Error handling request:", e);
             response = { status: "error", error: e.message };
+            serialized = null;
         }
 
         try {
-            await this._wrappedSend([identity, JSON.stringify(response)]);
+            await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
         } catch (sendError) {
             console.error("[IPC] Error sending response:", sendError);
         }

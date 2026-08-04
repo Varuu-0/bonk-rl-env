@@ -83,30 +83,42 @@ Initializes the worker pool with the specified number of environments.
 ##### `reset`
 
 ```typescript
-async reset(seeds: number[]): Promise<any[]>
+async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any[]>
 ```
 
 Resets all environments with the given seeds.
 
 **Parameters**:
 - `seeds`: Array of random seeds for each environment
+- `options.ownership`: `owned` (default) or `borrowed`
 
-**Returns**: Array of initial observations
+**Returns**: Array of initial observations. Owned observations remain stable
+across later calls.
 
 ---
 
 ##### `step`
 
 ```typescript
-async step(actions: number[]): Promise<any[]>
+async step(actions: number[], options?: ResultOwnershipOptions): Promise<any[]>
 ```
 
 Executes one step in all environments.
 
 **Parameters**:
 - `actions`: Array of actions for each environment
+- `options.ownership`: `owned` (default) or `borrowed`
 
 **Returns**: Array of step results (observations, rewards, dones, infos)
+
+Owned results are caller snapshots and may be retained or mutated without
+affecting later steps. Borrowed results avoid snapshot allocations but expose
+pooled objects: consume them before the next `reset` or `step`, do not retain
+or mutate them, and do not overlap calls on the same pool.
+
+`ownership` only affects the shared-memory transport. In message-passing mode
+results are structured-cloned by the worker transport and are always
+caller-owned, so `borrowed` is a no-op there (accepted for a symmetric API).
 
 ---
 
@@ -163,6 +175,9 @@ const obs = await pool.reset([1, 2, 3, ..., 64]);
 // Step
 const actions = [0, 1, 2, ..., 63]; // Actions for each env
 const results = await pool.step(actions);
+
+// Allocation-sensitive consumers may opt into pooled, short-lived results.
+const borrowed = await pool.step(actions, { ownership: 'borrowed' });
 
 // Get telemetry
 const telemetry = await pool.getTelemetrySnapshots();

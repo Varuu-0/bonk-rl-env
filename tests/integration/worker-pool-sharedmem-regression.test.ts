@@ -73,3 +73,291 @@ describe('WorkerPool extractObservation regression (unit-level)', () => {
     expect(o.playerX).toBe(5);
   });
 });
+
+describe('WorkerPool shared-memory result ownership', () => {
+  it('keeps retained step results unchanged across later steps', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      const resetBatch = await pool.reset([1]);
+      const resetObservation = resetBatch[0];
+      const resetSnapshot = structuredClone(resetObservation);
+
+      const retainedBatch = await pool.step([{ right: true }]);
+      const retainedResult = retainedBatch[0];
+      const retainedInfo = retainedResult.info;
+      const retainedObservation = retainedResult.observation;
+      const retainedOpponent = retainedObservation.opponents[0];
+      const snapshot = structuredClone(retainedResult);
+
+      expect(retainedObservation).not.toBe(resetObservation);
+      expect(resetObservation).toEqual(resetSnapshot);
+
+      const nextBatch = await pool.step([{ left: true }]);
+
+      expect(nextBatch).not.toBe(retainedBatch);
+      expect(nextBatch[0]).not.toBe(retainedResult);
+      expect(nextBatch[0].info).not.toBe(retainedInfo);
+      expect(nextBatch[0].observation).not.toBe(retainedObservation);
+      expect(nextBatch[0].observation.opponents[0]).not.toBe(retainedOpponent);
+      expect(retainedResult).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('keeps retained terminal observations unchanged across later steps', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, { maxTicks: 1 }, true);
+      await pool.reset([1]);
+
+      const retainedResult = (await pool.step([0]))[0];
+      const retainedTerminal = retainedResult.info.terminal_observation;
+      const retainedOpponent = retainedTerminal.opponents[0];
+      const snapshot = structuredClone(retainedTerminal);
+
+      const nextResult = (await pool.step([0]))[0];
+
+      expect(retainedResult.done).toBe(true);
+      expect(nextResult.info.terminal_observation).not.toBe(retainedTerminal);
+      expect(nextResult.info.terminal_observation.opponents[0]).not.toBe(retainedOpponent);
+      expect(retainedTerminal).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('snapshots every nested field of the pooled result graph (structural guard)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const collectRefs = (value: any, into: Set<any>): void => {
+      if (value === null || typeof value !== 'object') return;
+      if (into.has(value)) return;
+      into.add(value);
+      for (const key of Object.keys(value)) collectRefs(value[key], into);
+    };
+
+    // Walks the snapshot and fails if any node aliases the pooled source. This
+    // is the guard that breaks when a future nested mutable field added to
+    // extractObservation() is not deep-copied by snapshotObservation().
+    const expectGraphIndependent = (source: any, snapshot: any): void => {
+      const sourceRefs = new Set<any>();
+      collectRefs(source, sourceRefs);
+
+      const walk = (value: any): void => {
+        if (value === null || typeof value !== 'object') return;
+        expect(sourceRefs.has(value)).toBe(false);
+        for (const key of Object.keys(value)) walk(value[key]);
+      };
+
+      walk(snapshot);
+      expect(snapshot).toEqual(source);
+    };
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+      const borrowed = (await pool.step([{ right: true }], { ownership: 'borrowed' }))[0];
+      expectGraphIndependent(borrowed, (pool as any).snapshotResult(borrowed));
+
+      await pool.close();
+      await pool.init(1, { maxTicks: 1 }, true);
+      await pool.reset([1]);
+      const terminalBorrowed = (await pool.step([0], { ownership: 'borrowed' }))[0];
+      expect(terminalBorrowed.info.terminal_observation).toBeDefined();
+      expectGraphIndependent(terminalBorrowed, (pool as any).snapshotResult(terminalBorrowed));
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('preserves non-plain members (Date/Map/Set/typed array) through the snapshot boundary', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      const fixture = {
+        playerX: 1,
+        opponents: [{ x: 2, alive: true }],
+        observedAt: new Date(1700000000000),
+        tags: new Set(['a', 'b']),
+        lookup: new Map([['k', 5]]),
+        samples: new Float64Array([1.5, 2.5]),
+      };
+
+      const snapshot = (pool as any).snapshotObservation(fixture);
+
+      // Plain graph members must remain fully owned, as before.
+      expect(snapshot).not.toBe(fixture);
+      expect(snapshot.opponents).not.toBe(fixture.opponents);
+      expect(snapshot.opponents[0]).not.toBe(fixture.opponents[0]);
+
+      // Non-plain members must survive snapshotting as their real types
+      // instead of degrading to {} (guards the snapshot deep copy, which
+      // preserves Date/Map/Set/typed-array members).
+      expect(snapshot.observedAt).toBeInstanceOf(Date);
+      expect(snapshot.observedAt).toEqual(fixture.observedAt);
+      expect(snapshot.observedAt).not.toBe(fixture.observedAt);
+      expect(snapshot.tags).toBeInstanceOf(Set);
+      expect(snapshot.tags).toEqual(fixture.tags);
+      expect(snapshot.tags).not.toBe(fixture.tags);
+      expect(snapshot.lookup).toBeInstanceOf(Map);
+      expect(snapshot.lookup).toEqual(fixture.lookup);
+      expect(snapshot.lookup).not.toBe(fixture.lookup);
+      expect(snapshot.samples).toBeInstanceOf(Float64Array);
+      expect(snapshot.samples).toEqual(fixture.samples);
+      expect(snapshot.samples).not.toBe(fixture.samples);
+
+      expect(snapshot).toEqual(fixture);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('pins the documented snapshot value contract (plain, arrays, Date/Map/Set, typed arrays, Buffers, SAB-backed views)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const BufferCtor = (globalThis as any).Buffer;
+    const SABCtor = (globalThis as any).SharedArrayBuffer;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      const sab = new SABCtor(8);
+      const sabView = new Float64Array(sab);
+      sabView[0] = 3.5;
+      const sab2 = new SABCtor(8);
+      const sabDataView = new DataView(sab2);
+      sabDataView.setFloat32(0, 1.25);
+      const bareSab = new SABCtor(8);
+      const buf = BufferCtor.from([1, 2, 3]);
+
+      const fixture = {
+        playerX: 1,
+        nested: { depth: [1, 2, { inner: 'x' }] },
+        labels: ['a', 'b'],
+        observedAt: new Date(1700000000000),
+        tags: new Set(['x']),
+        lookup: new Map([['k', 1]]),
+        samples: new Float64Array([1.5, 2.5]),
+        bytes: buf,
+        sabView,
+        sabDataView,
+        bareSab,
+      };
+
+      const snapshot = (pool as any).snapshotObservation(fixture);
+
+      // Plain objects and arrays are fully owned.
+      expect(snapshot).not.toBe(fixture);
+      expect(snapshot.nested).toEqual(fixture.nested);
+      expect(snapshot.nested).not.toBe(fixture.nested);
+      expect(snapshot.nested.depth).not.toBe(fixture.nested.depth);
+      expect(snapshot.nested.depth[2]).not.toBe(fixture.nested.depth[2]);
+      expect(snapshot.labels).toEqual(fixture.labels);
+      expect(snapshot.labels).not.toBe(fixture.labels);
+
+      // Documented non-plain types survive as their real types.
+      expect(snapshot.observedAt).toBeInstanceOf(Date);
+      expect(snapshot.observedAt.getTime()).toBe(fixture.observedAt.getTime());
+      expect(snapshot.tags).toBeInstanceOf(Set);
+      expect(snapshot.tags).toEqual(fixture.tags);
+      expect(snapshot.lookup).toBeInstanceOf(Map);
+      expect(snapshot.lookup).toEqual(fixture.lookup);
+      expect(snapshot.samples).toBeInstanceOf(Float64Array);
+      expect(snapshot.samples).toEqual(fixture.samples);
+      expect(snapshot.samples.buffer).not.toBe(fixture.samples.buffer);
+
+      // Buffers are copied byte-for-byte (Node Buffer#slice would alias the
+      // source memory; Buffer.from copies). Node pools small Buffers into one
+      // backing ArrayBuffer, so instance/buffer identity is not a proxy for
+      // independence here — it is asserted by the mutation isolation below.
+      expect(snapshot.bytes).toBeInstanceOf(BufferCtor);
+      expect(snapshot.bytes).toEqual(buf);
+      expect(snapshot.bytes).not.toBe(buf);
+
+      // SharedArrayBuffer-backed views are copied, not shared: this is
+      // exactly where structuredClone would re-alias the pool's SAB.
+      expect(snapshot.sabView).toBeInstanceOf(Float64Array);
+      expect(snapshot.sabView[0]).toBe(3.5);
+      expect(snapshot.sabView.buffer).not.toBe(sab);
+      expect(snapshot.sabDataView).toBeInstanceOf(DataView);
+      expect(snapshot.sabDataView.getFloat32(0)).toBe(1.25);
+      expect(snapshot.sabDataView.buffer).not.toBe(sab2);
+      expect(snapshot.bareSab).toBeInstanceOf(SABCtor);
+      expect(snapshot.bareSab).not.toBe(bareSab);
+
+      // Mutating the source graph must not leak into the snapshot.
+      snapshot.playerX = 99;
+      snapshot.nested.depth[0] = 99;
+      snapshot.samples[0] = 99;
+      snapshot.sabView[0] = 99;
+      buf[0] = 99;
+      expect(fixture.playerX).toBe(1);
+      expect(fixture.nested.depth[0]).toBe(1);
+      expect(fixture.samples[0]).toBe(1.5);
+      expect(sabView[0]).toBe(3.5);
+      expect(snapshot.bytes[0]).toBe(1);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('terminates on a self-referential Map (recursion guard)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      // A Map that references itself must not recurse unbounded through the
+      // snapshot deep copy; its back-reference resolves to the in-progress
+      // copy, so the snapshot graph is a real, owned cycle.
+      const selfRef = new Map([['k', 1]]);
+      selfRef.set('self', selfRef);
+
+      const snapshot = (pool as any).snapshotObservation({ selfRef });
+
+      expect(snapshot.selfRef).toBeInstanceOf(Map);
+      expect(snapshot.selfRef.get('self')).toBe(snapshot.selfRef);
+      expect(snapshot.selfRef.get('k')).toBe(1);
+      expect(snapshot.selfRef).not.toBe(selfRef);
+      expect(snapshot.selfRef.get('self')).not.toBe(selfRef);
+    } finally {
+      await pool.close();
+    }
+  });
+});
+
+describe('WorkerPool message-passing result ownership', () => {
+  it('keeps retained step results stable regardless of the ownership option', async () => {
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, false); // message passing (structured clone)
+      await pool.reset([1]);
+
+      // `borrowed` is a no-op in message-passing mode: worker transport
+      // already structured-clones every result, so retaining is safe.
+      const retained = (await pool.step([{ right: true }], { ownership: 'borrowed' }))[0];
+      const snapshot = structuredClone(retained);
+
+      await pool.step([{ left: true }], { ownership: 'owned' });
+
+      expect(retained).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
+});

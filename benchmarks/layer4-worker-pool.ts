@@ -94,16 +94,16 @@ async function createPool(numWorkers: number): Promise<WorkerPool> {
  */
 async function measureSample(pool: WorkerPool, actions: number[]): Promise<number[]> {
     const seeds = actions.map((_, index) => index + 1);
-    await pool.reset(seeds);
+    await pool.reset(seeds, { ownership: 'borrowed' });
 
     for (let i = 0; i < WARMUP_STEPS; i++) {
-        await pool.step(actions);
+        await pool.step(actions, { ownership: 'borrowed' });
     }
 
     const stepLatencies = new Array<number>(STEPS_PER_SAMPLE);
     let prev = performance.now();
     for (let i = 0; i < STEPS_PER_SAMPLE; i++) {
-        await pool.step(actions);
+        await pool.step(actions, { ownership: 'borrowed' });
         const now = performance.now();
         stepLatencies[i] = now - prev;
         prev = now;
