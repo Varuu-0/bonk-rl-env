@@ -125,8 +125,8 @@ export class SharedMemoryManager {
 
     writeActions(actions: Uint8Array) {
         const slot = this.currentActionSlot;
-        Atomics.store(this.control.actionSlotIndex, 0, slot);
         this.views.actions.set(actions, slot * this.numEnvs);
+        Atomics.store(this.control.actionSlotIndex, 0, slot);
         this.currentActionSlot = (this.currentActionSlot + 1) & this.actionRingMask;
         // Signal that new actions are available
         Atomics.store(this.control.workerReady, 0, 1);
@@ -135,8 +135,8 @@ export class SharedMemoryManager {
 
     writeActionsQuiet(actions: Uint8Array) {
         const slot = this.currentActionSlot;
-        Atomics.store(this.control.actionSlotIndex, 0, slot);
         this.views.actions.set(actions, slot * this.numEnvs);
+        Atomics.store(this.control.actionSlotIndex, 0, slot);
         this.currentActionSlot = (this.currentActionSlot + 1) & this.actionRingMask;
         // Does NOT signal — caller must call sendCommand separately
     }

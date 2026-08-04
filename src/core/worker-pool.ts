@@ -225,9 +225,25 @@ export class WorkerPool {
         }
     }
 
+    private allocateMessageId(): number {
+        const liveCallbacks = this.callbacks.size;
+        if (liveCallbacks >= 0x100000000) {
+            throw new Error('WorkerPool message ID space exhausted');
+        }
+
+        let id = this.msgId >>> 0;
+        for (let attempt = 0; attempt <= liveCallbacks; attempt++) {
+            this.msgId = (id + 1) >>> 0;
+            if (!this.callbacks.has(id)) return id;
+            id = this.msgId;
+        }
+
+        throw new Error('WorkerPool could not allocate a message ID');
+    }
+
     private sendMessage(worker: Worker, msg: any): Promise<any> {
         return new Promise((resolve, reject) => {
-            const id = this.msgId++;
+            const id = this.allocateMessageId();
             // Set a timeout to reject if no response
             const timeout = setTimeout(() => {
                 if (this.callbacks.has(id)) {
