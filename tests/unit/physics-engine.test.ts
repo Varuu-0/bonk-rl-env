@@ -361,4 +361,51 @@ describe('PhysicsEngine', () => {
       expect(aliveIds.includes(2)).toBe(true);
     });
   });
+
+  describe('dead-disc final state observability', () => {
+    it('snapshots final transforms and velocity so they stay readable and stable across post-death ticks', () => {
+      engine = new PhysicsEngine();
+      // Player starts beyond the circular OOB boundary and dies on the first tick.
+      engine.addPlayer(0, 900, -900);
+      engine.tick();
+
+      const deathState = engine.getPlayerState(0);
+      expect(deathState.alive).toBe(false);
+      expect(deathState.deathType).toBe(4);
+      // The snapshot must capture real transforms, not the zero default.
+      expect(deathState.x).not.toBe(0);
+      expect(deathState.y).not.toBe(0);
+
+      for (let i = 0; i < 5; i++) {
+        engine.tick();
+        const state = engine.getPlayerState(0);
+        expect(state.alive).toBe(false);
+        expect(state.deathType).toBe(4);
+        expect(state.x).toBe(deathState.x);
+        expect(state.y).toBe(deathState.y);
+        expect(state.velX).toBe(deathState.velX);
+        expect(state.velY).toBe(deathState.velY);
+        expect(state.angle).toBe(deathState.angle);
+        expect(state.angularVel).toBe(deathState.angularVel);
+      }
+    });
+
+    it('releases the destroyed body from playerBodies on detach so observations never read it', () => {
+      engine = new PhysicsEngine();
+      engine.addPlayer(0, 0, 0);
+      engine.addPlayer(1, 900, 0);
+      engine.tick();
+
+      expect((engine as any).playerBodies.has(0)).toBe(true);
+      expect((engine as any).playerBodies.has(1)).toBe(false);
+      expect((engine as any).detachedPlayerStates.has(1)).toBe(true);
+
+      // A subsequent tick keeps player 0's live body intact and does not touch
+      // the already-detached dead disc again.
+      engine.tick();
+      expect((engine as any).playerBodies.has(0)).toBe(true);
+      expect((engine as any).playerBodies.has(1)).toBe(false);
+      expect(engine.getPlayerState(0).alive).toBe(true);
+    });
+  });
 });
