@@ -29,8 +29,8 @@ The physics engine itself is fast — **38.6 µs per tick** on a single thread. 
 ### 2.1 Component Stack
 
 ```
-┌──────────────────────────────────────────────────────────────┝
-│  Python Client (Gymnasium)  ↝── ZeroMQ (zmq.Router) ──→     │
+┌──────────────────────────────────────────────────────────────┐
+│  Python Client (Gymnasium)  ←── ZeroMQ (zmq.Router) ──→     │
 ├──────────────────────────────────────────────────────────────┤
 │  IpcBridge  (src/ipc/ipc-bridge.ts)                         │
 │    • JSON serialization over ZMQ                            │
@@ -82,13 +82,13 @@ encodeActions(actions) → Uint8Array
 writeActionsQuiet(encoded)
 sendCommand(STEP)
 Atomics.notify(workerReady)
-                                          Atomics.wait(workerReady) ↝ wakes
+                                          Atomics.wait(workerReady) ← wakes
                                           readActions(slot)
                                           BonkEnvironment.step() × numEnvs
                                           writeObservation/reward/done/tick
                                           signalWorkerConsumed()
                                           signalMainReady()
-Atomics.wait(mainReady) ↝ wakes
+Atomics.wait(mainReady) ← wakes
 readResults() → observations, rewards…
 extractObservation() per env (pooled internally)
 snapshot caller-owned results (default) or return borrowed pools (opt-in)
@@ -192,7 +192,7 @@ For maximum throughput, **N=16** offers 43,487 env-steps/sec at 0.368 ms latency
 
 ```
 Worker Step (total ~38-55 µs per env at N=1)
-├── box2d Step()              ~25-30 µs  (65-75%)  ↝ DOMINANT
+├── box2d Step()              ~25-30 µs  (65-75%)  ← DOMINANT
 ├── applyInput() × 2          ~2-4 µs    (5-10%)
 ├── getObservation() × 2      ~3-5 µs    (8-13%)
 ├── reward calculation        ~1-2 µs    (2-5%)
@@ -353,7 +353,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
 
 ## 8. Performance Log
 
-### 2026-08-04 � Caller-owned observation results
+### 2026-08-04 — Caller-owned observation results
 
 - SharedArrayBuffer extraction remains internally pooled, while public
   `reset`/`step` results are snapshotted by default so retained observations do
@@ -364,7 +364,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
 - Default owned steps allocate `1 + 5N` objects/arrays, plus three per terminal
   observation; borrowed steps add no result-materialization allocations.
 
-### 2026-07-29 � Contact-rule and tick-loop optimizations
+### 2026-07-29 — Contact-rule and tick-loop optimizations
 
 | Change | File | Impact |
 |---|---|---|
@@ -393,7 +393,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
   try/catch per call in the physics step; worth measuring whether the guard can
   be applied only around the known-corrupt destroy path.
 
-### 2026-07-29 � Test-runner native-crash fix (vitest pool)
+### 2026-07-29 — Test-runner native-crash fix (vitest pool)
 
 - Root cause: `zeromq` (native addon) access-violates during vitest **thread**
   worker teardown; every full-suite run died with `0xC0000005` after tests
@@ -401,7 +401,7 @@ Reaching closer to linear scaling would require architectural changes (e.g., bat
 - Effect: full suite now completes (44 files / 1094 passed / 0 failed, ~8.7s),
   making entire-suite regression checks practical instead of targeted subsets.
 
-### 2026-07-29 � Review-driven hot-path allocations removed
+### 2026-07-29 — Review-driven hot-path allocations removed
 
 - `listener.Persist` early-exits before any extraction when the map has no
   cap-zone sensors (eliminates per-contact-point work on every standard map).
