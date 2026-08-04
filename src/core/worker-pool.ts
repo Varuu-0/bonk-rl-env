@@ -683,8 +683,14 @@ export class WorkerPool {
      * (re-sliced into owned buffers, unlike `structuredClone`, which shares
      * SABs). Other exotic structured-cloneable values (Error, URL, Blob, ...)
      * are outside the contract: the pooled observation/result graphs are plain
-     * data, and such members degrade to `{}`. Shared references and cycles are
-     * preserved via the `seen` map.
+     * data, and such members degrade to `{}`.
+     *
+     * Plain objects and arrays preserve shared references and cycles via the
+     * `seen` map. Buffer, Date, RegExp, Map, Set, typed-array, DataView,
+     * ArrayBuffer, and SAB members are copied per occurrence (each occurrence
+     * gets an independent copy). A self-referential Map/Set resolves its
+     * back-reference to the in-progress copy instead of recursing, so
+     * self-referential Map/Set graphs terminate.
      */
     private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
         if (value === null || typeof value !== 'object') return value;
@@ -692,15 +698,21 @@ export class WorkerPool {
         if (value instanceof Date) return new Date(value.getTime());
         if (value instanceof RegExp) return new RegExp(value.source, value.flags);
         if (value instanceof Map) {
+            const inProgress = seen.get(value);
+            if (inProgress) return inProgress;
             const copy = new Map();
             seen.set(value, copy);
             for (const [k, v] of value) copy.set(k, this.deepCopy(v, seen));
+            seen.delete(value);
             return copy;
         }
         if (value instanceof Set) {
+            const inProgress = seen.get(value);
+            if (inProgress) return inProgress;
             const copy = new Set();
             seen.set(value, copy);
             for (const v of value) copy.add(this.deepCopy(v, seen));
+            seen.delete(value);
             return copy;
         }
         if (ArrayBuffer.isView(value)) {

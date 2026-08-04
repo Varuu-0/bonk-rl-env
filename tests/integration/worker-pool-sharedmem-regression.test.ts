@@ -313,6 +313,32 @@ describe('WorkerPool shared-memory result ownership', () => {
       await pool.close();
     }
   });
+
+  it('terminates on a self-referential Map (recursion guard)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      // A Map that references itself must not recurse unbounded through the
+      // snapshot deep copy; its back-reference resolves to the in-progress
+      // copy, so the snapshot graph is a real, owned cycle.
+      const selfRef = new Map([['k', 1]]);
+      selfRef.set('self', selfRef);
+
+      const snapshot = (pool as any).snapshotObservation({ selfRef });
+
+      expect(snapshot.selfRef).toBeInstanceOf(Map);
+      expect(snapshot.selfRef.get('self')).toBe(snapshot.selfRef);
+      expect(snapshot.selfRef.get('k')).toBe(1);
+      expect(snapshot.selfRef).not.toBe(selfRef);
+      expect(snapshot.selfRef.get('self')).not.toBe(selfRef);
+    } finally {
+      await pool.close();
+    }
+  });
 });
 
 describe('WorkerPool message-passing result ownership', () => {
