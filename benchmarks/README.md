@@ -57,8 +57,12 @@ extraction, reward calculation, and action decoding. No worker threads or IPC.
 Tests both default and frame-skip configurations.
 
 ### Layer 4 — Worker Pool (`layer4-worker-pool.ts`)
-Tests `WorkerPool.step()` with SharedArrayBuffer IPC across N=1,2,4,8,16
-environments. This is the TypeScript multi-env path with Atomics synchronization.
+Tests `WorkerPool.step()` with SharedArrayBuffer IPC across exactly 1, 2, 4, and
+8 workers, with one environment per worker. Each worker count runs in a single
+reused pool; eight balanced-order samples of 2,000 steps report per-step median,
+P25, and P75 latency plus aggregate environment throughput. A seeded
+deterministic pseudo-random action workload keeps runs reproducible, and worker
+startup and warmup are excluded from measurements.
 
 ### Layer 5 — Memory (`layer5-memory.ts`)
 Runs 50K steps and monitors heap growth, peak RSS, and GC effectiveness.
@@ -92,6 +96,7 @@ and key metrics per layer.
 | 2 | PhysicsEngine TPS | > 15,000 |
 | 3 | BonkEnvironment SPS | > 30,000 |
 | 4 | WorkerPool SPS (N=1) | > 2,000 |
+| 4 | Aggregate Env-SPS (N>1) | >= 90% of N=1 |
 | 5 | Heap growth (50K steps) | < 5 MB |
 | 6 | Throughput CV (100K steps) | < 10% |
 
