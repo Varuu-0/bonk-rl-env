@@ -2,12 +2,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const fakes = vi.hoisted(() => {
   type WorkerEvent = 'message' | 'error' | 'exit';
-  type CommandBehavior = 'complete' | 'error' | 'timeout' | 'crash';
+  type CommandBehavior = 'complete' | 'error' | 'timeout' | 'crash' | 'exit';
 
   const control = {
-    initBehaviors: [] as Array<'ok' | 'error'>,
+    initBehaviors: [] as Array<'ok' | 'error' | 'timeout'>,
     resetMessageBehavior: 'ok' as 'ok' | 'error',
-    stepMessageBehavior: 'ok' as 'ok' | 'error',
+    stepMessageBehavior: 'ok' as 'ok' | 'error' | 'silent',
     commandBehaviors: [] as CommandBehavior[],
     readError: false,
     stepTimeoutMs: 1000,
@@ -47,7 +47,7 @@ const fakes = vi.hoisted(() => {
         manager?.connect(message.syncBuffer, message.workerIndex, this);
         if (control.initBehaviors[this.index] === 'error') {
           this.emit('message', { id: message.id, status: 'error', error: 'synthetic init failure' });
-        } else {
+        } else if (control.initBehaviors[this.index] !== 'timeout') {
           this.emit('message', {
             id: message.id,
             status: 'ok',
@@ -63,7 +63,7 @@ const fakes = vi.hoisted(() => {
       } else if (message.type === 'step') {
         if (control.stepMessageBehavior === 'error') {
           this.emit('message', { id: message.id, status: 'error', error: 'synthetic step failure' });
-        } else {
+        } else if (control.stepMessageBehavior !== 'silent') {
           this.emit('message', { id: message.id, status: 'ok', data: [{}] });
         }
       }
@@ -116,6 +116,10 @@ const fakes = vi.hoisted(() => {
       if (behavior === 'timeout') return;
       if (behavior === 'crash') {
         queueMicrotask(() => this.worker?.emit('error', new Error('synthetic worker crash')));
+        return;
+      }
+      if (behavior === 'exit') {
+        queueMicrotask(() => this.worker?.emit('exit', 1));
         return;
       }
 
@@ -262,6 +266,65 @@ describe('WorkerPool failure state', () => {
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
+  });
+
+  it('fails the pool when a worker exits during an active shared batch', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, true);
+    fakes.control.commandBehaviors = ['exit'];
+
+    await expect(pool.step([0])).rejects.toThrow(
+      'Worker 0 failed: Worker 0 exited unexpectedly with code 1',
+    );
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a worker exits during an active message-passing batch', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+    fakes.control.stepMessageBehavior = 'silent';
+
+    const pendingStep = pool.step([0]);
+    fakes.FakeWorker.instances[0].emit('exit', 1);
+
+    await expect(pendingStep).rejects.toThrow(
+      'Worker 0 failed: Worker 0 exited unexpectedly with code 1',
+    );
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('interrupts an active shared batch when close() is called and stays closed', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, true);
+    fakes.control.commandBehaviors = ['timeout'];
+
+    const pendingStep = pool.step([0]);
+    await pool.close();
+
+    await expect(pendingStep).rejects.toThrow(
+      'Shared-memory step interrupted because worker pool is closed',
+    );
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is closed');
+  });
+
+  it('fails the pool and cleans up when a worker never answers init', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    fakes.control.initBehaviors = ['timeout'];
+    pool = new WorkerPool(1);
+
+    await expect(pool.init(1, {}, true)).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
   });
 
   it('propagates message-mode reset errors without failing the pool', async () => {
