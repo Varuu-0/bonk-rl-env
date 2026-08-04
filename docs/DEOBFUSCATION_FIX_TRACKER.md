@@ -866,7 +866,8 @@ source level — see `DEOBFUSCATION.md` §31 for line-numbered evidence:
   dotted `.length` substitutions (`X.length != X[47]` for the bag and
   real-array patterns; two fresh preamble boots confirm `M$QCc[47] ===
   "length"`).
-- Regenerated readable artifact: 4,480,444 bytes; SHA-256
-  `5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`
-  (two identical runs). Full verification set passes including the new
-  `audit-index47-census.js --self-check`.
+- Regenerated readable artifact: 4,474,907 bytes; SHA-256
+  `2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`
+  (two identical runs; final combined-pipeline output after the stateful
+  setup-decoder fold landed). Full verification set passes including the new
+  `audit-index47-census.js --self-check` and `audit-stateful-decoder-fold.js`.
