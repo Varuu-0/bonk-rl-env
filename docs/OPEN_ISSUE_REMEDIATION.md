@@ -13,13 +13,13 @@ source-proven findings in `docs/DEOBFUSCATION.md`.
 ## Progress Summary
 
 - All 134 initially open issues have an evidence-based disposition.
-- 84 fixed, duplicate, feature, or refuted reports have been closed with
+- 86 fixed, duplicate, feature, or refuted reports have been closed with
   mechanism-specific comments.
 - The 48 remaining open reports are fully assigned to seven focused
   workstreams: documentation, worker protocol, PRNG, Python contracts, worker
   resilience, observation ownership, and physics lifecycle/parity.
-- PRs #169-#175 are open. The physics workstream is in final implementation and
-  review before its PR is opened.
+- PRs #169-#176 are open. Review follow-ups are in progress on the remaining
+  code and benchmark branches.
 - Issues #137 and #139 were closed after controlled A/B benchmarks refuted the
   reported false-sharing collapse; PR #174 retains the reproducible benchmark.
 
@@ -43,10 +43,10 @@ source-proven findings in `docs/DEOBFUSCATION.md`.
 | Observation ownership | #67, #92, #109, #121 | PR open; review pending | [#175](https://github.com/Varuu-0/bonk-rl-env/pull/175) |
 | Python client contracts | #58, #91, #96, #111, #116, #135 | PR review follow-up | [#172](https://github.com/Varuu-0/bonk-rl-env/pull/172) |
 | PRNG integer correctness | #57, #93, #106, #122, #123, #147; [R3M6](DEOBFUSCATION_FIX_TRACKER.md) | PR open; focused tests pass | [#171](https://github.com/Varuu-0/bonk-rl-env/pull/171) |
-| Physics reset safety and force point | #42, #49, #77, #97, #112, #119, #146 | Agent implementation in progress | PR pending |
+| Physics reset safety and force point | #42, #49, #77, #97, #112, #119, #146 | PR open; review pending | [#176](https://github.com/Varuu-0/bonk-rl-env/pull/176) |
 | Shared-memory scaling evidence | #137, #139 | Reports refuted and closed; benchmark retained | [#174](https://github.com/Varuu-0/bonk-rl-env/pull/174) |
 | TPS and determinism documentation | #44, #99, #157 | PR open; review passes | [#169](https://github.com/Varuu-0/bonk-rl-env/pull/169) |
-| Issue closure comments | 84 fixed, duplicate, feature, and refuted reports | Complete; linked to this tracker | N/A |
+| Issue closure comments | 86 fixed, duplicate, feature, and refuted reports | Complete; linked to this tracker | N/A |
 
 ## Audit Matrix
 
@@ -71,14 +71,14 @@ absent because GitHub already records it as closed.
 | #39 | Not a bug | `next()` and `nextInt()` use the same canonical state transition |
 | #40 | Not a bug | Temporary force vector is instance-local and synchronous |
 | #41 | Fixed | Player angular velocity index is present in Python mapping |
-| #42 | Duplicate | Physics reset safety; canonical #49/#77 |
+| #42 | Duplicate | Physics reset safety; PR #176; canonical #49/#77 |
 | #43 | Fixed | Current reward path has no TS/Python division mismatch |
 | #44 | Fix | Documentation workstream; PR #169 |
 | #45 | Not a bug | Installed Box2D destroys attached joints before bodies |
 | #46 | Not a bug | Sequential `for await` request handling preserves response order |
 | #47 | Not a bug | Warmup/mixing is not required by canonical Mulberry32 |
 | #48 | Duplicate | Worker protocol; PR #170; canonical #149 |
-| #49 | Fix | Physics reset safety |
+| #49 | Fix | Physics reset safety; PR #176 |
 | #50 | Not a bug | Step counter atomically increments by one; no defect exists |
 | #51 | Not a bug | Seedless autoreset intentionally continues deterministic stream |
 | #52 | Not a bug | Result-ready atomic gates observation reads |
@@ -106,7 +106,7 @@ absent because GitHub already records it as closed.
 | #74 | Fixed | Terminal observation is transported through `info` |
 | #75 | Not a bug | Increment-then-mix matches canonical Mulberry32 |
 | #76 | Not a bug | Result publication occurs after payload writes |
-| #77 | Fix | Physics reset safety |
+| #77 | Fix | Physics reset safety; PR #176 |
 | #78 | Fixed | Profiler wrappers preserve `this` binding |
 | #79 | Not a bug | Raw seed is canonical and preserves reproducibility |
 | #80 | Not a bug | Callback map is owned by one Node event loop |
@@ -126,7 +126,7 @@ absent because GitHub already records it as closed.
 | #94 | Not a bug | Completion counter resets every batch |
 | #95 | Not a bug | Physics engines and temporary vectors are worker-local |
 | #96 | Fix | Python client contracts; PR #172 |
-| #97 | Duplicate | Physics reset safety; canonical #49/#77 |
+| #97 | Duplicate | Physics reset safety; PR #176; canonical #49/#77 |
 | #98 | Not a bug | Shared-memory offsets are aligned by construction |
 | #99 | Fix | Documentation workstream; PR #169; native rate is deobfuscated as 30 TPS |
 | #100 | Not a bug | Counter value, not notification count, controls completion |
@@ -141,14 +141,14 @@ absent because GitHub already records it as closed.
 | #109 | Fix | Observation ownership; PR #175 |
 | #110 | Not a bug | Timeout and success paths both delete callback entries |
 | #111 | Fix | Python client contracts; PR #172 |
-| #112 | Duplicate | Physics reset safety; canonical #49/#77 |
+| #112 | Duplicate | Physics reset safety; PR #176; canonical #49/#77 |
 | #113 | Not a bug | View lengths and padding cannot overflow adjacent regions |
 | #114 | Fix | Worker failure and timeout recovery; PR #173 |
 | #115 | Not a bug | Seed zero produces a varied canonical sequence |
 | #116 | Fix | Python client contracts; PR #172 |
 | #117 | Not a bug | Worker-local buffers are copied before yielding |
 | #118 | Fix | Worker failure and timeout recovery; PR #173 |
-| #119 | Duplicate | Physics reset safety; canonical #49/#77 |
+| #119 | Duplicate | Physics reset safety; PR #176; canonical #49/#77 |
 | #120 | Duplicate | Refuted callback-map claim; canonical #80 |
 | #121 | Fix | Observation ownership; PR #175 |
 | #122 | Duplicate | PRNG integer correctness; PR #171; canonical #93 |
@@ -175,7 +175,7 @@ absent because GitHub already records it as closed.
 | #143 | Duplicate | Worker timeout recovery; PR #173; canonical #141 |
 | #144 | Fixed | Truncated flag is transported end-to-end |
 | #145 | Duplicate | Refuted warmup claim; canonical #140 |
-| #146 | Hardening | Physics reset/native force-point alignment |
+| #146 | Hardening | Physics reset/native force-point alignment; PR #176 |
 | #147 | Duplicate | PRNG integer correctness; PR #171; canonical #93 |
 | #148 | Fix | Worker protocol hardening; PR #170 |
 | #149 | Fix | Worker protocol hardening; PR #170 |
