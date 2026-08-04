@@ -4,12 +4,12 @@ A high-performance, headless simulation engine for *Bonk.io*, designed specifica
 
 ## Overview
 
-This project decouples the core *Bonk.io* physics logic from the original multiplayer networking stack. By removing browser-based rendering and WebSocket bottlenecks, we have created a deterministic, headless simulation loop. This allows machine learning agents to train in minutes rather than days, making it an ideal environment for testing PPO, DQN, or other reinforcement learning algorithms.
+This project decouples the core *Bonk.io* physics logic from the original multiplayer networking stack. By removing browser-based rendering and WebSocket bottlenecks, we have created a seedable, headless simulation loop. This allows machine learning agents to train in minutes rather than days, making it an ideal environment for testing PPO, DQN, or other reinforcement learning algorithms.
 
 ## Architecture
 
 - **Worker Pool**: Operates as a Massively Parallel Vectorized Environment, dynamically scaling to use all available CPU cores via Node.js `worker_threads`.
-- **Synchronous Loop**: Replaces real-time clocks with a synchronous `tick()` system equipped with a deterministic PRNG for perfectly reproducible rollouts.
+- **Synchronous Loop**: Replaces real-time clocks with a synchronous `tick()` system and a deterministic PRNG. Explicit seeds reproduce rollouts on the same runtime and architecture; absent seeds intentionally randomize, and bit-exact cross-platform floating-point parity is not guaranteed.
 - **Batch IPC Bridge**: Utilizes **ZeroMQ (ZMQ) ROUTER/DEALER** patterns for high-speed, batch communication between the TypeScript worker pool and the Python ML pipeline.
 - **Vectorized Gymnasium API**: Implements the `stable_baselines3.common.vec_env.VecEnv` interface natively, allowing the Python agent to dispatch actions and aggregate observations across 64+ parallel environments simultaneously.
 
@@ -29,11 +29,11 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 
 ## Features
 
-- **Deterministic Physics**: Reproducible simulation results for reliable RL training
+- **Seeded Reproducibility**: Explicit seeds reproduce simulation results on the same runtime and architecture
 - **Multi-threaded Parallelism**: Horizontal scaling across all available CPU cores
 - **Gymnasium Compatible**: Native integration with stable-baselines3 and other Python RL frameworks
 - **ZeroMQ Communication**: Low-latency message passing between Node.js and Python
-- **Configurable Tick Rates**: Support for 15/30/60 ticks per second simulation
+- **Native Tick Rate**: Fixed 30 ticks per second, matching the verified Bonk.io simulation rate
 - **Memory Efficient**: Typed arrays for observations, worker thread memory isolation
 
 ## SharedArrayBuffer Worker Pool (Optional Feature)
@@ -56,7 +56,7 @@ The implementation uses JavaScript's `SharedArrayBuffer` combined with the `Atom
 
 - **Reduced Latency**: Eliminates serialization/deserialization overhead for each environment step
 - **Lower Memory Usage**: Single buffer instead of per-message allocation
-- **Improved Throughput**: Particularly beneficial for high-frequency environment stepping (60 ticks/sec)
+- **Improved Throughput**: Particularly beneficial when stepping many environments in parallel
 - **Cache-Friendly**: Shared memory can be more cache-coherent than message passing
 
 ### How to Enable/Disable

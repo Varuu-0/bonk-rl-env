@@ -225,8 +225,8 @@ Bonk-RL-Env is a high-performance, headless reinforcement learning environment f
 
 #### 1. Deterministic Physics Engine
 - Uses Box2D with fixed time step (1/30s)
-- Deterministic PRNG ensures reproducible simulations
-- Configured for 30 TPS (ticks per second) with configurable options (15/30/60)
+- Deterministic PRNG enables explicitly seeded reproducibility on the same runtime and architecture
+- Runs at the fixed native rate of 30 TPS (ticks per second)
 
 #### 2. Massively Parallel Worker Pool
 - Scales horizontally using Node.js worker_threads
@@ -254,7 +254,8 @@ Bonk-RL-Env is a high-performance, headless reinforcement learning environment f
 - Fixed physics timestep
 - Deterministic PRNG
 - Synchronized worker execution
-- Enables scientific rigor in RL experiments
+- Explicit seeds reproduce rollouts on the same runtime and architecture
+- Absent seeds intentionally randomize; bit-exact cross-platform parity is not guaranteed
 
 ### Performance Characteristics (from README)
 - Raw PhysicsEngine TPS: 22,612
@@ -275,7 +276,7 @@ Bonk-RL-Env is a high-performance, headless reinforcement learning environment f
 
 ### Configuration Options
 - Number of parallel environments (`numEnvs`)
-- Tick rate (`ticksPerSecond`: 15, 30, or 60)
+- Fixed 30 TPS simulation rate
 - Shared memory usage (`useSharedMemory`: boolean)
 - Telemetry settings (enabled, profile level, debug level, output)
 - Port configuration (`PORT` environment variable)
