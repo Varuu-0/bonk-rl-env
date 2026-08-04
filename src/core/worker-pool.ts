@@ -350,7 +350,13 @@ export class WorkerPool {
                 throw error;
             }
             const failure = this.createFailure('reset', error);
-            await this.failPool(failure);
+            // Shared-memory batches can corrupt or desync the pool, so any
+            // failure there is fatal. Message-passing failures are transient
+            // (a worker error reply or a slow worker) and must not kill the
+            // whole pool: callers can retry without a full re-init().
+            if (this.useSharedMemory) {
+                await this.failPool(failure);
+            }
             throw failure;
         }
     }
@@ -368,7 +374,13 @@ export class WorkerPool {
                 throw error;
             }
             const failure = this.createFailure('step', error);
-            await this.failPool(failure);
+            // Shared-memory batches can corrupt or desync the pool, so any
+            // failure there is fatal. Message-passing failures are transient
+            // (a worker error reply or a slow worker) and must not kill the
+            // whole pool: callers can retry without a full re-init().
+            if (this.useSharedMemory) {
+                await this.failPool(failure);
+            }
             throw failure;
         }
     }
@@ -641,21 +653,12 @@ export class WorkerPool {
      */
     async getTelemetrySnapshots(): Promise<BigUint64Array[]> {
         this.assertReady('get telemetry');
-        try {
-            const promises = [];
-            for (let i = 0; i < this.workers.length; i++) {
-                promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
-            }
-            const snapshots = await Promise.all(promises);
-            return snapshots as BigUint64Array[];
-        } catch (error) {
-            if (this.state === 'closed') {
-                throw error;
-            }
-            const failure = this.createFailure('telemetry', error);
-            await this.failPool(failure);
-            throw failure;
+        const promises = [];
+        for (let i = 0; i < this.workers.length; i++) {
+            promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
         }
+        const snapshots = await Promise.all(promises);
+        return snapshots as BigUint64Array[];
     }
 
     async close() {

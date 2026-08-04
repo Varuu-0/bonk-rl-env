@@ -24,12 +24,9 @@ const WORKER_ERROR = -1;
 
 function signalSyncCompleted(status: number = WORKER_COMPLETE) {
     if (!syncCompleted) return;
-    try {
-        Atomics.store(syncCompleted, syncWorkerIndex + 1, status);
-    } finally {
-        Atomics.add(syncCompleted, 0, 1);
-        Atomics.notify(syncCompleted, 0, 1);
-    }
+    Atomics.store(syncCompleted, syncWorkerIndex + 1, status);
+    Atomics.add(syncCompleted, 0, 1);
+    Atomics.notify(syncCompleted, 0, 1);
 }
 
 /**

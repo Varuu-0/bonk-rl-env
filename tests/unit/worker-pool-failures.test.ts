@@ -7,6 +7,7 @@ const fakes = vi.hoisted(() => {
   const control = {
     initBehaviors: [] as Array<'ok' | 'error'>,
     resetMessageBehavior: 'ok' as 'ok' | 'error',
+    stepMessageBehavior: 'ok' as 'ok' | 'error',
     commandBehaviors: [] as CommandBehavior[],
     readError: false,
     stepTimeoutMs: 1000,
@@ -60,7 +61,11 @@ const fakes = vi.hoisted(() => {
           this.emit('message', { id: message.id, status: 'ok', data: [{}] });
         }
       } else if (message.type === 'step') {
-        this.emit('message', { id: message.id, status: 'ok', data: [] });
+        if (control.stepMessageBehavior === 'error') {
+          this.emit('message', { id: message.id, status: 'error', error: 'synthetic step failure' });
+        } else {
+          this.emit('message', { id: message.id, status: 'ok', data: [{}] });
+        }
       }
     }
 
@@ -153,6 +158,7 @@ const fakes = vi.hoisted(() => {
     FakeSharedMemoryManager.instances = [];
     control.initBehaviors = [];
     control.resetMessageBehavior = 'ok';
+    control.stepMessageBehavior = 'ok';
     control.commandBehaviors = [];
     control.readError = false;
     control.stepTimeoutMs = 1000;
@@ -258,15 +264,42 @@ describe('WorkerPool failure state', () => {
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
   });
 
-  it('propagates message-mode reset errors instead of returning null observations', async () => {
+  it('propagates message-mode reset errors without failing the pool', async () => {
     pool = new WorkerPool(1);
     await pool.init(1, {}, false);
     fakes.control.resetMessageBehavior = 'error';
 
     await expect(pool.reset()).rejects.toThrow('synthetic reset failure');
 
-    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
-    await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    fakes.control.resetMessageBehavior = 'ok';
+    const observations = await pool.reset();
+    expect(observations).toHaveLength(1);
+  });
+
+  it('propagates message-mode step errors without failing the pool', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+    fakes.control.stepMessageBehavior = 'error';
+
+    await expect(pool.step([0])).rejects.toThrow('synthetic step failure');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    fakes.control.stepMessageBehavior = 'ok';
+    const results = await pool.step([0]);
+    expect(results).toHaveLength(1);
+  });
+
+  it('propagates telemetry snapshot errors without failing the pool', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, true);
+
+    await expect(pool.getTelemetrySnapshots()).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    const results = await pool.step([0]);
+    expect(results).toHaveLength(1);
   });
 
   it('propagates shared-memory read errors and disposes the pool', async () => {
