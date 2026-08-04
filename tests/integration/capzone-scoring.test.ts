@@ -167,29 +167,6 @@ describe('CapZoneScoring', () => {
             expect(second).toBe(null);
         });
 
-        it('destroyAllBodies clears scoring state', () => {
-            engine = new PhysicsEngine();
-
-            engine.addBody({
-                name: 'floor', type: 'rect',
-                x: 0, y: 500, width: 800, height: 30,
-                static: true,
-            });
-
-            engine.addCapZone(
-                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
-                0, 190, 200, 100,
-            );
-
-            addBall(engine, 0, 50, 0, 0);
-
-            for (let i = 0; i < 100; i++) engine.tick();
-
-            engine.destroyAllBodies();
-
-            expect(engine.getTeamScored()).toBe(null);
-        });
-
         it('reset() clears scoring state', () => {
             engine = new PhysicsEngine();
 

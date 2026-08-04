@@ -16,7 +16,7 @@ import {
   POSITION_ITERATIONS,
   SCALE,
 } from '../../src/core/physics-engine';
-import { safeDestroy } from '../utils/test-helpers';
+import { safeDestroy, UP_INPUT } from '../utils/test-helpers';
 
 describe('PhysicsEngine', () => {
   let engine: PhysicsEngine | null = null;
@@ -95,6 +95,28 @@ describe('PhysicsEngine', () => {
       engine.tick();
       const state = engine.getPlayerState(0);
       expect(state.velX !== 0 || state.velY !== 0).toBe(true);
+    });
+
+    it('applies movement through the center of mass without torque', () => {
+      engine = new PhysicsEngine();
+      engine.addPlayer(0, 0, 0);
+
+      // @ts-ignore -- box2d has no type declarations
+      const { b2CircleDef } = require('box2d');
+      const body = (engine as any).playerBodies.get(0);
+      const offsetFixture = new b2CircleDef();
+      offsetFixture.radius = 0.4;
+      offsetFixture.localPosition.Set(1, 0);
+      offsetFixture.density = 1;
+      body.CreateShape(offsetFixture);
+      body.SetMassFromShapes();
+
+      expect(body.GetWorldCenter().x).not.toBe(body.GetPosition().x);
+
+      engine.applyInput(0, UP_INPUT);
+      engine.tick();
+
+      expect(engine.getPlayerState(0).angularVel).toBeCloseTo(0, 12);
     });
   });
 

@@ -95,23 +95,6 @@ describe('JointsCapZones', () => {
             expect(bodyMap.size).toBe(2);
         });
 
-        it('destroyAllBodies clears bodyMap', () => {
-            engine = new PhysicsEngine();
-
-            engine.addBody({
-                name: 'block',
-                type: 'rect',
-                x: 0, y: 0,
-                width: 50, height: 10,
-                static: true,
-            });
-
-            engine.destroyAllBodies();
-
-            const bodyMap = (engine as any).getBodyMap();
-            expect(bodyMap.size).toBe(0);
-        });
-
         it('reset() clears bodyMap', () => {
             engine = new PhysicsEngine();
 

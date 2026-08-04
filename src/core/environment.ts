@@ -253,11 +253,11 @@ export class BonkEnvironment {
         }
         this.scoreBlue = 0;
         this.scoreRed = 0;
-        // Reuse existing engine — destroy bodies on the same world, don't
-        // create a new PhysicsEngine (eliminates ~160 KB allocation per reset)
-        this.physics.destroyAllBodies();
+        // Discard the old Box2D world instead of destroying bodies in-place;
+        // the bundled port can retain invalid broadphase bounds after teardown.
+        this.physics.reset();
 
-        // Re-add platforms to the existing world
+        // Re-add platforms to the fresh world
         for (const body of this.config.mapData.bodies) {
             this.physics.addBody(body);
         }

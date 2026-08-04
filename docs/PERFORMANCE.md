@@ -280,8 +280,7 @@ Bit-flag encoding into a single `Uint8` is extremely cheap (~50 ns per action). 
 | Float32Array observation buffer       | Zero-allocation obs→mem write  | `src/core/worker.ts:27-55` |
 | Ring buffer for action pipelining     | Reduces contention             | `src/ipc/shared-memory.ts:111-127` |
 | Lazy telemetry hook activation        | No overhead when disabled      | `src/core/physics-engine.ts:641-670` |
-| Broadphase crash guards               | Prevents box2d corruption      | `src/core/physics-engine.ts:38-98` |
-| Engine reuse on reset (destroyAllBodies) | Eliminates 160 KB/reset     | `src/core/physics-engine.ts:607` |
+| Fresh-world episode reset             | Avoids stale broadphase state  | `src/core/environment.ts`, `src/core/physics-engine.ts` |
 | Pre-allocated PlayerState objects     | Zero alloc in getPlayerState   | `src/core/physics-engine.ts:205` |
 | Atomics.wait (vs polling)             | ~95% CPU reduction on idle     | `src/core/worker-pool.ts:343-353` |
 

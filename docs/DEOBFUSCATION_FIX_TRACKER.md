@@ -795,3 +795,27 @@ source level — see `DEOBFUSCATION.md` §31 for line-numbered evidence:
   implementation work: authenticated target-map capture, server-provided
   `ms.fl` coverage, football host state, imported Box2D CCD parity, and the
   local native-map converter/physics-port backlog.
+
+### 2026-08-04 — Fresh-world episode lifecycle and force-point alignment
+
+- Replaced the episode-boundary `destroyAllBodies()` path with the existing
+  fresh-world `PhysicsEngine.reset()`. The unsafe body-by-body teardown API and
+  broadphase exception-swallowing monkey patches were removed, so corrupted
+  broadphase operations can no longer be silently treated as valid physics.
+- The lifecycle choice follows the 2026-07-29 client trace: `novakReset`,
+  contact-listener reattachment, and the full `CreateBody`/`CreateFixture` pass
+  rebuild world state from serialized bodies (client lines 6996-7237,
+  7536-7647, 8313-8325, 8571-8579; `DEOBFUSCATION.md` §31).
+- Player movement now calls `ApplyForce(force, body.GetWorldCenter())`, matching
+  decoded property indexes 163/164 and the native movement paths documented in
+  `DEOBFUSCATION.md` §5 and §35.2.
+- Newly dead discs are removed from the live Box2D world after the step while
+  their final transforms remain available to observations. This mirrors the
+  native next-state rebuild and prevents dead proxies from eventually leaving
+  the fixed broadphase AABB during direct post-death engine ticks.
+- Regression coverage proves a distinct world per episode, disabled warm
+  starting, listener/config/PPM/bounds restoration, map-body/capzone/joint and
+  grapple recreation, tick reset, lethal contact behavior across 75 repeated
+  71-body resets, and zero angular velocity from movement through an offset
+  center of mass. This closes the common reset/broadphase cause tracked by
+  #42, #49, #77, #97, #112, and #119, and the force-point mismatch in #146.

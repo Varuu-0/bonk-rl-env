@@ -77,8 +77,7 @@ describe('PhysicsEngine error paths', () => {
     it('does not throw for dead player', () => {
       engine = new PhysicsEngine();
       engine.addPlayer(0, 0, 0);
-      // Manually simulate dead state via destroyAllBodies
-      engine.destroyAllBodies();
+      engine.reset();
       expect(() => {
         engine!.applyInput(0, EMPTY_INPUT);
       }).not.toThrow();
