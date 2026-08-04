@@ -676,13 +676,15 @@ export class WorkerPool {
      * Deep-copies a pooled observation/result graph so the caller owns every
      * nested mutable field and buffer.
      *
-     * Used rather than the global `structuredClone`: `structuredClone`
-     * preserves SharedArrayBuffer-backed views by sharing the underlying
-     * buffer, while this copy re-slices every buffer so the snapshot is fully
-     * independent. It handles plain objects and arrays plus the common
-     * structured-cloneable types (Date, RegExp, Map, Set, typed arrays,
-     * DataView, ArrayBuffer, SharedArrayBuffer) without silent degradation,
-     * and preserves shared references and cycles via the `seen` map.
+     * Supported value contract: primitives; plain objects; arrays; Date,
+     * RegExp, Map, Set; typed arrays; Node Buffers (copied byte-for-byte via
+     * `Buffer.from`, because `Buffer.prototype.slice` aliases the source
+     * memory); DataView; ArrayBuffer; and SharedArrayBuffer-backed views
+     * (re-sliced into owned buffers, unlike `structuredClone`, which shares
+     * SABs). Other exotic structured-cloneable values (Error, URL, Blob, ...)
+     * are outside the contract: the pooled observation/result graphs are plain
+     * data, and such members degrade to `{}`. Shared references and cycles are
+     * preserved via the `seen` map.
      */
     private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
         if (value === null || typeof value !== 'object') return value;
@@ -705,8 +707,15 @@ export class WorkerPool {
             if (value instanceof DataView) {
                 return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength);
             }
-            // .slice() copies into a fresh buffer, so SharedArrayBuffer-backed
-            // views become owned instead of sharing the pool's SAB.
+            const bufferCtor = (globalThis as any).Buffer;
+            if (bufferCtor && value instanceof bufferCtor) {
+                // Node Buffer#slice aliases the source memory, so copy the
+                // bytes into a fresh Buffer instead of slicing.
+                return bufferCtor.from(value);
+            }
+            // TypedArray#slice copies into a fresh buffer, so
+            // SharedArrayBuffer-backed views become owned rather than sharing
+            // the pool's SAB.
             return value.slice();
         }
         if (value instanceof ArrayBuffer) {
