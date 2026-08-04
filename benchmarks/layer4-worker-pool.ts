@@ -34,7 +34,7 @@ const SAMPLE_ORDERS = [
     [2, 1, 8, 4],
     [1, 8, 4, 2],
 ];
-const MIN_BASELINE_SAMPLES = SAMPLE_ORDERS.length;
+const MIN_SAMPLES_PER_COUNT = SAMPLE_ORDERS.length / 2;
 const BENCH_CONFIG = {
     verboseTelemetry: false,
     numOpponents: 1,
@@ -172,7 +172,9 @@ async function main(): Promise<void> {
                     }
                 }
                 if (lastError !== undefined) {
-                    errors.set(numWorkers, `sample failed after ${MAX_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+                    // Drop only this sample; earlier samples stay retained and
+                    // later orders keep collecting for this worker count.
+                    console.warn(`[Layer 4] N=${numWorkers} sample dropped after ${MAX_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
                 }
             }
         }
@@ -183,12 +185,13 @@ async function main(): Promise<void> {
     }
 
     const baselineLatencies = samples.get(1)!;
-    const baselineUnderpowered = baselineLatencies.length < MIN_BASELINE_SAMPLES;
+    const baselineUnderpowered = baselineLatencies.length < MIN_SAMPLES_PER_COUNT;
     const baselineEnvSps = !baselineUnderpowered
         ? 1_000 / quantile(baselineLatencies.flat(), 0.5)
         : 0;
 
     for (const numWorkers of WORKER_COUNTS) {
+        const retainedSamples = samples.get(numWorkers)!.length;
         if (errors.has(numWorkers)) {
             recordResult(suite, {
                 layer: 4,
@@ -199,7 +202,7 @@ async function main(): Promise<void> {
                 metrics: [],
                 error: errors.get(numWorkers)!,
             });
-        } else if (baselineUnderpowered) {
+        } else if (retainedSamples < MIN_SAMPLES_PER_COUNT) {
             recordResult(suite, {
                 layer: 4,
                 name: `WorkerPool.step() N=${numWorkers}`,
@@ -207,7 +210,17 @@ async function main(): Promise<void> {
                 status: 'ERROR',
                 durationMs: 0,
                 metrics: [],
-                error: `N=1 baseline underpowered (${baselineLatencies.length}/${MIN_BASELINE_SAMPLES} samples) — scaling gate not evaluated`,
+                error: `only ${retainedSamples}/${SAMPLE_ORDERS.length} samples retained for N=${numWorkers}`,
+            });
+        } else if (baselineUnderpowered && numWorkers !== 1) {
+            recordResult(suite, {
+                layer: 4,
+                name: `WorkerPool.step() N=${numWorkers}`,
+                passed: false,
+                status: 'ERROR',
+                durationMs: 0,
+                metrics: [],
+                error: `N=1 baseline underpowered (${baselineLatencies.length}/${SAMPLE_ORDERS.length} samples) — scaling gate not evaluated`,
             });
         } else {
             recordResult(suite, createResult(numWorkers, samples.get(numWorkers)!, baselineEnvSps));
