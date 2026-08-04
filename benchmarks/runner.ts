@@ -72,7 +72,7 @@ const LAYERS: Record<string, { file: string; name: string; description: string }
     '1': { file: 'layer1-primitives.ts', name: 'Primitives', description: 'Atomics, TypedArray, object allocation latencies' },
     '2': { file: 'layer2-physics.ts', name: 'Raw Physics', description: 'Box2D physics engine tick throughput (isolated)' },
     '3': { file: 'layer3-environment.ts', name: 'Environment', description: 'BonkEnvironment step throughput (no IPC)' },
-    '4': { file: 'layer4-worker-pool.ts', name: 'Worker Pool', description: 'SharedArrayBuffer IPC throughput across env counts' },
+    '4': { file: 'layer4-worker-pool.ts', name: 'Worker Pool', description: 'SharedArrayBuffer IPC scaling across exact worker counts' },
     '5': { file: 'layer5-memory.ts', name: 'Memory', description: 'Heap stability and reset cycle memory leaks' },
     '6': { file: 'layer6-stability.ts', name: 'Stability', description: 'Long-running throughput variance and GC pressure' },
 };
@@ -340,14 +340,17 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
     // ─── SCALING ANALYSIS (Layer 4) ─────────────────────────────────
     const layer4 = results.find(r => r.layer === 4 && r.suite);
     if (layer4 && layer4.suite) {
+        const scalingResults = layer4.suite.results.filter(bench =>
+            bench.metrics.some(metric => metric.label === 'Workers'),
+        );
         print('SCALING ANALYSIS (Layer 4: Worker Pool)', colors.bright + colors.white);
         print(hr);
 
-        const n1Sps = getMetric(layer4.suite.results, 'WorkerPool.step() N=1', 'SPS (per-env)') ?? 0;
+        const n1Sps = getMetric(scalingResults, 'WorkerPool.step() N=1', 'Batch SPS') ?? 0;
 
         const scHeader =
             '  ' + pad('N', 4) + ' ' +
-            padLeft('SPS', 10) + ' ' +
+            padLeft('Batch SPS', 10) + ' ' +
             padLeft('Env-SPS', 12) + ' ' +
             padLeft('Speedup', 10) + ' ' +
             padLeft('Efficiency', 12) + ' ' +
@@ -361,11 +364,11 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
             '\u2500'.repeat(12) + ' ' +
             '\u2500'.repeat(10));
 
-        for (const bench of layer4.suite.results) {
-            const n = bench.metrics.find(m => m.label === 'Envs')?.value ?? 0;
-            const sps = bench.metrics.find(m => m.label === 'SPS (per-env)')?.value ?? 0;
+        for (const bench of scalingResults) {
+            const n = bench.metrics.find(m => m.label === 'Workers')?.value ?? 0;
+            const sps = bench.metrics.find(m => m.label === 'Batch SPS')?.value ?? 0;
             const envSps = bench.metrics.find(m => m.label === 'Env-SPS (aggregate)')?.value ?? 0;
-            const latency = bench.metrics.find(m => m.label === 'Latency')?.value ?? 0;
+            const latency = bench.metrics.find(m => m.label === 'Median latency')?.value ?? 0;
             const speedup = n1Sps > 0 ? (envSps / n1Sps) : 0;
             const efficiency = n > 0 ? (speedup / n) * 100 : 0;
 
@@ -382,12 +385,12 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
         console.log();
 
         // Scaling insights
-        const envCounts = layer4.suite.results.map(b => b.metrics.find(m => m.label === 'Envs')?.value ?? 0);
-        const envSpsValues = layer4.suite.results.map(b => b.metrics.find(m => m.label === 'Env-SPS (aggregate)')?.value ?? 0);
-        const maxIdx = envSpsValues.indexOf(Math.max(...envSpsValues));
-        print(`  Peak aggregate throughput: ${fmtNum(envSpsValues[maxIdx])} env-steps/sec at N=${envCounts[maxIdx]}`, colors.dim);
-        const n16 = getMetric(layer4.suite.results, 'WorkerPool.step() N=16', 'SPS (per-env)');
-        if (n16) print(`  Per-env SPS at N=16: ${n16.toLocaleString()} (serial Atomics.wait overhead visible)`, colors.dim);
+        const workerCounts = scalingResults.map(b => b.metrics.find(m => m.label === 'Workers')!.value);
+        const envSpsValues = scalingResults.map(b => b.metrics.find(m => m.label === 'Env-SPS (aggregate)')?.value ?? 0);
+        if (envSpsValues.length > 0) {
+            const maxIdx = envSpsValues.indexOf(Math.max(...envSpsValues));
+            print(`  Peak aggregate throughput: ${fmtNum(envSpsValues[maxIdx])} env-steps/sec at N=${workerCounts[maxIdx]}`, colors.dim);
+        }
     }
 
     console.log();
@@ -403,7 +406,7 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
     if (layer2 && layer3 && layer4_1) {
         const rawTps = getMetric(layer2.suite!.results, 'PhysicsEngine.tick() (2 players, applyInput + tick)', 'TPS');
         const envSps = getMetric(layer3.suite!.results, 'BonkEnvironment.step() (1 AI + 1 opponent)', 'SPS');
-        const poolSps = getMetric(layer4_1.suite!.results, 'WorkerPool.step() N=1', 'SPS (per-env)');
+        const poolSps = getMetric(layer4_1.suite!.results, 'WorkerPool.step() N=1', 'Batch SPS');
 
         if (rawTps && envSps && poolSps) {
             // Note: L2 simulates 2 players, L3 simulates 1 AI + 1 opponent.
