@@ -34,6 +34,7 @@ const SAMPLE_ORDERS = [
     [2, 1, 8, 4],
     [1, 8, 4, 2],
 ];
+const MIN_BASELINE_SAMPLES = SAMPLE_ORDERS.length;
 const BENCH_CONFIG = {
     verboseTelemetry: false,
     numOpponents: 1,
@@ -67,16 +68,20 @@ function makeActions(numWorkers: number): number[] {
 async function createPool(numWorkers: number): Promise<WorkerPool> {
     let lastError: unknown;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        const pool = new WorkerPool(numWorkers);
         try {
-            const pool = new WorkerPool(numWorkers);
             await pool.init(numWorkers, BENCH_CONFIG, true);
             if (!pool.isUsingSharedMemory()) {
-                await pool.close();
                 throw new Error('SharedArrayBuffer mode unavailable');
             }
             return pool;
         } catch (e) {
             lastError = e;
+            try {
+                await pool.close();
+            } catch {
+                // preserve the original error
+            }
         }
     }
     throw lastError instanceof Error ? lastError : new Error(String(lastError));
@@ -178,13 +183,13 @@ async function main(): Promise<void> {
     }
 
     const baselineLatencies = samples.get(1)!;
-    const baselineEnvSps = baselineLatencies.length > 0
+    const baselineUnderpowered = baselineLatencies.length < MIN_BASELINE_SAMPLES;
+    const baselineEnvSps = !baselineUnderpowered
         ? 1_000 / quantile(baselineLatencies.flat(), 0.5)
         : 0;
 
     for (const numWorkers of WORKER_COUNTS) {
-        const error = errors.get(numWorkers);
-        if (errors.has(numWorkers) || (numWorkers !== 1 && baselineEnvSps === 0)) {
+        if (errors.has(numWorkers)) {
             recordResult(suite, {
                 layer: 4,
                 name: `WorkerPool.step() N=${numWorkers}`,
@@ -192,7 +197,17 @@ async function main(): Promise<void> {
                 status: 'ERROR',
                 durationMs: 0,
                 metrics: [],
-                error: error || 'N=1 baseline unavailable',
+                error: errors.get(numWorkers)!,
+            });
+        } else if (baselineUnderpowered) {
+            recordResult(suite, {
+                layer: 4,
+                name: `WorkerPool.step() N=${numWorkers}`,
+                passed: false,
+                status: 'ERROR',
+                durationMs: 0,
+                metrics: [],
+                error: `N=1 baseline underpowered (${baselineLatencies.length}/${MIN_BASELINE_SAMPLES} samples) — scaling gate not evaluated`,
             });
         } else {
             recordResult(suite, createResult(numWorkers, samples.get(numWorkers)!, baselineEnvSps));
