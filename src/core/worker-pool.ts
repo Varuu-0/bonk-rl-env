@@ -32,6 +32,11 @@ export interface ResultOwnershipOptions {
      * `owned` returns caller-owned snapshots that remain stable across later
      * calls. `borrowed` exposes the shared-memory extraction pools and is only
      * valid until the next reset or step.
+     *
+     * Only the shared-memory transport is affected: message-passing results
+     * are structured-cloned by the worker transport and are always
+     * caller-owned, so the option is a no-op there (accepted for a symmetric
+     * API).
      */
     ownership?: 'owned' | 'borrowed';
 }
@@ -315,6 +320,9 @@ export class WorkerPool {
      * Reset all environments. Results are caller-owned by default.
      * Borrowed results must be consumed before the next reset or step and must
      * not be retained or mutated.
+     *
+     * Message-passing mode always returns caller-owned results; `ownership`
+     * only affects the shared-memory extraction path.
      */
     async reset(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('reset');
@@ -388,6 +396,9 @@ export class WorkerPool {
                 promises.push(this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds }));
                 seedIdx += wEnvs;
             }
+            // Message-passing results are already caller-owned structured clones,
+            // so the ownership option only affects the shared-memory extraction
+            // path above.
             const results = await this.settleMessageBatch(promises);
             return results.flat();
         } catch (error) {
@@ -411,15 +422,19 @@ export class WorkerPool {
      * Step all environments. Results are caller-owned by default.
      * Borrowed results preserve the zero-allocation extraction path but the
      * entire returned graph is invalidated by the next reset or step.
+     *
+     * Message-passing mode always returns caller-owned structured clones, so
+     * `ownership` is a no-op there (accepted for a symmetric API).
      */
     async step(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('step');
         try {
-            // Use shared memory mode if enabled
+            // Shared memory mode honors `ownership`; message-passing mode always
+            // returns caller-owned structured clones.
             if (this.useSharedMemory) {
                 return await this.stepSharedMemory(actions, options);
             }
-            return await this.stepMessagePassing(actions);
+            return await this.stepMessagePassing(actions, options);
         } catch (error) {
             if (this.state === 'closed') {
                 throw error;
@@ -578,9 +593,14 @@ export class WorkerPool {
     }
 
     /**
-     * Step using message passing (fallback mode)
+     * Step using message passing (fallback mode).
+     *
+     * Results are structured-cloned by the worker transport, so they are
+     * already caller-owned in both `owned` and `borrowed` modes. `options` is
+     * accepted for API symmetry with the shared-memory path and has no effect
+     * on allocation or retention semantics here.
      */
-    private async stepMessagePassing(actions: any[]): Promise<any[]> {
+    private async stepMessagePassing(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
         const returnTimes: bigint[] = [];
 
@@ -652,30 +672,36 @@ export class WorkerPool {
         return encoded;
     }
 
-    private snapshotObservation(observation: any): any {
-        if (observation == null) return observation;
+    /**
+     * Deep-copies plain objects and arrays, preserving shared references and
+     * cycles via the `seen` map. Used to materialize caller-owned snapshots of
+     * the pooled observation/result graphs.
+     */
+    private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
+        if (value === null || typeof value !== 'object') return value;
+        const cached = seen.get(value);
+        if (cached) return cached;
+        const copy: any = Array.isArray(value) ? [] : {};
+        seen.set(value, copy);
+        for (const key of Object.keys(value)) {
+            copy[key] = this.deepCopy(value[key], seen);
+        }
+        return copy;
+    }
 
-        // Keep this in sync with nested mutable fields populated by
-        // extractObservation(). Scalar fields are copied by the spread.
-        return {
-            ...observation,
-            opponents: Array.isArray(observation.opponents)
-                ? observation.opponents.map((opponent: any) => ({ ...opponent }))
-                : observation.opponents,
-        };
+    /**
+     * Copies a pooled observation graph so the caller owns every nested
+     * mutable field (the `opponents` array and its objects today, and any
+     * nested objects `extractObservation` adds later). The structural guard in
+     * worker-pool-sharedmem-regression.test.ts fails if a nested field aliases
+     * a pooled template.
+     */
+    private snapshotObservation(observation: any): any {
+        return this.deepCopy(observation);
     }
 
     private snapshotResult(result: any): any {
-        const info = { ...result.info };
-        if (info.terminal_observation != null) {
-            info.terminal_observation = this.snapshotObservation(info.terminal_observation);
-        }
-
-        return {
-            ...result,
-            observation: this.snapshotObservation(result.observation),
-            info,
-        };
+        return this.deepCopy(result);
     }
 
     /**

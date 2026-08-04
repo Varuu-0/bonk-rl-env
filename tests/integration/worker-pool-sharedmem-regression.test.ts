@@ -131,4 +131,70 @@ describe('WorkerPool shared-memory result ownership', () => {
       await pool.close();
     }
   });
+
+  it('snapshots every nested field of the pooled result graph (structural guard)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const collectRefs = (value: any, into: Set<any>): void => {
+      if (value === null || typeof value !== 'object') return;
+      if (into.has(value)) return;
+      into.add(value);
+      for (const key of Object.keys(value)) collectRefs(value[key], into);
+    };
+
+    // Walks the snapshot and fails if any node aliases the pooled source. This
+    // is the guard that breaks when a future nested mutable field added to
+    // extractObservation() is not deep-copied by snapshotObservation().
+    const expectGraphIndependent = (source: any, snapshot: any): void => {
+      const sourceRefs = new Set<any>();
+      collectRefs(source, sourceRefs);
+
+      const walk = (value: any): void => {
+        if (value === null || typeof value !== 'object') return;
+        expect(sourceRefs.has(value)).toBe(false);
+        for (const key of Object.keys(value)) walk(value[key]);
+      };
+
+      walk(snapshot);
+      expect(snapshot).toEqual(source);
+    };
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+      const borrowed = (await pool.step([{ right: true }], { ownership: 'borrowed' }))[0];
+      expectGraphIndependent(borrowed, (pool as any).snapshotResult(borrowed));
+
+      await pool.close();
+      await pool.init(1, { maxTicks: 1 }, true);
+      await pool.reset([1]);
+      const terminalBorrowed = (await pool.step([0], { ownership: 'borrowed' }))[0];
+      expect(terminalBorrowed.info.terminal_observation).toBeDefined();
+      expectGraphIndependent(terminalBorrowed, (pool as any).snapshotResult(terminalBorrowed));
+    } finally {
+      await pool.close();
+    }
+  });
+});
+
+describe('WorkerPool message-passing result ownership', () => {
+  it('keeps retained step results stable regardless of the ownership option', async () => {
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, false); // message passing (structured clone)
+      await pool.reset([1]);
+
+      // `borrowed` is a no-op in message-passing mode: worker transport
+      // already structured-clones every result, so retaining is safe.
+      const retained = (await pool.step([{ right: true }], { ownership: 'borrowed' }))[0];
+      const snapshot = structuredClone(retained);
+
+      await pool.step([{ left: true }], { ownership: 'owned' });
+
+      expect(retained).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
 });

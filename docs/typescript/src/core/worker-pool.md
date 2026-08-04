@@ -116,6 +116,10 @@ affecting later steps. Borrowed results avoid snapshot allocations but expose
 pooled objects: consume them before the next `reset` or `step`, do not retain
 or mutate them, and do not overlap calls on the same pool.
 
+`ownership` only affects the shared-memory transport. In message-passing mode
+results are structured-cloned by the worker transport and are always
+caller-owned, so `borrowed` is a no-op there (accepted for a symmetric API).
+
 ---
 
 ##### `getTelemetrySnapshots`

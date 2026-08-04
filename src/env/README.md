@@ -58,3 +58,7 @@ Callers that consume a batch synchronously and discard it before the next
 the internal shared-memory extraction pools, must not be mutated, and become
 invalid after the next call. This opt-in avoids the caller snapshot allocations
 without changing the SharedArrayBuffer transport itself.
+
+`ownership` only affects the SharedArrayBuffer path. Message-passing results are
+structured-cloned by the worker transport and are always caller-owned, so
+`borrowed` is accepted for API symmetry but has no allocation effect there.
