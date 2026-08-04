@@ -368,7 +368,7 @@ math, benchmarks, map data, examples, and test infrastructure.
 | R3M3 | `TelemetryController.shutdown()` final report skipped by window guard; tick counters desynced | `telemetry-controller.ts` L309-320 | ❌ |
 | R3M4 | `startCollection()` interval never stopped on shutdown (dead code but latent leak) | `profiler.ts` L399-413 | ❌ |
 | R3M5 | `BonkEnv.stop()` calls `pool.close()` without await; port released before workers terminate — race on port reuse | `bonk-env.ts` L107, `worker-pool.ts` L588-604 | ✅ (close is awaited everywhere; pending callbacks rejected on close) |
-| R3M6 | `PRNG` seed not normalized to 32-bit unsigned — negative/large seeds break determinism | `prng.ts` L19-24, L30-32 | ❌ |
+| R3M6 | `PRNG` seed/state not normalized to 32-bit unsigned — out-of-domain seeds and long runs can leave the uint32 ring and lose precision | `prng.ts` L19-24, L30-32 | ✅ (seed and state normalized; canonical sequence preserved) |
 | R3M7 | Physics hooks permanently wrapped; trampoline adds 2 fn calls/tick even when telemetry disabled; no disable path | `physics-engine.ts` L759-781 | ❌ |
 | R3M8 | `bonk-env.ts` StepResult.observation typed `any`; contradicts `environment.ts` Observation; types README shows third shape | `bonk-env.ts` L28-34, `types/README.md` L44-57 | ❌ |
 | R3M9 | `ipc-bridge.test.ts` asserts step/reset without init returns `ok` — encodes missing-validation bug | `ipc-bridge.test.ts` L179-193 | ✅ (init validation added; tests updated including `ipc-bridge-constructor` telemetry-step tests) |
