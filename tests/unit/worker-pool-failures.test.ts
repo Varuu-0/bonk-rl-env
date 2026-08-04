@@ -6,7 +6,7 @@ const fakes = vi.hoisted(() => {
 
   const control = {
     initBehaviors: [] as Array<'ok' | 'error' | 'timeout'>,
-    resetMessageBehavior: 'ok' as 'ok' | 'error',
+    resetMessageBehavior: 'ok' as 'ok' | 'error' | 'silent',
     stepMessageBehavior: 'ok' as 'ok' | 'error' | 'silent',
     commandBehaviors: [] as CommandBehavior[],
     readError: false,
@@ -57,7 +57,7 @@ const fakes = vi.hoisted(() => {
       } else if (message.type === 'reset') {
         if (control.resetMessageBehavior === 'error') {
           this.emit('message', { id: message.id, status: 'error', error: 'synthetic reset failure' });
-        } else {
+        } else if (control.resetMessageBehavior !== 'silent') {
           this.emit('message', { id: message.id, status: 'ok', data: [{}] });
         }
       } else if (message.type === 'step') {
@@ -325,6 +325,30 @@ describe('WorkerPool failure state', () => {
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
     await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a message-mode worker hangs on step', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+    fakes.control.stepMessageBehavior = 'silent';
+
+    await expect(pool.step([0])).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a message-mode worker hangs on reset', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+    fakes.control.resetMessageBehavior = 'silent';
+
+    await expect(pool.reset()).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
   });
 
   it('propagates message-mode reset errors without failing the pool', async () => {

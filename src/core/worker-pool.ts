@@ -260,7 +260,11 @@ export class WorkerPool {
                 if (this.callbacks.has(id)) {
                     this.callbacks.delete(id);
                     console.error(`[WorkerPool] Message ${id} timed out`);
-                    reject(new Error(`Message ${id} timed out`));
+                    const err = new Error(`Message ${id} timed out`) as Error & { code?: string };
+                    // A timed-out reply means the worker is hung/unreachable,
+                    // which is distinct from an error reply from a live worker.
+                    err.code = 'WORKER_TIMEOUT';
+                    reject(err);
                 }
             }, getConfig().workerPool.messageTimeoutMs);
             this.callbacks.set(id, { resolve, reject, timeout });
@@ -351,10 +355,11 @@ export class WorkerPool {
             }
             const failure = this.createFailure('reset', error);
             // Shared-memory batches can corrupt or desync the pool, so any
-            // failure there is fatal. Message-passing failures are transient
-            // (a worker error reply or a slow worker) and must not kill the
-            // whole pool: callers can retry without a full re-init().
-            if (this.useSharedMemory) {
+            // failure there is fatal. In message mode an error reply from a
+            // live worker is transient and must not kill the pool, but a
+            // timeout means the worker is hung/unreachable: fail so callers
+            // re-init instead of waiting out the full timeout on every call.
+            if (this.useSharedMemory || this.isWorkerTimeout(error)) {
                 await this.failPool(failure);
             }
             throw failure;
@@ -375,10 +380,11 @@ export class WorkerPool {
             }
             const failure = this.createFailure('step', error);
             // Shared-memory batches can corrupt or desync the pool, so any
-            // failure there is fatal. Message-passing failures are transient
-            // (a worker error reply or a slow worker) and must not kill the
-            // whole pool: callers can retry without a full re-init().
-            if (this.useSharedMemory) {
+            // failure there is fatal. In message mode an error reply from a
+            // live worker is transient and must not kill the pool, but a
+            // timeout means the worker is hung/unreachable: fail so callers
+            // re-init instead of waiting out the full timeout on every step.
+            if (this.useSharedMemory || this.isWorkerTimeout(error)) {
                 await this.failPool(failure);
             }
             throw failure;
@@ -686,6 +692,10 @@ export class WorkerPool {
         const failure = new Error(`Worker pool ${operation} failed: ${causeError.message}`);
         (failure as any).cause = causeError;
         return failure;
+    }
+
+    private isWorkerTimeout(error: unknown): boolean {
+        return (error as { code?: string })?.code === 'WORKER_TIMEOUT';
     }
 
     private requireSharedMemoryManager(workerIndex: number): SharedMemoryManager {
