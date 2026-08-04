@@ -19,16 +19,18 @@ def bonk_server():
     if not os.path.isfile(server_script):
         pytest.skip("src/main.ts not found")
 
-    if shutil.which("npx") is None:
-        pytest.skip("npx not found")
+    if shutil.which("node") is None:
+        pytest.skip("node not found")
 
-    # npx is a .cmd wrapper on Windows; invoke through the shell so
-    # CreateProcess can resolve it (plain Popen([...]) raises WinError 2).
-    npx_cmd = shutil.which("npx")
+    # Invoke tsx's Node CLI directly instead of going through npx, which is a
+    # .cmd shim on Windows and fails when npx is missing or broken.
+    tsx_cli = os.path.join(project_root, "node_modules", "tsx", "dist", "cli.mjs")
+    if not os.path.isfile(tsx_cli):
+        pytest.skip("tsx CLI not found (run npm install)")
+
     proc = subprocess.Popen(
-        f'"{npx_cmd}" tsx src/main.ts',
+        [shutil.which("node"), tsx_cli, "src/main.ts"],
         cwd=project_root,
-        shell=True,
         # DEVNULL, not PIPE: the server logs verbosely per init/reset and an
         # undrained pipe buffer deadlocks the server after a few test cycles.
         stdout=subprocess.DEVNULL,
