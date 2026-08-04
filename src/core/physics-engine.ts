@@ -32,73 +32,6 @@ const {
   b2FilterData,
 } = box2d;
 
-// Monkey-patch b2BroadPhase.Query to guard against undefined bounds entries.
-// The box2d JS port (Box2DFlash v2.0) can leave stale/undefined entries in
-// the bounds array during DestroyProxy, causing "Cannot read properties of
-// undefined (reading 'IsLower')" crashes during Step → Solve → SynchronizeShapes.
-(() => {
-  const b2BroadPhase = box2d.b2BroadPhase;
-
-  // Guard Query (original fix)
-  const _origQuery = b2BroadPhase.prototype.Query;
-  b2BroadPhase.prototype.Query = function (
-    lowerQueryOut: any, upperQueryOut: any,
-    lowerValue: number, upperValue: number,
-    bounds: any[], boundCount: number, axis: number,
-  ) {
-    try {
-      _origQuery.call(this, lowerQueryOut, upperQueryOut, lowerValue, upperValue, bounds, boundCount, axis);
-    } catch (e: any) {
-      if (e instanceof TypeError && (e.message.includes("IsLower") || e.message.includes("value"))) {
-        // Bounds array corrupted — skip this query to prevent cascading failures
-      } else {
-        throw e;
-      }
-    }
-  };
-
-  // Guard TestOverlap
-  const _origTestOverlap = b2BroadPhase.prototype.TestOverlap;
-  b2BroadPhase.prototype.TestOverlap = function (proxyA: number, proxyB: number) {
-    try {
-      return _origTestOverlap.call(this, proxyA, proxyB);
-    } catch (e: any) {
-      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        return false;  // Treat corrupted broadphase as no overlap
-      }
-      throw e;
-    }
-  };
-
-  // Guard MoveProxy
-  const _origMoveProxy = b2BroadPhase.prototype.MoveProxy;
-  b2BroadPhase.prototype.MoveProxy = function (proxyId: number, aabb: any, displacement: any) {
-    try {
-      _origMoveProxy.call(this, proxyId, aabb, displacement);
-    } catch (e: any) {
-      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        // Broadphase corrupted — skip this move to prevent cascading failures
-      } else {
-        throw e;
-      }
-    }
-  };
-
-  // Guard DestroyProxy
-  const _origDestroyProxy = b2BroadPhase.prototype.DestroyProxy;
-  b2BroadPhase.prototype.DestroyProxy = function (proxyId: number) {
-    try {
-      _origDestroyProxy.call(this, proxyId);
-    } catch (e: any) {
-      if (e instanceof TypeError && (e.message.includes("value") || e.message.includes("IsLower"))) {
-        // Broadphase corrupted — skip this destroy to prevent cascading failures
-      } else {
-        throw e;
-      }
-    }
-  };
-})();
-
 // ─── Constants ───────────────────────────────────────────────────────
 /** bonk.io runs at 30 ticks per second */
 export const TPS = 30;
@@ -214,11 +147,26 @@ export interface MapDef {
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
 
+/** Frozen final transforms of a dead disc, snapshotted when its body is detached
+ * from the live world. Observations read these plain objects instead of the
+ * destroyed b2Body, which this port may leave partially readable or recycle. */
+interface DetachedPlayerSnapshot {
+  x: number;
+  y: number;
+  velX: number;
+  velY: number;
+  angle: number;
+  angularVel: number;
+}
+
 export class PhysicsEngine {
   private world: any;
   private playerBodies: Map<number, any> = new Map();
   private playerHeavyState: Map<number, boolean> = new Map();
   private playerAlive: Map<number, boolean> = new Map();
+  /** Frozen final transforms of dead discs, snapshotted on detach so observations
+   * never read a destroyed b2Body. Entries live until the next reset(). */
+  private detachedPlayerStates: Map<number, DetachedPlayerSnapshot> = new Map();
   private playerGrappleJoints: Map<number, any> = new Map();
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
@@ -741,6 +689,7 @@ export class PhysicsEngine {
     body.SetUserData({ playerId: id });
 
     this.playerBodies.set(id, body);
+    this.detachedPlayerStates.delete(id);
     this.updatePlayerFilter(id);
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
@@ -754,7 +703,6 @@ export class PhysicsEngine {
     const body = this.playerBodies.get(playerId);
     if (!body || !this.playerAlive.get(playerId)) return;
 
-    const pos = body.GetPosition();
     const force = this._tempForce;
     force.x = 0;
     force.y = 0;
@@ -765,7 +713,7 @@ export class PhysicsEngine {
     if (input.down) force.y += MOVE_FORCE;
 
     if (input.heavy) force.Multiply(HEAVY_FORCE_MULTIPLIER);
-    body.ApplyForce(force, pos);
+    body.ApplyForce(force, body.GetWorldCenter());
     this.playerHeavyState.set(playerId, input.heavy);
 
     // Handle grapple toggle
@@ -835,6 +783,29 @@ export class PhysicsEngine {
   }
 
   /**
+   * Freeze a dead disc's final transforms and remove its body from the live
+   * world. Observations read the plain-object snapshot instead of the destroyed
+   * b2Body, and the destroyed proxy can no longer leave the fixed broadphase
+   * AABB during direct post-death engine ticks.
+   */
+  private detachPlayer(id: number, body: any): void {
+    this.releaseGrapple(id);
+    this.pendingSwingDestroy.delete(id);
+    const pos = body.GetPosition();
+    const vel = body.GetLinearVelocity();
+    this.detachedPlayerStates.set(id, {
+      x: pos.x * SCALE,
+      y: pos.y * SCALE,
+      velX: vel.x * SCALE,
+      velY: vel.y * SCALE,
+      angle: body.GetAngle(),
+      angularVel: body.GetAngularVelocity(),
+    });
+    this.world.DestroyBody(body);
+    this.playerBodies.delete(id);
+  }
+
+  /**
    * Advance the physics simulation by exactly one tick (1/30s).
    * This is the core synchronous step — no real-time clock involved.
    */
@@ -872,16 +843,24 @@ export class PhysicsEngine {
       this.pendingSwingDestroy.clear();
     }
 
-    // Check for players out of bounds (dead). Squared comparison avoids a
-    // per-player Math.sqrt on every tick; the threshold is identical.
-    for (const [id, body] of this.playerBodies) {
-      if (!this.playerAlive.get(id)) continue;
+    // One pass over a snapshot of the player map: detect OOB deaths, then detach
+    // every dead disc. Iterating a copy (instead of the live map, which
+    // detachPlayer deletes from) keeps the pass robust if a future cleanup ever
+    // removes a not-yet-visited id, which a Map iterator would silently skip.
+    // The common no-death tick stays a single walk instead of two full passes.
+    for (const [id, body] of Array.from(this.playerBodies)) {
+      if (this.playerAlive.get(id)) {
+        // Squared comparison avoids a per-player Math.sqrt; threshold identical.
+        const pos = body.GetPosition();
+        if (pos.x * pos.x + pos.y * pos.y > this.oobRadiusSquared) {
+          this.playerAlive.set(id, false);
+          this.playerDeathType.set(id, 4);
+          globalProfiler.increment('death_out_of_bounds');
+        }
+      }
 
-      const pos = body.GetPosition();
-      if (pos.x * pos.x + pos.y * pos.y > this.oobRadiusSquared) {
-        this.playerAlive.set(id, false);
-        this.playerDeathType.set(id, 4);
-        globalProfiler.increment('death_out_of_bounds');
+      if (!this.playerAlive.get(id)) {
+        this.detachPlayer(id, body);
       }
     }
 
@@ -970,6 +949,21 @@ export class PhysicsEngine {
    * Get the current state of a player.
    */
   getPlayerState(playerId: number): PlayerState {
+    const detached = this.detachedPlayerStates.get(playerId);
+    if (detached) {
+      return {
+        x: detached.x,
+        y: detached.y,
+        velX: detached.velX,
+        velY: detached.velY,
+        angle: detached.angle,
+        angularVel: detached.angularVel,
+        isHeavy: this.playerHeavyState.get(playerId) || false,
+        alive: false,
+        deathType: this.playerDeathType.get(playerId) || 0,
+      };
+    }
+
     const body = this.playerBodies.get(playerId);
     if (!body) {
       return {
@@ -1014,39 +1008,6 @@ export class PhysicsEngine {
   }
 
   /**
-   * Destroy all bodies on the existing world without replacing it.
-   * Reuses the same b2World and b2BroadPhase — only the bodies and
-   * their associated fixtures/shapes are removed and re-created.
-   */
-  destroyAllBodies(): void {
-    // Destroy player bodies
-    for (const [, body] of this.playerBodies) {
-      try { this.world.DestroyBody(body); } catch { /* broadphase edge case */ }
-    }
-    this.playerBodies.clear();
-    this.playerHeavyState.clear();
-    this.playerAlive.clear();
-    this.playerDeathType.clear();
-    this.playerGrappleJoints.clear();
-    this.pendingSwingDestroy.clear();
-    this.lastHitBy.clear();
-    this.lastHitTicks.clear();
-
-    // Destroy platform/map bodies
-    for (const body of this.platformBodies) {
-      try { this.world.DestroyBody(body); } catch { /* broadphase edge case */ }
-    }
-    this.platformBodies = [];
-    this.platformBodyMap.clear();
-    this.capZoneSensors = [];
-    this.capZoneState.clear();
-    this.capZoneTouches = [];
-    this.lastScoredTeam = null;
-    this.instantGoalResolved = false;
-    this.tickCount = 0;
-  }
-
-  /**
    * Reset the world — discard the old world entirely and create a fresh one.
    * This avoids box2d broadphase corruption that occurs when destroying many
    * bodies (especially polygons and dynamic bodies) individually.
@@ -1066,6 +1027,7 @@ export class PhysicsEngine {
     this.playerBodies.clear();
     this.playerHeavyState.clear();
     this.playerAlive.clear();
+    this.detachedPlayerStates.clear();
     this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
     this.playerTeams.clear();

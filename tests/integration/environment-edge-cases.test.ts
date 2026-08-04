@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { BonkEnvironment } from '../../src/core/environment';
+import { BonkEnvironment, Observation } from '../../src/core/environment';
 import { MapDef } from '../../src/core/physics-engine';
 import { safeDestroy, encodeAction, EMPTY_INPUT, GRAPPLE_INPUT, HEAVY_INPUT, RIGHT_INPUT, LEFT_INPUT, UP_INPUT, DOWN_INPUT } from '../utils/test-helpers';
 
@@ -726,6 +726,150 @@ describe('BonkEnvironment edge cases', () => {
       env.reset();
       const result = env.step(0);
       expect(result.observation.tick).toBe(1);
+    });
+
+    it('rebuilds map lifecycle state on a fresh world every episode', () => {
+      const mapData: MapDef = makeMap({
+        bodies: [
+          { name: 'grapple-target', type: 'rect', x: 0, y: 100, width: 200, height: 20, static: true },
+          { name: 'joint-anchor', type: 'rect', x: -400, y: 0, width: 20, height: 20, static: true },
+          { name: 'joint-weight', type: 'circle', x: -350, y: 0, radius: 10, static: false },
+        ],
+        joints: [
+          { type: 'distance', bodyA: 'joint-anchor', bodyB: 'joint-weight' },
+        ],
+        capZones: [
+          { index: 0, owner: 'neutral', type: 1, fixture: 'grapple-target', shapeType: 'bx' },
+        ],
+        physics: { ppm: 18, bounds: { width: 60, height: 40 } },
+      });
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 0,
+        randomOpponent: false,
+        teamsEnabled: true,
+        noCollide: true,
+        maxTicks: 100,
+      });
+
+      const physics = (env as any).physics;
+      let previousWorld = physics.world;
+
+      for (let episode = 0; episode < 10; episode++) {
+        const observation = env.reset(1000 + episode);
+        const world = physics.world;
+        const playerBody = physics.playerBodies.get(0);
+
+        expect(world).not.toBe(previousWorld);
+        expect(observation.tick).toBe(0);
+        expect(observation.arenaHalfWidth).toBe(30 * 30);
+        expect(observation.arenaHalfHeight).toBe(20 * 30);
+        expect(physics.getBodyMap().size).toBe(mapData.bodies.length);
+        expect(physics.capZoneSensors).toHaveLength(1);
+        expect(physics.ppm).toBe(18);
+        expect(physics.teamsEnabled).toBe(true);
+        expect(physics.noCollide).toBe(true);
+        expect(world.m_contactListener).toBeTruthy();
+        expect(world.constructor.m_warmStarting).toBe(false);
+        expect(world.GetJointCount()).toBe(1);
+        expect(playerBody.GetShapeList().GetRadius()).toBeCloseTo(18 / 30, 12);
+
+        const result = env.step(GRAPPLE_INPUT);
+        expect(result.observation.tick).toBe(1);
+        expect(physics.hasGrappleJoint(0)).toBe(true);
+        expect(world.GetJointCount()).toBe(2);
+
+        previousWorld = world;
+      }
+    });
+
+    it('preserves lethal contacts after repeated many-body resets', () => {
+      const fillerBodies = Array.from({ length: 70 }, (_, index) => ({
+        name: `filler-${index}`,
+        type: 'rect' as const,
+        x: 1000 + index * 40,
+        y: 1000,
+        width: 10,
+        height: 10,
+        static: true,
+      }));
+      const mapData: MapDef = makeMap({
+        spawnPoints: {
+          team_blue: { x: 0, y: 0 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [
+          { name: 'lethal', type: 'rect', x: 0, y: 0, width: 100, height: 100, static: true, isLethal: true },
+          ...fillerBodies,
+        ],
+      });
+      env = new BonkEnvironment({ mapData, numOpponents: 0, randomOpponent: false, maxTicks: 10 });
+
+      const physics = (env as any).physics;
+      let previousWorld = physics.world;
+
+      for (let episode = 0; episode < 75; episode++) {
+        const observation = env.reset(2000 + episode);
+        const world = physics.world;
+
+        expect(world).not.toBe(previousWorld);
+        expect(observation.tick).toBe(0);
+        expect(physics.getBodyMap().size).toBe(mapData.bodies.length);
+
+        const result = env.step(EMPTY_INPUT);
+        expect(result.observation.tick).toBe(1);
+        expect(result.info.aiAlive).toBe(false);
+
+        previousWorld = world;
+      }
+    });
+  });
+
+  describe('dead-disc observation stability', () => {
+    it('freezes the dead player observation across post-death steps', async () => {
+      const mapData: MapDef = {
+        name: 'lethal-obs',
+        spawnPoints: {
+          team_blue: { x: 0, y: -300 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [
+          { name: 'lethal', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true, isLethal: true },
+        ],
+      };
+      env = new BonkEnvironment({ mapData, numOpponents: 0, randomOpponent: false, maxTicks: 200 });
+      env.reset();
+
+      let deathObs: Observation | null = null;
+      // The AI free-falls ~473 px to the lethal platform (~38 physics ticks).
+      // With numOpponents: 0 the vacuous allOpponentsDead check makes the env
+      // tick physics only every other step, so death lands near step 76; the
+      // 200-step budget keeps the test robust to gravity/spawn tweaks.
+      for (let i = 0; i < 200; i++) {
+        const result = env.step(EMPTY_INPUT);
+        if (result.info.aiAlive === false) {
+          deathObs = result.observation;
+          break;
+        }
+      }
+      expect(deathObs).not.toBeNull();
+      // The snapshot must capture real transforms, not the zero default.
+      expect(deathObs!.playerY).not.toBe(0);
+      expect(deathObs!.playerVelY).not.toBe(0);
+      // The destroyed body must leave playerBodies on detach so observations
+      // never read it.
+      expect((env as any).physics.playerBodies.has(0)).toBe(false);
+
+      for (let i = 0; i < 3; i++) {
+        const result = env.step(EMPTY_INPUT);
+        expect(result.done).toBe(true);
+        expect(result.observation.playerX).toBe(deathObs!.playerX);
+        expect(result.observation.playerY).toBe(deathObs!.playerY);
+        expect(result.observation.playerVelX).toBe(deathObs!.playerVelX);
+        expect(result.observation.playerVelY).toBe(deathObs!.playerVelY);
+        expect(result.observation.playerAngle).toBe(deathObs!.playerAngle);
+        expect(result.observation.playerAngularVel).toBe(deathObs!.playerAngularVel);
+      }
     });
   });
 

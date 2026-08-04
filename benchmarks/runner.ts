@@ -470,8 +470,8 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
             print(`\n  ${tagColor}${tag} Reset cycle leak test (200 resets)${colors.reset}`);
             print(`    Heap growth: ${fmtNum(growth)} MB — ${growth >= 10 ? 'LEAK: PhysicsEngine objects not fully GC\'d' : 'no significant leak'}`, colors.dim);
             if (growth >= 10) {
-                print(`    Root cause: environment.ts reset() creates new PhysicsEngine + PRNG each call`, colors.gray);
-                print(`    Recommendation: reuse engine via destroyAllBodies() instead of new instance`, colors.gray);
+                print(`    Root cause: discarded Box2D worlds are not reclaimed promptly`, colors.gray);
+                print(`    Recommendation: profile retained world references; do not destroy bodies in-place`, colors.gray);
             }
         }
     }
@@ -542,8 +542,8 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
                 rootCause = 'Cross-thread Atomics.wait round-trip is inherently expensive (~40ms per ping-pong)';
                 recommendation = 'This is expected; blocking Atomics.wait is for synchronization, not throughput. Accept the cost.';
             } else if (bench.name.includes('Reset cycles')) {
-                rootCause = 'BonkEnvironment.reset() allocates new PhysicsEngine + PRNG each call instead of reusing';
-                recommendation = 'Implement destroyAllBodies() in PhysicsEngine to clear and reuse the existing world';
+                rootCause = 'Fresh-world episode resets retain more heap than the benchmark threshold';
+                recommendation = 'Profile retained b2World references without reintroducing unsafe body-by-body teardown';
             } else if (bench.name.includes('stability')) {
                 rootCause = 'High coefficient of variation even after excluding JIT warmup segment';
                 recommendation = 'GC pauses or straggler workers causing intermittent slowdowns; consider --expose-gc flag';

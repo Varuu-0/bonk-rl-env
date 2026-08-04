@@ -82,7 +82,7 @@ applyInput(playerId: number, input: PlayerInput): void {
   force.x = 0;
   force.y = 0;
   // ... reuse force vector
-  body.ApplyForce(force, pos);
+  body.ApplyForce(force, body.GetWorldCenter());
 }
 ```
 
