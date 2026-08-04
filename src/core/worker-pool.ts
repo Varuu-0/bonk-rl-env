@@ -27,6 +27,14 @@ interface SharedObservation {
     tick: number;
 }
 
+type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
+
+const SYNC_COMPLETED_INDEX = 0;
+const SYNC_STATUS_OFFSET = 1;
+const WORKER_IDLE = 0;
+const WORKER_COMPLETE = 1;
+const WORKER_ERROR = -1;
+
 export class WorkerPool {
     private workers: Worker[] = [];
     private workerEnvs: number[] = [];
@@ -66,6 +74,10 @@ export class WorkerPool {
     // Shared sync buffer for completion counter (all workers share this)
     private _syncBuffer: SharedArrayBuffer | null = null;
 
+    private state: WorkerPoolState = 'idle';
+    private failure: Error | null = null;
+    private cleanupPromise: Promise<void> | null = null;
+
     constructor(private numWorkers: number = getConfig().workerPool.numWorkers) {
     }
 
@@ -101,9 +113,8 @@ export class WorkerPool {
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
         await this.close(); // Clean up existing if re-initialized
-        this.workers = [];
-        this.workerEnvs = [];
-        this.sharedMemManagers = [];
+        this.state = 'initializing';
+        this.failure = null;
 
         // Determine if we should use shared memory
         const sharedMemorySupported = SharedMemoryManager.isSupported();
@@ -115,113 +126,129 @@ export class WorkerPool {
         // Ensure we don't start more workers than environment instances
         const activeWorkers = Math.min(this.numWorkers, totalEnvs);
 
-        // Create shared sync buffer for completion counter
-        this._syncBuffer = new SharedArrayBuffer(4);
+        try {
+            // Index 0 is the wake counter; each worker also owns a status slot.
+            this._syncBuffer = this.useSharedMemory
+                ? new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT * (activeWorkers + SYNC_STATUS_OFFSET))
+                : null;
 
-        const baseEnvsPerWorker = Math.floor(totalEnvs / activeWorkers);
-        let remainder = totalEnvs % activeWorkers;
+            const baseEnvsPerWorker = Math.floor(totalEnvs / activeWorkers);
+            let remainder = totalEnvs % activeWorkers;
 
-        const promises = [];
-        let currentStartId = 0;
-        for (let i = 0; i < activeWorkers; i++) {
-            const numEnvs = baseEnvsPerWorker + (remainder > 0 ? 1 : 0);
-            remainder--;
+            const promises = [];
+            let currentStartId = 0;
+            for (let i = 0; i < activeWorkers; i++) {
+                const numEnvs = baseEnvsPerWorker + (remainder > 0 ? 1 : 0);
+                remainder--;
 
-            if (numEnvs > 0) {
-                const workerPath = path.join(__dirname, 'worker-loader.js');
+                if (numEnvs > 0) {
+                    const workerPath = path.join(__dirname, 'worker-loader.js');
 
-                const worker = new Worker(workerPath);
-                this.workers.push(worker);
-                this.workerEnvs.push(numEnvs);
+                    const worker = new Worker(workerPath);
+                    const workerIndex = this.workers.length;
+                    this.workers.push(worker);
+                    this.workerEnvs.push(numEnvs);
 
-                worker.on('message', (msg) => {
-                    const cb = this.callbacks.get(msg.id);
-                    if (cb) {
-                        this.callbacks.delete(msg.id);
-                        clearTimeout(cb.timeout);
-                        if (msg.status === 'error') cb.reject(new Error(msg.error));
-                        else cb.resolve(msg.data);
-                    }
-                });
-
-                worker.on('error', (err) => {
-                    console.error(`[WorkerPool] Worker error: ${err}`);
-                });
-
-                // Initialize shared memory if enabled
-                if (this.useSharedMemory) {
-                    const shm = new SharedMemoryManager(numEnvs, this.ringSize);
-                    this.sharedMemManagers.push(shm);
-
-                    // Send init and wait for it
-                    const initPromise = this.sendMessage(worker, {
-                        type: 'init',
-                        numEnvs,
-                        startId: currentStartId,
-                        config,
-                        sharedBuffer: shm.getBuffer(),
-                        ringSize: this.ringSize,
-                        syncBuffer: this._syncBuffer!
-                    }).then(res => {
-                        // After successful init, trigger the wait-for-action loop
-                        worker.postMessage({ type: 'wait-for-action', config });
-                        return res;
+                    worker.on('message', (msg) => {
+                        const cb = this.callbacks.get(msg.id);
+                        if (cb) {
+                            this.callbacks.delete(msg.id);
+                            clearTimeout(cb.timeout);
+                            if (msg.status === 'error') cb.reject(new Error(msg.error));
+                            else cb.resolve(msg.data);
+                        } else if (msg.status === 'error') {
+                            this.handleWorkerFailure(worker, workerIndex, new Error(msg.error));
+                        }
                     });
 
-                    promises.push(initPromise);
-                } else {
-                    this.sharedMemManagers.push(null);
-                    promises.push(this.sendMessage(worker, { type: 'init', numEnvs, startId: currentStartId, config }));
-                }
-                currentStartId += numEnvs;
-            }
-        }
+                    worker.on('error', (err) => {
+                        this.handleWorkerFailure(worker, workerIndex, err);
+                    });
+                    worker.on('exit', (code: number) => {
+                        if (this.workers[workerIndex] === worker) {
+                            this.handleWorkerFailure(
+                                worker,
+                                workerIndex,
+                                new Error(`Worker ${workerIndex} exited unexpectedly with code ${code}`),
+                            );
+                        }
+                    });
 
-        // Wait for all workers to initialize
-        const results = await Promise.all(promises);
+                    // Initialize shared memory if enabled
+                    if (this.useSharedMemory) {
+                        const shm = new SharedMemoryManager(numEnvs, this.ringSize);
+                        this.sharedMemManagers.push(shm);
 
-        // Initialize buffer pool based on max environments per worker
-        this.maxEnvsPerWorker = Math.max(...this.workerEnvs);
-        for (let i = 0; i < this.workers.length; i++) {
-            this.actionBufferPool.push(new Uint8Array(this.workerEnvs[i]));
-        }
+                        // Send init and wait for it
+                        const initPromise = this.sendMessage(worker, {
+                            type: 'init',
+                            numEnvs,
+                            startId: currentStartId,
+                            workerIndex,
+                            config,
+                            sharedBuffer: shm.getBuffer(),
+                            ringSize: this.ringSize,
+                            syncBuffer: this._syncBuffer!
+                        }).then(res => {
+                            // After successful init, trigger the wait-for-action loop
+                            worker.postMessage({ type: 'wait-for-action', config });
+                            return res;
+                        });
 
-        // Pre-allocate observation pool and finished buffer
-        this.initObsPool(totalEnvs);
-        this._finished = new Uint8Array(this.workers.length);
-
-        // Pre-allocate return times buffer
-        this._returnTimes = new BigUint64Array(this.workers.length);
-
-        // Pre-allocate result objects pool
-        this._resultPool = [];
-        for (let i = 0; i < totalEnvs; i++) {
-            this._resultPool.push({
-                observation: null,
-                reward: 0,
-                done: false,
-                truncated: false,
-                terminated: false,
-                info: { tick: 0 }
-            });
-        }
-
-        // Check if workers actually support shared memory mode
-        if (this.useSharedMemory) {
-            const allSupportShared = results.every((r: any) => r && r.mode === 'shared');
-            if (!allSupportShared) {
-                console.warn('[WorkerPool] Some workers did not support shared memory, falling back to message passing');
-                results.forEach((r: any, idx: number) => {
-                    if (!r || r.mode !== 'shared') {
-                        console.warn(`  - Worker ${idx} returned mode: ${r ? r.mode : 'undefined'}`);
+                        promises.push(initPromise);
+                    } else {
+                        this.sharedMemManagers.push(null);
+                        promises.push(this.sendMessage(worker, { type: 'init', numEnvs, startId: currentStartId, config }));
                     }
-                });
-                this.useSharedMemory = false;
-            } else {
-                console.log('[WorkerPool] All workers successfully initialized with SharedArrayBuffer');
+                    currentStartId += numEnvs;
+                }
             }
-        } else {
-            console.log('[WorkerPool] Shared memory optimization is disabled (either not supported or explicitly turned off)');
+
+            // Wait for all workers to initialize
+            const results = await Promise.all(promises);
+
+            // Initialize buffer pool based on max environments per worker
+            this.maxEnvsPerWorker = Math.max(...this.workerEnvs);
+            for (let i = 0; i < this.workers.length; i++) {
+                this.actionBufferPool.push(new Uint8Array(this.workerEnvs[i]));
+            }
+
+            // Pre-allocate observation pool and finished buffer
+            this.initObsPool(totalEnvs);
+            this._finished = new Uint8Array(this.workers.length);
+
+            // Pre-allocate return times buffer
+            this._returnTimes = new BigUint64Array(this.workers.length);
+
+            // Pre-allocate result objects pool
+            this._resultPool = [];
+            for (let i = 0; i < totalEnvs; i++) {
+                this._resultPool.push({
+                    observation: null,
+                    reward: 0,
+                    done: false,
+                    truncated: false,
+                    terminated: false,
+                    info: { tick: 0 }
+                });
+            }
+
+            // Workers initialized with shared buffers cannot safely switch protocols in place.
+            if (this.useSharedMemory) {
+                const unsupportedWorker = results.findIndex((r: any) => !r || r.mode !== 'shared');
+                if (unsupportedWorker !== -1) {
+                    throw new Error(`Worker ${unsupportedWorker} did not initialize in shared-memory mode`);
+                }
+                console.log('[WorkerPool] All workers successfully initialized with SharedArrayBuffer');
+            } else {
+                console.log('[WorkerPool] Shared memory optimization is disabled (either not supported or explicitly turned off)');
+            }
+
+            this.state = 'ready';
+        } catch (error) {
+            const failure = this.createFailure('initialization', error);
+            await this.failPool(failure);
+            throw failure;
         }
     }
 
@@ -235,125 +262,114 @@ export class WorkerPool {
                     console.error(`[WorkerPool] Message ${id} timed out`);
                     reject(new Error(`Message ${id} timed out`));
                 }
-            }, 30000);  // 30 second timeout for init/other messages
+            }, getConfig().workerPool.messageTimeoutMs);
             this.callbacks.set(id, { resolve, reject, timeout });
-            worker.postMessage({ id, ...msg });
+            try {
+                worker.postMessage({ id, ...msg });
+            } catch (error) {
+                clearTimeout(timeout);
+                this.callbacks.delete(id);
+                reject(error);
+            }
         });
     }
 
     async reset(seeds?: number[]): Promise<any[]> {
-        if (this.useSharedMemory) {
-            // 1. Send reset command to all workers
-            let seedIdx = 0;
+        this.assertReady('reset');
 
-            // Reset shared completion counter before signaling workers
-            const completedArr = new Int32Array(this._syncBuffer!);
-            Atomics.store(completedArr, 0, 0);
+        if (this.useSharedMemory && seeds) {
+            for (const seed of seeds) {
+                if (!Number.isInteger(seed) || seed < 0 || seed > 0xFFFFFFFE) {
+                    throw new Error(`Seed ${seed} out of supported range [0, 4294967294] for shared-memory reset`);
+                }
+            }
+        }
 
-            for (let i = 0; i < this.workers.length; i++) {
-                const wEnvs = this.workerEnvs[i];
-                const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs).map(s => {
-                    // SAB transport encodes "no seed" as 0 and real seeds as
-                    // seed+1 in a Uint32Array. Range-check here so a wrapping
-                    // seed can never silently collide with the sentinel.
-                    if (!Number.isInteger(s) || s < 0 || s > 0xFFFFFFFE) {
-                        throw new Error(`Seed ${s} out of supported range [0, 4294967294] for shared-memory reset`);
+        try {
+            if (this.useSharedMemory) {
+                // 1. Send reset command to all workers
+                let seedIdx = 0;
+
+                const completedArr = this.prepareSharedBatch();
+
+                for (let i = 0; i < this.workers.length; i++) {
+                    const wEnvs = this.workerEnvs[i];
+                    // SAB transport encodes "no seed" as 0 and real seeds as seed+1.
+                    const wSeeds = seeds
+                        ? seeds.slice(seedIdx, seedIdx + wEnvs).map(seed => seed + 1)
+                        : new Array(wEnvs).fill(0);
+                    seedIdx += wEnvs;
+
+                    const shm = this.requireSharedMemoryManager(i);
+                    shm.writeSeeds(wSeeds);
+                    shm.sendCommand(1); // RESET command
+                }
+
+                // 2. Wait for reset completion using shared completion counter
+                await this.waitForSharedCompletion(
+                    completedArr,
+                    'reset',
+                    getConfig().workerPool.messageTimeoutMs,
+                );
+
+                // All workers done — consume their signals
+                for (let i = 0; i < this.workers.length; i++) {
+                    const shm = this.requireSharedMemoryManager(i);
+                    if (!shm.isResultsReady()) {
+                        throw new Error(`Worker ${i} completed reset without publishing results`);
                     }
-                    return s + 1;
-                }) : new Array(wEnvs).fill(0);
-                seedIdx += wEnvs;
-
-                const shm = this.sharedMemManagers[i]!;
-                shm.writeSeeds(wSeeds);
-                shm.sendCommand(1); // RESET command
-            }
-
-            // 2. Wait for reset completion using shared completion counter
-            const timeoutMs = 30000;
-            const startTime = Date.now();
-            const finished = this._finished;
-            finished.fill(0);  // Reset from previous step
-
-            // First pass: check if any workers already done
-            for (let i = 0; i < this.workers.length; i++) {
-                if (this.sharedMemManagers[i]!.isResultsReady()) {
-                    this.sharedMemManagers[i]!.consumeResultsSignal();
-                    finished[i] = 1;
-                }
-            }
-
-            // Wait for ALL workers to complete using shared completion counter
-            {
-                const numWorkers = this.workers.length;
-                let waitVal = Atomics.load(completedArr, 0);
-                while (waitVal < numWorkers) {
-                    const elapsed = Date.now() - startTime;
-                    const remaining = Math.max(1, timeoutMs - elapsed);
-                    Atomics.wait(completedArr, 0, waitVal, remaining);
-                    waitVal = Atomics.load(completedArr, 0);
-                    if (Date.now() - startTime >= timeoutMs) break;
-                }
-            }
-
-            // All workers done — consume their signals
-            for (let i = 0; i < this.workers.length; i++) {
-                if (finished[i]) continue;
-                const shm = this.sharedMemManagers[i]!;
-                try {
                     shm.consumeResultsSignal();
-                } catch (e: any) {
-                    console.warn(`[WorkerPool] reset: worker ${i} failed during consume:`, e.message);
                 }
-                finished[i] = 1;
-            }
 
-            // 3. Extract observations
-            const observations: any[] = [];
-            let globalEnvIdx = 0;
-            for (let i = 0; i < this.workers.length; i++) {
-                const wEnvs = this.workerEnvs[i];
-                try {
-                    const res = this.sharedMemManagers[i]!.readResults();
+                // 3. Extract observations
+                const observations: any[] = [];
+                let globalEnvIdx = 0;
+                for (let i = 0; i < this.workers.length; i++) {
+                    const wEnvs = this.workerEnvs[i];
+                    const res = this.requireSharedMemoryManager(i).readResults();
                     for (let j = 0; j < wEnvs; j++) {
                         observations.push(this.extractObservation(res.observations, j, globalEnvIdx));
                         globalEnvIdx++;
                     }
-                } catch (e: any) {
-                    console.warn(`[WorkerPool] reset: worker ${i} failed to read results:`, e.message);
-                    // Push zeroed observations so the array length stays consistent
-                    for (let j = 0; j < wEnvs; j++) {
-                        observations.push(null);
-                        globalEnvIdx++;
-                    }
                 }
+                return observations;
             }
-            return observations;
-        }
 
-        const promises = [];
-        let seedIdx = 0;
-        for (let i = 0; i < this.workers.length; i++) {
-            const wEnvs = this.workerEnvs[i];
-            const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : undefined;
-            promises.push(
-                this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds })
-                    .catch(e => {
-                        console.warn(`[WorkerPool] reset: worker ${i} failed:`, e.message);
-                        return new Array(wEnvs).fill(null);
-                    })
-            );
-            seedIdx += wEnvs;
+            const promises = [];
+            let seedIdx = 0;
+            for (let i = 0; i < this.workers.length; i++) {
+                const wEnvs = this.workerEnvs[i];
+                const wSeeds = seeds ? seeds.slice(seedIdx, seedIdx + wEnvs) : undefined;
+                promises.push(this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds }));
+                seedIdx += wEnvs;
+            }
+            const results = await Promise.all(promises);
+            return results.flat();
+        } catch (error) {
+            if (this.state === 'closed') {
+                throw error;
+            }
+            const failure = this.createFailure('reset', error);
+            await this.failPool(failure);
+            throw failure;
         }
-        const results = await Promise.all(promises);
-        return results.flat();
     }
 
     async step(actions: any[]): Promise<any[]> {
-        // Use shared memory mode if enabled
-        if (this.useSharedMemory) {
-            return this.stepSharedMemory(actions);
-        } else {
-            return this.stepMessagePassing(actions);
+        this.assertReady('step');
+        try {
+            // Use shared memory mode if enabled
+            if (this.useSharedMemory) {
+                return await this.stepSharedMemory(actions);
+            }
+            return await this.stepMessagePassing(actions);
+        } catch (error) {
+            if (this.state === 'closed') {
+                throw error;
+            }
+            const failure = this.createFailure('step', error);
+            await this.failPool(failure);
+            throw failure;
         }
     }
 
@@ -369,9 +385,7 @@ export class WorkerPool {
         // 1. Encode actions and signal all workers in parallel
         let actionIdx = 0;
 
-        // Reset shared completion counter before signaling workers
-        const completedArr = new Int32Array(this._syncBuffer!);
-        Atomics.store(completedArr, 0, 0);
+        const completedArr = this.prepareSharedBatch();
 
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
@@ -382,20 +396,18 @@ export class WorkerPool {
             }
             actionIdx += wEnvs;
 
-            const shm = this.sharedMemManagers[i]!;
+            const shm = this.requireSharedMemoryManager(i);
             shm.writeActionsQuiet(encodedActions);
             shm.sendCommand(0); // STEP command (also notifies worker)
         }
 
-        // 2. Wait for results from all workers using Atomics.wait (no polling overhead)
-        const timeoutMs = 5000;
-        const startTime = Date.now();
+        // 2. Wait for results from all workers without blocking worker event delivery.
         const finished = this._finished;
         finished.fill(0);  // Reset from previous step
 
         // First pass: check if any workers already done (non-blocking)
         for (let i = 0; i < this.workers.length; i++) {
-            const shm = this.sharedMemManagers[i]!;
+            const shm = this.requireSharedMemoryManager(i);
             if (shm.isResultsReady()) {
                 shm.consumeResultsSignal();
                 returnTimes[i] = process.hrtime.bigint();
@@ -403,23 +415,19 @@ export class WorkerPool {
             }
         }
 
-        // Wait for ALL workers to complete using shared completion counter
-        {
-            const numWorkers = this.workers.length;
-            let waitVal = Atomics.load(completedArr, 0);
-            while (waitVal < numWorkers) {
-                const elapsed = Date.now() - startTime;
-                const remaining = Math.max(1, timeoutMs - elapsed);
-                Atomics.wait(completedArr, 0, waitVal, remaining);
-                waitVal = Atomics.load(completedArr, 0);
-                if (Date.now() - startTime >= timeoutMs) break;
-            }
-        }
+        await this.waitForSharedCompletion(
+            completedArr,
+            'step',
+            getConfig().workerPool.stepTimeoutMs,
+        );
 
         // All workers done — consume their signals
         for (let i = 0; i < this.workers.length; i++) {
             if (finished[i]) continue;
-            const shm = this.sharedMemManagers[i]!;
+            const shm = this.requireSharedMemoryManager(i);
+            if (!shm.isResultsReady()) {
+                throw new Error(`Worker ${i} completed step without publishing results`);
+            }
             shm.consumeResultsSignal();
             returnTimes[i] = process.hrtime.bigint();
             finished[i] = 1;
@@ -632,37 +640,225 @@ export class WorkerPool {
      * Each worker returns a copy of its local TelemetryBuffer.
      */
     async getTelemetrySnapshots(): Promise<BigUint64Array[]> {
-        const promises = [];
-        for (let i = 0; i < this.workers.length; i++) {
-            promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
+        this.assertReady('get telemetry');
+        try {
+            const promises = [];
+            for (let i = 0; i < this.workers.length; i++) {
+                promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
+            }
+            const snapshots = await Promise.all(promises);
+            return snapshots as BigUint64Array[];
+        } catch (error) {
+            if (this.state === 'closed') {
+                throw error;
+            }
+            const failure = this.createFailure('telemetry', error);
+            await this.failPool(failure);
+            throw failure;
         }
-        const snapshots = await Promise.all(promises);
-        return snapshots as BigUint64Array[];
     }
 
     async close() {
-        for (const callback of this.callbacks.values()) {
-            clearTimeout(callback.timeout);
-            callback.reject(new Error('Worker pool closed'));
+        this.state = 'closed';
+        this.failure = null;
+        this.wakeSharedWaiters();
+        await this.cleanup(new Error('Worker pool closed'));
+        this.useSharedMemory = false;
+    }
+
+    private assertReady(operation: string): void {
+        if (this.state === 'failed') {
+            throw new Error(`Cannot ${operation}: worker pool is in failed state (${this.failure?.message ?? 'unknown failure'})`);
         }
-        this.callbacks.clear();
+        if (this.state !== 'ready') {
+            throw new Error(`Cannot ${operation}: worker pool is ${this.state}`);
+        }
+    }
 
-        const terminatePromises = this.workers.map(w => w.terminate());
-        await Promise.all(terminatePromises);
+    private createFailure(operation: string, cause: unknown): Error {
+        const causeError = cause instanceof Error ? cause : new Error(String(cause));
+        if (this.state === 'failed' && this.failure) {
+            return this.failure;
+        }
+        const failure = new Error(`Worker pool ${operation} failed: ${causeError.message}`);
+        (failure as any).cause = causeError;
+        return failure;
+    }
 
-        // Properly dispose of SharedMemoryManager instances to prevent memory leaks
-        for (const shm of this.sharedMemManagers) {
-            if (shm) {
-                shm.dispose();
+    private requireSharedMemoryManager(workerIndex: number): SharedMemoryManager {
+        const shm = this.sharedMemManagers[workerIndex];
+        if (!shm) {
+            throw new Error(`Shared memory manager not initialized for worker ${workerIndex}`);
+        }
+        return shm;
+    }
+
+    private prepareSharedBatch(): Int32Array {
+        if (!this._syncBuffer) {
+            throw new Error('Shared completion state is not initialized');
+        }
+        const sync = new Int32Array(this._syncBuffer);
+        Atomics.store(sync, SYNC_COMPLETED_INDEX, 0);
+        for (let i = 0; i < this.workers.length; i++) {
+            Atomics.store(sync, SYNC_STATUS_OFFSET + i, WORKER_IDLE);
+        }
+        return sync;
+    }
+
+    private async waitForSharedCompletion(sync: Int32Array, operation: string, timeoutMs: number): Promise<void> {
+        const startedAt = Date.now();
+        const numWorkers = this.workers.length;
+
+        while (true) {
+            if (this.state === 'failed' && this.failure) {
+                throw this.failure;
+            }
+            if (this.state !== 'ready') {
+                throw new Error(`Shared-memory ${operation} interrupted because worker pool is ${this.state}`);
+            }
+
+            const failedWorker = this.findWorkerWithStatus(sync, WORKER_ERROR);
+            if (failedWorker !== -1) {
+                throw new Error(`Worker ${failedWorker} reported an error during shared-memory ${operation}`);
+            }
+
+            const completed = Atomics.load(sync, SYNC_COMPLETED_INDEX);
+            if (completed >= numWorkers) {
+                break;
+            }
+
+            const remaining = timeoutMs - (Date.now() - startedAt);
+            if (remaining <= 0) {
+                throw this.createSharedTimeout(operation, sync, timeoutMs);
+            }
+
+            const waiter = (Atomics as any).waitAsync(sync, SYNC_COMPLETED_INDEX, completed, remaining);
+            const waitResult = waiter.async ? await waiter.value : waiter.value;
+            if (waitResult === 'timed-out') {
+                throw this.createSharedTimeout(operation, sync, timeoutMs);
             }
         }
 
+        const incompleteWorkers: number[] = [];
+        for (let i = 0; i < numWorkers; i++) {
+            if (Atomics.load(sync, SYNC_STATUS_OFFSET + i) !== WORKER_COMPLETE) {
+                incompleteWorkers.push(i);
+            }
+        }
+        if (incompleteWorkers.length > 0) {
+            throw new Error(
+                `Shared-memory ${operation} completion was invalid for worker(s) ${incompleteWorkers.join(', ')}`,
+            );
+        }
+    }
+
+    private createSharedTimeout(operation: string, sync: Int32Array, timeoutMs: number): Error {
+        const pendingWorkers: number[] = [];
+        for (let i = 0; i < this.workers.length; i++) {
+            if (Atomics.load(sync, SYNC_STATUS_OFFSET + i) !== WORKER_COMPLETE) {
+                pendingWorkers.push(i);
+            }
+        }
+        return new Error(
+            `Shared-memory ${operation} timed out after ${timeoutMs}ms waiting for worker(s) ${pendingWorkers.join(', ')}`,
+        );
+    }
+
+    private findWorkerWithStatus(sync: Int32Array, status: number): number {
+        for (let i = 0; i < this.workers.length; i++) {
+            if (Atomics.load(sync, SYNC_STATUS_OFFSET + i) === status) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    private handleWorkerFailure(worker: Worker, workerIndex: number, error: Error): void {
+        if (this.workers[workerIndex] !== worker || this.state === 'closed' || this.state === 'failed') {
+            return;
+        }
+        const failure = new Error(`Worker ${workerIndex} failed: ${error.message}`);
+        (failure as any).cause = error;
+        this.recordSharedWorkerFailure(workerIndex);
+        void this.failPool(failure);
+    }
+
+    private recordSharedWorkerFailure(workerIndex: number): void {
+        if (!this._syncBuffer) return;
+        const sync = new Int32Array(this._syncBuffer);
+        const statusIndex = SYNC_STATUS_OFFSET + workerIndex;
+        const previous = Atomics.exchange(sync, statusIndex, WORKER_ERROR);
+        if (previous === WORKER_IDLE) {
+            Atomics.add(sync, SYNC_COMPLETED_INDEX, 1);
+        }
+        Atomics.notify(sync, SYNC_COMPLETED_INDEX);
+    }
+
+    private wakeSharedWaiters(): void {
+        if (!this._syncBuffer) return;
+        const sync = new Int32Array(this._syncBuffer);
+        Atomics.add(sync, SYNC_COMPLETED_INDEX, Math.max(1, this.workers.length));
+        Atomics.notify(sync, SYNC_COMPLETED_INDEX);
+    }
+
+    private async failPool(error: Error): Promise<void> {
+        if (this.state !== 'failed') {
+            this.state = 'failed';
+            this.failure = error;
+            this.wakeSharedWaiters();
+        }
+        await this.cleanup(this.failure ?? error);
+    }
+
+    private cleanup(callbackError: Error): Promise<void> {
+        if (this.cleanupPromise) {
+            return this.cleanupPromise;
+        }
+
+        for (const callback of this.callbacks.values()) {
+            clearTimeout(callback.timeout);
+            callback.reject(callbackError);
+        }
+        this.callbacks.clear();
+
+        const workers = this.workers;
+        const sharedMemManagers = this.sharedMemManagers;
         this.workers = [];
         this.workerEnvs = [];
         this.sharedMemManagers = [];
         this.actionBufferPool = [];
         this._obsPool = [];
         this._terminalObsPool = [];
+        this._obsPoolSize = 0;
+        this._finished = new Uint8Array(0);
+        this._returnTimes = new BigUint64Array(0);
+        this._resultPool = [];
+        this._convertedResults = [];
+        this.maxEnvsPerWorker = 0;
+
+        const cleanupPromise = (async () => {
+            try {
+                await Promise.all(workers.map(async worker => {
+                    try {
+                        await worker.terminate();
+                    } catch {
+                        // Continue terminating and disposing the rest of the pool.
+                    }
+                }));
+                for (const shm of sharedMemManagers) {
+                    try {
+                        shm?.dispose();
+                    } catch {
+                        // Continue disposing the rest of the pool.
+                    }
+                }
+            } finally {
+                this._syncBuffer = null;
+                this.cleanupPromise = null;
+            }
+        })();
+        this.cleanupPromise = cleanupPromise;
+        return cleanupPromise;
     }
 
     /**
