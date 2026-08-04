@@ -288,6 +288,25 @@ describe('CapZoneScoring', () => {
             expect(engine.getTeamScored()).toBe(null);
         });
 
+        it('does not score when a truthy static map body overlaps the zone', () => {
+            engine = new PhysicsEngine();
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
+                0, 190, 200, 100,
+            );
+            engine.addBody({
+                name: 'truthy-static-ball', type: 'circle',
+                x: 0, y: 190, radius: 5,
+                // Runtime map data can be non-boolean; addBody() treats all
+                // truthy values as static and retains this value as user data.
+                static: 1 as any,
+            });
+
+            for (let i = 0; i < 5; i++) engine.tick();
+
+            expect(engine.getTeamScored()).toBe(null);
+        });
+
         it('player-disc contact does NOT trigger an instant zone', () => {
             engine = new PhysicsEngine();
 
