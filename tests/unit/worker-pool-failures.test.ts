@@ -8,6 +8,8 @@ const fakes = vi.hoisted(() => {
     initBehaviors: [] as Array<'ok' | 'error' | 'timeout'>,
     resetMessageBehavior: 'ok' as 'ok' | 'error' | 'silent',
     stepMessageBehavior: 'ok' as 'ok' | 'error' | 'silent',
+    resetBehaviors: [] as Array<'ok' | 'error' | 'silent'>,
+    stepBehaviors: [] as Array<'ok' | 'error' | 'silent'>,
     commandBehaviors: [] as CommandBehavior[],
     readError: false,
     stepTimeoutMs: 1000,
@@ -55,15 +57,17 @@ const fakes = vi.hoisted(() => {
           });
         }
       } else if (message.type === 'reset') {
-        if (control.resetMessageBehavior === 'error') {
+        const behavior = control.resetBehaviors[this.index] ?? control.resetMessageBehavior;
+        if (behavior === 'error') {
           this.emit('message', { id: message.id, status: 'error', error: 'synthetic reset failure' });
-        } else if (control.resetMessageBehavior !== 'silent') {
+        } else if (behavior !== 'silent') {
           this.emit('message', { id: message.id, status: 'ok', data: [{}] });
         }
       } else if (message.type === 'step') {
-        if (control.stepMessageBehavior === 'error') {
+        const behavior = control.stepBehaviors[this.index] ?? control.stepMessageBehavior;
+        if (behavior === 'error') {
           this.emit('message', { id: message.id, status: 'error', error: 'synthetic step failure' });
-        } else if (control.stepMessageBehavior !== 'silent') {
+        } else if (behavior !== 'silent') {
           this.emit('message', { id: message.id, status: 'ok', data: [{}] });
         }
       }
@@ -163,6 +167,8 @@ const fakes = vi.hoisted(() => {
     control.initBehaviors = [];
     control.resetMessageBehavior = 'ok';
     control.stepMessageBehavior = 'ok';
+    control.resetBehaviors = [];
+    control.stepBehaviors = [];
     control.commandBehaviors = [];
     control.readError = false;
     control.stepTimeoutMs = 1000;
@@ -349,6 +355,41 @@ describe('WorkerPool failure state', () => {
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a hung worker times out after another worker error-replies in the same step batch', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    fakes.control.stepBehaviors = ['error', 'silent'];
+    pool = new WorkerPool(2);
+    await pool.init(2, {}, false);
+
+    await expect(pool.step([0, 0])).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(true);
+    await expect(pool.step([0, 0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a hung worker times out after another worker error-replies in the same reset batch', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    fakes.control.resetBehaviors = ['error', 'silent'];
+    pool = new WorkerPool(2);
+    await pool.init(2, {}, false);
+
+    await expect(pool.reset()).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(true);
+    await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('fails the pool when a message-mode telemetry snapshot times out', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+
+    await expect(pool.getTelemetrySnapshots()).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
+    await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
   });
 
   it('propagates message-mode reset errors without failing the pool', async () => {

@@ -347,7 +347,7 @@ export class WorkerPool {
                 promises.push(this.sendMessage(this.workers[i], { type: 'reset', seeds: wSeeds }));
                 seedIdx += wEnvs;
             }
-            const results = await Promise.all(promises);
+            const results = await this.settleMessageBatch(promises);
             return results.flat();
         } catch (error) {
             if (this.state === 'closed') {
@@ -546,7 +546,7 @@ export class WorkerPool {
             actionIdx += wEnvs;
         }
 
-        const results = await Promise.all(promises);
+        const results = await this.settleMessageBatch(promises);
         const batchEnd = process.hrtime.bigint();
 
         // Record Batch Latency
@@ -663,8 +663,25 @@ export class WorkerPool {
         for (let i = 0; i < this.workers.length; i++) {
             promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
         }
-        const snapshots = await Promise.all(promises);
-        return snapshots as BigUint64Array[];
+        const settled = await Promise.allSettled(promises);
+        const hungWorker = settled.find(r => r.status === 'rejected' && this.isWorkerTimeout(r.reason));
+        if (hungWorker) {
+            const failure = this.createFailure('telemetry', (hungWorker as { reason: Error }).reason);
+            // In shared mode workers block in Atomics.wait and never service
+            // GET_TELEMETRY, so that timeout is expected and recoverable. In
+            // message mode a timeout means the worker is hung/unreachable:
+            // fail so callers re-init instead of burning the full timeout on
+            // every snapshot.
+            if (!this.useSharedMemory) {
+                await this.failPool(failure);
+            }
+            throw failure;
+        }
+        const firstRejection = settled.find(r => r.status === 'rejected');
+        if (firstRejection) {
+            throw (firstRejection as { reason: Error }).reason;
+        }
+        return settled.map(r => (r as { value: any }).value) as BigUint64Array[];
     }
 
     async close() {
@@ -696,6 +713,26 @@ export class WorkerPool {
 
     private isWorkerTimeout(error: unknown): boolean {
         return (error as { code?: string })?.code === 'WORKER_TIMEOUT';
+    }
+
+    /**
+     * Settles a message-mode batch, preferring a hung-worker timeout over any
+     * live-worker error reply that happened to reject first. Promise.all would
+     * swallow the later timeout once the batch has settled, leaving the pool
+     * ready with an unreachable worker; waiting for every worker keeps the
+     * tagged timeout visible so the caller can fail the pool.
+     */
+    private async settleMessageBatch(promises: Promise<any>[]): Promise<any[]> {
+        const settled = await Promise.allSettled(promises);
+        const hungWorker = settled.find(r => r.status === 'rejected' && this.isWorkerTimeout(r.reason));
+        if (hungWorker) {
+            throw (hungWorker as { reason: Error }).reason;
+        }
+        const firstRejection = settled.find(r => r.status === 'rejected');
+        if (firstRejection) {
+            throw (firstRejection as { reason: Error }).reason;
+        }
+        return settled.map(r => (r as { value: any }).value);
     }
 
     private requireSharedMemoryManager(workerIndex: number): SharedMemoryManager {
