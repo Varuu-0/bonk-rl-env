@@ -211,7 +211,7 @@ describe('PRNG', () => {
             ]);
         });
 
-it('supports the full uint32-sized inclusive range', () => {
+        it('supports the full uint32-sized inclusive range', () => {
             const prng = new PRNG(0);
 
             expect(prng.nextInt(-0x80000000, 0x7FFFFFFF)).toBe(-0x3BCB4B9E);

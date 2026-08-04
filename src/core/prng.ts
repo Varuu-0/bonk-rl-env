@@ -71,9 +71,9 @@ export class PRNG {
      * differ from the float-scaled implementation to remove modulo bias.
      * Because draw consumption is data-dependent for such ranges, interleaving
      * next() and nextInt() advances the shared stream by a variable number of
-* words; next() itself always emits the canonical sequence.
- *
- * @throws {Error} If min is greater than max after flooring or the inclusive
+     * words; next() itself always emits the canonical sequence.
+     *
+     * @throws {Error} If min is greater than max after flooring or the inclusive
      *                 range contains more than 2^32 values.
      */
     nextInt(min: number, max: number): number {
