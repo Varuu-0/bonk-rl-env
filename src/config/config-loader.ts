@@ -152,6 +152,10 @@ export interface AppConfig {
     python: PythonConfig;
 }
 
+export type DeepPartial<T> = {
+    [K in keyof T]?: T[K] extends readonly unknown[] ? T[K] : T[K] extends object ? DeepPartial<T[K]> : T[K];
+};
+
 // ─── Built-in Defaults ─────────────────────────────────────────────────────
 
 const DEFAULTS: AppConfig = {
@@ -268,7 +272,7 @@ function isPlainObject(val: unknown): val is Record<string, unknown> {
     return typeof val === 'object' && val !== null && !Array.isArray(val);
 }
 
-export function deepMerge<T extends Record<string, any>>(base: T, override: Partial<T>): T {
+export function deepMerge<T extends Record<string, any>>(base: T, override: DeepPartial<T>): T {
     const result: Record<string, any> = { ...base };
     for (const key of Object.keys(override)) {
         if (key === '__proto__' || key === 'constructor' || key === 'prototype') continue;

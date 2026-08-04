@@ -12,7 +12,7 @@ import {
   getTelemetryController,
 } from '../../src/telemetry/telemetry-controller';
 import { globalProfiler, wrap, TelemetryIndices, TelemetryBuffer } from '../../src/telemetry/profiler';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys } from '../../src/telemetry/flags';
+import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys, type TelemetryFlags } from '../../src/telemetry/flags';
 import { resetConfig } from '../../src/config/config-loader';
 
 describe('TelemetryController', () => {
@@ -230,7 +230,7 @@ describe('TelemetryFlags parsing', () => {
 
   describe('mergeConfigWithFlags', () => {
     it('applies config when CLI uses defaults', () => {
-      const cliFlags = { enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
+      const cliFlags: TelemetryFlags = { enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
       const config = { enabled: true, outputFormat: 'file' as const };
 
       const merged = mergeConfigWithFlags(config, cliFlags);
@@ -239,7 +239,7 @@ describe('TelemetryFlags parsing', () => {
     });
 
     it('CLI flags take precedence over config', () => {
-      const cliFlags = { enableTelemetry: true, profileLevel: 'detailed', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
+      const cliFlags: TelemetryFlags = { enableTelemetry: true, profileLevel: 'detailed', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
       const config = { enabled: false };
 
       const merged = mergeConfigWithFlags(config, cliFlags);

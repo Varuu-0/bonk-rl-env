@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const sock = {
+  const sock: { bind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
     bind: async () => {},
     close: () => {},
     send: async () => {},
@@ -125,8 +125,8 @@ describe('IpcBridge constructor', () => {
 
   it('sets up wrapped send for telemetry (line 22)', () => {
     const bridge = new IpcBridge();
-    expect(bridge._wrappedSend).toBeDefined();
-    expect(typeof bridge._wrappedSend).toBe('function');
+    expect((bridge as any)._wrappedSend).toBeDefined();
+    expect(typeof (bridge as any)._wrappedSend).toBe('function');
   });
 });
 
@@ -197,7 +197,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
     await bridge.close();
     expect(bridge.isClosed()).toBe(true);
 
-    const poolCloseSpy = vi.spyOn(bridge.pool, 'close');
+    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close');
     await bridge.close();
     expect(poolCloseSpy).not.toHaveBeenCalled();
   });
@@ -223,7 +223,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
 
   it('closes the worker pool (line 172)', async () => {
     const bridge = new IpcBridge({ server: { port: 12355 } });
-    const poolCloseSpy = vi.spyOn(bridge.pool, 'close');
+    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close');
     await bridge.close();
     expect(poolCloseSpy).toHaveBeenCalled();
   });
@@ -245,8 +245,8 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 100);
-    expect(bridge.stepCount).toBe(100);
-    expect(bridge.stepCount % 5000).not.toBe(0);
+    expect((bridge as any).stepCount).toBe(100);
+    expect((bridge as any).stepCount % 5000).not.toBe(0);
   });
 
   it('records memory at exactly 5000 steps (line 91)', async () => {
@@ -254,8 +254,8 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
-    expect(bridge.stepCount).toBe(5000);
-    expect(bridge.stepCount % 5000).toBe(0);
+    expect((bridge as any).stepCount).toBe(5000);
+    expect((bridge as any).stepCount % 5000).toBe(0);
   });
 
   it('checks telemetry enabled at 5000 steps (line 93)', async () => {
@@ -263,7 +263,7 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
-    expect(bridge.stepCount).toBe(5000);
+    expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('fetches telemetry snapshots when enabled (lines 94-96)', async () => {
@@ -271,7 +271,7 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
-    expect(bridge.stepCount).toBe(5000);
+    expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('reports at 5000 steps when telemetry enabled (line 97)', async () => {
@@ -279,7 +279,7 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
-    expect(bridge.stepCount).toBe(5000);
+    expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('does NOT run telemetry branch when disabled', async () => {
@@ -288,7 +288,7 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
-    expect(bridge.stepCount).toBe(5000);
+    expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('records memory again at 10000 steps', async () => {
@@ -296,7 +296,7 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     const pool = (bridge as any).pool;
     vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 10000);
-    expect(bridge.stepCount).toBe(10000);
-    expect(bridge.stepCount % 5000).toBe(0);
+    expect((bridge as any).stepCount).toBe(10000);
+    expect((bridge as any).stepCount % 5000).toBe(0);
   });
 });

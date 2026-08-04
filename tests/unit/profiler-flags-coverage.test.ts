@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { globalProfiler, TelemetryBuffer, TelemetryIndices, Profiler, setLatestWorkerTelemetry, startCollection, stopCollection } from '../../src/telemetry/profiler';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from '../../src/telemetry/flags';
+import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, type TelemetryFlags } from '../../src/telemetry/flags';
 
 describe('Profiler uncovered paths', () => {
   beforeEach(() => {
@@ -524,7 +524,7 @@ describe('Flags uncovered paths', () => {
   });
 
   describe('mergeConfigWithFlags', () => {
-    const defaultCliFlags = { enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
+    const defaultCliFlags: TelemetryFlags = { enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
 
     it('applies config when CLI has defaults', () => {
       const result = mergeConfigWithFlags({ enabled: true, outputFormat: 'file', retentionDays: 30 }, defaultCliFlags);
@@ -534,7 +534,7 @@ describe('Flags uncovered paths', () => {
     });
 
     it('CLI flags take precedence over config', () => {
-      const cliFlags = { ...defaultCliFlags, enableTelemetry: true, outputFormat: 'file' };
+      const cliFlags: TelemetryFlags = { ...defaultCliFlags, enableTelemetry: true, outputFormat: 'file' };
       const result = mergeConfigWithFlags({ enabled: false, outputFormat: 'console' }, cliFlags);
       expect(result.enableTelemetry).toBe(true);
       expect(result.outputFormat).toBe('file');

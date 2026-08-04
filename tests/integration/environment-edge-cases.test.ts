@@ -895,7 +895,7 @@ describe('BonkEnvironment edge cases', () => {
       const mapData: MapDef = makeMap({
         physics: {
           ppm: 30,
-          bounds: { halfWidth: 600, halfHeight: 400 },
+          bounds: { width: 1200, height: 800 },
         },
       });
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
@@ -947,7 +947,7 @@ describe('BonkEnvironment edge cases', () => {
           { name: 'bodyB', type: 'rect', x: 100, y: 0, width: 50, height: 50, static: false },
         ],
         joints: [
-          { bodyA: 'bodyA', bodyB: 'bodyB' },
+          { type: 'distance', bodyA: 'bodyA', bodyB: 'bodyB' },
         ],
       };
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });

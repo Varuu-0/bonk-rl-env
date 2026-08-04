@@ -29,7 +29,7 @@ export function makeWall(
     width: 10,
     height: 400,
     static: true,
-    collides,
+    collides: collides as MapBodyDef['collides'],
   };
   engine.addBody(def);
   return def;
@@ -63,8 +63,8 @@ export function addBall(
   y: number,
   _vx = 0,
   _vy = 0,
-): number {
-  return engine.addPlayer(x, y, 0);
+): void {
+  engine.addPlayer(0, x, y);
 }
 
 export function safeDestroy(engine: PhysicsEngine | null): void {

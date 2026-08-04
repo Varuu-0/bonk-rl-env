@@ -69,7 +69,7 @@ export class TelemetryController {
    *
    * @param configTelemetry - Optional telemetry config from config.ts
    */
-  initialize(configTelemetry?: TelemetryConfig): void {
+  initialize(configTelemetry?: Partial<TelemetryConfig>): void {
     if (initializationComplete) {
       return;
     }
