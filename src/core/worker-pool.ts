@@ -673,11 +673,16 @@ export class WorkerPool {
     }
 
     /**
-     * Manual deep-copy fallback for runtimes without `structuredClone`.
-     * Preserves shared references and cycles via the `seen` map and handles
-     * the common non-plain structured-cloneable types (Date, RegExp, Map, Set,
-     * typed arrays, DataView, ArrayBuffer) so behavior matches
-     * `structuredClone()` for snapshot inputs.
+     * Deep-copies a pooled observation/result graph so the caller owns every
+     * nested mutable field and buffer.
+     *
+     * Used rather than the global `structuredClone`: `structuredClone`
+     * preserves SharedArrayBuffer-backed views by sharing the underlying
+     * buffer, while this copy re-slices every buffer so the snapshot is fully
+     * independent. It handles plain objects and arrays plus the common
+     * structured-cloneable types (Date, RegExp, Map, Set, typed arrays,
+     * DataView, ArrayBuffer, SharedArrayBuffer) without silent degradation,
+     * and preserves shared references and cycles via the `seen` map.
      */
     private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
         if (value === null || typeof value !== 'object') return value;
@@ -700,9 +705,15 @@ export class WorkerPool {
             if (value instanceof DataView) {
                 return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength);
             }
-            return value.slice(); // typed arrays
+            // .slice() copies into a fresh buffer, so SharedArrayBuffer-backed
+            // views become owned instead of sharing the pool's SAB.
+            return value.slice();
         }
         if (value instanceof ArrayBuffer) {
+            return value.slice(0);
+        }
+        const sabCtor = (globalThis as any).SharedArrayBuffer;
+        if (sabCtor && value instanceof sabCtor) {
             return value.slice(0);
         }
 
@@ -718,14 +729,11 @@ export class WorkerPool {
 
     /**
      * Materializes a caller-owned snapshot of a pooled observation/result
-     * graph. Prefers the global `structuredClone` (Node 20+) so non-plain
-     * members (Date, Map, Set, typed arrays) survive snapshotting; falls back
-     * to {@link deepCopy} on runtimes without it.
+     * graph. Delegates to {@link deepCopy}, which copies every nested buffer
+     * (including SharedArrayBuffer-backed views) instead of sharing them as
+     * `structuredClone` would.
      */
     private snapshotCopy(value: any): any {
-        if (typeof (globalThis as any).structuredClone === 'function') {
-            return (globalThis as any).structuredClone(value);
-        }
         return this.deepCopy(value);
     }
 

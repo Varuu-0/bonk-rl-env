@@ -202,8 +202,8 @@ describe('WorkerPool shared-memory result ownership', () => {
       expect(snapshot.opponents[0]).not.toBe(fixture.opponents[0]);
 
       // Non-plain members must survive snapshotting as their real types
-      // instead of degrading to {} (guards structuredClone in the snapshot
-      // boundary and the fallback deep copy).
+      // instead of degrading to {} (guards the snapshot deep copy, which
+      // preserves Date/Map/Set/typed-array members).
       expect(snapshot.observedAt).toBeInstanceOf(Date);
       expect(snapshot.observedAt).toEqual(fixture.observedAt);
       expect(snapshot.observedAt).not.toBe(fixture.observedAt);
@@ -218,6 +218,100 @@ describe('WorkerPool shared-memory result ownership', () => {
       expect(snapshot.samples).not.toBe(fixture.samples);
 
       expect(snapshot).toEqual(fixture);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('deep-copies nested plain objects, arrays, and SAB-backed members (fallback path)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      // Force the manual deep-copy path even on runtimes where the global
+      // structuredClone exists, so the fallback branches are genuinely
+      // exercised rather than always bypassed on Node 20+.
+      const scDescriptor = Object.getOwnPropertyDescriptor(globalThis, 'structuredClone');
+      if (scDescriptor && scDescriptor.configurable) {
+        Object.defineProperty(globalThis, 'structuredClone', {
+          value: undefined,
+          writable: true,
+          configurable: true,
+        });
+      }
+
+      const sab = new SharedArrayBuffer(8);
+      const sabView = new Float64Array(sab);
+      sabView[0] = 3.5;
+      const sab2 = new SharedArrayBuffer(8);
+      const sabDataView = new DataView(sab2);
+      sabDataView.setFloat32(0, 1.25);
+      const bareSab = new SharedArrayBuffer(8);
+
+      const fixture = {
+        playerX: 1,
+        nested: { depth: [1, 2, { inner: 'x' }] },
+        labels: ['a', 'b'],
+        observedAt: new Date(1700000000000),
+        tags: new Set(['x']),
+        lookup: new Map([['k', 1]]),
+        samples: new Float64Array([1.5, 2.5]),
+        sabView,
+        sabDataView,
+        bareSab: sab,
+      };
+
+      try {
+        const snapshot = (pool as any).snapshotObservation(fixture);
+
+        // Nested plain objects and arrays are fully owned.
+        expect(snapshot).not.toBe(fixture);
+        expect(snapshot.nested).toEqual(fixture.nested);
+        expect(snapshot.nested).not.toBe(fixture.nested);
+        expect(snapshot.nested.depth).not.toBe(fixture.nested.depth);
+        expect(snapshot.nested.depth[2]).not.toBe(fixture.nested.depth[2]);
+        expect(snapshot.labels).toEqual(fixture.labels);
+        expect(snapshot.labels).not.toBe(fixture.labels);
+
+        // Non-plain members survive as their real types.
+        expect(snapshot.observedAt).toBeInstanceOf(Date);
+        expect(snapshot.observedAt.getTime()).toBe(fixture.observedAt.getTime());
+        expect(snapshot.tags).toBeInstanceOf(Set);
+        expect(snapshot.tags).toEqual(fixture.tags);
+        expect(snapshot.lookup).toBeInstanceOf(Map);
+        expect(snapshot.lookup).toEqual(fixture.lookup);
+        expect(snapshot.samples).toBeInstanceOf(Float64Array);
+        expect(snapshot.samples).toEqual(fixture.samples);
+        expect(snapshot.samples.buffer).not.toBe(fixture.samples.buffer);
+
+        // SharedArrayBuffer-backed views must be copied, not shared: this is
+        // exactly where structuredClone would re-alias the pool's SAB.
+        expect(snapshot.sabView).toBeInstanceOf(Float64Array);
+        expect(snapshot.sabView[0]).toBe(3.5);
+        expect(snapshot.sabView.buffer).not.toBe(sab);
+        expect(snapshot.sabDataView).toBeInstanceOf(DataView);
+        expect(snapshot.sabDataView.getFloat32(0)).toBe(1.25);
+        expect(snapshot.sabDataView.buffer).not.toBe(sab2);
+        expect(snapshot.bareSab).toBeInstanceOf((globalThis as any).SharedArrayBuffer);
+        expect(snapshot.bareSab).not.toBe(bareSab);
+
+        // Mutating the snapshot must not leak into the source graph.
+        snapshot.playerX = 99;
+        snapshot.nested.depth[0] = 99;
+        snapshot.samples[0] = 99;
+        snapshot.sabView[0] = 99;
+        expect(fixture.playerX).toBe(1);
+        expect(fixture.nested.depth[0]).toBe(1);
+        expect(fixture.samples[0]).toBe(1.5);
+        expect(sabView[0]).toBe(3.5);
+      } finally {
+        if (scDescriptor) {
+          Object.defineProperty(globalThis, 'structuredClone', scDescriptor);
+        }
+      }
     } finally {
       await pool.close();
     }
