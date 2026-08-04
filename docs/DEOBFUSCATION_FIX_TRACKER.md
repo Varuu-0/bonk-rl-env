@@ -237,6 +237,28 @@ the maps.
 
 Chronological record of fixes applied. Append new entries here.
 
+### 2026-08-04 — Stateful setup-decoder fold (`t8H`/`n6e`) in the deobfuscation pipeline
+
+- `.deobf/final-pipeline.js` gains pass4b: all 791 AMD-body `t8H`/`n6e` calls
+  (380 + 411) are folded to the steady decoder value `73`, replacing the
+  previous unconditional `t8H_never_inline`/`n6e_never_inline` skips.
+- The fold is gated on a structural proof of the two-phase environment-probe
+  machine `B3jF8[210213].f_fpV2a` (only closure state `R1n[4]`, armed by the
+  single top-level preamble call `B3jF8.n6e();` at line 2424, so every body
+  call returns 73) plus two fresh preamble boots that agree (first call 93,
+  steady 73) and a per-site sandbox evaluation. The arming call is never
+  folded. Provenance: `.deobf/final-stateful-decoder-folds.json`.
+- New independent audit `.deobf/audit-stateful-decoder-fold.js` re-derives the
+  structural facts, candidates, sidecar bijection, and a 233,900-node readable
+  AST pairing walk (0 anomalies); `audit-independent.js` TASK 6 now asserts
+  `body=0 / preamble=1` residual setup-decoder calls.
+- No simulator behavior changes: this is a readability/analysis artifact
+  update. The two dispatcher-interposition sites `S8z[Z9u]`/`r5E[J6c]` remain
+  bracketed (a `73;` statement still separates selector from calculation).
+- Verification: full set passes (pipeline ×2 identical SHA
+  `2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`, syntax,
+  all audits, anchors). See `DEOBFUSCATION.md` §39 and the roadmap S0.4/S4.2.
+
 ### 2026-07-26 — Initial deobfuscation pass (prior session)
 
 - `GRAVITY_Y` changed from `10` → `20` in `physics-engine.ts`
@@ -844,7 +866,8 @@ source level — see `DEOBFUSCATION.md` §31 for line-numbered evidence:
   dotted `.length` substitutions (`X.length != X[47]` for the bag and
   real-array patterns; two fresh preamble boots confirm `M$QCc[47] ===
   "length"`).
-- Regenerated readable artifact: 4,480,444 bytes; SHA-256
-  `5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`
-  (two identical runs). Full verification set passes including the new
-  `audit-index47-census.js --self-check`.
+- Regenerated readable artifact: 4,474,907 bytes; SHA-256
+  `2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`
+  (two identical runs; final combined-pipeline output after the stateful
+  setup-decoder fold landed). Full verification set passes including the new
+  `audit-index47-census.js --self-check` and `audit-stateful-decoder-fold.js`.

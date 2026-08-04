@@ -21,6 +21,11 @@ re-verified against the retained 2026-07-29 build on August 2, 2026.
 > inventory, exact deobfuscation scope, residual census, and correction matrix.
 > When earlier chronological research notes disagree with §§31-38, the later
 > source-verified correction is authoritative.
+>
+> **Update (2026-08-04):** §39 records the stateful setup-decoder fold
+> (`t8H`/`n6e`): all 791 formerly-skipped AMD-body calls are folded to the
+> decoder's steady value `73` after a structural two-phase proof and two fresh
+> preamble boots. §38 counts are updated accordingly.
 
 All findings were verified by checking each claim against the live bonk.io runtime (`M$QCc` constant table) and the `alpha2s.js` source code.
 
@@ -4050,7 +4055,7 @@ not as the current metric baseline.
 `node .deobf/final-pipeline.js` always starts from
 `.deobf/alpha2s.pretty.js` and emits `.deobf/alpha2s.readable.js` from one
 right-to-left absolute-offset merge. Every stage scans the pristine input;
-overlap priority is preamble capture > pass4 > pass3 > table-fold >
+overlap priority is preamble capture > pass4 > pass4b > pass3 > table-fold >
 dispatcher-table-index-fold > pass3b-formula-fold > pass1 > banners:
 
 1. **Preamble decoder capture:** every literal `B3jF8.U3q/w65(n)` before the
@@ -4061,29 +4066,39 @@ dispatcher-table-index-fold > pass3b-formula-fold > pass1 > banners:
    decoder results; `final-preamble-folds.json` records their capture values.
 2. **String inline (pass4):** literal-arg decoder calls `B3jF8|k7V.U3q/w65(n)`
    are evaluated in a sandboxed VM after booting the ~2430-line requirejs
-   header and inlined as string literals (5,939 replacements). Setup call
-   `t8H` and stateful `n6e` are never inlined (791 deliberate skips).
-3. **Op-fold (pass3):** adjacent `k7V.H0n/d1M(sel); X[i] = k7V.w_c/Q5$(args)`
+   header and inlined as string literals (5,939 replacements). `t$4`/`g7y`
+   op-calls with literal arguments are folded with an ` /*op */ ` comment
+   (96 replacements).
+3. **Stateful setup-decoder fold (pass4b):** `t8H`/`n6e` are two wrappers of
+   the same two-phase environment-probe machine `B3jF8[210213].f_fpV2a`,
+   stateful only through the closure slot `R1n[4]`. The single arming call is
+   the top-level preamble `B3jF8.n6e();` (line 2424), so every AMD-body call is
+   second-or-later and returns the steady value 73. A structural proof of the
+   machine plus two fresh preamble boots (first call 93, steady 73, runs agree)
+   gate the fold; all 791 body calls (380 `t8H`, 411 `n6e`) are folded to `73`.
+   See §39 and `final-stateful-decoder-folds.json`.
+4. **Op-fold (pass3):** adjacent `k7V.H0n/d1M(sel); X[i] = k7V.w_c/Q5$(args)`
    sequences with all-literal arguments are folded to their numeric result
    with an ` /*opfold*/ … */` provenance comment (1,696 folds). Its 207
    non-literal-argument skips are the candidate universe for pass3b below.
-4. **Immutable table fold:** AST/binding analysis proves the single `M$QCc`
+5. **Immutable table fold:** AST/binding analysis proves the single `M$QCc`
    property-name table initializer has no writes or escaping alias. It replaces
    complete, read-only literal table lookups with JSON string literals: 23,852
    folds (1,186 direct aliases and 22,666 carrier slots). This includes 554
    index-47 lookups folded to the literal string `"length"`, never `.length`.
    The pipeline writes the range/value provenance to `final-folds.json`; the
    independent table audit re-derives and verifies every fold.
-5. **Dispatcher table-index fold:** a separate strict pass starts only from the
+6. **Dispatcher table-index fold:** a separate strict pass starts only from the
    immutable-table helper's proven dynamic origins. It requires an immediate
    table alias, one unmodified `var` index definition, an immediately preceding
    literal `H0n/d1M` selector in the same statement list, and two agreeing
    fresh-VM evaluations. It folds 86 bracket reads to strings, including one
-   index-47 `"length"` string. The two `t8H`-interposed cases remain bracketed.
+   index-47 `"length"` string. The two dispatcher-index sites whose interposing
+   `t8H` calls are now folded `73;` statements remain bracketed.
    `final-dispatcher-folds.json` records every source range, selector, call,
    resolved table index, value, and rejected strict-pattern site; the
    independent AMD-body audit re-derives the entire set and verifies it.
-6. **Dispatcher-formula fold (pass3b):** all 207 of the non-literal pass3
+7. **Dispatcher-formula fold (pass3b):** all 207 of the non-literal pass3
    candidates are replaced only at the `Q5$/w_c` call with a static case
    formula from the 253-case `B3jF8[239984]` dispatcher map (SHA-256
    `6bd5eabc9911df5b9339334ff9034f97fdbc979b30a834761a3bb9f6c9c53a87`).
@@ -4099,21 +4114,22 @@ dispatcher-table-index-fold > pass3b-formula-fold > pass1 > banners:
    every accepted site (with `orderPreserved` provenance);
    `audit-formula-fold.js` and the paired readable-AST audit independently
    re-derive all 207.
-7. **AST annotation + analysis labels (pass1):** Babel identifies all 89,199
+8. **AST annotation + analysis labels (pass1):** Babel identifies all 89,199
    literal numeric member accesses in the AMD body. Of these, 46,518 are
    covered by table folds, 31,373 emit conservative dotted analysis labels,
    11,298 emit ` /* name */ ` annotations, and 10 out-of-table slots remain
    unchanged. Dotted labels are for analysis readability, not a claim that a
    packed argument-array slot was originally a JavaScript property.
-8. **Banner insertion:** 43 zero-length section banners at `anchors.json`
+9. **Banner insertion:** 43 zero-length section banners at `anchors.json`
    line starts.
 
 Inputs: `tables.json` (1,724-entry resolved property-name table),
 `callsites.json` (per-receiver safety verdicts and index histograms),
 `anchors.json` (banner anchors), `final-preamble-folds.json` (source-order
 preamble capture provenance), `final-folds.json` (literal AMD-body fold
-provenance), `final-dispatcher-folds.json` (dispatcher-index provenance), and
-`final-formula-folds.json` (dispatcher-formula provenance).
+provenance), `final-dispatcher-folds.json` (dispatcher-index provenance),
+`final-formula-folds.json` (dispatcher-formula provenance), and
+`final-stateful-decoder-folds.json` (stateful setup-decoder provenance).
 Before table folds, AST pass1 classifies 46,831 conservative
 dotted labels, 41,557 ordinary annotations, 801 index-47 annotations, and 10
 out-of-table skips. The old character scanner missed 341 division-as-regex
@@ -4134,7 +4150,7 @@ sites, 30,506 ordinary annotation sites, and 554 index-47 annotation sites.
 
 ### 36.3 Artifacts
 
-- `alpha2s.readable.js` — 4,480,444 bytes, 40,233 lines, the analysis target.
+- `alpha2s.readable.js` — 4,474,907 bytes, 39,673 lines, the analysis target.
 - `final-pipeline.js`, `ast-member-scan.js`, `table-lookup-fold.js`,
   `op-dispatch-fold.js`, `audit-independent.js`, `audit-preamble.js`,
   `audit-formula-fold.js`, `audit-training-statics.js`,
@@ -4161,7 +4177,8 @@ sites, 30,506 ordinary annotation sites, and 554 index-47 annotation sites.
 - **10 out-of-table indices** are left unchanged rather than being assigned an
   incorrect property name.
 - **86 strict dispatcher-resolved table indexes** are folded to strings. Two
-  direct-table sites with interposed stateful `t8H` setup calls and two `a9M`
+  direct-table sites with a folded `73;` interposing statement (formerly a
+  stateful `t8H` setup call) and two `a9M`
   data-record brackets remain unchanged rather than extending the proof past
   its source-order/evaluation boundary.
 - **Conservative dotted-label eligibility is mechanically checked.** A
@@ -4239,7 +4256,7 @@ linear in the output size as substitutions grow.
 | Pipeline spot/fold audits | 25 / 25 each, PASS |
 | Independent pass-one closure | 89,199 sites; 0 gap or mismatch |
 | Independent table-fold audit | 23,852 / 23,852 approved; 0 extra/unproven |
-| Independent formula-fold audit | 48 / 48 approved; 159 / 159 rejections re-derived; 0 structural anomalies |
+| Independent formula-fold audit | 207 / 207 folds re-derived (48 inline, 159 ordered); 0 structural anomalies |
 | Audit receiver coverage | 187 safe-to-substitute + 1,141 do-not-substitute = 1,328 analyzed |
 
 The readable artifact remains an analysis target, not an executable or a
@@ -4261,13 +4278,18 @@ node .deobf/ast-member-scan.js --self-check
 node .deobf/audit-independent.js
 node .deobf/audit-preamble.js
 node .deobf/audit-formula-fold.js
+node .deobf/audit-stateful-decoder-fold.js
 node .deobf/audit-training-statics.js --self-check
+node .deobf/audit-map-option-writers.js --self-check
+node .deobf/audit-out-of-table.js --self-check
+node .deobf/audit-dynamic-training-residuals.js --self-check
+node .deobf/audit-index47-census.js --self-check
 node .deobf/audit-table-lookup.js --verify
 node .deobf/test-anchors.js
 ```
 
 Two consecutive final-pipeline runs produced the same readable SHA-256:
-`5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`.
+`2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`.
 
 ### 37.2 Transport and deterministic state exchange
 
@@ -4381,6 +4403,15 @@ factory body, plus the preamble's literal decoder materialization:
   warm-up primitives. `audit-preamble.js` proves the generated preamble has no
   literal decoder call, its static `M$QCc` array has 1,724 strings, and its
   materialized table equals both the original preamble and `tables.json`.
+- All 791 AMD-body `t8H`/`n6e` calls (380 + 411) are folded to the steady
+  decoder value 73. `B3jF8.t8H`/`B3jF8.n6e` both forward to the two-phase
+  environment-probe machine `B3jF8[210213].f_fpV2a`; its only closure state is
+  `R1n[4]`, armed by the single top-level preamble call `B3jF8.n6e();`
+  (line 2424), so every body call is second-or-later and returns 73. The fold
+  is gated by a structural proof of the machine plus two fresh preamble boots
+  (first call 93, steady 73, runs agree), recorded in
+  `final-stateful-decoder-folds.json` and independently re-derived by
+  `audit-stateful-decoder-fold.js` (see §39).
 
 - The 1,724-entry `M$QCc` property-name table is decoded by executing the
   retained header, not by inferred names.
@@ -4395,7 +4426,8 @@ factory body, plus the preamble's literal decoder materialization:
   decoded value, output literal, and disposition of every candidate.
 - The dispatcher-index pass independently re-derives 88 direct immutable-table
   dynamic reads. Its strict same-statement selector rule folds 86 to verified
-  string literals; two `t8H`-interposed sites are retained. The separate
+  string literals; two interposition sites are retained (the interposing `t8H`
+  is now a folded `73;` statement). The separate
   `final-dispatcher-folds` v1 sidecar records every folded source range,
    selector, call, value, and rejected strict-pattern site.
 - Pass3b independently accounts for all 207 non-literal dispatcher sequences:
@@ -4432,7 +4464,7 @@ data-flow readable, not a recovery of original symbols or control flow.
 
 ### 38.2 Retained artifact contract
 
-The local `.deobf/` directory deliberately retains only the following 29
+The local `.deobf/` directory deliberately retains only the following 31
 artifacts. Legacy intermediate bundles, per-pass scripts, and stale run logs
 were removed on 2026-08-02.
 
@@ -4441,8 +4473,8 @@ were removed on 2026-08-02.
 | Canonical source chain | `alpha2s.raw.js`, `alpha2s.pretty.js`, `alpha2s.readable.js` | Raw is the byte-exact captured build; pretty is the immutable pipeline input and line-evidence target; readable is the reproducible analysis output. |
 | Derived inputs | `tables.json`, `callsites.json`, `anchors.json` | The decoded table, conservative receiver verdicts, and 43 banner anchors. Regenerate only from the retained canonical source. |
 | Producers | `dump-tables.js`, `analyze-callsites.js`, `final-pipeline.js`, `op-dispatch-fold.js` | Respectively create the table, receiver analysis, canonical readable output plus sidecars, and validate/extract the dispatcher formula map. |
-| AST and fold proof | `ast-member-scan.js`, `table-lookup-fold.js`, `final-stats.json`, `final-preamble-folds.json`, `final-folds.json`, `final-dispatcher-folds.json`, `final-formula-folds.json`, `audit-training-statics.js`, `audit-map-option-writers.js`, `audit-out-of-table.js`, `audit-dynamic-training-residuals.js` | AST member discovery, immutable-table proof, current run metrics, source-order preamble capture provenance, literal AMD-body fold provenance, dispatcher-index provenance, formula provenance, direct static facts, complete table-origin option-writer censuses, and intentionally retained residual inventories. |
-| Independent gates | `audit-independent.js`, `audit-preamble.js`, `audit-formula-fold.js`, `audit-table-lookup.js`, `audit-table-lookup.log`, `audit-index47-census.js`, `test-anchors.js` | Independent pass-one, preamble-capture, formula, AMD-body fold, index-47 census, and anchor checks plus the atomically refreshed successful fold-audit log. |
+| AST and fold proof | `ast-member-scan.js`, `table-lookup-fold.js`, `final-stats.json`, `final-preamble-folds.json`, `final-folds.json`, `final-dispatcher-folds.json`, `final-formula-folds.json`, `final-stateful-decoder-folds.json`, `audit-training-statics.js`, `audit-map-option-writers.js`, `audit-out-of-table.js`, `audit-dynamic-training-residuals.js` | AST member discovery, immutable-table proof, current run metrics, source-order preamble capture provenance, literal AMD-body fold provenance, dispatcher-index provenance, formula provenance, stateful setup-decoder fold provenance, direct static facts, complete table-origin option-writer censuses, and intentionally retained residual inventories. |
+| Independent gates | `audit-independent.js`, `audit-preamble.js`, `audit-formula-fold.js`, `audit-stateful-decoder-fold.js`, `audit-table-lookup.js`, `audit-table-lookup.log`, `audit-index47-census.js`, `test-anchors.js` | Independent pass-one, preamble-capture, formula, stateful-decoder, AMD-body fold, index-47 census, and anchor checks plus the atomically refreshed successful fold-audit log. |
 | Historical evidence | `audit-report.txt` | Preserved 2026-07-30 audit snapshot only; its counts and index convention are not current. |
 
 The raw-to-readable flow is:
@@ -4450,17 +4482,18 @@ The raw-to-readable flow is:
 ```text
 alpha2s.raw.js -> alpha2s.pretty.js
 pretty -> tables.json + callsites.json + anchors.json
-pretty -> final-pipeline.js -> readable.js + final-stats.json + final-preamble-folds.json + final-folds.json + final-dispatcher-folds.json + final-formula-folds.json
+pretty -> final-pipeline.js -> readable.js + final-stats.json + final-preamble-folds.json + final-folds.json + final-dispatcher-folds.json + final-formula-folds.json + final-stateful-decoder-folds.json
 ```
 
-`final-stats.json` reports JavaScript string length (4,480,015 characters) for
-the generated readable output; the physical UTF-8 file is 4,480,444 bytes.
+`final-stats.json` reports JavaScript string length (4,474,478 characters) for
+the generated readable output; the physical UTF-8 file is 4,474,907 bytes.
 This documentation consistently uses the latter file size.
 
 ### 38.3 Reproducible pipeline and audit closure
 
 The final merge runs source-order preamble decoder capture, pass4 string
-inlining, pass3 constant operation folding, immutable table-string folding,
+inlining, pass4b stateful setup-decoder folding, pass3 constant operation
+folding, immutable table-string folding,
 strict dispatcher-index string folding, strict pass3b formula substitution, AST
 pass1 labeling, then banner
 insertion. It has no dropped overlaps in the current build.
@@ -4468,7 +4501,8 @@ insertion. It has no dropped overlaps in the current build.
 | Check | Current result |
 |---|---:|
 | Preamble literal decoder captures | 1,731: 1,724 table strings + 7 stateful warm-up primitives; two fresh captures agree |
-| Body decoder/primitive inlines | 5,939; 791 intentional stateful/setup skips |
+| Body decoder/primitive inlines | 5,939 string inlines + 96 `t$4`/`g7y` op-folds |
+| Stateful setup-decoder folds (`t8H`/`n6e`) | 791 / 791 zero-argument AMD-body calls folded to steady value 73; the single arming preamble `B3jF8.n6e();` (line 2424) retained; structural gate + two fresh boots agree (first call 93, steady 73) |
 | Literal operation folds | 1,696; 207 non-literal argument skips handed to pass3b |
 | Strict pass3b formula substitutions | 207 / 207; 0 rejections; 48 inline + 159 order-preserving IIFE lowering; 368 argument substitutions + 111 annotations across 191 sites; 0 index-47 recoveries |
 | Pass3 folded-LHS recovery | 1,560 dotted labels and 135 annotations |
@@ -4483,12 +4517,13 @@ insertion. It has no dropped overlaps in the current build.
 | Banners | 43, all anchor checks pass |
 | Independent table-fold verification | 23,852 / 23,852 literal folds and 86 / 86 dispatcher-index folds approved; 0 extra, unproven, or wrong-value folds |
 | Independent formula-fold verification | 207 / 207 folds re-derived; paired readable AST formulas match exactly (48 inline, 159 ordered) |
+| Independent stateful-decoder verification | 791 / 791 fold sites re-derived from pristine source; readable pairing walk confirms every site is a `73` literal; 0 anomalies across 233,900 node pairs; the arming preamble call is retained |
 | Training-static verification | Foot defaults, swing defaults, `ms.fl` force reader, linear shrink formulas, exact `mapVersion=15`, and no `swingF`/`swingD` map override re-derived from source anchors, dispatcher cases, and final-fold provenance |
 | Independent pass-one closure | 0 gaps, 0 pairing mismatches, 0 unlabelled in-table brackets |
 
 `node --check .deobf/alpha2s.readable.js` passes. Two fresh full pipeline runs
 produced the identical readable SHA-256:
-`5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`.
+`2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`.
 
 Run the complete current verification set with:
 
@@ -4499,6 +4534,7 @@ node .deobf/ast-member-scan.js --self-check
 node .deobf/audit-independent.js
 node .deobf/audit-preamble.js
 node .deobf/audit-formula-fold.js
+node .deobf/audit-stateful-decoder-fold.js
 node .deobf/audit-training-statics.js --self-check
 node .deobf/audit-map-option-writers.js --self-check
 node .deobf/audit-out-of-table.js --self-check
@@ -4533,14 +4569,18 @@ applies only to the AMD body.
 dynamic-index candidates; the independent literal re-derivation reports 1,067
 because it applies a narrower carrier universe. A separate direct-alias pass
 finds 88 dispatcher-resolved table reads, folds all 86 strict adjacent-selector
-sites, and retains `S8z[Z9u]` and `r5E[J6c]` because `t8H` separates selector
+sites, and retains `S8z[Z9u]` and `r5E[J6c]` because a statement (the folded
+`73;` decoder call, formerly `k7V.t8H();`) still separates selector
 from computation. The callsite audit reports three remaining dynamic brackets
 on its tracked receivers: two `a9M` data-record reads (not table aliases) and
 `S8z[Z9u]`; `r5E[J6c]` has no literal-index evidence, so it is outside that
 receiver inventory. Four dynamic brackets remain globally, all deliberately
 unchanged rather than being given speculative names.
 
-**Decoders and control flow.** The current audit counts 1,639 residual
+**Decoders and control flow.** The stateful setup decoders `t8H`/`n6e` are
+fully folded (§39): all 791 AMD-body calls became the steady literal 73, and
+the only surviving call is the arming preamble `B3jF8.n6e();` at line 2424.
+The current audit counts 1,639 residual
 dispatcher/selector occurrences: `w_c` 438, `Q5$` 379, `H0n` 405, and `d1M`
 417. Pass3 hands its 207 non-literal operation sequences to pass3b; all 207
 satisfy the strict factory/binding/adjacency proof and are emitted as static
@@ -4603,3 +4643,95 @@ not as current simulator requirements.
 No entry in this matrix retroactively turns an old guess into proof. Each
 replacement finding is tied to the retained pretty source, a regenerated
 readable artifact, and the validation chain above.
+
+---
+
+## §39 Stateful Setup-Decoder Fold: `t8H`/`n6e` → 73 (2026-08-04)
+
+This section documents the resolution of the last 791 intentional
+decoder-inline skips (previously "380 `t8H` + 411 `n6e` stateful/setup skips").
+The two call forms are now folded to the constant `73`, closing the stateful
+decoder residual of the property-access pipeline (roadmap items S0.4 and S4.2).
+
+### 39.1 Decoder identity
+
+`B3jF8.t8H` and `B3jF8.n6e` are two identical wrapper functions (pretty lines
+289-291 and 348-350) that forward every call to the same closure function
+`B3jF8[210213].f_fpV2a`. The factory IIFE at pretty line 501 creates one object
+(`R1n[8]`) with exactly one method, `f_fpV2a`, and assigns it to
+`B3jF8[210213]` exactly once; nothing else in the bundle references the factory
+key. There are no other callers of `f_fpV2a` and no direct writes to
+`B3jF8[210213]`.
+
+### 39.2 The machine is a two-phase environment probe
+
+`f_fpV2a` is a flattened `switch` state machine (`f2U`, cases 1-151). Its only
+cross-call state is the factory-closure slot `R1n[4]`:
+
+| Case | Behavior | Evidence (pretty lines) |
+|---|---|---|
+| 1 (entry) | `f2U = R1n[4] ? 5 : 4` — branches on the state slot | 700-702 |
+| 4 → … | Probe setup and execution (phase span): builds a list `Z6x[5]` of named probes (`a5z` names, `H3o` test functions) that run `decodeURIComponent`, `new RegExp`, `atob`, `endsWith`, `unescape`, `typeof` checks, a `for…in console` enumeration, `debugger`, etc., each verifying that an obfuscator helper's function source is unmodified | 595-1007 (probe phase; individual case ranges below) |
+| 126/124/123/122/151/150 | Executes every probe, records `{name: result}` into `Z6x[91]`, then the case-149 inner check computes each distinct name's pass fraction and requires every fraction ≥ 0.5 | 652-800, 997-999 |
+| 149 | `f2U = inner(Z6x[91]) ? 148 : 147` | 861-967 |
+| 147 (arming result) | `R1n[4] = 26; return 93;` — arms the state slot and returns the first-phase value | 846-849 |
+| 148 (divergent) | `f2U = 98 ? 148 : 147;` — a literal-true loop that never returns; a hang trap when the probe check passes | 827-829 |
+| 5 (steady) | `return 73;` — runs unconditionally once `R1n[4]` is truthy | 635-637 |
+
+The only closure writes are the initialization `R1n[4] = undefined` (line 507)
+and the single arm write `R1n[4] = 26` (case 147); `R1n[8] = {}` (line 508)
+creates the module object. Therefore:
+
+- **First call:** runs the full probe sequence; either arms `R1n[4] = 26` and
+  returns 93, or never returns (case 148 trap).
+- **Every later call:** case 1 → case 5 → returns 73, with no side effects.
+
+### 39.3 Why every AMD-body call is second-or-later
+
+The first call in program order is the top-level preamble statement
+`B3jF8.n6e();` at pretty line 2424 — before the `M$QCc` materialization
+(line 2430) and before the `requirejs(...)` factory (line 2431). All 791 body
+calls (pretty lines 2436-41875) are inside the AMD factory or its nested
+definitions, so they execute only after the preamble statement ran. If the
+arming phase completed, `R1n[4]` is armed; if the case-148 hang trap diverged, the bundle never
+reaches the factory. In both cases a body call that executes returns 73.
+
+Empirically, in Node the probe check fails, so the preamble call returns 93 and
+arms the slot. Two fresh preamble boots agree (first call 93, all post-boot
+samples 73) — this is part of the fold gate.
+
+### 39.4 Fold rule and provenance
+
+**Admission rule (pass4b):** a zero-argument `t8H`/`n6e` call on `k7V`/`B3jF8`
+inside the AMD body is replaced by the literal `73` only when (a) the
+structural proof of §39.2 holds, (b) two fresh preamble boots agree on
+first-call 93 and steady 73, and (c) the per-site sandbox evaluation returns
+exactly 73. The arming preamble call `B3jF8.n6e();` (line 2424) is **never**
+folded: its side effect (arming `R1n[4]`) is required by every later call.
+
+**Counts (before → after):** 791 skips (380 `t8H` + 411 `n6e`) → 791 folds;
+`pass4` skip reasons `t8H_never_inline`/`n6e_never_inline` no longer exist.
+All 792 source call sites are zero-argument expression statements; the single
+preamble one is retained.
+
+**Verification:** `audit-stateful-decoder-fold.js` independently re-derives the
+structural facts, boots the preamble twice in fresh VMs, re-derives all 791
+candidates from the pristine source (380/411), checks the
+`final-stateful-decoder-folds.json` sidecar bijection, and runs a
+233,900-node AST pairing walk over the readable output: every candidate site is
+a `73` literal, no body `t8H`/`n6e` call survives, and the arming call is
+retained — 0 anomalies. `audit-independent.js` additionally asserts
+`body=0 / preamble=1` residual setup-decoder calls. Two fresh pipeline runs
+produce the identical readable SHA-256
+`2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3`.
+
+### 39.5 What this does not claim
+
+The fold is a constant-folding of a state machine, not a claim about what the
+probes detect or what the original names were. The probe/trap semantics are
+documented as observed behavior of the retained build; the case-148 hang is a
+divergent path that never executes in the retained build's normal operation.
+The two dispatcher-interposition sites `S8z[Z9u]` (line 22938) and `r5E[J6c]`
+(line 23501) remain bracketed: after the fold a `73;` statement still sits
+between the selector and the index calculation, so their strict-adjacency
+rejection is unchanged.

@@ -1,6 +1,6 @@
 # Remaining Alpha2s Deobfuscation Roadmap
 
-**Last updated:** 2026-08-03  
+**Last updated:** 2026-08-04  
 **Authority:** `docs/DEOBFUSCATION.md` section 38 is the authoritative record for the retained 2026-07-29 `alpha2s.js` build; current sidecars and `final-stats.json` supply its detailed producer counts.  
 **Scope:** This document is the forward-looking, proof-first work list for source readability. The simulator implementation backlog remains in `docs/DEOBFUSCATION_FIX_TRACKER.md`.
 
@@ -41,8 +41,8 @@ baseline while extending the pipeline.
 | Dispatcher-index table folds | 86 of 88 candidates | `final-dispatcher-folds.json` |
 | Dispatcher-formula folds | 207 of 207 candidates (48 inline + 159 order-preserving IIFE lowering) | `final-formula-folds.json`, `audit-formula-fold.js` |
 | Literal operation folds | 1,696 | `final-stats.json` |
-| Body decoder/primitive inlines | 5,939; 791 deliberate stateful/setup skips | `final-stats.json` |
-| Current readable output SHA-256 | `5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6` | two matching pipeline runs |
+| Body decoder/primitive inlines | 5,939 string inlines + 96 op-folds; stateful `t8H`/`n6e` fully folded (791 → 73 each), 0 skips remain | `final-stats.json`, `final-stateful-decoder-folds.json`, `audit-stateful-decoder-fold.js` |
+| Current readable output SHA-256 | `2097916F16311692A5A457690E3BD8377AC0D07E7D58AD95490C73FF74BAADD3` | two matching pipeline runs |
 
 All 89,189 in-table literal body accesses have a verified readable
 representation. The 10 remaining accesses have an index outside the decoded
@@ -72,7 +72,7 @@ rewrite rule. This stage has no generated-code substitutions.
 | S0.1 | Formula census | 0 retained `formula_reorders_arguments` cases (2026-08-04: all 207 non-literal sequences folded; 48 inline, 159 via the order-preserving IIFE lowering) | Argument-shape, evaluation-risk, wrapper, and selector inventory | Every retained formula sidecar record is classified exactly once |
 | S0.2 | Dynamic table census | 1,069 producer candidates; 1,067 narrower independent count documented in `DEOBFUSCATION.md` section 38.4; 88 direct-alias candidates have 86 accepted and 2 retained | Index-expression and carrier-write provenance inventory, including the reason for the two-count universe difference and the direct-alias overlap | Producer and independent census each close under their documented universe, and every direct candidate has a same-universe mapping or an explicit exclusion |
 | S0.3 | Receiver census | 11,053 unknown-receiver annotations | Per-function binding, slot, write, escape, enumeration, and dynamic-access dispositions | Every annotation remains attributable to a source property-table index |
-| S0.4 | Stateful decoder census | 380 `t8H` and 411 `n6e` intentional skips | Initialization phase, literal/dynamic argument, and state-dependence classification | No skip is silently reclassified as constant |
+| S0.4 | Stateful decoder census | **RESOLVED (2026-08-04):** all 791 `t8H`/`n6e` skips folded to steady value 73; `audit-stateful-decoder-fold.js` and `final-stateful-decoder-folds.json` record the structural two-phase proof, two fresh-boot agreement, sidecar bijection, and readable pairing walk; see `DEOBFUSCATION.md` §39 | No skip remains unclassified; the single arming preamble call `B3jF8.n6e();` is documented as retained |
 | S0.5 | Dispatcher census | 1,639 residual occurrences | Call form, selector provenance, literal/nonliteral arguments, and known case status | Counts remain consistent with current baseline |
 
 The output of Stage 0 should be analysis sidecars or reports, not optimistic
@@ -100,7 +100,7 @@ rejected.
 
 | Site | Current reason retained | Candidate work | Required proof |
 |---|---|---|---|
-| `S8z[Z9u]` | `t8H` occurs between selector and calculation | Prove the exact interposed sequence cannot affect the numeric dispatcher state, then re-evaluate it in fresh VMs | Non-interference between the stateful decoder and operation dispatcher, including the decoder warm-up effect; exact statement sequence, two matching evaluations, sidecar and independent-audit support |
+| `S8z[Z9u]` | A folded `73;` statement (formerly the `t8H` setup call) occurs between selector and calculation | Prove the exact interposed sequence cannot affect the numeric dispatcher state, then re-evaluate it in fresh VMs | Non-interference between the stateful decoder and operation dispatcher, including the decoder warm-up effect; exact statement sequence, two matching evaluations, sidecar and independent-audit support |
 | `r5E[J6c]` | Same strict-adjacency failure | Same as above | Same as above |
 
 Even if resolved, these sites may only gain a constant index or annotation. They
@@ -159,7 +159,7 @@ partially execute stateful bootstrap code.
 | ID | Residual | Current state | Safe next step | Boundary |
 |---|---|---|---|---|
 | S4.1 | Dynamic `U3q`/`w65` calls | Literal preamble calls are complete; dynamic arguments remain | Consider capture only when full source-order bootstrap replay reaches the site and repeated fresh runs prove the decoded result stable for the candidate state | Never pointwise-inline a stateful decoder call or infer stability from a constant argument alone |
-| S4.2 | `t8H`/`n6e` skips | 791 total: 380 `t8H`, 411 `n6e` | Extend capture only by replaying from the full preamble bootstrap through the candidate call, or by proving that the call is state-independent | A bounded subsequence replay is invalid; game-dependent calls need runtime evidence |
+| S4.2 | `t8H`/`n6e` skips | **RESOLVED (2026-08-04):** 791 total folded (380 `t8H`, 411 `n6e`) by proving state-independence of the steady phase: the machine's only state is closure slot `R1n[4]`, armed by the single top-level preamble call at line 2424; every AMD-body call is second-or-later and returns 73 unconditionally. Structural proof + two fresh preamble boots (first 93, steady 73) + per-site sandbox evaluation gate the fold; the arming call itself is never folded. See `DEOBFUSCATION.md` §39 | None — the call is constant-folded, not pointwise-inlined; the stateful first call remains in the preamble |
 | S4.3 | Escaped string literal readability | Some preamble literals remain mechanically escaped | Add an AST value-equality pass before changing literal spelling | Preserve exact string values and directive semantics |
 | S4.4 | Preamble flattened machines | Data-dependent bootstrap state machines remain | Linearize only paths with static transitions; otherwise add comments | Do not claim recovery of the original statement/loop structure |
 | S4.5 | Bootstrap helper names | Resolver, decoder, and dispatcher symbols remain obfuscated | Add role comments only after behavior-specific evidence | Original names are not recoverable from the bundle |
@@ -229,6 +229,7 @@ node .deobf/ast-member-scan.js --self-check
 node .deobf/audit-independent.js
 node .deobf/audit-preamble.js
 node .deobf/audit-formula-fold.js
+node .deobf/audit-stateful-decoder-fold.js
 node .deobf/audit-training-statics.js --self-check
 node .deobf/audit-map-option-writers.js --self-check
 node .deobf/audit-out-of-table.js --self-check
