@@ -237,6 +237,8 @@ def test_reset_accepts_integer_seeds_and_normalizes_numpy_values(monkeypatch):
         ([0xFFFFFFFF], ValueError, "must be in \\[0, 4294967294\\]"),
         (np.array([[0]]), ValueError, "one-dimensional"),
         (0, TypeError, "must be a sequence"),
+        ({0: 1}, TypeError, "must be a sequence"),
+        ("12", TypeError, "must be a sequence"),
     ],
 )
 def test_reset_rejects_non_integer_out_of_range_or_invalid_shape_seeds(

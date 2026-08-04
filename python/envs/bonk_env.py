@@ -186,6 +186,8 @@ class BonkVecEnv(VecEnv):
             if seeds.ndim != 1:
                 raise ValueError("seeds must be a one-dimensional sequence")
             seeds = seeds.tolist()
+        elif isinstance(seeds, (str, bytes)) or isinstance(seeds, dict):
+            raise TypeError("seeds must be a sequence of integers")
         else:
             try:
                 seeds = list(seeds)
