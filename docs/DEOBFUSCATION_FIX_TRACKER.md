@@ -819,3 +819,32 @@ source level — see `DEOBFUSCATION.md` §31 for line-numbered evidence:
   71-body resets, and zero angular velocity from movement through an offset
   center of mass. This closes the common reset/broadphase cause tracked by
   #42, #49, #77, #97, #112, and #119, and the force-point mismatch in #146.
+
+### 2026-08-04 — Formula-order closure and index-47 census (deobfuscation residuals)
+
+- **`formula_reorders_arguments` residual closed (159 → 0).** All 207
+  non-literal pass3b dispatcher sequences are now folded: 48 keep the inline
+  form (identity argument order) and 159 use the new order-preserving IIFE
+  lowering — each call argument binds to a fresh parameter in left-to-right
+  call order and the case formula applies to the parameters, reproducing the
+  dispatcher's evaluate-arguments-first behavior with identical exception and
+  coercion order (`.deobf/op-dispatch-fold.js` `substituteCaseOrdered`,
+  mirrored independently in `audit-formula-fold.js`; every reordered case
+  selector was behavior-checked against the booted dispatcher with 0
+  mismatches). Formula argument recoveries grew to 368 substitutions + 111
+  annotations across 191 sites; 0 index-47 recoveries.
+- **Index-47 census made mechanical.** New `.deobf/audit-index47-census.js`
+  re-derives the 247 surviving bracketed index-47 sites from the AST minus
+  `final-folds.json` fold ranges and classifies all of them: 245 packed-slot
+  storage on `[arguments]` array bags (slot-47 writes, loop counters) and 2
+  nested-receiver special sites (L3081 `N7I[98][47]` real-array element write
+  into the `capZones` label table; L6257 `O7a[7][47]` table-string read
+  retained because the strict carrier fold rule requires every slot assignment
+  to dominate the read). Node-executed probes prove 0 of 247 sites are safe
+  dotted `.length` substitutions (`X.length != X[47]` for the bag and
+  real-array patterns; two fresh preamble boots confirm `M$QCc[47] ===
+  "length"`).
+- Regenerated readable artifact: 4,480,444 bytes; SHA-256
+  `5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`
+  (two identical runs). Full verification set passes including the new
+  `audit-index47-census.js --self-check`.
