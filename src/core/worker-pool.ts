@@ -27,6 +27,15 @@ interface SharedObservation {
     tick: number;
 }
 
+export interface ResultOwnershipOptions {
+    /**
+     * `owned` returns caller-owned snapshots that remain stable across later
+     * calls. `borrowed` exposes the shared-memory extraction pools and is only
+     * valid until the next reset or step.
+     */
+    ownership?: 'owned' | 'borrowed';
+}
+
 type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
 
 const SYNC_COMPLETED_INDEX = 0;
@@ -302,7 +311,12 @@ export class WorkerPool {
         });
     }
 
-    async reset(seeds?: number[]): Promise<any[]> {
+    /**
+     * Reset all environments. Results are caller-owned by default.
+     * Borrowed results must be consumed before the next reset or step and must
+     * not be retained or mutated.
+     */
+    async reset(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('reset');
 
         if (this.useSharedMemory && seeds) {
@@ -356,7 +370,10 @@ export class WorkerPool {
                     const wEnvs = this.workerEnvs[i];
                     const res = this.requireSharedMemoryManager(i).readResults();
                     for (let j = 0; j < wEnvs; j++) {
-                        observations.push(this.extractObservation(res.observations, j, globalEnvIdx));
+                        const observation = this.extractObservation(res.observations, j, globalEnvIdx);
+                        observations.push(options.ownership === 'borrowed'
+                            ? observation
+                            : this.snapshotObservation(observation));
                         globalEnvIdx++;
                     }
                 }
@@ -390,12 +407,17 @@ export class WorkerPool {
         }
     }
 
-    async step(actions: any[]): Promise<any[]> {
+    /**
+     * Step all environments. Results are caller-owned by default.
+     * Borrowed results preserve the zero-allocation extraction path but the
+     * entire returned graph is invalidated by the next reset or step.
+     */
+    async step(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('step');
         try {
             // Use shared memory mode if enabled
             if (this.useSharedMemory) {
-                return await this.stepSharedMemory(actions);
+                return await this.stepSharedMemory(actions, options);
             }
             return await this.stepMessagePassing(actions);
         } catch (error) {
@@ -419,7 +441,7 @@ export class WorkerPool {
      * Step using shared memory (zero-copy IPC)
      * Writes actions to shared memory, signals workers, and waits for results
      */
-    private async stepSharedMemory(actions: any[]): Promise<any[]> {
+    private async stepSharedMemory(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
         const batchStart = process.hrtime.bigint();
         this._returnTimes.fill(BigInt(0));
         const returnTimes = this._returnTimes;
@@ -544,7 +566,15 @@ export class WorkerPool {
             actionIdx += wEnvs;
         }
 
-        return this._convertedResults;
+        if (options.ownership === 'borrowed') {
+            return this._convertedResults;
+        }
+
+        const ownedResults = new Array(this._convertedResults.length);
+        for (let i = 0; i < this._convertedResults.length; i++) {
+            ownedResults[i] = this.snapshotResult(this._convertedResults[i]);
+        }
+        return ownedResults;
     }
 
     /**
@@ -620,6 +650,32 @@ export class WorkerPool {
         if (action.heavy) encoded |= 16;
         if (action.grapple) encoded |= 32;
         return encoded;
+    }
+
+    private snapshotObservation(observation: any): any {
+        if (observation == null) return observation;
+
+        // Keep this in sync with nested mutable fields populated by
+        // extractObservation(). Scalar fields are copied by the spread.
+        return {
+            ...observation,
+            opponents: Array.isArray(observation.opponents)
+                ? observation.opponents.map((opponent: any) => ({ ...opponent }))
+                : observation.opponents,
+        };
+    }
+
+    private snapshotResult(result: any): any {
+        const info = { ...result.info };
+        if (info.terminal_observation != null) {
+            info.terminal_observation = this.snapshotObservation(info.terminal_observation);
+        }
+
+        return {
+            ...result,
+            observation: this.snapshotObservation(result.observation),
+            info,
+        };
     }
 
     /**

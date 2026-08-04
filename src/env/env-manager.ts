@@ -7,6 +7,7 @@
 
 import { BonkEnv, BonkEnvConfig } from './bonk-env';
 import { PortManager } from '../utils/port-manager';
+import type { ResultOwnershipOptions } from '../core/worker-pool';
 
 export interface EnvManagerOptions {
     /** Port manager options */
@@ -186,16 +187,17 @@ export class EnvManager {
     /**
      * Reset all environments.
      * @param seeds Optional seeds for each environment
+     * @param options Result ownership mode; caller-owned by default
      * @returns Array of initial observations
      */
-    async resetAll(seeds?: number[]): Promise<any[]> {
+    async resetAll(seeds?: number[], options?: ResultOwnershipOptions): Promise<any[]> {
         const envs = this.getAllEnvs();
         const results: any[] = [];
         
         // Reset all environments in parallel, each with its own seed
         const resetPromises = envs.map((env, idx) => {
             const envSeed = seeds?.[idx];
-            return env.reset(envSeed !== undefined ? [envSeed] : undefined);
+            return env.reset(envSeed !== undefined ? [envSeed] : undefined, options);
         });
         
         const resetResults = await Promise.all(resetPromises);
@@ -214,15 +216,16 @@ export class EnvManager {
     /**
      * Step all environments with the given actions.
      * @param actions Actions for each environment
+     * @param options Result ownership mode; caller-owned by default
      * @returns Array of step results
      */
-    async stepAll(actions: any[]): Promise<any[]> {
+    async stepAll(actions: any[], options?: ResultOwnershipOptions): Promise<any[]> {
         const envs = this.getAllEnvs();
         
         // Step all environments in parallel, each with exactly one action
         const stepPromises = envs.map((env, idx) => {
             const action = actions[idx];
-            return env.step(action !== undefined ? [action] : []);
+            return env.step(action !== undefined ? [action] : [], options);
         });
         
         return Promise.all(stepPromises);

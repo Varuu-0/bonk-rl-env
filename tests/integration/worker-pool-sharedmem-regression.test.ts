@@ -73,3 +73,62 @@ describe('WorkerPool extractObservation regression (unit-level)', () => {
     expect(o.playerX).toBe(5);
   });
 });
+
+describe('WorkerPool shared-memory result ownership', () => {
+  it('keeps retained step results unchanged across later steps', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      const resetBatch = await pool.reset([1]);
+      const resetObservation = resetBatch[0];
+      const resetSnapshot = structuredClone(resetObservation);
+
+      const retainedBatch = await pool.step([{ right: true }]);
+      const retainedResult = retainedBatch[0];
+      const retainedInfo = retainedResult.info;
+      const retainedObservation = retainedResult.observation;
+      const retainedOpponent = retainedObservation.opponents[0];
+      const snapshot = structuredClone(retainedResult);
+
+      expect(retainedObservation).not.toBe(resetObservation);
+      expect(resetObservation).toEqual(resetSnapshot);
+
+      const nextBatch = await pool.step([{ left: true }]);
+
+      expect(nextBatch).not.toBe(retainedBatch);
+      expect(nextBatch[0]).not.toBe(retainedResult);
+      expect(nextBatch[0].info).not.toBe(retainedInfo);
+      expect(nextBatch[0].observation).not.toBe(retainedObservation);
+      expect(nextBatch[0].observation.opponents[0]).not.toBe(retainedOpponent);
+      expect(retainedResult).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
+
+  it('keeps retained terminal observations unchanged across later steps', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, { maxTicks: 1 }, true);
+      await pool.reset([1]);
+
+      const retainedResult = (await pool.step([0]))[0];
+      const retainedTerminal = retainedResult.info.terminal_observation;
+      const retainedOpponent = retainedTerminal.opponents[0];
+      const snapshot = structuredClone(retainedTerminal);
+
+      const nextResult = (await pool.step([0]))[0];
+
+      expect(retainedResult.done).toBe(true);
+      expect(nextResult.info.terminal_observation).not.toBe(retainedTerminal);
+      expect(nextResult.info.terminal_observation.opponents[0]).not.toBe(retainedOpponent);
+      expect(retainedTerminal).toEqual(snapshot);
+    } finally {
+      await pool.close();
+    }
+  });
+});

@@ -87,6 +87,18 @@ const env = await init({
 
 If SharedArrayBuffer is not available (or headers not set), the system automatically falls back to standard `postMessage` communication.
 
+### Result Ownership
+
+SharedArrayBuffer transport still uses pooled internal buffers, but public
+`WorkerPool`, `BonkEnv`, and `EnvManager` reset/step results are caller-owned by
+default. Retained observations therefore remain unchanged after later steps.
+
+Allocation-sensitive code that consumes a result immediately can opt into the
+pooled path with `{ ownership: 'borrowed' }`. Borrowed results must not be
+retained or mutated and are invalidated by the next reset or step on that pool.
+This option changes only result materialization; worker transport remains on
+the same SharedArrayBuffer.
+
 ## Telemetry System
 
 The Manifold Server includes a comprehensive telemetry system for monitoring performance, debugging issues, and analyzing simulation behavior. The system is designed with a **zero-overhead default** - telemetry is disabled by default and only activates when explicitly enabled.

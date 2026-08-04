@@ -18,8 +18,8 @@ class BonkEnv {
 
   async start(): Promise<void>;
   async stop(): Promise<void>;
-  async reset(seeds?: number[]): Promise<any>;
-  async step(actions: any[]): Promise<StepResult | StepResult[]>;
+  async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any>;
+  async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]>;
   isActive(): boolean;
 }
 ```
@@ -32,8 +32,8 @@ class EnvManager {
   async createPool(size: number, config?: BonkEnvConfig): Promise<BonkEnv[]>;
   async destroyEnv(id: string): Promise<void>;
   async shutdownAll(): Promise<void>;
-  async resetAll(seeds?: number[]): Promise<any[]>;
-  async stepAll(actions: any[]): Promise<any[]>;
+  async resetAll(seeds?: number[], options?: ResultOwnershipOptions): Promise<any[]>;
+  async stepAll(actions: any[], options?: ResultOwnershipOptions): Promise<any[]>;
   getEnv(id: string): BonkEnv | undefined;
   getAllEnvs(): BonkEnv[];
   getEnvCount(): number;
@@ -46,3 +46,15 @@ class EnvManager {
 - `EnvManager` provides lifecycle management for parallel environment pools
 - Port allocation range: 6000–7000 (configurable)
 - Environments run in separate processes for true parallelism
+
+## Result Ownership
+
+`reset` and `step` return caller-owned object graphs by default. Retaining an
+observation or step result across later calls is safe in both message-passing
+and SharedArrayBuffer modes.
+
+Callers that consume a batch synchronously and discard it before the next
+`reset` or `step` may pass `{ ownership: 'borrowed' }`. Borrowed results expose
+the internal shared-memory extraction pools, must not be mutated, and become
+invalid after the next call. This opt-in avoids the caller snapshot allocations
+without changing the SharedArrayBuffer transport itself.

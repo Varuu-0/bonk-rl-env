@@ -96,7 +96,7 @@ function benchNativeStability(): BenchmarkResult {
 async function benchPoolStability(numEnvs: number): Promise<BenchmarkResult> {
     const pool = new WorkerPool();
     await pool.init(numEnvs, {}, true);
-    await pool.reset();
+    await pool.reset(undefined, { ownership: 'borrowed' });
 
     const actions: any[] = [];
     for (let i = 0; i < numEnvs; i++) {
@@ -104,7 +104,7 @@ async function benchPoolStability(numEnvs: number): Promise<BenchmarkResult> {
     }
 
     for (let i = 0; i < Math.min(WARMUP, 500); i++) {
-        await pool.step(actions);
+        await pool.step(actions, { ownership: 'borrowed' });
     }
 
     const segments: SegmentResult[] = [];
@@ -112,7 +112,7 @@ async function benchPoolStability(numEnvs: number): Promise<BenchmarkResult> {
     let segmentStart = totalStart;
 
     for (let i = 0; i < STEPS; i++) {
-        await pool.step(actions);
+        await pool.step(actions, { ownership: 'borrowed' });
         if ((i + 1) % REPORT_INTERVAL === 0) {
             const now = performance.now();
             const segElapsed = now - segmentStart;

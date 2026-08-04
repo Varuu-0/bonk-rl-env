@@ -73,7 +73,9 @@ export class IpcBridge {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else {
                     console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
-                    const obs = await this.pool.reset(payload.seeds);
+                    // JSON serialization below is the ownership boundary, so
+                    // avoid an otherwise redundant snapshot allocation here.
+                    const obs = await this.pool.reset(payload.seeds, { ownership: 'borrowed' });
                     console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
                     response = {
                         status: "ok",
@@ -91,7 +93,9 @@ export class IpcBridge {
                 } else if (!this._initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else {
-                    const results = await this.pool.step(actions);
+                    // Requests are serialized by the server loop, and JSON
+                    // serialization below owns the data before another step.
+                    const results = await this.pool.step(actions, { ownership: 'borrowed' });
 
                     this.stepCount++;
                     globalProfiler.tick();
