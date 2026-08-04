@@ -1,3 +1,5 @@
+from collections import UserDict
+from collections.abc import Mapping
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -5,6 +7,20 @@ import pytest
 import zmq
 
 from envs import bonk_env
+
+
+class _KeyValueMapping(Mapping):
+    def __init__(self, data):
+        self._data = dict(data)
+
+    def __getitem__(self, key):
+        return self._data[key]
+
+    def __iter__(self):
+        return iter(self._data)
+
+    def __len__(self):
+        return len(self._data)
 
 
 def _make_mocked_env(monkeypatch, num_envs=1, **kwargs):
@@ -238,6 +254,8 @@ def test_reset_accepts_integer_seeds_and_normalizes_numpy_values(monkeypatch):
         (np.array([[0]]), ValueError, "one-dimensional"),
         (0, TypeError, "must be a sequence"),
         ({0: 1}, TypeError, "must be a sequence"),
+        (UserDict({0: 1}), TypeError, "must be a sequence"),
+        (_KeyValueMapping({0: 1}), TypeError, "must be a sequence"),
         ("12", TypeError, "must be a sequence"),
     ],
 )
@@ -252,6 +270,19 @@ def test_reset_rejects_non_integer_out_of_range_or_invalid_shape_seeds(
 
     socket.send_json.assert_not_called()
     env.close()
+
+
+def test_reset_accepts_sequence_containers_besides_lists_and_arrays(monkeypatch):
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=2)
+    socket.send_json.reset_mock()
+    socket.recv_json.side_effect = zmq.Again()
+
+    with pytest.raises(TimeoutError, match="waiting for 'reset' response"):
+        env.reset(seeds=(1, 2))
+
+    socket.send_json.assert_called_once_with(
+        {"command": "reset", "seeds": [1, 2], "options": {}}
+    )
 
 
 def test_reset_requires_one_seed_per_environment(monkeypatch):
