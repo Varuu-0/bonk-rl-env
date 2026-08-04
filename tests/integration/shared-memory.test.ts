@@ -17,6 +17,7 @@ describe('SharedMemoryManager', () => {
     });
 
     afterEach(() => {
+      vi.restoreAllMocks();
       shm?.dispose();
       shm = null;
     });
@@ -45,6 +46,37 @@ describe('SharedMemoryManager', () => {
 
       const readActions = shm!.readActions(slot2);
       expect(Array.from(readActions)).toEqual([16, 32, 1, 2]);
+    });
+
+    it.each([
+      ['writeActions', true],
+      ['writeActionsQuiet', false],
+    ] as const)('%s publishes the slot only after its payload', (method, shouldWakeWorker) => {
+      const actions = new Uint8Array([8, 4, 2, 1]);
+      const actionSlotIndex = shm!.getControl().actionSlotIndex;
+      const publishedPayloads: number[][] = [];
+      const atomics = (globalThis as any).Atomics as {
+        store(array: Int32Array, index: number, value: number): number;
+      };
+      const originalStore = atomics.store;
+      const storeSpy = vi.spyOn(atomics, 'store').mockImplementation((array: Int32Array, index: number, value: number) => {
+        if (array === actionSlotIndex) {
+          publishedPayloads.push(Array.from(shm!.readActions(value)));
+        }
+        return originalStore(array, index, value);
+      });
+
+      shm![method](actions);
+      storeSpy.mockRestore();
+
+      expect(publishedPayloads).toEqual([[8, 4, 2, 1]]);
+      expect(shm!.hasNewActions()).toBe(shouldWakeWorker);
+
+      if (!shouldWakeWorker) {
+        shm!.sendCommand(1);
+        expect(shm!.readCommand()).toBe(1);
+        expect(shm!.hasNewActions()).toBe(true);
+      }
     });
   });
 
