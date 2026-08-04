@@ -1,9 +1,16 @@
+const UINT32_SIZE = 0x100000000;
+const STATE_INCREMENT = 0x6D2B79F5;
+
 /**
  * PRNG based on Mulberry32 for deterministic random number generation.
  * 
  * This class implements the Mulberry32 algorithm, which is a fast, 
  * high-quality pseudorandom number generator suitable for applications 
  * requiring reproducible random sequences.
+ *
+ * next() always emits the canonical Mulberry32 sequence. nextInt() samples
+ * integers without modulo bias; see nextInt() for how rejection sampling
+ * affects stream consumption and backward-compatible outputs.
  */
 export class PRNG {
     /** 
@@ -13,14 +20,11 @@ export class PRNG {
 
     /**
      * Create a new PRNG instance with the given seed.
-     * @param seed - The initial seed. Any number can be used; the algorithm 
-     *               will mix it sufficiently through its operations.
+     * @param seed - The initial seed. It is normalized to a 32-bit unsigned integer.
      */
     constructor(seed: number) {
-        // Initialize state with the provided seed.
-        // Note: The Mulberry32 algorithm does not require additional seeding 
-        // steps beyond setting the initial state.
-        this.a = seed;
+        // Canonical Mulberry32 uses the normalized seed directly, without a warmup.
+        this.a = seed >>> 0;
     }
 
     /**
@@ -28,7 +32,7 @@ export class PRNG {
      * @param seed - The new seed value.
      */
     setSeed(seed: number): void {
-        this.a = seed;
+        this.a = seed >>> 0;
     }
 
     /**
@@ -41,8 +45,8 @@ export class PRNG {
      * 3. Extract the final 32-bit value and convert it to a fraction.
      */
     next(): number {
-        // Step 1: Update state with the golden ratio-like constant.
-        let t = this.a += 0x6D2B79F5;
+        // Step 1: Update state in the uint32 ring to avoid long-run precision loss.
+        let t = this.a = ((this.a >>> 0) + STATE_INCREMENT) >>> 0;
         
         // Step 2: First mixing step.
         t = Math.imul(t ^ t >>> 15, t | 1);
@@ -51,7 +55,7 @@ export class PRNG {
         t ^= t + Math.imul(t ^ t >>> 7, t | 61);
         
         // Step 4: Convert to unsigned 32-bit and then to double in [0, 1).
-        return ((t ^ t >>> 14) >>> 0) / 4294967296;
+        return ((t ^ t >>> 14) >>> 0) / UINT32_SIZE;
     }
 
     /**
@@ -60,7 +64,17 @@ export class PRNG {
      * @param max - The upper bound (inclusive). Will be floored to an integer.
      * @returns An integer in the range [min, max] (inclusive).
      * 
-     * @throws {Error} If min is greater than max after flooring.
+     * Consumes exactly one raw 32-bit word when the inclusive range is a power
+     * of two, and the returned values are then identical to the previous
+     * float-scaled implementation. For every other range, rejection sampling
+     * may consume additional words and the returned values intentionally
+     * differ from the float-scaled implementation to remove modulo bias.
+     * Because draw consumption is data-dependent for such ranges, interleaving
+     * next() and nextInt() advances the shared stream by a variable number of
+     * words; next() itself always emits the canonical sequence.
+     *
+     * @throws {Error} If min is greater than max after flooring or the inclusive
+     *                 range contains more than 2^32 values.
      */
     nextInt(min: number, max: number): number {
         // Convert min and max to integers by flooring.
@@ -74,10 +88,49 @@ export class PRNG {
             );
         }
         
-        // Calculate the size of the range.
+        // Calculate the size of the range. One uint32 word can sample at most 2^32 values.
         const range = _max - _min + 1;
-        
-        // Generate a float in [0, 1), scale it to the range, and floor to get an integer.
-        return Math.floor(this.next() * range) + _min;
+        if (!(range >= 1 && range <= UINT32_SIZE)) {
+            throw new Error(
+                `Invalid range size: nextInt supports at most ${UINT32_SIZE} values`
+            );
+        }
+
+        // Powers of two evenly divide the uint32 space: one word is exactly
+        // uniform, and mapping it to the high bits matches the legacy
+        // float-scaled outputs exactly.
+        if ((range & (range - 1)) === 0) {
+            const value = this.next() * UINT32_SIZE;
+            return Math.floor(value / (UINT32_SIZE / range)) + _min;
+        }
+
+        // Reject the incomplete high bucket so every result has the same number of preimages.
+        const limit = UINT32_SIZE - (UINT32_SIZE % range);
+        let value: number;
+        do {
+            value = this.next() * UINT32_SIZE;
+        } while (value >= limit);
+
+        return (value % range) + _min;
+    }
+
+    /**
+     * Read the current internal state.
+     *
+     * Intended for tests and diagnostics; not part of the public API.
+     * @internal
+     */
+    getState(): number {
+        return this.a;
+    }
+
+    /**
+     * Overwrite the internal state, normalized to a 32-bit unsigned integer.
+     *
+     * Intended for tests and diagnostics; not part of the public API.
+     * @internal
+     */
+    setState(state: number): void {
+        this.a = state >>> 0;
     }
 }
