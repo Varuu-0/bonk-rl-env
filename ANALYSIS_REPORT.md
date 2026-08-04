@@ -276,7 +276,7 @@ Bonk-RL-Env is a high-performance, headless reinforcement learning environment f
 
 ### Configuration Options
 - Number of parallel environments (`numEnvs`)
-- Fixed 30 TPS simulation rate
+- Fixed 30 TPS simulation rate (native Bonk.io rate; the config `physics.ticksPerSecond` field exists but is not applied by the engine)
 - Shared memory usage (`useSharedMemory`: boolean)
 - Telemetry settings (enabled, profile level, debug level, output)
 - Port configuration (`PORT` environment variable)
