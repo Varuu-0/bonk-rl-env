@@ -22,6 +22,7 @@ import {
 
 const STEPS_PER_SAMPLE = 2_000;
 const WARMUP_STEPS = 250;
+const MAX_ATTEMPTS = 3;
 const WORKER_COUNTS = [1, 2, 4, 8];
 const SAMPLE_ORDERS = [
     [1, 2, 4, 8],
@@ -48,31 +49,65 @@ function quantile(values: number[], q: number): number {
     return sorted[lower] * (1 - weight) + sorted[upper] * weight;
 }
 
-async function measureSample(numWorkers: number): Promise<number> {
-    const pool = new WorkerPool(numWorkers);
-    try {
-        await pool.init(numWorkers, BENCH_CONFIG, true);
-        if (!pool.isUsingSharedMemory()) {
-            throw new Error('SharedArrayBuffer mode unavailable');
-        }
-        await pool.reset(Array.from({ length: numWorkers }, (_, index) => index + 1));
-        const actions = new Array(numWorkers).fill(0);
-
-        for (let i = 0; i < WARMUP_STEPS; i++) {
-            await pool.step(actions);
-        }
-
-        const start = performance.now();
-        for (let i = 0; i < STEPS_PER_SAMPLE; i++) {
-            await pool.step(actions);
-        }
-        return (performance.now() - start) / STEPS_PER_SAMPLE;
-    } finally {
-        await pool.close();
+/**
+ * Deterministic pseudo-random action workload. A fixed-seed LCG keeps the
+ * exact action sequence reproducible across runs while exercising more than
+ * the idle action.
+ */
+function makeActions(numWorkers: number): number[] {
+    let state = (0x0BAD5EED + numWorkers * 0x9E3779B9) >>> 0;
+    const actions = new Array<number>(numWorkers);
+    for (let i = 0; i < numWorkers; i++) {
+        state = (Math.imul(state, 1664525) + 1013904223) >>> 0;
+        actions[i] = state % 64;
     }
+    return actions;
 }
 
-function createResult(numWorkers: number, latenciesMs: number[], baselineEnvSps: number): BenchmarkResult {
+async function createPool(numWorkers: number): Promise<WorkerPool> {
+    let lastError: unknown;
+    for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+        try {
+            const pool = new WorkerPool(numWorkers);
+            await pool.init(numWorkers, BENCH_CONFIG, true);
+            if (!pool.isUsingSharedMemory()) {
+                await pool.close();
+                throw new Error('SharedArrayBuffer mode unavailable');
+            }
+            return pool;
+        } catch (e) {
+            lastError = e;
+        }
+    }
+    throw lastError instanceof Error ? lastError : new Error(String(lastError));
+}
+
+/**
+ * Returns per-step latencies (ms) for STEPS_PER_SAMPLE measured steps.
+ * Warmup is excluded; the caller resets the pool to a deterministic state
+ * before each sample.
+ */
+async function measureSample(pool: WorkerPool, actions: number[]): Promise<number[]> {
+    const seeds = actions.map((_, index) => index + 1);
+    await pool.reset(seeds);
+
+    for (let i = 0; i < WARMUP_STEPS; i++) {
+        await pool.step(actions);
+    }
+
+    const stepLatencies = new Array<number>(STEPS_PER_SAMPLE);
+    let prev = performance.now();
+    for (let i = 0; i < STEPS_PER_SAMPLE; i++) {
+        await pool.step(actions);
+        const now = performance.now();
+        stepLatencies[i] = now - prev;
+        prev = now;
+    }
+    return stepLatencies;
+}
+
+function createResult(numWorkers: number, samples: number[][], baselineEnvSps: number): BenchmarkResult {
+    const latenciesMs = samples.flat();
     const medianLatencyMs = quantile(latenciesMs, 0.5);
     const batchSps = 1_000 / medianLatencyMs;
     const envSps = batchSps * numWorkers;
@@ -85,7 +120,7 @@ function createResult(numWorkers: number, latenciesMs: number[], baselineEnvSps:
         name: `WorkerPool.step() N=${numWorkers}`,
         passed,
         status: passed ? 'PASS' : 'FAIL',
-        durationMs: latenciesMs.reduce((sum, latency) => sum + latency * STEPS_PER_SAMPLE, 0),
+        durationMs: latenciesMs.reduce((sum, latency) => sum + latency, 0),
         metrics: [
             { label: 'Batch SPS', value: Math.round(batchSps), unit: 'batches/sec' },
             { label: 'Env-SPS (aggregate)', value: Math.round(envSps), unit: 'env-steps/sec' },
@@ -94,7 +129,7 @@ function createResult(numWorkers: number, latenciesMs: number[], baselineEnvSps:
             { label: 'P75 latency', value: +quantile(latenciesMs, 0.75).toFixed(3), unit: 'ms' },
             { label: 'Workers', value: numWorkers, unit: '' },
             { label: 'Envs per worker', value: 1, unit: '' },
-            { label: 'Samples', value: latenciesMs.length, unit: '' },
+            { label: 'Samples', value: samples.length, unit: '' },
             { label: 'Steps per sample', value: STEPS_PER_SAMPLE, unit: '' },
         ],
     };
@@ -103,23 +138,48 @@ function createResult(numWorkers: number, latenciesMs: number[], baselineEnvSps:
 async function main(): Promise<void> {
     const suiteStart = performance.now();
     const suite = createSuite(4, 'Worker Pool', 'SharedArrayBuffer IPC scaling across exact worker counts');
-    const samples = new Map<number, number[]>(WORKER_COUNTS.map(count => [count, []]));
+    const samples = new Map<number, number[][]>(WORKER_COUNTS.map(count => [count, []]));
     const errors = new Map<number, string>();
+    const pools = new Map<number, WorkerPool>();
 
-    for (const order of SAMPLE_ORDERS) {
-        for (const numWorkers of order) {
-            if (errors.has(numWorkers)) continue;
+    try {
+        for (const numWorkers of WORKER_COUNTS) {
             try {
-                samples.get(numWorkers)!.push(await measureSample(numWorkers));
+                pools.set(numWorkers, await createPool(numWorkers));
             } catch (e: any) {
-                errors.set(numWorkers, e instanceof Error ? e.message : String(e));
+                errors.set(numWorkers, `pool init failed: ${e instanceof Error ? e.message : String(e)}`);
             }
+        }
+
+        for (const order of SAMPLE_ORDERS) {
+            for (const numWorkers of order) {
+                if (errors.has(numWorkers)) continue;
+                const pool = pools.get(numWorkers)!;
+                const actions = makeActions(numWorkers);
+                let lastError: unknown;
+                for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
+                    try {
+                        samples.get(numWorkers)!.push(await measureSample(pool, actions));
+                        lastError = undefined;
+                        break;
+                    } catch (e) {
+                        lastError = e;
+                    }
+                }
+                if (lastError !== undefined) {
+                    errors.set(numWorkers, `sample failed after ${MAX_ATTEMPTS} attempts: ${lastError instanceof Error ? lastError.message : String(lastError)}`);
+                }
+            }
+        }
+    } finally {
+        for (const pool of pools.values()) {
+            await pool.close();
         }
     }
 
     const baselineLatencies = samples.get(1)!;
-    const baselineEnvSps = baselineLatencies.length === SAMPLE_ORDERS.length
-        ? 1_000 / quantile(baselineLatencies, 0.5)
+    const baselineEnvSps = baselineLatencies.length > 0
+        ? 1_000 / quantile(baselineLatencies.flat(), 0.5)
         : 0;
 
     for (const numWorkers of WORKER_COUNTS) {

@@ -58,8 +58,10 @@ Tests both default and frame-skip configurations.
 
 ### Layer 4 — Worker Pool (`layer4-worker-pool.ts`)
 Tests `WorkerPool.step()` with SharedArrayBuffer IPC across exactly 1, 2, 4, and
-8 workers, with one environment per worker. Eight balanced-order samples report
-median, P25, and P75 latency plus aggregate environment throughput; worker
+8 workers, with one environment per worker. Each worker count runs in a single
+reused pool; eight balanced-order samples of 2,000 steps report per-step median,
+P25, and P75 latency plus aggregate environment throughput. A seeded
+deterministic pseudo-random action workload keeps runs reproducible, and worker
 startup and warmup are excluded from measurements.
 
 ### Layer 5 — Memory (`layer5-memory.ts`)

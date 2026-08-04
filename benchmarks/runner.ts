@@ -347,6 +347,10 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
         print(hr);
 
         const n1Sps = getMetric(scalingResults, 'WorkerPool.step() N=1', 'Batch SPS') ?? 0;
+        const baselineAvailable = n1Sps > 0;
+        if (!baselineAvailable) {
+            print('  N=1 baseline unavailable — speedup/efficiency columns omitted', colors.yellow);
+        }
 
         const scHeader =
             '  ' + pad('N', 4) + ' ' +
@@ -369,15 +373,17 @@ function printConsolidatedSummary(results: SuiteRunResult[]) {
             const sps = bench.metrics.find(m => m.label === 'Batch SPS')?.value ?? 0;
             const envSps = bench.metrics.find(m => m.label === 'Env-SPS (aggregate)')?.value ?? 0;
             const latency = bench.metrics.find(m => m.label === 'Median latency')?.value ?? 0;
-            const speedup = n1Sps > 0 ? (envSps / n1Sps) : 0;
-            const efficiency = n > 0 ? (speedup / n) * 100 : 0;
+            const speedup = baselineAvailable ? (envSps / n1Sps) : 0;
+            const efficiency = baselineAvailable && n > 0 ? (speedup / n) * 100 : 0;
+            const speedupText = baselineAvailable ? speedup.toFixed(2) + 'x' : 'n/a';
+            const efficiencyText = baselineAvailable ? efficiency.toFixed(1) + '%' : 'n/a';
 
             const row =
                 '  ' + pad(String(n), 4) + ' ' +
                 padLeft(sps.toLocaleString(), 10) + ' ' +
                 padLeft(envSps.toLocaleString(), 12) + ' ' +
-                padLeft(speedup.toFixed(2) + 'x', 10) + ' ' +
-                padLeft(efficiency.toFixed(1) + '%', 12) + ' ' +
+                padLeft(speedupText, 10) + ' ' +
+                padLeft(efficiencyText, 12) + ' ' +
                 padLeft(latency.toFixed(3) + 'ms', 10);
             print(row);
         }
