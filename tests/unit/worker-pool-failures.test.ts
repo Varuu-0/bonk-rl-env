@@ -381,6 +381,19 @@ describe('WorkerPool failure state', () => {
     await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
   });
 
+  it('keeps the pool usable when only live workers error-reply in a message-mode batch', async () => {
+    fakes.control.stepBehaviors = ['error', 'ok'];
+    pool = new WorkerPool(2);
+    await pool.init(2, {}, false);
+
+    await expect(pool.step([0, 0])).rejects.toThrow('synthetic step failure');
+
+    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(false);
+    fakes.control.stepBehaviors = ['ok', 'ok'];
+    const results = await pool.step([0, 0]);
+    expect(results).toHaveLength(2);
+  });
+
   it('fails the pool when a message-mode telemetry snapshot times out', async () => {
     fakes.control.messageTimeoutMs = 20;
     pool = new WorkerPool(1);
