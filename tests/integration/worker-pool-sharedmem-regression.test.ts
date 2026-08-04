@@ -176,6 +176,52 @@ describe('WorkerPool shared-memory result ownership', () => {
       await pool.close();
     }
   });
+
+  it('preserves non-plain members (Date/Map/Set/typed array) through the snapshot boundary', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, {}, true);
+      await pool.reset([1]);
+
+      const fixture = {
+        playerX: 1,
+        opponents: [{ x: 2, alive: true }],
+        observedAt: new Date(1700000000000),
+        tags: new Set(['a', 'b']),
+        lookup: new Map([['k', 5]]),
+        samples: new Float64Array([1.5, 2.5]),
+      };
+
+      const snapshot = (pool as any).snapshotObservation(fixture);
+
+      // Plain graph members must remain fully owned, as before.
+      expect(snapshot).not.toBe(fixture);
+      expect(snapshot.opponents).not.toBe(fixture.opponents);
+      expect(snapshot.opponents[0]).not.toBe(fixture.opponents[0]);
+
+      // Non-plain members must survive snapshotting as their real types
+      // instead of degrading to {} (guards structuredClone in the snapshot
+      // boundary and the fallback deep copy).
+      expect(snapshot.observedAt).toBeInstanceOf(Date);
+      expect(snapshot.observedAt).toEqual(fixture.observedAt);
+      expect(snapshot.observedAt).not.toBe(fixture.observedAt);
+      expect(snapshot.tags).toBeInstanceOf(Set);
+      expect(snapshot.tags).toEqual(fixture.tags);
+      expect(snapshot.tags).not.toBe(fixture.tags);
+      expect(snapshot.lookup).toBeInstanceOf(Map);
+      expect(snapshot.lookup).toEqual(fixture.lookup);
+      expect(snapshot.lookup).not.toBe(fixture.lookup);
+      expect(snapshot.samples).toBeInstanceOf(Float64Array);
+      expect(snapshot.samples).toEqual(fixture.samples);
+      expect(snapshot.samples).not.toBe(fixture.samples);
+
+      expect(snapshot).toEqual(fixture);
+    } finally {
+      await pool.close();
+    }
+  });
 });
 
 describe('WorkerPool message-passing result ownership', () => {

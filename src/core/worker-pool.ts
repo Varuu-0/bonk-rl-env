@@ -673,12 +673,39 @@ export class WorkerPool {
     }
 
     /**
-     * Deep-copies plain objects and arrays, preserving shared references and
-     * cycles via the `seen` map. Used to materialize caller-owned snapshots of
-     * the pooled observation/result graphs.
+     * Manual deep-copy fallback for runtimes without `structuredClone`.
+     * Preserves shared references and cycles via the `seen` map and handles
+     * the common non-plain structured-cloneable types (Date, RegExp, Map, Set,
+     * typed arrays, DataView, ArrayBuffer) so behavior matches
+     * `structuredClone()` for snapshot inputs.
      */
     private deepCopy(value: any, seen: Map<any, any> = new Map()): any {
         if (value === null || typeof value !== 'object') return value;
+
+        if (value instanceof Date) return new Date(value.getTime());
+        if (value instanceof RegExp) return new RegExp(value.source, value.flags);
+        if (value instanceof Map) {
+            const copy = new Map();
+            seen.set(value, copy);
+            for (const [k, v] of value) copy.set(k, this.deepCopy(v, seen));
+            return copy;
+        }
+        if (value instanceof Set) {
+            const copy = new Set();
+            seen.set(value, copy);
+            for (const v of value) copy.add(this.deepCopy(v, seen));
+            return copy;
+        }
+        if (ArrayBuffer.isView(value)) {
+            if (value instanceof DataView) {
+                return new DataView(value.buffer.slice(0), value.byteOffset, value.byteLength);
+            }
+            return value.slice(); // typed arrays
+        }
+        if (value instanceof ArrayBuffer) {
+            return value.slice(0);
+        }
+
         const cached = seen.get(value);
         if (cached) return cached;
         const copy: any = Array.isArray(value) ? [] : {};
@@ -690,6 +717,19 @@ export class WorkerPool {
     }
 
     /**
+     * Materializes a caller-owned snapshot of a pooled observation/result
+     * graph. Prefers the global `structuredClone` (Node 20+) so non-plain
+     * members (Date, Map, Set, typed arrays) survive snapshotting; falls back
+     * to {@link deepCopy} on runtimes without it.
+     */
+    private snapshotCopy(value: any): any {
+        if (typeof (globalThis as any).structuredClone === 'function') {
+            return (globalThis as any).structuredClone(value);
+        }
+        return this.deepCopy(value);
+    }
+
+    /**
      * Copies a pooled observation graph so the caller owns every nested
      * mutable field (the `opponents` array and its objects today, and any
      * nested objects `extractObservation` adds later). The structural guard in
@@ -697,11 +737,11 @@ export class WorkerPool {
      * a pooled template.
      */
     private snapshotObservation(observation: any): any {
-        return this.deepCopy(observation);
+        return this.snapshotCopy(observation);
     }
 
     private snapshotResult(result: any): any {
-        return this.deepCopy(result);
+        return this.snapshotCopy(result);
     }
 
     /**
