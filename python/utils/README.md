@@ -22,11 +22,11 @@ logger = TrainingLogger(log_dir="logs", filename="trajectory.csv")
 
 # In training loop
 for episode in range(num_episodes):
-    obs, _ = env.reset()
+    obs = env.reset()
     for tick in range(max_ticks):
         action = model.predict(obs)
-        obs, reward, terminated, truncated, info = env.step(action)
-        logger.log_step(episode, tick, obs, reward, terminated)
+        obs, rewards, dones, infos = env.step(action)
+        logger.log_step(episode, tick, obs, rewards, dones)
 
 logger.close()
 ```

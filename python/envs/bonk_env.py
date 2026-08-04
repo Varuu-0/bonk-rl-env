@@ -170,13 +170,17 @@ class BonkVecEnv(VecEnv):
         
     def reset(self, seeds=None, options=None):
         """Reset all environments.
-        
+
+        Implements the stable-baselines3 ``VecEnv`` contract: returns the
+        observation array directly (not the Gymnasium ``(obs, info)`` tuple),
+        so ``PPO.learn()`` and friends can consume the result unchanged.
+
         Args:
             seeds: Optional list of seeds for each environment
             options: Optional reset options
-            
+
         Returns:
-            Initial observations for all environments
+            numpy array of shape (num_envs, 14) with initial observations
         """
         self._ensure_open()
 
@@ -225,8 +229,7 @@ class BonkVecEnv(VecEnv):
         obs_data = message["data"]["observation"]
         obs_array = np.array([self._convert_obs(o) for o in obs_data])
         
-        # Return in Gymnasium format: (obs, info)
-        return obs_array, {}
+        return obs_array
     
     def step_async(self, actions):
         """Send actions to environments asynchronously.
@@ -266,13 +269,19 @@ class BonkVecEnv(VecEnv):
 
     def step_wait(self):
         """Wait for step results and return observations.
-        
+
+        Implements the stable-baselines3 ``VecEnv`` contract: ``step()``
+        forwards here, so this returns the SB3 4-tuple (not the Gymnasium
+        5-tuple). Termination and truncation are folded into a single
+        ``dones`` boolean array; episodes that ended by truncation are marked
+        with ``info["TimeLimit.truncated"] = True`` so SB3 can bootstrap the
+        value of the terminal observation.
+
         Returns:
-            tuple: (obs, rewards, terminated, truncated, infos)
+            tuple: (obs, rewards, dones, infos)
                 - obs: observations for each environment
-                - rewards: rewards for each environment  
-                - terminated: boolean array for terminated episodes (natural end)
-                - truncated: boolean array for truncated episodes (max steps)
+                - rewards: rewards for each environment
+                - dones: boolean array, True for terminated OR truncated episodes
                 - infos: list of info dictionaries for each environment
         """
         self._ensure_open()
@@ -328,9 +337,15 @@ class BonkVecEnv(VecEnv):
             # Build info dict
             info = d.get("info", {})
             
-            # Handle terminal observation for terminated episodes only
-            if is_terminated and "terminal_observation" in info:
+            # Handle terminal observation for done episodes only (SB3 uses it
+            # to bootstrap value estimates on truncation, see GH issue #633)
+            if (is_terminated or is_truncated) and "terminal_observation" in info:
                 info["terminal_observation"] = self._convert_obs(info["terminal_observation"])
+
+            # SB3 convention: truncation (not termination) is signalled inside
+            # the info dict so done() can be treated uniformly.
+            if is_truncated and not is_terminated:
+                info["TimeLimit.truncated"] = True
             
             # Add individual episode info for debugging
             info["_episode"] = {
@@ -351,11 +366,15 @@ class BonkVecEnv(VecEnv):
             
             infos.append(info)
         
+        dones = np.logical_or(
+            np.array(terminated, dtype=bool),
+            np.array(truncated, dtype=bool),
+        )
+
         return (
-            np.array(obs_list), 
-            np.array(rewards), 
-            np.array(terminated), 
-            np.array(truncated),
+            np.array(obs_list),
+            np.array(rewards),
+            dones,
             infos
         )
 

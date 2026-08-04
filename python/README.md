@@ -1,12 +1,12 @@
 # Python Client
 
-The `python/` directory contains the Python client and ML pipeline for the Bonk.io RL environment. It provides Gymnasium-compatible environment wrappers, custom reward functions, training utilities, and performance benchmarking tools designed for reinforcement learning with frameworks like Stable Baselines3.
+The `python/` directory contains the Python client and ML pipeline for the Bonk.io RL environment. It provides stable-baselines3-compatible vectorized environment wrappers, custom reward functions, training utilities, and performance benchmarking tools designed for reinforcement learning with frameworks like Stable Baselines3.
 
 ## Directory Structure
 
 | Directory | Purpose |
 |-----------|---------|
-| [`envs/`](envs/) | Gymnasium-compatible `BonkVecEnv` wrapping the Node.js physics backend via ZMQ IPC |
+| [`envs/`](envs/) | stable-baselines3 `VecEnv`-compatible `BonkVecEnv` wrapping the Node.js physics backend via ZMQ IPC |
 | [`reward/`](reward/) | Custom reward functions: navigation, curiosity, count-based exploration, composite rewards |
 | [`utils/`](utils/) | Training logger (CSV trajectory recording) and map visualization (static + animated) |
 | [`benchmarks/`](benchmarks/) | Performance benchmarking: IPC throughput, latency profiling, stress testing |
@@ -49,4 +49,4 @@ See `requirements.txt` in the project root for the full dependency list. Core re
 
 ## Architecture
 
-The Python client communicates with the Node.js physics engine over ZMQ (TCP). The `BonkVecEnv` class implements the `stable_baselines3.common.vec_env.VecEnv` interface, enabling seamless integration with SB3 algorithms. Each step sends batched actions and receives observations, rewards, and done flags for all parallel environments in a single IPC round-trip.
+The Python client communicates with the Node.js physics engine over ZMQ (TCP). The `BonkVecEnv` class implements the `stable_baselines3.common.vec_env.VecEnv` interface, enabling seamless integration with SB3 algorithms. It follows the SB3 `VecEnv` contract exactly: `reset()` returns the observation array directly, and `step()` returns the 4-tuple `(obs, rewards, dones, infos)` where `dones` folds termination and truncation together (truncation is flagged in `info["TimeLimit.truncated"]`). Each step sends batched actions and receives observations, rewards, and done flags for all parallel environments in a single IPC round-trip.
