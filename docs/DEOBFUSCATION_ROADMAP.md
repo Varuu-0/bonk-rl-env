@@ -39,10 +39,10 @@ baseline while extending the pipeline.
 | Out-of-table literals retained | 10 | `final-stats.json` |
 | Immutable table folds | 23,852 | `final-folds.json`, `audit-table-lookup.js` |
 | Dispatcher-index table folds | 86 of 88 candidates | `final-dispatcher-folds.json` |
-| Dispatcher-formula folds | 48 of 207 candidates | `final-formula-folds.json`, `audit-formula-fold.js` |
+| Dispatcher-formula folds | 207 of 207 candidates (48 inline + 159 order-preserving IIFE lowering) | `final-formula-folds.json`, `audit-formula-fold.js` |
 | Literal operation folds | 1,696 | `final-stats.json` |
 | Body decoder/primitive inlines | 5,939; 791 deliberate stateful/setup skips | `final-stats.json` |
-| Current readable output SHA-256 | `6AB86E2960E3DB3083089238AEF6CF749636093B64E92FD14F25DAC6455DA65E` | two matching pipeline runs |
+| Current readable output SHA-256 | `5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6` | two matching pipeline runs |
 
 All 89,189 in-table literal body accesses have a verified readable
 representation. The 10 remaining accesses have an index outside the decoded
@@ -68,8 +68,8 @@ table and therefore do not have an invented name.
 rewrite rule. This stage has no generated-code substitutions.
 
 | ID | Work item | Current scope | Required output | Exit gate |
-|---|---|---:|---|---|
-| S0.1 | Formula census | 159 retained `formula_reorders_arguments` cases | Argument-shape, evaluation-risk, wrapper, and selector inventory | Every retained formula sidecar record is classified exactly once |
+|---|---:|---|---|---|
+| S0.1 | Formula census | 0 retained `formula_reorders_arguments` cases (2026-08-04: all 207 non-literal sequences folded; 48 inline, 159 via the order-preserving IIFE lowering) | Argument-shape, evaluation-risk, wrapper, and selector inventory | Every retained formula sidecar record is classified exactly once |
 | S0.2 | Dynamic table census | 1,069 producer candidates; 1,067 narrower independent count documented in `DEOBFUSCATION.md` section 38.4; 88 direct-alias candidates have 86 accepted and 2 retained | Index-expression and carrier-write provenance inventory, including the reason for the two-count universe difference and the direct-alias overlap | Producer and independent census each close under their documented universe, and every direct candidate has a same-universe mapping or an explicit exclusion |
 | S0.3 | Receiver census | 11,053 unknown-receiver annotations | Per-function binding, slot, write, escape, enumeration, and dynamic-access dispositions | Every annotation remains attributable to a source property-table index |
 | S0.4 | Stateful decoder census | 380 `t8H` and 411 `n6e` intentional skips | Initialization phase, literal/dynamic argument, and state-dependence classification | No skip is silently reclassified as constant |
@@ -87,12 +87,14 @@ without violating JavaScript evaluation semantics.
 
 | Item | Current state | Safe direction | Proof required | Do not do |
 |---|---|---|---|---|
-| 159 reordered formulas | Every nonliteral rejected case would reorder call arguments if emitted directly | First add exact, generated comments that identify the proven case formula. Consider substitution only with an order-preserving representation. | Factory map, wrapper bindings, selector source, argument evaluation order, side effects, exceptions, exact paired readable AST, and sidecar closure | Directly replace `Q5$` or `w_c` calls with formulas whose operand order differs from the call |
+| 159 reordered formulas | RESOLVED 2026-08-04: every reordered case is folded with the order-preserving IIFE lowering — each call argument binds to a fresh parameter in left-to-right call order and the formula applies to the parameters, reproducing the dispatcher's evaluate-arguments-first behavior | Keep the existing inline form for identity-order cases; keep the IIFE lowering only for reordered cases | Factory map, wrapper bindings, selector source, argument evaluation order, side effects, exceptions, exact paired readable AST, and sidecar closure (`orderPreserved` provenance) | Directly replace `Q5$` or `w_c` calls with formulas whose operand order differs from the call (no bare operand-order change) |
 | 1,639 residual dispatcher/selector calls | 438 `w_c`, 379 `Q5$`, 405 `H0n`, 417 `d1M` | Classify and annotate only where selector and case provenance are proven | Per-call wrapper and selector proof; comments must not change code AST nodes | Assume every dispatcher call has a static selector or case |
 
-An order-preserving lowering must be designed and audited before it is enabled.
-The existing 48 substitutions remain the standard: they only emit formulas whose
-argument-use order matches the original call.
+The order-preserving lowering is enabled and audited (2026-08-04): the producer
+emits `(function (a0..aN-1) { return <case formula over the parameters>; })(arg0..argN-1)`
+for reordered cases, and `audit-formula-fold.js` re-derives the identical text
+independently. All 207 non-literal sequences are folded; zero candidates remain
+rejected.
 
 ### S1.2: Two interposed dispatcher-index reads
 
@@ -129,7 +131,7 @@ table name is known.
 
 | Case | Count | Reason |
 |---|---:|---|
-| Index-47 property access | 247 surviving bracketed sites | A dotted `.length` rewrite changes Array semantics |
+| Index-47 property access | 247 surviving bracketed sites | A dotted `.length` rewrite changes Array semantics; `audit-index47-census.js` classifies all 247 (245 packed-slot storage on `[arguments]` bags, 2 nested-receiver special sites) with Node-executed probes proving 0 dot-safe sites |
 | Out-of-table literal index | 10 | The property-name table has no value for the index |
 | Global dynamic brackets | 4 today | Two PIXI particle reads, renderer emitter timing, and scoreboard sorting; all remain bracketed because their stateful/data-record proof is intentionally incomplete |
 
@@ -231,6 +233,7 @@ node .deobf/audit-training-statics.js --self-check
 node .deobf/audit-map-option-writers.js --self-check
 node .deobf/audit-out-of-table.js --self-check
 node .deobf/audit-dynamic-training-residuals.js --self-check
+node .deobf/audit-index47-census.js --self-check
 node .deobf/audit-table-lookup.js --verify
 node .deobf/test-anchors.js
 ```

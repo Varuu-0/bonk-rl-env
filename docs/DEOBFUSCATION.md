@@ -4083,17 +4083,22 @@ dispatcher-table-index-fold > pass3b-formula-fold > pass1 > banners:
    `final-dispatcher-folds.json` records every source range, selector, call,
    resolved table index, value, and rejected strict-pattern site; the
    independent AMD-body audit re-derives the entire set and verifies it.
-6. **Dispatcher-formula fold (pass3b):** 48 of the 207 non-literal pass3
-   candidates are replaced only at the `Q5$/w_c` call with a parenthesized
+6. **Dispatcher-formula fold (pass3b):** all 207 of the non-literal pass3
+   candidates are replaced only at the `Q5$/w_c` call with a static case
    formula from the 253-case `B3jF8[239984]` dispatcher map (SHA-256
    `6bd5eabc9911df5b9339334ff9034f97fdbc979b30a834761a3bb9f6c9c53a87`).
    The selector statement and LHS remain intact. The factory setter, four
    wrappers, and sole `k7V` alias are binding-proven; the selector must be the
    immediately preceding bare statement; every argument must be used exactly
-   once in original left-to-right order. The remaining 159 sites are retained
-   because their case formulas reorder arguments. `final-formula-folds.json`
-   records every accepted and rejected site; `audit-formula-fold.js` and the
-   paired readable-AST audit independently re-derive the result.
+   once. 48 formulas read their arguments in the call's exact left-to-right
+   order and are emitted inline; the other 159 reorder their arguments and use
+   the order-preserving IIFE lowering — every call argument is bound to a
+   fresh parameter in call order and the formula is applied to the parameters,
+   reproducing the dispatcher's own evaluate-arguments-first behavior with
+   identical exception and coercion order. `final-formula-folds.json` records
+   every accepted site (with `orderPreserved` provenance);
+   `audit-formula-fold.js` and the paired readable-AST audit independently
+   re-derive all 207.
 7. **AST annotation + analysis labels (pass1):** Babel identifies all 89,199
    literal numeric member accesses in the AMD body. Of these, 46,518 are
    covered by table folds, 31,373 emit conservative dotted analysis labels,
@@ -4129,12 +4134,13 @@ sites, 30,506 ordinary annotation sites, and 554 index-47 annotation sites.
 
 ### 36.3 Artifacts
 
-- `alpha2s.readable.js` — 4,473,431 bytes, 40,233 lines, the analysis target.
+- `alpha2s.readable.js` — 4,480,444 bytes, 40,233 lines, the analysis target.
 - `final-pipeline.js`, `ast-member-scan.js`, `table-lookup-fold.js`,
   `op-dispatch-fold.js`, `audit-independent.js`, `audit-preamble.js`,
   `audit-formula-fold.js`, `audit-training-statics.js`,
   `audit-map-option-writers.js`, `audit-out-of-table.js`,
-  `audit-dynamic-training-residuals.js`, `audit-table-lookup.js`,
+  `audit-dynamic-training-residuals.js`, `audit-index47-census.js`,
+  `audit-table-lookup.js`,
   `final-stats.json`, `final-preamble-folds.json`, `final-folds.json`, and
   `final-dispatcher-folds.json`, `final-formula-folds.json` are the current
   producer, proof, and audit artifacts.
@@ -4150,8 +4156,8 @@ sites, 30,506 ordinary annotation sites, and 554 index-47 annotation sites.
   remain; the bundle is data-flow readable, not control-flow readable.
 - **1,639 dispatcher/selector occurrences remain** (`w_c` 438, `Q5$` 379,
   `H0n` 405, `d1M` 417). Beyond pass3's all-literal folds, pass3b proves and
-  emits 48 non-literal formulas; 159 candidates remain because they would
-  change left-to-right argument evaluation order.
+  emits all 207 non-literal formulas: 48 inline (identity argument order) and
+  159 through the order-preserving IIFE lowering (reordered argument use).
 - **10 out-of-table indices** are left unchanged rather than being assigned an
   incorrect property name.
 - **86 strict dispatcher-resolved table indexes** are folded to strings. Two
@@ -4164,6 +4170,9 @@ sites, 30,506 ordinary annotation sites, and 554 index-47 annotation sites.
   property-bag admission rule plus a single binding, no dynamic index, no
   out-of-table slot, and no alias escape. Index `47` can only remain bracketed
   with a `length` annotation or fold to the string literal `"length"`.
+  `audit-index47-census.js` re-derives the 247 surviving index-47 sites and
+  classifies all of them with Node-executed probes: none is a safe dotted
+  `.length` substitution (see §38.1).
 - **Readability verdict:** all 89,189 in-table literal numeric accesses are
    represented by a dotted analysis label, an annotation, or a decoded table
    string. Local names and flattened control flow remain obfuscated; the
@@ -4216,7 +4225,7 @@ linear in the output size as substitutions grow.
 | Decoded property table | 1,724 names |
 | Literal string/primitive decoder inlines | 7,670 total: 1,731 source-order preamble captures + 5,939 body pass4 replacements |
 | Literal operation folds | 1,696 |
-| Strict dispatcher-formula folds | 48 / 207 candidates; 159 argument-order rejections |
+| Strict dispatcher-formula folds | 207 / 207 candidates: 48 inline (identity argument order) + 159 order-preserving IIFE lowering; 0 argument-order rejections |
 | AST body literal-index accesses | **89,199** |
 | Immutable table-string folds | **23,852** (1,186 direct, 22,666 carrier) |
 | Source sites covered by table folds | **46,518** |
@@ -4258,7 +4267,7 @@ node .deobf/test-anchors.js
 ```
 
 Two consecutive final-pipeline runs produced the same readable SHA-256:
-`6AB86E2960E3DB3083089238AEF6CF749636093B64E92FD14F25DAC6455DA65E`.
+`5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`.
 
 ### 37.2 Transport and deterministic state exchange
 
@@ -4390,11 +4399,13 @@ factory body, plus the preamble's literal decoder materialization:
   `final-dispatcher-folds` v1 sidecar records every folded source range,
    selector, call, value, and rejected strict-pattern site.
 - Pass3b independently accounts for all 207 non-literal dispatcher sequences:
-  48 are emitted as static formulas and 159 are retained because their case
-  expressions would reorder call arguments. The factory setter, wrapper
-  bindings, selector adjacency, case map, argument recovery, sidecar bijection,
-  and the paired readable AST expression are all verified; no index-47 access
-  is dotted inside a formula.
+  48 are emitted inline as static formulas and 159 use the order-preserving
+  IIFE lowering that binds every call argument to a fresh parameter in
+  left-to-right call order before applying the case formula to the parameters.
+  The factory setter, wrapper bindings, selector adjacency, case map, argument
+  recovery, `orderPreserved` provenance, sidecar bijection, and the paired
+  readable AST expression are all verified; no index-47 access is dotted inside
+  a formula.
 - The 341-site legacy division-versus-regex scanner blind spot is closed by
   AST discovery. Before whole-expression folding it contained 279
   dotted-label and 62 annotation decisions; 56 lie inside table folds, leaving
@@ -4402,7 +4413,17 @@ factory body, plus the preamble's literal decoder materialization:
 - Table index 47 (`length`) is structurally protected. It produces no emitted
   `.length` label: 247 surviving sites remain bracketed and annotated, while
   554 immutable table reads plus one dispatcher-resolved table read become the
-  string literal `"length"`.
+  string literal `"length"`. `audit-index47-census.js` mechanically re-derives
+  the 247 sites (AST candidates minus `final-folds.json` folded ranges) and
+  classifies every one with source evidence and Node-executed probes:
+  245 are packed-slot storage on `[arguments]` array bags (slot 47 written as
+  a scalar, counter, or object — dotted `.length` would read the bag's element
+  count, proven by the `X.length != X[47]` probe), and 2 are nested-receiver
+  sites (L3081 `N7I[98][47] =` is a real-array element write into the
+  `capZones` label table; L6257 `O7a[7][47]` is the table-string read
+  `"length"` retained because the strict carrier fold rule requires every slot
+  assignment to dominate the read and the in-loop write does not dominate).
+  Zero sites are safe dotted substitutions.
 
 This does **not** mean the original source is fully deobfuscated. Dotted output
 is an analysis label for a resolved table index, not evidence that the original
@@ -4411,7 +4432,7 @@ data-flow readable, not a recovery of original symbols or control flow.
 
 ### 38.2 Retained artifact contract
 
-The local `.deobf/` directory deliberately retains only the following 28
+The local `.deobf/` directory deliberately retains only the following 29
 artifacts. Legacy intermediate bundles, per-pass scripts, and stale run logs
 were removed on 2026-08-02.
 
@@ -4421,7 +4442,7 @@ were removed on 2026-08-02.
 | Derived inputs | `tables.json`, `callsites.json`, `anchors.json` | The decoded table, conservative receiver verdicts, and 43 banner anchors. Regenerate only from the retained canonical source. |
 | Producers | `dump-tables.js`, `analyze-callsites.js`, `final-pipeline.js`, `op-dispatch-fold.js` | Respectively create the table, receiver analysis, canonical readable output plus sidecars, and validate/extract the dispatcher formula map. |
 | AST and fold proof | `ast-member-scan.js`, `table-lookup-fold.js`, `final-stats.json`, `final-preamble-folds.json`, `final-folds.json`, `final-dispatcher-folds.json`, `final-formula-folds.json`, `audit-training-statics.js`, `audit-map-option-writers.js`, `audit-out-of-table.js`, `audit-dynamic-training-residuals.js` | AST member discovery, immutable-table proof, current run metrics, source-order preamble capture provenance, literal AMD-body fold provenance, dispatcher-index provenance, formula provenance, direct static facts, complete table-origin option-writer censuses, and intentionally retained residual inventories. |
-| Independent gates | `audit-independent.js`, `audit-preamble.js`, `audit-formula-fold.js`, `audit-table-lookup.js`, `audit-table-lookup.log`, `test-anchors.js` | Independent pass-one, preamble-capture, formula, and AMD-body fold checks plus the atomically refreshed successful fold-audit log. |
+| Independent gates | `audit-independent.js`, `audit-preamble.js`, `audit-formula-fold.js`, `audit-table-lookup.js`, `audit-table-lookup.log`, `audit-index47-census.js`, `test-anchors.js` | Independent pass-one, preamble-capture, formula, AMD-body fold, index-47 census, and anchor checks plus the atomically refreshed successful fold-audit log. |
 | Historical evidence | `audit-report.txt` | Preserved 2026-07-30 audit snapshot only; its counts and index convention are not current. |
 
 The raw-to-readable flow is:
@@ -4432,8 +4453,8 @@ pretty -> tables.json + callsites.json + anchors.json
 pretty -> final-pipeline.js -> readable.js + final-stats.json + final-preamble-folds.json + final-folds.json + final-dispatcher-folds.json + final-formula-folds.json
 ```
 
-`final-stats.json` reports JavaScript string length (4,473,002 characters) for
-the generated readable output; the physical UTF-8 file is 4,473,431 bytes.
+`final-stats.json` reports JavaScript string length (4,480,015 characters) for
+the generated readable output; the physical UTF-8 file is 4,480,444 bytes.
 This documentation consistently uses the latter file size.
 
 ### 38.3 Reproducible pipeline and audit closure
@@ -4449,7 +4470,7 @@ insertion. It has no dropped overlaps in the current build.
 | Preamble literal decoder captures | 1,731: 1,724 table strings + 7 stateful warm-up primitives; two fresh captures agree |
 | Body decoder/primitive inlines | 5,939; 791 intentional stateful/setup skips |
 | Literal operation folds | 1,696; 207 non-literal argument skips handed to pass3b |
-| Strict pass3b formula substitutions | 48 / 207; 159 `formula_reorders_arguments` rejections; 79 argument substitutions + 19 annotations across 47 sites; 0 index-47 recoveries |
+| Strict pass3b formula substitutions | 207 / 207; 0 rejections; 48 inline + 159 order-preserving IIFE lowering; 368 argument substitutions + 111 annotations across 191 sites; 0 index-47 recoveries |
 | Pass3 folded-LHS recovery | 1,560 dotted labels and 135 annotations |
 | AST body candidates | 89,199 |
 | Table-fold-covered source sites | 46,518 |
@@ -4461,13 +4482,13 @@ insertion. It has no dropped overlaps in the current build.
 | Dynamic-bracket training relevance | All 4 retained dynamic brackets are renderer/display paths; no classic physics, map-codec, or converter path |
 | Banners | 43, all anchor checks pass |
 | Independent table-fold verification | 23,852 / 23,852 literal folds and 86 / 86 dispatcher-index folds approved; 0 extra, unproven, or wrong-value folds |
-| Independent formula-fold verification | 48 / 48 folds and 159 / 159 retained candidates re-derived; paired readable AST formulas match exactly |
+| Independent formula-fold verification | 207 / 207 folds re-derived; paired readable AST formulas match exactly (48 inline, 159 ordered) |
 | Training-static verification | Foot defaults, swing defaults, `ms.fl` force reader, linear shrink formulas, exact `mapVersion=15`, and no `swingF`/`swingD` map override re-derived from source anchors, dispatcher cases, and final-fold provenance |
 | Independent pass-one closure | 0 gaps, 0 pairing mismatches, 0 unlabelled in-table brackets |
 
 `node --check .deobf/alpha2s.readable.js` passes. Two fresh full pipeline runs
 produced the identical readable SHA-256:
-`6AB86E2960E3DB3083089238AEF6CF749636093B64E92FD14F25DAC6455DA65E`.
+`5F2D3882ABFB6A3BFA1FBBED3693E546B7D7E4B0ECA98255CE3592D8C91522E6`.
 
 Run the complete current verification set with:
 
@@ -4482,6 +4503,7 @@ node .deobf/audit-training-statics.js --self-check
 node .deobf/audit-map-option-writers.js --self-check
 node .deobf/audit-out-of-table.js --self-check
 node .deobf/audit-dynamic-training-residuals.js --self-check
+node .deobf/audit-index47-census.js --self-check
 node .deobf/audit-table-lookup.js --verify
 node .deobf/test-anchors.js
 ```
@@ -4520,9 +4542,9 @@ unchanged rather than being given speculative names.
 
 **Decoders and control flow.** The current audit counts 1,639 residual
 dispatcher/selector occurrences: `w_c` 438, `Q5$` 379, `H0n` 405, and `d1M`
-417. Pass3 hands its 207 non-literal operation sequences to pass3b; 48 satisfy
-the strict factory/binding/adjacency/order proof and 159 remain unchanged. The
-flattened `switch` dispatchers are not reversed. The current readable artifact still contains 112.4
+417. Pass3 hands its 207 non-literal operation sequences to pass3b; all 207
+satisfy the strict factory/binding/adjacency proof and are emitted as static
+formulas (48 inline, 159 via the order-preserving IIFE lowering). The flattened `switch` dispatchers are not reversed. The current readable artifact still contains 112.4
 obfuscated identifier tokens per 100 lines, so original local, parameter, and
 function names have not been recovered.
 
