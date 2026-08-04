@@ -843,11 +843,12 @@ export class PhysicsEngine {
       this.pendingSwingDestroy.clear();
     }
 
-    // One pass over the player map: detect OOB deaths, then detach every dead
-    // disc in place. A dead disc's final transforms are snapshotted and its body
-    // removed from the live world (and from playerBodies), so the common
-    // no-death tick stays a single walk instead of two full passes.
-    for (const [id, body] of this.playerBodies) {
+    // One pass over a snapshot of the player map: detect OOB deaths, then detach
+    // every dead disc. Iterating a copy (instead of the live map, which
+    // detachPlayer deletes from) keeps the pass robust if a future cleanup ever
+    // removes a not-yet-visited id, which a Map iterator would silently skip.
+    // The common no-death tick stays a single walk instead of two full passes.
+    for (const [id, body] of Array.from(this.playerBodies)) {
       if (this.playerAlive.get(id)) {
         // Squared comparison avoids a per-player Math.sqrt; threshold identical.
         const pos = body.GetPosition();

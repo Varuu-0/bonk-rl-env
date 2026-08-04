@@ -841,7 +841,11 @@ describe('BonkEnvironment edge cases', () => {
       env.reset();
 
       let deathObs: Observation | null = null;
-      for (let i = 0; i < 80; i++) {
+      // The AI free-falls ~473 px to the lethal platform (~38 physics ticks).
+      // With numOpponents: 0 the vacuous allOpponentsDead check makes the env
+      // tick physics only every other step, so death lands near step 76; the
+      // 200-step budget keeps the test robust to gravity/spawn tweaks.
+      for (let i = 0; i < 200; i++) {
         const result = env.step(EMPTY_INPUT);
         if (result.info.aiAlive === false) {
           deathObs = result.observation;
