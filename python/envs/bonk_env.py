@@ -1,12 +1,29 @@
+from collections.abc import Mapping
+from numbers import Integral
+
 import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import zmq
-import json
 from stable_baselines3.common.vec_env import VecEnv
 
+
+DEFAULT_REQUEST_TIMEOUT_MS = 30_000
+DEFAULT_CLOSE_TIMEOUT_MS = 1_000
+DEFAULT_LINGER_MS = 1_000
+MAX_RESET_SEED = 0xFFFFFFFE
+
+
 class BonkVecEnv(VecEnv):
-    def __init__(self, num_envs=1, port=5555, config=None):
+    def __init__(
+        self,
+        num_envs=1,
+        port=5555,
+        config=None,
+        timeout_ms=DEFAULT_REQUEST_TIMEOUT_MS,
+        close_timeout_ms=DEFAULT_CLOSE_TIMEOUT_MS,
+        linger_ms=DEFAULT_LINGER_MS,
+    ):
         """Initialize the Bonk vectorized environment.
         
         Args:
@@ -18,7 +35,24 @@ class BonkVecEnv(VecEnv):
                 - max_ticks: Maximum ticks per episode (default 900)
                 - random_opponent: Use random opponent policy (default True)
                 - seed: Random seed
+            timeout_ms: Send and receive timeout for normal requests
+            close_timeout_ms: Send and receive timeout for session close
+            linger_ms: Maximum time for queued messages to linger on close
         """
+        for name, value, minimum in (
+            ("timeout_ms", timeout_ms, 1),
+            ("close_timeout_ms", close_timeout_ms, 1),
+            ("linger_ms", linger_ms, 0),
+        ):
+            if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
+                raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
+
+        self._timeout_ms = int(timeout_ms)
+        self._close_timeout_ms = int(close_timeout_ms)
+        self._linger_ms = int(linger_ms)
+        self._closed = False
+        self._closed_reason = None
+
         # Action space: 6 binary inputs (left, right, up, down, heavy, grapple)
         action_space = spaces.Discrete(64)
         
@@ -31,27 +65,78 @@ class BonkVecEnv(VecEnv):
         
         super().__init__(num_envs, observation_space, action_space)
         
-        self.context = zmq.Context()
-        self.socket = self.context.socket(zmq.DEALER)
-        self.socket.connect(f"tcp://127.0.0.1:{port}")
-        
-        # Wait a short moment for connection before sending init
-        import time
-        time.sleep(0.1)
-        
-        self.socket.send_json({
-            "command": "init", 
-            "numEnvs": num_envs, 
-            "config": config or {},
-            "useSharedMemory": True
-        })
-        message = self.socket.recv_json()
-        
-        if message.get("status") != "ok":
-            raise RuntimeError(f"Error initializing environments: {message.get('error')}")
+        self.context = None
+        self.socket = None
+        try:
+            self.context = zmq.Context()
+            self.socket = self.context.socket(zmq.DEALER)
+            self.socket.setsockopt(zmq.LINGER, self._linger_ms)
+            self.socket.setsockopt(zmq.SNDTIMEO, self._timeout_ms)
+            self.socket.setsockopt(zmq.RCVTIMEO, self._timeout_ms)
+            self.socket.connect(f"tcp://127.0.0.1:{port}")
+
+            self._send_json({
+                "command": "init",
+                "numEnvs": num_envs,
+                "config": config or {},
+                "useSharedMemory": True,
+            })
+            message = self._recv_json("init")
+
+            if message.get("status") != "ok":
+                raise RuntimeError(f"Error initializing environments: {message.get('error')}")
+        except Exception:
+            self._closed = True
+            self._closed_reason = "initialization failure"
+            try:
+                self._close_transport()
+            except Exception:
+                pass
+            raise
 
         self._episode_returns = np.zeros(num_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(num_envs, dtype=np.int64)
+
+    def _send_json(self, message, timeout_ms=None):
+        command = message["command"]
+        timeout_ms = self._timeout_ms if timeout_ms is None else timeout_ms
+        try:
+            self.socket.send_json(message)
+        except zmq.Again as exc:
+            raise TimeoutError(
+                f"Timed out after {timeout_ms} ms sending '{command}' request to Bonk backend"
+            ) from exc
+
+    def _recv_json(self, command, timeout_ms=None):
+        timeout_ms = self._timeout_ms if timeout_ms is None else timeout_ms
+        try:
+            return self.socket.recv_json()
+        except zmq.Again as exc:
+            self._closed = True
+            self._closed_reason = f"a receive timeout while waiting for '{command}'"
+            try:
+                self._close_transport()
+            except Exception:
+                pass
+            raise TimeoutError(
+                f"Timed out after {timeout_ms} ms waiting for '{command}' response from Bonk backend"
+            ) from exc
+
+    def _close_transport(self):
+        socket, context = self.socket, self.context
+        self.socket = None
+        self.context = None
+        try:
+            if socket is not None:
+                socket.close(linger=self._linger_ms)
+        finally:
+            if context is not None:
+                context.term()
+
+    def _ensure_open(self):
+        if self._closed:
+            reason = self._closed_reason or "close"
+            raise RuntimeError(f"cannot use BonkVecEnv after {reason}")
 
     def _convert_obs(self, data):
         """Convert JSON observation data to numpy array.
@@ -93,12 +178,43 @@ class BonkVecEnv(VecEnv):
         Returns:
             Initial observations for all environments
         """
+        self._ensure_open()
+
         # Generate random seeds for deterministic rollouts in each env
         if seeds is None:
             seeds = np.random.randint(0, 1000000, size=self.num_envs).tolist()
-        
-        self.socket.send_json({"command": "reset", "seeds": seeds, "options": options or {}})
-        message = self.socket.recv_json()
+        elif isinstance(seeds, np.ndarray):
+            if seeds.ndim != 1:
+                raise ValueError("seeds must be a one-dimensional sequence")
+            seeds = seeds.tolist()
+        elif isinstance(seeds, (str, bytes)) or isinstance(seeds, Mapping):
+            raise TypeError("seeds must be a sequence of integers")
+        else:
+            try:
+                seeds = list(seeds)
+            except TypeError as exc:
+                raise TypeError("seeds must be a sequence of integers") from exc
+
+        if len(seeds) != self.num_envs:
+            raise ValueError(
+                f"seeds must contain exactly {self.num_envs} values, got {len(seeds)}"
+            )
+
+        validated_seeds = []
+        for index, seed in enumerate(seeds):
+            if isinstance(seed, (bool, np.bool_)) or not isinstance(seed, Integral):
+                raise TypeError(f"seed at index {index} must be an integer, got {seed!r}")
+            seed = int(seed)
+            if not 0 <= seed <= MAX_RESET_SEED:
+                raise ValueError(
+                    f"seed at index {index} must be in [0, {MAX_RESET_SEED}], got {seed}"
+                )
+            validated_seeds.append(seed)
+
+        self._send_json(
+            {"command": "reset", "seeds": validated_seeds, "options": options or {}}
+        )
+        message = self._recv_json("reset")
         
         if message.get("status") != "ok":
             raise RuntimeError(f"Error resetting environment: {message.get('error')}")
@@ -118,10 +234,35 @@ class BonkVecEnv(VecEnv):
         Args:
             actions: List or array of actions for each environment
         """
+        self._ensure_open()
+
         if isinstance(actions, np.ndarray):
+            if actions.ndim != 1:
+                raise ValueError("actions must be a one-dimensional sequence")
             actions = actions.tolist()
-            
-        self.socket.send_json({"command": "step", "actions": actions})
+        else:
+            try:
+                actions = list(actions)
+            except TypeError as exc:
+                raise TypeError("actions must be a sequence of integers") from exc
+
+        if len(actions) != self.num_envs:
+            raise ValueError(
+                f"actions must contain exactly {self.num_envs} values, got {len(actions)}"
+            )
+
+        validated_actions = []
+        for index, action in enumerate(actions):
+            if isinstance(action, (bool, np.bool_)) or not isinstance(action, Integral):
+                raise TypeError(f"action at index {index} must be an integer, got {action!r}")
+            action = int(action)
+            if not 0 <= action < self.action_space.n:
+                raise ValueError(
+                    f"action at index {index} must be in [0, {self.action_space.n - 1}], got {action}"
+                )
+            validated_actions.append(action)
+
+        self._send_json({"command": "step", "actions": validated_actions})
 
     def step_wait(self):
         """Wait for step results and return observations.
@@ -134,7 +275,9 @@ class BonkVecEnv(VecEnv):
                 - truncated: boolean array for truncated episodes (max steps)
                 - infos: list of info dictionaries for each environment
         """
-        message = self.socket.recv_json()
+        self._ensure_open()
+
+        message = self._recv_json("step")
         
         if message.get("status") != "ok":
             raise RuntimeError(f"Error stepping environment: {message.get('error')}")
@@ -217,27 +360,42 @@ class BonkVecEnv(VecEnv):
         )
 
     def close(self):
-        """Close the environment and cleanup resources."""
+        """Close this client session and cleanup its transport resources."""
+        if self._closed:
+            return
+
+        self._closed = True
+        self._closed_reason = "close"
         try:
-            self.socket.setsockopt(zmq.RCVTIMEO, 500)
-            self.socket.send_json({"command": "close"})
-            self.socket.recv_json()
-        except Exception:
-            pass
-        self.socket.close()
-        self.context.term()
+            self.socket.setsockopt(zmq.SNDTIMEO, self._close_timeout_ms)
+            self.socket.setsockopt(zmq.RCVTIMEO, self._close_timeout_ms)
+            self._send_json({"command": "close"}, timeout_ms=self._close_timeout_ms)
+            message = self._recv_json("close", timeout_ms=self._close_timeout_ms)
+            if message.get("status") != "ok":
+                raise RuntimeError(f"Error closing environments: {message.get('error')}")
+        finally:
+            self._close_transport()
 
     def get_attr(self, attr_name, indices=None):
         """Get attribute from environments."""
-        return [None] * self.num_envs
+        if attr_name == "render_mode":
+            render_modes = [None] * self.num_envs
+            return [render_modes[index] for index in self._get_indices(indices)]
+        raise NotImplementedError(
+            f"BonkVecEnv does not support remote attribute access for {attr_name!r}"
+        )
 
     def set_attr(self, attr_name, value, indices=None):
         """Set attribute in environments."""
-        pass
+        raise NotImplementedError(
+            f"BonkVecEnv does not support remote attribute assignment for {attr_name!r}"
+        )
 
     def env_method(self, method_name, *method_args, indices=None, **method_kwargs):
         """Call method on environments."""
-        return [None] * self.num_envs
+        raise NotImplementedError(
+            f"BonkVecEnv does not support remote method calls for {method_name!r}"
+        )
 
     def seed(self, seed=None):
         """Set seeds for environments."""

@@ -30,6 +30,16 @@ class TestBonkVecEnvConnectionLifecycle:
         env.close()
         env.close()
 
+    def test_close_keeps_server_available_for_a_new_session(self, bonk_vec_env_factory):
+        first_env = bonk_vec_env_factory(num_envs=1)
+        first_env.reset(seeds=[1])
+        first_env.close()
+
+        second_env = bonk_vec_env_factory(num_envs=1)
+        obs, info = second_env.reset(seeds=[2])
+        assert obs.shape == (1, 14)
+        assert isinstance(info, dict)
+
 
 @pytest.mark.slow
 class TestBonkVecEnvObservationShape:
@@ -115,6 +125,18 @@ class TestBonkVecEnvActionSpace:
         obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
         assert obs.shape == (1, 14)
 
+    def test_invalid_actions_do_not_poison_the_live_session(self, bonk_vec_env_single):
+        bonk_vec_env_single.reset()
+
+        with pytest.raises(TypeError, match="must be an integer"):
+            bonk_vec_env_single.step_async(np.array([1.5]))
+        with pytest.raises(ValueError, match="must be in \\[0, 63\\]"):
+            bonk_vec_env_single.step_async(np.array([64]))
+
+        bonk_vec_env_single.step_async(np.array([0]))
+        obs, _, _, _, _ = bonk_vec_env_single.step_wait()
+        assert obs.shape == (1, 14)
+
 
 @pytest.mark.slow
 class TestBonkVecEnvMultipleReset:
@@ -129,6 +151,17 @@ class TestBonkVecEnvMultipleReset:
         bonk_vec_env_single.step_async(np.array([0]))
         bonk_vec_env_single.step_wait()
         obs, _ = bonk_vec_env_single.reset()
+        assert obs.shape == (1, 14)
+
+    def test_numpy_seed_transport_boundaries(self, bonk_vec_env_single):
+        obs, _ = bonk_vec_env_single.reset(seeds=np.array([np.uint64(0xFFFFFFFE)]))
+        assert obs.shape == (1, 14)
+
+    def test_invalid_seed_does_not_poison_the_live_session(self, bonk_vec_env_single):
+        with pytest.raises(ValueError, match="must be in \\[0, 4294967294\\]"):
+            bonk_vec_env_single.reset(seeds=[0xFFFFFFFF])
+
+        obs, _ = bonk_vec_env_single.reset(seeds=[0])
         assert obs.shape == (1, 14)
 
 
