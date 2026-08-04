@@ -288,21 +288,26 @@ describe('CapZoneScoring', () => {
             expect(engine.getTeamScored()).toBe(null);
         });
 
-        it('does not score when a truthy static map body overlaps the zone', () => {
+        it('does not score when a dynamic body carries truthy static user data', () => {
             engine = new PhysicsEngine();
             engine.addCapZone(
                 { index: 0, owner: 'neutral', type: 2, fixture: 'zone', shapeType: 'bx' },
                 0, 190, 200, 100,
             );
-            engine.addBody({
+            // Static bodies never generate contacts, so the body must be
+            // created dynamic to reach the sensor. addBody() stores the def
+            // object itself as user data, so mutating it after creation makes
+            // the guard see truthy `static` while the body still collides.
+            const def: any = {
                 name: 'truthy-static-ball', type: 'circle',
-                x: 0, y: 190, radius: 5,
-                // Runtime map data can be non-boolean; addBody() treats all
-                // truthy values as static and retains this value as user data.
-                static: 1 as any,
-            });
+                x: 0, y: 50, radius: 5, density: 1,
+                static: false,
+                restitution: 0, friction: 0,
+            };
+            engine.addBody(def);
+            def.static = 1 as any;
 
-            for (let i = 0; i < 5; i++) engine.tick();
+            for (let i = 0; i < 100; i++) engine.tick();
 
             expect(engine.getTeamScored()).toBe(null);
         });
