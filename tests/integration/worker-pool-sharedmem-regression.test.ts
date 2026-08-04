@@ -325,7 +325,7 @@ describe('WorkerPool shared-memory result ownership', () => {
       // A Map that references itself must not recurse unbounded through the
       // snapshot deep copy; its back-reference resolves to the in-progress
       // copy, so the snapshot graph is a real, owned cycle.
-      const selfRef = new Map([['k', 1]]);
+      const selfRef: Map<string, unknown> = new Map([['k', 1]]);
       selfRef.set('self', selfRef);
 
       const snapshot = (pool as any).snapshotObservation({ selfRef });

@@ -1,7 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
-import { getConfig, type AppConfig, deepMerge } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, deepMerge } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -15,8 +15,8 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _shouldClose: boolean = false;
 
-    constructor(config?: Partial<AppConfig>) {
-        this.port = (config as any)?.server?.port ?? getConfig().server.port;
+    constructor(config?: DeepPartial<AppConfig>) {
+        this.port = config?.server?.port ?? getConfig().server.port;
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 

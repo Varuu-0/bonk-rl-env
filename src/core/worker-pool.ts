@@ -728,7 +728,7 @@ export class WorkerPool {
             // TypedArray#slice copies into a fresh buffer, so
             // SharedArrayBuffer-backed views become owned rather than sharing
             // the pool's SAB.
-            return value.slice();
+            return (value as any).slice();
         }
         if (value instanceof ArrayBuffer) {
             return value.slice(0);

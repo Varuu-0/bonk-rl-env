@@ -52,7 +52,7 @@ describe('IpcBridge bypass API', () => {
     });
 
     it('initializes with shared memory when supported', async () => {
-      if (IpcBridge.prototype.constructor.isSupported?.()) {
+      if ((IpcBridge.prototype.constructor as any).isSupported?.()) {
         await bridge.initEnv(2, {}, true);
       }
     });
