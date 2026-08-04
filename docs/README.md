@@ -23,6 +23,7 @@ Additional documents:
 | [DEOBFUSCATION.md](DEOBFUSCATION.md) | Verified source findings and authoritative artifact inventory |
 | [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md) | Simulator discrepancies and implementation status derived from verified findings |
 | [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md) | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work |
+| [OPEN_ISSUE_REMEDIATION.md](OPEN_ISSUE_REMEDIATION.md) | Evidence-based disposition and PR progress for the full open-issue audit |
 
 ## Subdirectories
 
