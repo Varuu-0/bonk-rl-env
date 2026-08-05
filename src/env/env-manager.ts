@@ -186,25 +186,44 @@ export class EnvManager {
 
     /**
      * Reset all environments.
-     * @param seeds Optional seeds for each environment
+     * @param seeds Optional seeds, one per internal environment across the
+     *   manager's pools. When provided the batch must contain exactly one
+     *   seed per internal environment (numEnvs per BonkEnv) so no internal
+     *   environment is silently left unseeded.
      * @param options Result ownership mode; caller-owned by default
-     * @returns Array of initial observations
+     * @returns Flat array of initial observations, one per internal environment
      */
     async resetAll(seeds?: number[], options?: ResultOwnershipOptions): Promise<any[]> {
         const envs = this.getAllEnvs();
         const results: any[] = [];
         
-        // Reset all environments in parallel, each with its own seed
-        const resetPromises = envs.map((env, idx) => {
-            const envSeed = seeds?.[idx];
-            return env.reset(envSeed !== undefined ? [envSeed] : undefined, options);
+        if (seeds !== undefined) {
+            if (!Array.isArray(seeds)) {
+                throw new Error(`Invalid seed batch: expected an array of seeds, got ${typeof seeds}`);
+            }
+            this.assertBatchLength('seed', seeds.length, envs);
+        }
+
+        // Reset all environments in parallel, slicing the batch per pool so
+        // every internal environment of a multi-env BonkEnv receives its own
+        // seed instead of only the first one (issue #230).
+        let seedIdx = 0;
+        const resetPromises = envs.map((env) => {
+            const count = env.getNumEnvs();
+            const envSeeds = seeds !== undefined ? seeds.slice(seedIdx, seedIdx + count) : undefined;
+            seedIdx += count;
+            return env.reset(envSeeds, options);
         });
         
         const resetResults = await Promise.all(resetPromises);
         
         for (const result of resetResults) {
             if (Array.isArray(result)) {
-                results.push(...result);
+                // Flatten per-env results with an explicit loop: spreading a
+                // very large batch would exceed the engine's argument limit.
+                for (const item of result) {
+                    results.push(item);
+                }
             } else {
                 results.push(result);
             }
@@ -215,36 +234,73 @@ export class EnvManager {
 
     /**
      * Step all environments with the given actions.
-     * @param actions Actions for each environment
+     * @param actions Actions for each internal environment across the
+     *   manager's pools: exactly one action per internal environment
+     *   (numEnvs per BonkEnv)
      * @param options Result ownership mode; caller-owned by default
-     * @returns Flat array of step results, one per environment, matching the
-     *   shape returned by {@link resetAll}
+     * @returns Flat array of step results, one per internal environment,
+     *   matching the shape returned by {@link resetAll}
      */
     async stepAll(actions: any[], options?: ResultOwnershipOptions): Promise<any[]> {
         const envs = this.getAllEnvs();
         
-        // Step all environments in parallel, each with exactly one action
-        const stepPromises = envs.map((env, idx) => {
-            const action = actions[idx];
-            return env.step(action !== undefined ? [action] : [], options);
+        if (!Array.isArray(actions)) {
+            throw new Error(`Invalid action batch: expected an array of actions, got ${typeof actions}`);
+        }
+        this.assertBatchLength('action', actions.length, envs);
+
+        // Step all environments in parallel, slicing the batch so each pool
+        // receives the actions for all of its internal environments instead
+        // of a single-element batch that a multi-env pool would reject
+        // (issue #230).
+        let actionIdx = 0;
+        const stepPromises = envs.map((env) => {
+            const count = env.getNumEnvs();
+            const envActions = actions.slice(actionIdx, actionIdx + count);
+            actionIdx += count;
+            return env.step(envActions, options);
         });
         
         const stepResults = await Promise.all(stepPromises);
-        
-        // Each BonkEnv.step resolves to an array (its worker pool always
-        // resolves one result per environment), so flatten the batch into the
-        // same flat shape resetAll returns instead of a nested StepResult[][]
-        // (issue #198). The pooled array path is fully symmetric with the
-        // resetAll flattening below.
+
+        // Every BonkEnv.step resolves to an array (one StepResult per internal
+        // environment), so collect the results into the same flat shape
+        // resetAll returns (issue #198).
         const results: any[] = [];
         for (const result of stepResults) {
             if (Array.isArray(result)) {
-                results.push(...result);
+                // Flatten per-env results with an explicit loop: spreading a
+                // very large batch would exceed the engine's argument limit.
+                for (const item of result) {
+                    results.push(item);
+                }
             } else {
                 results.push(result);
             }
         }
         return results;
+    }
+
+    /**
+     * Validate that a batch covers exactly the internal environments of the
+     * given BonkEnvs. A count mismatch rejects before any pool is touched, so
+     * a malformed batch can never fail or desync a worker pool by forwarding
+     * an empty or short action list.
+     * @param kind 'seed' or 'action' (used in the error message)
+     * @param received Number of entries in the caller's batch
+     * @param envs The BonkEnv instances the batch is meant to cover
+     */
+    private assertBatchLength(kind: 'seed' | 'action', received: number, envs: BonkEnv[]): void {
+        let expected = 0;
+        for (const env of envs) {
+            expected += env.getNumEnvs();
+        }
+        if (received !== expected) {
+            const plural = expected === 1 ? '' : 's';
+            throw new Error(
+                `Invalid ${kind} batch: expected ${expected} ${kind}${plural} for ${expected} internal environment${plural} across ${envs.length} environment pool${envs.length === 1 ? '' : 's'}, got ${received}`,
+            );
+        }
     }
 
     /**
