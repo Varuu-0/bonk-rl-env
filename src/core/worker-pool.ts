@@ -628,6 +628,24 @@ export class WorkerPool {
      * on allocation or retention semantics here.
      */
     private async stepMessagePassing(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
+        // Reject malformed entries before any worker is signalled, mirroring
+        // the shared-memory path's phase-1 encoding. A full-length batch that
+        // contains e.g. `undefined` would otherwise throw inside a worker
+        // mid-slice: that worker's earlier environments would already have
+        // advanced while the pool stays ready, leaving the batch partially
+        // executed and every later step desynced (#207). The ACTION_ENCODE
+        // label marks this as a per-request input error with the pool
+        // untouched, exactly like the shared-memory transport.
+        try {
+            for (const action of actions) {
+                this.encodeAction(action);
+            }
+        } catch (error) {
+            const tagged = error instanceof Error ? error : new Error(String(error));
+            (tagged as Error & { code?: string }).code = 'ACTION_ENCODE';
+            throw tagged;
+        }
+
         const batchStart = process.hrtime.bigint();
         const returnTimes: bigint[] = [];
 
