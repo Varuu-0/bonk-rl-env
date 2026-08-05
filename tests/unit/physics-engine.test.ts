@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   PhysicsEngine,
   PlayerInput,
@@ -340,6 +340,65 @@ describe('PhysicsEngine', () => {
       engine.addPlayer(0, 900, 0);
       engine.tick();
       expect(engine.getPlayerState(0).alive).toBe(false);
+    });
+
+    it('death circle follows the configured map center, not the world origin', () => {
+      engine = new PhysicsEngine();
+      // Map centered at (800, 800) map units (an arena offset from the world
+      // origin, like the bundled exports): the disc at spawn is ~50 units
+      // from the map center and must survive the first tick.
+      engine.setDeathCircleCenter(800, 800);
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+
+      // A disc more than 850 map units from the map center still dies with
+      // deathType 4 (native rule, measured from the map center).
+      engine.addPlayer(1, 800, 1700); // 900 map units from (800, 800)
+      engine.tick();
+      const outside = engine.getPlayerState(1);
+      expect(outside.alive).toBe(false);
+      expect(outside.deathType).toBe(4);
+    });
+
+    it('reset() clears a stale death-circle center back to the origin default', () => {
+      engine = new PhysicsEngine();
+      // Map centered at (800, 800): the disc ~50 units from that center survives.
+      engine.setDeathCircleCenter(800, 800);
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+
+      // Reused for a map WITHOUT a deathCenter: the stale (800, 800) center must
+      // not persist, so the same disc (~1167 from the origin) is now OOB.
+      engine.reset();
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(false);
+      expect(engine.getPlayerState(0).deathType).toBe(4);
+    });
+
+    it('non-finite death-circle center is ignored and never disables OOB', () => {
+      engine = new PhysicsEngine();
+      engine.setDeathCircleCenter(NaN, NaN);
+
+      // A disc just beyond the origin-based OOB radius must still die: the
+      // rejected NaN center must not have disabled the OOB check map-wide.
+      engine.addPlayer(0, 900, 0);
+      engine.tick();
+      const killed = engine.getPlayerState(0);
+      expect(killed.alive).toBe(false);
+      expect(killed.deathType).toBe(4);
+
+      // And a non-finite center must not clobber a previously valid one.
+      engine.reset();
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      engine.setDeathCircleCenter(800, 800);
+      engine.setDeathCircleCenter(Infinity, 0);
+      warned.mockRestore();
+      engine.addPlayer(1, 800, 850); // safe if center stayed (800, 800)
+      engine.tick();
+      expect(engine.getPlayerState(1).alive).toBe(true);
     });
   });
 

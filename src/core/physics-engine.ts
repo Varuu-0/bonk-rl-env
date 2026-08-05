@@ -175,7 +175,14 @@ export interface MapDef {
   bodies: MapBodyDef[];
   capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
   joints?: Array<{ type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number }; length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }>;
-  physics?: { ppm?: number; bounds?: { width: number; height: number } };
+  physics?: {
+    ppm?: number;
+    bounds?: { width: number; height: number };
+    /** Map-relative out-of-bounds death-circle center in map units. When absent
+     * the engine keeps the world origin, which is correct for maps authored
+     * around the origin (see setDeathCircleCenter). */
+    deathCenter?: { x: number; y: number };
+  };
 }
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
@@ -230,6 +237,10 @@ export class PhysicsEngine {
   private lastHitTicks: Map<number, number> = new Map();
   /** Cached squared OOB radius so tick() avoids per-player Math.sqrt. */
   private oobRadiusSquared: number = Math.pow(OUT_OF_BOUNDS_DISTANCE / SCALE, 2);
+  /** OOB death-circle center in world units. Defaults to the world origin;
+   * setDeathCircleCenter() moves it to the map center for exported maps. */
+  private oobCenterX: number = 0;
+  private oobCenterY: number = 0;
   /** Reused by getArenaBounds so the zero-GC observation path allocates nothing per step. */
   private _arenaBoundsCache: { halfWidth: number; halfHeight: number } = { halfWidth: 0, halfHeight: 0 };
 
@@ -649,6 +660,38 @@ export class PhysicsEngine {
     }
   }
 
+  /**
+   * Sets the out-of-bounds death-circle center in map coordinates.
+   *
+   * Native semantics (DEOBFUSCATION "Death Type 4"): a disc dies with
+   * deathType 4 when its center is more than 850 map units from the map
+   * center. The native engine authors maps around the world origin (editor
+   * canvas 730×500 with the world origin at the canvas center, §33.5), so
+   * its `GetPosition().Length()` check is origin-relative only because the
+   * map center IS the world origin. Exported maps carry their map-center
+   * offset in the fixture data (`physics.deathCenter`); maps already
+   * centered on the world origin keep the default (0, 0).
+   *
+   * The radius is unchanged: OUT_OF_BOUNDS_DISTANCE (850) map units from
+   * this center, measured to the disc center (native GetPosition, so the
+   * disc radius never widens or shrinks the boundary).
+   */
+  setDeathCircleCenter(centerXMapUnits: number, centerYMapUnits: number): void {
+    // A non-finite center would make every OOB distance check NaN, and NaN >
+    // threshold is false, silently disabling OOB elimination map-wide. Guard
+    // so the death circle is always defined: ignore the bad input and keep the
+    // previous (default-origin or last-valid) center.
+    if (!Number.isFinite(centerXMapUnits) || !Number.isFinite(centerYMapUnits)) {
+      console.warn(
+        `setDeathCircleCenter ignoring non-finite center (${centerXMapUnits}, ${centerYMapUnits}); ` +
+          `keeping the previous death-circle center so OOB elimination stays enabled`,
+      );
+      return;
+    }
+    this.oobCenterX = centerXMapUnits / SCALE;
+    this.oobCenterY = centerYMapUnits / SCALE;
+  }
+
   getBodyMap(): Map<string, any> {
     return this.platformBodyMap;
   }
@@ -1047,8 +1090,12 @@ export class PhysicsEngine {
     for (const [id, body] of Array.from(this.playerBodies)) {
       if (this.playerAlive.get(id)) {
         // Squared comparison avoids a per-player Math.sqrt; threshold identical.
+        // Distance is measured from the OOB death-circle center (defaults to
+        // the world origin; setDeathCircleCenter moves it to the map center).
         const pos = body.GetPosition();
-        if (pos.x * pos.x + pos.y * pos.y > this.oobRadiusSquared) {
+        const dx = pos.x - this.oobCenterX;
+        const dy = pos.y - this.oobCenterY;
+        if (dx * dx + dy * dy > this.oobRadiusSquared) {
           this.playerAlive.set(id, false);
           this.playerDeathType.set(id, 4);
           globalProfiler.increment('death_out_of_bounds');
@@ -1065,9 +1112,16 @@ export class PhysicsEngine {
     }
   }
 
+  /**
+   * Timed cap-zone (type 1) completion countdown, gated on the native
+   * `while (p >= l)` rule (DEOBFUSCATION §34.6, lines 3698-3703): the f
+   * countdown only advances while the zone progress is at the limit, so a
+   * contested zone (p < l) pauses the timer and a takeover team must hold
+   * the zone to the limit before the capture fires.
+   */
   private processCapZoneCountdowns(): void {
     for (const [, state] of this.capZoneState) {
-      if (state.f > 0) {
+      if (state.f > 0 && state.p >= state.l) {
         state.f--;
         if (state.f === 0) {
           const ownerTeam = state.ot;
@@ -1239,6 +1293,14 @@ export class PhysicsEngine {
     this.platformBodies = [];
     this.platformBodyMap = new Map();
     this.tickCount = 0;
+    // Reset the OOB death-circle center to the origin default. Although it is
+    // map-level configuration, it must not survive across maps: reusing this
+    // engine for a map without a physics.deathCenter would otherwise keep a
+    // stale center from the previous map and shift (never disable) the death
+    // circle. The environment re-applies deathCenter after every reset for maps
+    // that define it; maps without one fall back to the origin default.
+    this.oobCenterX = 0;
+    this.oobCenterY = 0;
   }
 
   /**

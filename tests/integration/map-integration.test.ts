@@ -8,6 +8,7 @@ import {
     TPS,
     DT
 } from '../../src/core/physics-engine';
+import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
 import { loadMap, addAllBodies, getSpawnXY, getMapFiles } from '../utils/map-loader';
 
@@ -599,5 +600,78 @@ describe('MapIntegration', () => {
                 }
             );
         });
+    });
+
+    describe('out-of-bounds death circle follows the map center', () => {
+        // Native death type 4 (DEOBFUSCATION "Death Type 4"): a disc dies when
+        // its center is more than 850 map units from the MAP center. The
+        // bundled exports are captured in a coordinate space offset from the
+        // native world origin, so each fixture's physics.deathCenter carries
+        // the map center (730, 500) in export units. Spawn points must survive;
+        // a disc placed > 850 units from that center must die with deathType 4.
+        it.each(['simple1v1', 'ballPit'] as const)(
+            '%s spawn survives while a disc beyond 850 map units from the map center dies',
+            (key) => {
+                const map = loadMap(MAP_FILES[key]);
+                const dc = (map as any).physics?.deathCenter;
+                expect(dc).toBeDefined();
+
+                const sp = getSpawnXY(map);
+                expect(Math.hypot(sp.x - dc.x, sp.y - dc.y)).toBeLessThan(850);
+
+                const e = new PhysicsEngine();
+                try {
+                    addAllBodies(e, map);
+                    e.setDeathCircleCenter(dc.x, dc.y);
+
+                    // Idle player at the map spawn survives 5 full ticks.
+                    e.addPlayer(0, sp.x, sp.y);
+                    for (let i = 0; i < 5; i++) {
+                        e.applyInput(0, EMPTY_INPUT);
+                        e.tick();
+                    }
+                    const atSpawn = e.getPlayerState(0);
+                    expect(atSpawn.alive).toBe(true);
+                    expect(e.getTickCount()).toBe(5);
+
+                    // Disc 900 map units from the map center: inside the reported
+                    // arena bounds but far outside the 850-unit death circle.
+                    e.addPlayer(1, dc.x + 900, dc.y);
+                    e.tick();
+                    const farDisc = e.getPlayerState(1);
+                    expect(farDisc.alive).toBe(false);
+                    expect(farDisc.deathType).toBe(4);
+                } finally {
+                    safeDestroy(e);
+                }
+            },
+        );
+
+        it.each(['simple1v1', 'ballPit'] as const)(
+            '%s environment episode survives 5+ ticks with players alive at spawn',
+            (key) => {
+                const map = loadMap(MAP_FILES[key]);
+                const env = new BonkEnvironment({
+                    mapData: map as any,
+                    numOpponents: 1,
+                    randomOpponent: false,
+                    seed: 42,
+                    maxTicks: 100,
+                });
+                try {
+                    let done = false;
+                    for (let i = 0; i < 5; i++) {
+                        const r = env.step(0);
+                        expect(r.info.aiAlive).toBe(true);
+                        expect(r.info.opponentsAlive).toBe(1);
+                        expect(r.observation.tick).toBe(i + 1);
+                        done = r.done;
+                    }
+                    expect(done).toBe(false);
+                } finally {
+                    env.close();
+                }
+            },
+        );
     });
 });
