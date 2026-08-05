@@ -47,8 +47,12 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
   '-t': 'enableTelemetry',
 
   // Profiling level
+  // NOTE: `-p` is deliberately NOT an alias here — it belongs to `--port` in
+  // config-loader. Use `-l` (or `--profile-level`) instead, so the two parsers
+  // never read the same short flag with different meanings (issue #184).
   '--profile': 'profileLevel',
-  '-p': 'profileLevel',
+  '--profile-level': 'profileLevel',
+  '-l': 'profileLevel',
 
   // Debug level
   '--debug': 'debugLevel',
@@ -75,7 +79,8 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
 function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlags; valid: boolean; value: unknown } | null {
   switch (flag) {
     case '--profile':
-    case '-p':
+    case '--profile-level':
+    case '-l':
       if (value === 'minimal' || value === 'standard' || value === 'detailed') {
         return { key: 'profileLevel', valid: true, value };
       }
@@ -256,7 +261,7 @@ export function isAnyTelemetryEnabled(): boolean {
     // Keep the fast path exactly aligned with parseFlags(): only the
     // space-separated, valid-value forms imply telemetry.
     const nextArg = argv[i + 1];
-    if ((arg === '--profile' || arg === '-p') &&
+    if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
       return true;
     }

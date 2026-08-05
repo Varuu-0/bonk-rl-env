@@ -28,7 +28,7 @@ npx tsx src/main.ts -t --profile detailed --debug verbose
 | Flag | Alias | Description | Default |
 |:-----|:------|:------------|:--------|
 | `--telemetry` | `-t` | Master switch to enable telemetry | `false` |
-| `--profile` | `-p` | Profiling detail level | `standard` |
+| `--profile` / `--profile-level` | `-l` | Profiling detail level | `standard` |
 | `--debug` | `-d` | Debug output level | `none` |
 | `--output` | `-o` | Output format | `console` |
 | `--dashboard-port` | — | HTTP port for telemetry dashboard | `3001` |

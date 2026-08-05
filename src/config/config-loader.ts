@@ -2,7 +2,7 @@
  * config-loader.ts — Layered configuration system
  *
  * Resolution order (highest priority wins):
- *   1. CLI flags          (--port, --telemetry, --profile, --debug, --max-runtime)
+ *   1. CLI flags          (--port/-p, --telemetry, --profile[--level]/-l, --debug, --max-runtime)
  *   2. Environment vars   (PORT, TEST_MODE, MANIFOLD_TELEMETRY, MANIFOLD_*)
  *   3. config.json file   (project root, optional)
  *   4. Built-in defaults  (hardcoded below)
@@ -425,6 +425,8 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 break;
 
             case '--profile':
+            case '--profile-level':
+            case '-l':
                 if (next) {
                     if (next === 'minimal' || next === 'standard' || next === 'detailed') {
                         config.telemetry.profileLevel = next;
