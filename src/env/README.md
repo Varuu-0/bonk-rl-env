@@ -19,7 +19,7 @@ class BonkEnv {
   async start(): Promise<void>;
   async stop(): Promise<void>;
   async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any>;
-  async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]>;
+  async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]>;
   isActive(): boolean;
 }
 ```
@@ -46,6 +46,19 @@ class EnvManager {
 - `EnvManager` provides lifecycle management for parallel environment pools
 - Port allocation range: 6000–7000 (configurable)
 - Environments run in separate processes for true parallelism
+
+## Batch semantics
+
+`EnvManager`'s batch methods cover every *internal* environment of the
+manager's pools: a `BonkEnv` configured with `numEnvs: N` contributes `N`
+entries to each batch. `resetAll(seeds)` and `stepAll(actions)` therefore
+expect exactly one seed / exactly one action per internal environment
+(`sum(numEnvs)` across all created `BonkEnv`s) and return a single flat array
+with one entry per internal environment — the same shape from both APIs. A
+count mismatch is rejected with an `Invalid seed batch` / `Invalid action
+batch` error before any pool is touched, so an under-sized batch can never
+silently leave internal environments unseeded or fail a multi-env worker
+pool.
 
 ## Result Ownership
 
