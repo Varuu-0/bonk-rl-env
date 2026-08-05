@@ -984,7 +984,7 @@ describe('config-loader env vars and CLI', () => {
             expect(example.physics.positionIterations).toBeUndefined();
             expect(example.player.friction).toBe(0.001337);
             expect(example.player.restitution).toBe(0.95);
-            expect(example.player.moveForce).toBe(12);
+            expect(example.player.moveForce).toBe(24);
             expect(example.grapple.maxDistance).toBe(10);
             expect(example.grapple.jointFrequencyHz).toBe(2);
             expect(example.grapple.jointDampingRatio).toBe(0);
@@ -1002,7 +1002,7 @@ describe('config-loader env vars and CLI', () => {
             const defaults = getDefaults();
             expect(defaults.player.friction).toBe(0.001337);
             expect(defaults.player.restitution).toBe(0.95);
-            expect(defaults.player.moveForce).toBe(12.0);
+            expect(defaults.player.moveForce).toBe(24.0);
             expect((defaults.player as any).density).toBeUndefined();
             expect(defaults.grapple.maxDistance).toBe(10.0);
             expect(defaults.grapple.jointFrequencyHz).toBe(2.0);

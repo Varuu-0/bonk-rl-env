@@ -94,8 +94,22 @@ export const A1A_RECHARGE = 3;
 export const ARENA_HALF_WIDTH = 25;
 export const ARENA_HALF_HEIGHT = 20;
 
-/** Bonk's default movement force before scale-ratio and balance modifiers. */
-export const MOVE_FORCE = 12.0;
+/**
+ * Movement-force base for the player disc before the radius^2 scale and any
+ * heavy damp (DEOBFUSCATION §35.5 movement branch, lines 7979-7997:
+ * `state.ms.fl ? 20 : 12`, scaled by radius^2 and then by 0.7 for heavy).
+ *
+ * The verified mass-1 disc fixture (#212) plus gravity 20 leave the native
+ * 12 N base unable to lift the disc (net `Δv = (−12 + 20)·dt` downward), so
+ * the RL "up" bit could never produce ascent (#234). This port doubles the
+ * base to 24 N: with the mass-1 fixture the net upward acceleration is
+ * `(−24 + 20)` = −4 m/s², restoring the pre-#212 up-acceleration magnitude
+ * (≈ −3.9 m/s² at the old mass 0.5027 fixture) at the verified mass-1
+ * fixture. The radius^2 scale is applied relative to the canonical disc
+ * (DEFAULT_PPM/SCALE), so the default ppm = 12 cancels the ratio to 1.0 and
+ * only non-default map `ppm` values change the applied force.
+ */
+export const MOVE_FORCE = 24.0;
 
 /** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
 export const OUT_OF_BOUNDS_DISTANCE = 850;
@@ -798,10 +812,15 @@ export class PhysicsEngine {
     force.x = 0;
     force.y = 0;
 
-    if (input.left) force.x -= MOVE_FORCE;
-    if (input.right) force.x += MOVE_FORCE;
-    if (input.up) force.y -= MOVE_FORCE;
-    if (input.down) force.y += MOVE_FORCE;
+    // Native movement-force scale (DEOBFUSCATION §35.5): base force ×
+    // radius^2, with the radius measured relative to the canonical disc
+    // (ratio = 1.0 at the default ppm = DEFAULT_PPM); heavy then damps ×0.7.
+    const magnitude = MOVE_FORCE * (this.ppm / DEFAULT_PPM) ** 2;
+
+    if (input.left) force.x -= magnitude;
+    if (input.right) force.x += magnitude;
+    if (input.up) force.y -= magnitude;
+    if (input.down) force.y += magnitude;
 
     if (input.heavy) force.Multiply(HEAVY_FORCE_MULTIPLIER);
     body.ApplyForce(force, body.GetWorldCenter());

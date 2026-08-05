@@ -288,8 +288,12 @@ describe('PhysicsEngine', () => {
       expect(GRAVITY_Y).toBe(20);
     });
 
-    it('MOVE_FORCE is 12', () => {
-      expect(MOVE_FORCE).toBe(12);
+    // DEOBFUSCATION.md §35.5: native movement-force base is 12 (flipped 20),
+    // scaled by radius^2 and ×0.7 for heavy. #234 raises the default base to
+    // 24 (2× the native 12) so the verified mass-1 disc can out-thrust
+    // gravity 20 — a pure "up" input must produce upward acceleration.
+    it('MOVE_FORCE is 24', () => {
+      expect(MOVE_FORCE).toBe(24);
     });
 
     it('DEFAULT_PPM is 12', () => {

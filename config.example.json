@@ -38,8 +38,8 @@
     "_doc_friction": "Player disc surface friction, verified live 2026-07-29 native fixture (DEOBFUSCATION 38.6). Not consumed by the engine, which hardcodes the verified value. Type: float. Range: 0.0-1.0. Default: 0.001337. Env: PLAYER_FRICTION. CLI: --player-friction",
     "restitution": 0.95,
     "_doc_restitution": "Player disc bounciness, verified live 2026-07-29 native fixture (DEOBFUSCATION 38.6). Not consumed by the engine, which hardcodes the verified value. Type: float. Range: 0.0-1.0. Default: 0.95. Env: PLAYER_RESTITUTION. CLI: --player-restitution",
-    "moveForce": 12.0,
-    "_doc_moveForce": "Applied force for horizontal movement. Type: float. Range: 0.01+. Default: 12.0. Env: PLAYER_MOVE_FORCE. CLI: --player-move-force",
+    "moveForce": 24.0,
+    "_doc_moveForce": "Movement-force base applied to all directions, scaled by disc radius^2 (canonical-relative) and x0.7 for heavy (DEOBFUSCATION 35.5). Not consumed by the engine, which hardcodes the verified value. Default base 12 (native, fl?20:12) cannot lift the verified mass-1 disc against gravity 20 (#234); the port default 24 (2x native) restores upward acceleration for a pure up input. Type: float. Range: 0.01+. Default: 24.0. Env: PLAYER_MOVE_FORCE. CLI: --player-move-force",
     "heavyMassMultiplier": 0.7,
     "_doc_heavyMassMultiplier": "DEPRECATED: This is a FORCE multiplier (0.7x movement force when heavy), not a mass multiplier. Kept for backward compat. Type: float. Default: 0.7. Env: PLAYER_HEAVY_MASS_MULTIPLIER. CLI: --player-heavy-mass-multiplier"
   },
