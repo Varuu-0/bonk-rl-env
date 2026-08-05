@@ -498,17 +498,26 @@ export class PhysicsEngine {
       }
 
       // Apply collision filtering: `collides` gates only the player-group bits
-      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010). The map-body
-      // category 0x0001 always stays in maskBits so map geometry stays solid to
-      // other map bodies. `collidesWithPlayers` is map passthrough only: the
-      // native `f_p` flag subtracts just category bit 0 from maskBits
+      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010), mirroring the
+      // native mask construction (DEOBFUSCATION §33.4) where maskBits starts at
+      // the full mask and only false group flags subtract their bit — the map
+      // category is never subtracted. Here that means the map category 0x0001
+      // stays in maskBits whenever at least one player group is enabled, so map
+      // geometry stays solid to other map bodies. An all-false `collides` body
+      // (legacy "ghost geometry" such as visual/no-Physics-style barriers)
+      // keeps its fully-ghost mask 0x0000 so third-party-map behavior is
+      // unchanged. `collidesWithPlayers` is map passthrough only: the native
+      // `f_p` flag subtracts just category bit 0 from maskBits
       // (DEOBFUSCATION §33.4), which is this port's map-body category — never
       // the player bits 0x0002/0x0004 — so platforms must remain solid to
       // players in every case.
       if (def.collides) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
-        filter.maskBits = 0x0001;     // Map bodies always collide with each other
+        filter.maskBits =
+          (def.collides.g1 || def.collides.g2 || def.collides.g3 || def.collides.g4)
+            ? 0x0001 // Map bodies always collide with each other
+            : 0x0000; // All-false legacy ghost geometry
         if (def.collides.g1) filter.maskBits |= 0x0002;
         if (def.collides.g2) filter.maskBits |= 0x0004;
         if (def.collides.g3) filter.maskBits |= 0x0008;

@@ -472,7 +472,7 @@ describe('MapIntegration', () => {
                         dynamic.push({ ...b, name: `ballpit_${i}` });
                     }
                 });
-                expect(dynamic.length).toBeGreaterThan(0);
+                expect(dynamic.length).toBe(48);
 
                 const bodyMap = engine.getBodyMap();
                 for (let i = 0; i < 120; i++) {

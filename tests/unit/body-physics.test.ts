@@ -336,6 +336,31 @@ describe('Body Physics', () => {
             expect(state.y).toBeLessThanOrEqual(100);
         });
 
+        it('player rests on floor with collidesWithPlayers=false and no collides (default filter)', () => {
+            engine = new PhysicsEngine();
+
+            const floor: MapBodyDef = {
+                name: 'defaultFilterFloor',
+                type: 'rect',
+                x: 0,
+                y: 100,
+                width: 800,
+                height: 30,
+                static: true,
+                collidesWithPlayers: false,
+            };
+
+            engine.addBody(floor);
+            engine.addPlayer(0, 0, 95);
+
+            for (let i = 0; i < 45; i++) {
+                engine.tick();
+            }
+
+            const state = engine.getPlayerState(0);
+            expect(state.y).toBeLessThanOrEqual(100);
+        });
+
         it('player is stopped by floor with default collidesWithPlayers', () => {
             engine = new PhysicsEngine();
 
