@@ -101,6 +101,14 @@ export interface EnvironmentConfig {
      * environment config verbatim, so this is the end-to-end documented surface (#199).
      */
     defaultMapPath?: string;
+    /**
+     * Player slot index controlled by the RL agent (0-7, default 0). The agent
+     * observes, controls, and is rewarded for this slot; every other spawned
+     * slot is an opponent (`AI_PLAYER_ID` | `--ai-player-id` |
+     * `environment.aiPlayerId`). Must be within [0, numOpponents], the AI slot
+     * plus one slot per opponent (#221).
+     */
+    aiPlayerId?: number;
     /** Opponent random-policy probabilities */
     oppMoveProb?: number;
     oppUpProb?: number;
@@ -227,6 +235,7 @@ export class BonkEnvironment {
             ppm: this.ppm,
             mapPath: mapFile,
             defaultMapPath: config.defaultMapPath ?? '',
+            aiPlayerId: config.aiPlayerId ?? 0,
             oppMoveProb,
             oppUpProb,
             oppDownProb,
@@ -240,6 +249,22 @@ export class BonkEnvironment {
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
         };
+
+        // The AI slot is config-driven, never hardcoded to 0 (#221). An
+        // out-of-range slot fails loudly here instead of being silently
+        // ignored: with numOpponents opponents the spawned players occupy
+        // slots [0, numOpponents] (the AI plus one slot per opponent).
+        this.aiPlayerId = this.config.aiPlayerId;
+        if (!Number.isInteger(this.aiPlayerId) || this.aiPlayerId < 0) {
+            throw new Error(
+                `Invalid aiPlayerId ${this.aiPlayerId}: expected a non-negative integer player slot`,
+            );
+        }
+        if (this.aiPlayerId > this.config.numOpponents) {
+            throw new Error(
+                `Invalid aiPlayerId ${this.aiPlayerId}: with ${this.config.numOpponents} opponent(s) the player slots are 0..${this.config.numOpponents}`,
+            );
+        }
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
@@ -373,8 +398,10 @@ export class BonkEnvironment {
         const teamB = spawnPoints.team_blue || (spawnKeys.length > 0 ? spawnPoints[spawnKeys[0]] : null) || { x: -200, y: -100 };
         const teamR = spawnPoints.team_red || { x: 200, y: -100 };
 
-        // Add AI player
-        this.aiPlayerId = 0;
+        // Add the AI player on its configured slot (never reassigned to 0
+        // here), then one opponent per remaining slot of [0, numOpponents]
+        // (#221). The AI spawns on the blue team spawn and opponents on the
+        // red team spawn regardless of slot numbering, as before.
         this.physics.addPlayer(
             this.aiPlayerId,
             teamB.x,
@@ -383,14 +410,14 @@ export class BonkEnvironment {
 
         // Add opponent(s)
         this.opponentIds = [];
-        for (let i = 0; i < this.config.numOpponents; i++) {
-            const id = i + 1;
+        for (let slot = 0; slot <= this.config.numOpponents; slot++) {
+            if (slot === this.aiPlayerId) continue;
             this.physics.addPlayer(
-                id,
+                slot,
                 teamR.x,
                 teamR.y,
             );
-            this.opponentIds.push(id);
+            this.opponentIds.push(slot);
         }
 
         // Set team assignments
