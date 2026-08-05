@@ -224,7 +224,7 @@ Run the perf suite alone:
 npm run test:perf
 ```
 
-`tests/perf/memory-stability.test.ts` asserts there is no significant heap growth after many `env.reset()` and `env.step()` iterations. To measure actual retained memory rather than GC timing, `vitest.config.ts` passes `--expose-gc` to the test fork pool via `execArgv`, which makes `global.gc` available inside the test process. The test asserts `global.gc` is a function before sampling the heap, so the GC precondition can never silently regress into a no-op assertion.
+`tests/perf/memory-stability.test.ts` asserts there is no significant heap growth after many `env.reset()` and `env.step()` iterations. The measurement runs in a dedicated `node --expose-gc` subprocess (`tests/perf/memory-probe.ts`), which guarantees `global.gc` works and isolates the sample from concurrent-fork GC timing noise. The probe forces a full GC before and after a warm-up pass and a measured pass, then reports retained growth per memory category (V8 `heapUsed`, `external`, `arrayBuffers`, `rss`). The test fails if the probe exits non-zero, so the GC precondition can never silently regress into a no-op assertion.
 
 ## Coverage Goals
 

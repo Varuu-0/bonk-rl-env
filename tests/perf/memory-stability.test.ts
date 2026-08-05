@@ -1,38 +1,50 @@
 import { describe, it, expect } from 'vitest';
-import { BonkEnvironment } from '../../src/core/environment';
+import { execFileSync } from 'node:child_process';
+import { join } from 'node:path';
 
-// global.gc is exposed to test forks via `execArgv: ['--expose-gc']` in
-// vitest.config.ts. Asserting the precondition makes the heap-growth
-// measurement meaningful: it samples actual retained memory after a forced
-// GC, not whatever V8 happened to have collected between two raw samples.
-function forceFullGC(): void {
-  if (typeof global.gc !== 'function') {
-    throw new Error(
-      'global.gc is unavailable: vitest must run with --expose-gc (see vitest.config.ts `execArgv`)'
-    );
-  }
-  global.gc();
-  global.gc();
-}
+// The heap measurement runs in a dedicated `node --expose-gc` subprocess
+// (tests/perf/memory-probe.ts) instead of the vitest fork, so:
+//   - `global.gc` is always available (the vitest forks pool has no
+//     --expose-gc), making the assertion measure actual retained memory
+//     after forced GC rather than GC timing.
+//   - `--expose-gc` is scoped to that one measurement process instead of
+//     every test fork in the suite.
+//   - native/external memory categories are measured alongside V8 heap.
+// vitest resolves from the project root as cwd, so the probe path is
+// anchored relative to it.
+const probePath = join(process.cwd(), 'tests', 'perf', 'memory-probe.ts');
 
 describe('Memory stability', () => {
   it('no significant heap growth after many resets', () => {
-    const env = new BonkEnvironment({ maxTicks: 5000 });
-    forceFullGC();
-    const initialHeap = process.memoryUsage().heapUsed;
-
-    for (let i = 0; i < 50; i++) {
-      env.reset();
-      for (let j = 0; j < 100; j++) {
-        env.step(0);
-      }
+    let report = '';
+    let stderr = '';
+    let exitCode: number;
+    try {
+      report = execFileSync(process.execPath, ['--expose-gc', '--import', 'tsx', probePath], {
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      exitCode = 0;
+    } catch (err) {
+      const error = err as { status?: number; stdout?: string; stderr?: string };
+      exitCode = error.status ?? 1;
+      report = error.stdout ?? '';
+      stderr = error.stderr ?? '';
     }
 
-    forceFullGC();
-    const finalHeap = process.memoryUsage().heapUsed;
-    const growthMB = (finalHeap - initialHeap) / (1024 * 1024);
+    const results = JSON.parse(
+      (report.match(/\{.*\}/) ?? [''])[0] || '{}'
+    ) as Record<string, number>;
+    const growthMB = results.heapUsedMB ?? NaN;
+    const detail = (`${report}\n${stderr}`).trim();
 
-    env.close();
-    expect(growthMB).toBeLessThan(20);
+    expect(
+      exitCode,
+      `memory probe exited ${exitCode}; ${detail}`
+    ).toBe(0);
+    expect(
+      growthMB,
+      `retained heap growth ${growthMB.toFixed(2)} MB exceeds ${results.thresholdMB ?? 20} MB`
+    ).toBeLessThan(results.thresholdMB ?? 20);
   });
 });
