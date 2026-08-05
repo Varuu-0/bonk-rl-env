@@ -20,12 +20,26 @@ export class IpcBridge {
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
-        this.bindAddress = config?.server?.bindAddress ?? getConfig().server.bindAddress;
+        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+    }
+
+    /**
+     * Normalize a configured bind address into a ZMQ endpoint-ready host.
+     * Empty/whitespace values fall back to the loopback default, and bare
+     * IPv6 literals are wrapped in the brackets the tcp:// endpoint syntax
+     * requires (issue #235).
+     */
+    private static normalizeBindAddress(raw: string | undefined): string {
+        const addr = (raw ?? '').trim();
+        if (addr.length === 0) {
+            return '127.0.0.1';
+        }
+        return addr.includes(':') && !addr.startsWith('[') ? `[${addr}]` : addr;
     }
 
     // Wrapped send function for telemetry

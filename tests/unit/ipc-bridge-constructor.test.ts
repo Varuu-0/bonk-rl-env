@@ -111,6 +111,21 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getBindAddress()).toBe('0.0.0.0');
   });
 
+  it('wraps a bare IPv6 bind address in brackets for the tcp endpoint', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '::1' } });
+    expect(bridge.getBindAddress()).toBe('[::1]');
+  });
+
+  it('keeps an already-bracketed IPv6 bind address as-is', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '[::1]' } });
+    expect(bridge.getBindAddress()).toBe('[::1]');
+  });
+
+  it('falls back to the loopback default for an empty bind address', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '  ' } });
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
   it('falls back to getConfig().server.bindAddress when no config', () => {
     const bridge = new IpcBridge();
     expect(bridge.getBindAddress()).toBe('127.0.0.1');
@@ -160,6 +175,15 @@ describe('IpcBridge start()', () => {
     const startPromise = bridge.start();
     await new Promise(r => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://0.0.0.0:12348');
+    await bridge.close();
+    await startPromise;
+  });
+
+  it('binds an IPv6 bind address with brackets in the endpoint (issue #235)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '::1' } });
+    const startPromise = bridge.start();
+    await new Promise(r => setTimeout(r, 10));
+    expect(bindSpy).toHaveBeenCalledWith('tcp://[::1]:12348');
     await bridge.close();
     await startPromise;
   });

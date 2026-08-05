@@ -17,10 +17,30 @@ import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { PortManager } from '../../src/utils/port-manager';
 
+const BIND_ADDRESS = '127.0.0.2';
+const EXPECTED_ENDPOINT = `tcp://${BIND_ADDRESS}`;
+
+/**
+ * Wait until the ROUTER socket reports the configured bind endpoint (or
+ * timeout). This deterministically awaits the async bind() instead of racing
+ * a fixed sleep, and surfaces a bind failure as an assertion instead of a
+ * flaky lastEndpoint read.
+ */
+async function waitForBindEndpoint(sock: any, endpoint: string, timeoutMs: number = 10000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (sock.lastEndpoint === endpoint) {
+      return;
+    }
+    await new Promise(r => setTimeout(r, 25));
+  }
+  expect(sock.lastEndpoint, `socket did not bind to ${endpoint}`).toBe(endpoint);
+}
+
 describe('IpcBridge honors a configured bind address (issue #235)', () => {
-  const BIND_ADDRESS = '127.0.0.2';
   let bridge: IpcBridge;
   let client: zmq.Dealer;
+  let startPromise: Promise<void>;
   let portManager: PortManager;
   let port: number;
 
@@ -28,22 +48,27 @@ describe('IpcBridge honors a configured bind address (issue #235)', () => {
     portManager = new PortManager({ startPort: 15700, endPort: 15799 });
     port = portManager.allocate();
     bridge = new IpcBridge({ server: { port, bindAddress: BIND_ADDRESS } } as any);
-    // start() runs the serve loop until close(), so do not await it.
-    void bridge.start();
+    // start() runs the serve loop until close(), so do not await it here.
+    // Keep the promise referenced so a bind failure is a handled rejection
+    // that the readiness poll below surfaces as a test failure.
+    startPromise = bridge.start();
+    startPromise.catch(() => { /* surfaced by waitForBindEndpoint */ });
+    await waitForBindEndpoint((bridge as any).sock, `${EXPECTED_ENDPOINT}:${port}`);
     client = new zmq.Dealer();
     await client.connect(`tcp://${BIND_ADDRESS}:${port}`);
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise(r => setTimeout(r, 100));
   }, 30000);
 
   afterAll(async () => {
     try { client.close(); } catch { /* ignore */ }
     try { await bridge.close(); } catch { /* ignore */ }
+    try { await startPromise; } catch { /* ignore */ }
     portManager.release(port);
   }, 10000);
 
   it('binds the socket to the configured bind address (last endpoint)', () => {
     const sock: any = (bridge as any).sock;
-    expect(sock.lastEndpoint).toBe(`tcp://${BIND_ADDRESS}:${port}`);
+    expect(sock.lastEndpoint).toBe(`${EXPECTED_ENDPOINT}:${port}`);
   });
 
   it('exposes the configured bind address via getBindAddress()', () => {
