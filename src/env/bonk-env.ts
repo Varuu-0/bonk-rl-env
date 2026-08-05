@@ -145,11 +145,11 @@ export class BonkEnv {
 
     /**
      * Take a step in the environment with the given action(s).
-     * @param actions Action(s) to apply
+     * @param actions Action(s) to apply, one per internal environment
      * @param options Result ownership mode; caller-owned by default
-     * @returns Step result(s) containing observation, reward, done, truncated, info
+     * @returns Step results, one per internal environment, containing observation, reward, done, truncated, info
      */
-    async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]> {
+    async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]> {
         if (!this.isRunning || !this.pool) {
             throw new Error(`Environment ${this.id} is not running`);
         }

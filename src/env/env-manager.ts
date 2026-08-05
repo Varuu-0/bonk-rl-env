@@ -217,7 +217,8 @@ export class EnvManager {
      * Step all environments with the given actions.
      * @param actions Actions for each environment
      * @param options Result ownership mode; caller-owned by default
-     * @returns Array of step results
+     * @returns Flat array of step results, one per environment, matching the
+     *   shape returned by {@link resetAll}
      */
     async stepAll(actions: any[], options?: ResultOwnershipOptions): Promise<any[]> {
         const envs = this.getAllEnvs();
@@ -228,7 +229,22 @@ export class EnvManager {
             return env.step(action !== undefined ? [action] : [], options);
         });
         
-        return Promise.all(stepPromises);
+        const stepResults = await Promise.all(stepPromises);
+        
+        // Each BonkEnv.step resolves to an array (its worker pool always
+        // resolves one result per environment), so flatten the batch into the
+        // same flat shape resetAll returns instead of a nested StepResult[][]
+        // (issue #198). The pooled array path is fully symmetric with the
+        // resetAll flattening below.
+        const results: any[] = [];
+        for (const result of stepResults) {
+            if (Array.isArray(result)) {
+                results.push(...result);
+            } else {
+                results.push(result);
+            }
+        }
+        return results;
     }
 
     /**

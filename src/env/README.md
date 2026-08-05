@@ -19,7 +19,7 @@ class BonkEnv {
   async start(): Promise<void>;
   async stop(): Promise<void>;
   async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any>;
-  async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]>;
+  async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]>;
   isActive(): boolean;
 }
 ```
