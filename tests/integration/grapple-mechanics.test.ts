@@ -35,12 +35,12 @@ describe('GrappleMechanics', () => {
     });
   });
 
-  describe('grapple joint tuning fields', () => {
-    // The native grapple reads per-fixture frequencyHz (fh) / dampingRatio (dr)
-    // from map data. The simulator stores these on the body and applies them to
-    // the distance joint on attach. We assert the fields are accepted and the
-    // resulting grapple stays stable — we do NOT assert any invented impulse.
-    it('grapple to a body with frequencyHz/dampingRatio does not throw', () => {
+  describe('grapple joint tuning (verified swingF=2 / swingD=0)', () => {
+    // Verified native (DEOBFUSCATION §32.4): the grapple joint uses
+    // frequencyHz = (sep < swing.l) ? 0.01 : swingF and dampingRatio = swingD,
+    // with the only table-proven writers being swingF = 2 and swingD = 0.
+    // Map fh/dr fields belong to "d" joints and never affect the grapple.
+    it('map fh/dr fields do not affect the grapple joint (swingF=2 / swingD=0)', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({
         name: 'tuned-platform',
@@ -53,6 +53,14 @@ describe('GrappleMechanics', () => {
 
       expect(() => engine!.applyInput(0, GRAPPLE_INPUT)).not.toThrow();
       expect(engine.hasGrappleJoint(0)).toBe(true);
+
+      const joint = (engine as any).playerGrappleJoints.get(0);
+      // Taut at attach: separation == rest length -> swingF = 2 Hz.
+      expect(joint.m_frequencyHz).toBe(2.0);
+      expect(joint.m_dampingRatio).toBe(0.0);
+      expect(joint.m_frequencyHz).not.toBe(7.5);
+      expect(joint.m_dampingRatio).not.toBe(0.3);
+
       for (let i = 0; i < 15; i++) engine.tick();
 
       const state = engine.getPlayerState(0);
@@ -75,6 +83,42 @@ describe('GrappleMechanics', () => {
       expect(Number.isFinite(state.y)).toBe(true);
       expect(Number.isFinite(state.velX)).toBe(true);
       expect(Number.isFinite(state.velY)).toBe(true);
+    });
+
+    it('switches to the 0.01 Hz slack branch when the rope goes slack', () => {
+      // Platform BELOW the player: gravity pulls the disc toward the anchor,
+      // separation shrinks below the rest length -> slack -> 0.01 Hz.
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'slack-platform', x: 0, y: 50 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      const joint = (engine as any).playerGrappleJoints.get(0);
+      expect(joint.m_frequencyHz).toBe(2.0); // taut at attach (sep == length)
+
+      for (let i = 0; i < 3; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
+      expect(joint.m_frequencyHz).toBe(0.01);
+    });
+
+    it('stays on the swingF=2 Hz branch while the rope is taut', () => {
+      // Platform ABOVE the player: gravity pulls the disc away from the
+      // anchor, separation grows -> stays taut -> 2 Hz.
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'taut-platform', x: 0, y: -50 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      const joint = (engine as any).playerGrappleJoints.get(0);
+      expect(joint.m_frequencyHz).toBe(2.0);
+
+      for (let i = 0; i < 10; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
+      expect(joint.m_frequencyHz).toBe(2.0);
     });
   });
 
@@ -136,10 +180,14 @@ describe('GrappleMechanics', () => {
   });
 
   describe('innerGrapple', () => {
-    it('prevents grapple when innerGrapple is true', () => {
+    // Verified native (§32.1 final gate, lines 8297-8306): a candidate wins
+    // if `innerGrapple || !TestPoint(playerPos)` — innerGrapple only permits
+    // attaching while the disc center is INSIDE the shape; it does not block
+    // grappling a surface from outside.
+    it('allows grapple from outside an innerGrapple platform', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({
-        name: 'inner-grapple-platform',
+        name: 'inner-grapple-outside',
         x: 0,
         y: 50,
         innerGrapple: true,
@@ -148,12 +196,41 @@ describe('GrappleMechanics', () => {
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
-      for (let i = 0; i < 20; i++) engine.tick();
-      engine.applyInput(0, noInput());
-      for (let i = 0; i < 30; i++) engine.tick();
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+      for (let i = 0; i < 15; i++) engine.tick();
 
       const state = engine.getPlayerState(0);
-      expect(state.y).toBeGreaterThan(100);
+      expect(state.alive).toBe(true);
+      expect(state.y).toBeLessThan(200);
+    });
+
+    it('prevents grapple from inside a non-innerGrapple platform', () => {
+      // Player starts inside the platform shape (TestPoint true), no
+      // innerGrapple flag -> the candidate is skipped.
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({
+        name: 'inside-no-inner',
+        x: 0,
+        y: 0,
+      }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(false);
+    });
+
+    it('allows grapple from inside an innerGrapple platform', () => {
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({
+        name: 'inside-inner',
+        x: 0,
+        y: 0,
+        innerGrapple: true,
+      }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(true);
     });
 
     it('allows grapple when innerGrapple is false', () => {
@@ -177,12 +254,17 @@ describe('GrappleMechanics', () => {
 
   describe('grapple release', () => {
     it('releases grapple and player falls', () => {
+      // Platform ABOVE the player: the rope is taut (swingF=2 Hz holds the
+      // disc against gravity); after release the disc falls freely.
       engine = new PhysicsEngine();
-      engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
+      engine.addBody(makePlatformDef({ name: 'p', x: 0, y: -50 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
-      for (let i = 0; i < 10; i++) engine.tick();
+      for (let i = 0; i < 10; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
 
       const attachedState = engine.getPlayerState(0);
 
@@ -190,7 +272,7 @@ describe('GrappleMechanics', () => {
       for (let i = 0; i < 30; i++) engine.tick();
 
       const releasedState = engine.getPlayerState(0);
-      expect(releasedState.y).toBeGreaterThan(attachedState.y);
+      expect(releasedState.y).toBeGreaterThan(attachedState.y + 50);
       expect(releasedState.alive).toBe(true);
     });
 
@@ -275,13 +357,39 @@ describe('GrappleMechanics', () => {
     });
   });
 
-  describe('grapple distance limit', () => {
-    it('fails to grapple when platform is beyond 10m', () => {
+  describe('grapple target window', () => {
+    // Verified native (§32.1): QueryAABB ±10 world units around the disc
+    // center, scored by center-to-surface distance < 10. There is no
+    // 500/SCALE reach — the 500 literal is the a1a energy threshold.
+    it('attaches when the surface is within the 10-unit window (8.0 world units)', () => {
+      // 200x20 platform at y=250 map units: surface at (250-10)/30 = 8.0
+      // world units below the player at (0,0) — inside the window.
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'in-window', x: 0, y: 250 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+    });
+
+    it('fails to attach when the surface is beyond the 10-unit window (10.33 world units)', () => {
+      // 200x20 platform at y=320 map units: surface at (320-10)/30 = 10.33
+      // world units away — outside the window.
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'out-window', x: 0, y: 320 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(false);
+    });
+
+    it('fails to grapple when platform is beyond the window (surface 16.33 world units away)', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({ name: 'far-platform', x: 0, y: 0 }));
       engine.addPlayer(0, 0, 500);
 
       engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(false);
       for (let i = 0; i < 20; i++) engine.tick();
 
       engine.applyInput(0, noInput());
@@ -289,6 +397,85 @@ describe('GrappleMechanics', () => {
 
       const state = engine.getPlayerState(0);
       expect(state.y).toBeGreaterThan(400);
+    });
+
+    it('grapples the closer of two in-window surfaces', () => {
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'near', x: 0, y: 100 }));
+      engine.addBody(makePlatformDef({ name: 'far-but-in-window', x: 0, y: 200 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+
+      const joint = (engine as any).playerGrappleJoints.get(0);
+      const anchorBody = joint.GetBody2();
+      expect(anchorBody.GetUserData().name).toBe('near');
+    });
+  });
+
+  describe('a1a grapple energy meter', () => {
+    // Verified native (§32.3): spawn 1000; fire gate a1a > 500; drain 4/step
+    // while swinging with forced release and zeroing below 500; recharge
+    // 3/step otherwise, capped at 1000.
+    it('spawns with full energy and can fire immediately', () => {
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
+      engine.addPlayer(0, 0, 0);
+
+      expect(engine.getGrappleEnergy(0)).toBe(1000);
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+    });
+
+    it('drains 4/step while swinging and force-releases when a1a drops below 500', () => {
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      for (let i = 0; i < 125; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
+      // 1000 - 125*4 = 500: exactly at the threshold, still swinging.
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+      expect(engine.getGrappleEnergy(0)).toBe(500);
+
+      // One more tick: 496 < 500 -> forced release and zeroing.
+      engine.applyInput(0, GRAPPLE_INPUT);
+      engine.tick();
+      expect(engine.hasGrappleJoint(0)).toBe(false);
+      expect(engine.getGrappleEnergy(0)).toBe(0);
+    });
+
+    it('cannot re-fire while energy is below 500 and recharges 3/step', () => {
+      engine = new PhysicsEngine();
+      engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
+      engine.addPlayer(0, 0, 0);
+
+      engine.applyInput(0, GRAPPLE_INPUT);
+      for (let i = 0; i < 126; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
+      // Forced release at 126 ticks; energy zeroed.
+      expect(engine.hasGrappleJoint(0)).toBe(false);
+      expect(engine.getGrappleEnergy(0)).toBe(0);
+
+      // Holding grapple below the threshold must not attach.
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(false);
+
+      // Recharge 3/step: after 167 ticks energy = 501 > 500 -> re-fire.
+      for (let i = 0; i < 167; i++) {
+        engine.applyInput(0, GRAPPLE_INPUT);
+        engine.tick();
+      }
+      expect(engine.getGrappleEnergy(0)).toBe(501);
+      // The energy gate re-opens above 500: the next grapple press attaches.
+      engine.applyInput(0, GRAPPLE_INPUT);
+      expect(engine.hasGrappleJoint(0)).toBe(true);
     });
   });
 

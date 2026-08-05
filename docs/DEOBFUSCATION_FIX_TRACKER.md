@@ -3,7 +3,7 @@
 Tracks every discrepancy between verified bonk.io deobfuscation findings
 (`docs/DEOBFUSCATION.md`) and the local simulator, and the status of each fix.
 
-**Last updated:** 2026-08-03
+**Last updated:** 2026-08-04
 **Audit source:** `docs/DEOBFUSCATION.md` (38 sections; current artifact and
 audit baseline verified August 3, 2026)
 
@@ -23,7 +23,7 @@ audit baseline verified August 3, 2026)
 
 ## CRITICAL — Wrong simulation values
 
-### C1. `config.example.json` stale physics/player/grapple values — ⚠️ NEEDS RE-AUDIT
+### C1. `config.example.json` stale physics/player/grapple values — ✅ RE-AUDITED (2026-08-04)
 
 | Key | Verified bonk.io | Status |
 |-----|------------------|--------|
@@ -31,20 +31,30 @@ audit baseline verified August 3, 2026)
 | `physics.solverIterations` / `positionIterations` | `2` vel / `6` pos | ✅ Both fields present |
 | `player.radius` | `ppm`-derived (default 12) | ✅ Documented as derived; value kept only for backward compat |
 | `player.moveForce` | `12` | ✅ Updated |
-| `player.heavyMassMultiplier` | See §35.4: density/mass and scale-derived force effects | ⚠️ Prior force-only/no-mass status superseded; re-audit port behavior |
-| `player.friction` | `0.001337` live disc fixture | ⚠️ Prior `0` status superseded; re-audit port behavior |
-| `player.restitution` | `0.95` live disc fixture | ⚠️ Prior `0.8` status superseded; re-audit port behavior |
-| `grapple.maxDistance` | Not a scalar 500-unit reach; target QueryAABB/surface window is 10, and 500 is `a1a` energy | ⚠️ Prior `500` status superseded; rework targeting model |
+| `player.heavyMassMultiplier` | See §35.4: density/mass and scale-derived force effects | ✅ Re-audited: force multiplier ×0.7 (heavy also scales density per §35.4); value kept for backward compat, documented |
+| `player.friction` | `0.001337` live disc fixture | ✅ Re-audited 2026-08-04: config + engine now use `0.001337` |
+| `player.restitution` | `0.95` live disc fixture | ✅ Re-audited 2026-08-04: config + engine now use `0.95` |
+| `player.density` | `1/(π·r²)` baseline (mass 1), heavy-scaled | ✅ Removed stale `1.0` key; density is derived engine-side from the shape radius |
+| `grapple.maxDistance` | Target QueryAABB/surface window is 10; 500 is `a1a` energy | ✅ Re-audited 2026-08-04: documented as the verified 10-unit window; no scalar reach |
+| `grapple.jointFrequencyHz` / `jointDampingRatio` | `swingF = 2` / `swingD = 0` | ✅ Re-audited 2026-08-04: config + engine use 2.0 / 0.0 |
+| `grapple.slingshotImpulse` | Invented slingshot, no native evidence | ✅ Removed with the removed mechanic |
 
 ---
 
-### C2. `config-loader.ts` DEFAULTS partially stale — ⚠️ NEEDS RE-AUDIT
+### C2. `config-loader.ts` DEFAULTS partially stale — ✅ RE-AUDITED (2026-08-04)
 
 The gravity/iteration defaults remain source-verified. The former friction,
 restitution, heavy, and grapple entries above are superseded by the 2026-08-02
 artifact correction matrix in `DEOBFUSCATION.md` §38.6 and must not be treated
 as native defaults. `positionIterations` remains wired in `PhysicsConfig`;
 `player.radius` and `heavyMassMultiplier` remain backward-compatibility knobs.
+
+Re-audit outcome (2026-08-04): `DEFAULTS.player` and `DEFAULTS.grapple` now
+match the engine and `config.example.json` — friction `0.001337`, restitution
+`0.95`, grapple tuning `2.0`/`0.0`, window `10.0`; the stale `player.density`
+key and the invented `grapple.slingshotImpulse` were removed from
+`GrappleConfig`/`PlayerConfig`. Pinned by `tests/unit/config-loader-env.test.ts`
+and `tests/unit/config-example-sanity.test.ts`.
 
 ---
 
@@ -53,9 +63,9 @@ as native defaults. `positionIterations` remains wired in `PhysicsConfig`;
 | Issue | Verified behavior | Status |
 |-------|-------------------|--------|
 | Invented `grappleMultiplier === 99999` slingshot | No native evidence | ✅ Removed (code + tests) |
-| Grapple `frequencyHz=4.0` / `dampingRatio=0.5` hardcoded | `swingF`/`swingD`, with 0.01 taut/slack branch; `fh`/`dr` belong to map `d` joints | ⛔ Superseded prior fixture wiring; port must rework grapple joint behavior |
-| Grapple range `500 / SCALE` (SCALE=30) | No native 500-unit reach; target acquisition is QueryAABB/surface-distance within 10 units and `500` is `a1a` energy | ⛔ Superseded prior model; port must implement native targeting/energy behavior |
-| Grapple anchor = body center | Surface point via local `swing.p` + `rotatePoint` | ⚠️ Source math resolved in C5; verify port stores a body-local anchor |
+| Grapple `frequencyHz=4.0` / `dampingRatio=0.5` hardcoded | `swingF`/`swingD`, with 0.01 taut/slack branch; `fh`/`dr` belong to map `d` joints | ✅ Fixed 2026-08-04: joint uses `swingF=2` / `swingD=0` with the per-tick slack/taut 0.01 Hz switch; `fh`/`dr` never affect the grapple |
+| Grapple range `500 / SCALE` (SCALE=30) | No native 500-unit reach; target acquisition is QueryAABB/surface-distance within 10 units and `500` is `a1a` energy | ✅ Fixed 2026-08-04: QueryAABB ±10-unit window + center-to-surface scoring; `a1a` energy meter (fire > 500, drain 4, recharge 3, forced release) implemented per §32.3 |
+| Grapple anchor = body center | Surface point via local `swing.p` + `rotatePoint` | ✅ Fixed 2026-08-04: body-local surface anchor (`swing.p`); rest length = center-to-surface distance (`swing.l`) |
 | Body restitution default `0.4` | Native default `0.8` | ✅ Fixed |
 | No `ClearForces` after Step | Called after every Step natively | ⚠️ Blocked (Box2D port lacks method) |
 | `Step()` third arg ignored by port | Native uses `Step(dt, 2, 6)` | ⚠️ Blocked (port limitation) |
@@ -85,10 +95,10 @@ as native defaults. `positionIterations` remains wired in `PhysicsConfig`;
 
 | Aspect | Verified | Status |
 |--------|----------|--------|
-| Target selection | **RESOLVED (§32.1, 2026-07-29):** NOT a raycast — `QueryAABB` ±10 world units around disc center; fixtures from `type=="phys"` bodies only (capzone/noGrapple/frozen excluded); scored by center-to-surface distance (< 10), sorted ascending; first passing `innerGrapple \|\| !TestPoint(discCenter)` wins; `swing.b` = fixture body `arrayID` | ⛔ Port must be reworked — needs AABB query + surface-distance scoring; players never grappleable |
-| Anchor point | **RESOLVED (§32.2):** `swing.p = body.GetLocalPoint(worldSurfacePoint)` (body-local); world anchor = `rotatePoint(0, p, body.a) + body.p`; `rotatePoint` = standard 2D rotation (client lines 38733–38751) | ⚠️ Verify port stores body-local anchor (not world) |
-| `a1a` gating | **RESOLVED (§32.3):** `a1a` is an energy meter 0–1000, NOT distance. Fire requires `a1a > 500`; swinging drains 4/step; recharge 3/step; forced release + `a1a=0` below 500; max hold 125 steps, recharge 167 steps. Prior "500 map-unit reach" claim **corrected** — 500 is an energy threshold | ⛔ Port distance-check semantics wrong; implement energy meter |
-| Joint frequency/damping | **RESOLVED (§32.4):** `frequencyHz = (separation < swing.l) ? 0.01 : swingF`, `dampingRatio = swingD`; defaults `swingF=2`, `swingD=0` (client lines 3463–3464), with no map override writer in this build (`audit-map-option-writers.js`). **Correction:** `fh`/`dr` belong only to map-defined `"d"` joints (client lines 7822–7823), never the grapple | ⛔ Port must implement slack/taut freq switch (0.01 / swingF) and drop fixture `fh`/`dr` grapple wiring |
+| Target selection | **RESOLVED (§32.1, 2026-07-29):** NOT a raycast — `QueryAABB` ±10 world units around disc center; fixtures from `type=="phys"` bodies only (capzone/noGrapple/frozen excluded); scored by center-to-surface distance (< 10), sorted ascending; first passing `innerGrapple \|\| !TestPoint(discCenter)` wins; `swing.b` = fixture body `arrayID` | ✅ Fixed 2026-08-04: ±10-unit window with per-shape surface scoring (circle rim / polygon edge projection), ascending sort, `innerGrapple`/`TestPoint` gate; iterates the port's platform bodies — equivalent to the native QueryAABB broadphase filter (d < 10 implies AABB overlap, no fixed result buffer); players never grappleable |
+| Anchor point | **RESOLVED (§32.2):** `swing.p = body.GetLocalPoint(worldSurfacePoint)` (body-local); world anchor = `rotatePoint(0, p, body.a) + body.p`; `rotatePoint` = standard 2D rotation (client lines 38733–38751) | ✅ Fixed 2026-08-04: joint `Initialize(body, platform, playerPos, surfacePoint)` stores `localAnchorB = GetLocalPoint(surfacePoint)` and rest length = center-to-surface distance |
+| `a1a` gating | **RESOLVED (§32.3):** `a1a` is an energy meter 0–1000, NOT distance. Fire requires `a1a > 500`; swinging drains 4/step; recharge 3/step; forced release + `a1a=0` below 500; max hold 125 steps, recharge 167 steps. Prior "500 map-unit reach" claim **corrected** — 500 is an energy threshold | ✅ Fixed 2026-08-04: `a1a` meter implemented (spawn 1000, fire gate > 500, drain 4, recharge 3, forced release + zeroing, collision-break zeroing); exposed via `getGrappleEnergy()` |
+| Joint frequency/damping | **RESOLVED (§32.4):** `frequencyHz = (separation < swing.l) ? 0.01 : swingF`, `dampingRatio = swingD`; defaults `swingF=2`, `swingD=0` (client lines 3463–3464), with no map override writer in this build (`audit-map-option-writers.js`). **Correction:** `fh`/`dr` belong only to map-defined `"d"` joints (client lines 7822–7823), never the grapple | ✅ Fixed 2026-08-04: joint created with 2 Hz / 0 damping; `m_frequencyHz` re-evaluated per tick from the current separation (slack 0.01 / taut 2 Hz); `fh`/`dr` ignored |
 | Joint type | `b2DistanceJoint` | ✅ |
 
 ---
@@ -236,6 +246,33 @@ the maps.
 ## Fix Log
 
 Chronological record of fixes applied. Append new entries here.
+
+### 2026-08-04 — Player disc fixture parity (#180) and verified grapple model (#181); C1/C2 re-audit
+
+- `PhysicsEngine.addPlayer()` now uses the verified live 2026-07-29 disc
+  fixture (DEOBFUSCATION §35.4 / §38.6): density `1/(π·r²)` computed from the
+  actual shape radius (mass is exactly 1 — empirically verified), friction
+  `0.001337`, restitution `0.95`. `PLAYER_DENSITY` removed.
+- `fireGrapple()` reworked per §32: `a1a` energy gate (`> 500`; the 500
+  literal is energy, not reach), QueryAABB ±10-unit window with per-shape
+  center-to-surface scoring and the `innerGrapple`/`TestPoint` attach gate,
+  body-local surface anchor with rest length = center-to-surface distance,
+  and joint tuning `swingF=2` Hz / `swingD=0` with the per-tick slack/taut
+  `0.01` Hz branch (the port's distance joint re-reads `m_frequencyHz` every
+  step). Map `fh`/`dr` no longer affect the grapple.
+- `a1a` energy meter implemented (§32.3): spawn 1000, fire gate > 500, drain
+  4/step while swinging, forced release + zeroing below 500, recharge 3/step,
+  collision-break zeroing. Exposed via `getGrappleEnergy()`.
+- C1/C2 re-audit: `config.example.json` and `config-loader.ts` DEFAULTS updated
+  to the verified values (friction `0.001337`, restitution `0.95`, grapple
+  tuning `2.0`/`0.0`, window `10.0`); stale `player.density` key and the
+  invented `grapple.slingshotImpulse` removed from both config surfaces.
+- Tests: pinned fixture/mass tests in `physics-engine.test.ts`; grapple
+  window/tuning/energy/innerGrapple tests reworked in
+  `grapple-mechanics.test.ts`; config pins updated in
+  `config-example-sanity.test.ts` and `config-loader-env.test.ts`.
+- Verification: full suite green (see PR), typecheck clean, `git diff --check`
+  clean.
 
 ### 2026-08-04 — Stateful setup-decoder fold (`t8H`/`n6e`) in the deobfuscation pipeline
 

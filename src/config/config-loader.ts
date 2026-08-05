@@ -36,7 +36,6 @@ export interface PhysicsConfig {
 
 export interface PlayerConfig {
     radius: number;
-    density: number;
     friction: number;
     restitution: number;
     moveForce: number;
@@ -47,7 +46,6 @@ export interface GrappleConfig {
     maxDistance: number;
     jointFrequencyHz: number;
     jointDampingRatio: number;
-    slingshotImpulse: number;
 }
 
 export interface ArenaConfig {
@@ -177,17 +175,24 @@ const DEFAULTS: AppConfig = {
     },
     player: {
         radius: 0.4,
-        density: 1.0,
-        friction: 0.0,
-        restitution: 0.8,
+        // Verified live 2026-07-29 disc fixture (DEOBFUSCATION §38.6):
+        // friction 0.001337, restitution 0.95. Density is derived by the
+        // engine as 1/(pi*r^2) so the disc mass is exactly 1 — there is no
+        // standalone density default.
+        friction: 0.001337,
+        restitution: 0.95,
         moveForce: 12.0,
         heavyMassMultiplier: 0.7,
     },
     grapple: {
+        // Verified native grapple (DEOBFUSCATION §32): target window is a
+        // QueryAABB ±10 world units with center-to-surface distance < 10;
+        // joint tuning is swingF = 2 Hz / swingD = 0 with a 0.01 Hz slack
+        // branch; the literal 500 is the a1a energy threshold, not a reach.
+        // The invented slingshot impulse was removed with the mechanic.
         maxDistance: 10.0,
-        jointFrequencyHz: 4.0,
-        jointDampingRatio: 0.5,
-        slingshotImpulse: 50.0,
+        jointFrequencyHz: 2.0,
+        jointDampingRatio: 0.0,
     },
     arena: {
         defaultHalfWidth: 25.0,
