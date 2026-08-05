@@ -129,6 +129,15 @@ const fakes = vi.hoisted(() => {
 
       if (!this.sync) throw new Error('fake manager was not connected');
       this.ready = behavior === 'complete';
+      if (behavior === 'complete') {
+        // A real worker posts its step info payloads over the message
+        // channel before signalling completion; mirror that so the pool's
+        // per-batch info-delivery promise resolves.
+        this.worker?.emit('message', {
+          type: 'step-infos',
+          infos: Array.from({ length: this.numEnvs }, () => ({ tick: 0 })),
+        });
+      }
       Atomics.store(this.sync, this.workerIndex + 1, behavior === 'complete' ? 1 : -1);
       Atomics.add(this.sync, 0, 1);
       Atomics.notify(this.sync, 0);

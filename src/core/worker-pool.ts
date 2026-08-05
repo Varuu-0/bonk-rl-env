@@ -92,6 +92,11 @@ export class WorkerPool {
     // Shared sync buffer for completion counter (all workers share this)
     private _syncBuffer: SharedArrayBuffer | null = null;
 
+    // Per-worker resolvers for the `step-infos` messages that shared-memory
+    // workers post alongside each step batch (one message per worker, resolved
+    // exactly once per batch; see stepSharedMemory).
+    private _sharedInfoResolvers: ((infos: any[]) => void)[] = [];
+
     private state: WorkerPoolState = 'idle';
     private failure: Error | null = null;
     private cleanupPromise: Promise<void> | null = null;
@@ -134,6 +139,7 @@ export class WorkerPool {
         await this.close(); // Clean up existing if re-initialized
         this.state = 'initializing';
         this.failure = null;
+        this._sharedInfoResolvers = [];
 
         // Determine if we should use shared memory
         const sharedMemorySupported = SharedMemoryManager.isSupported();
@@ -178,6 +184,18 @@ export class WorkerPool {
                     this.workerEnvs.push(numEnvs);
 
                     worker.on('message', (msg) => {
+                        if (msg.type === 'step-infos') {
+                            // Shared-memory step info payload. Exactly one
+                            // message per worker per batch; the resolver was
+                            // registered by stepSharedMemory before the batch
+                            // was signalled.
+                            const resolve = this._sharedInfoResolvers[workerIndex];
+                            if (resolve) {
+                                this._sharedInfoResolvers[workerIndex] = null as any;
+                                resolve(msg.infos);
+                            }
+                            return;
+                        }
                         const cb = this.callbacks.get(msg.id);
                         if (cb) {
                             this.callbacks.delete(msg.id);
@@ -529,6 +547,17 @@ export class WorkerPool {
             throw tagged;
         }
 
+        // Phase 1.5 — register the per-worker info delivery promises for this
+        // batch. The worker ships the full info dictionaries over the message
+        // channel (the SAB carries only scalars), so each batch gets fresh
+        // promises resolved exactly once by the worker's `step-infos` reply.
+        const infoPromises: Promise<any[]>[] = [];
+        for (let i = 0; i < this.workers.length; i++) {
+            infoPromises.push(new Promise<any[]>(resolve => {
+                this._sharedInfoResolvers[i] = resolve;
+            }));
+        }
+
         // Phase 2 — signal all workers and wait for results without blocking
         // worker event delivery. From here on any failure may have left worker
         // state inconsistent, so the step() handler treats it as fatal.
@@ -572,6 +601,17 @@ export class WorkerPool {
         }
 
         const batchEnd = process.hrtime.bigint();
+
+        // Await the info payloads the workers posted alongside the batch.
+        // Every worker posts one message per batch before signalling
+        // completion, so this always settles; cleanup resolves pending
+        // resolvers with null if the pool fails mid-batch, and the state
+        // check below turns that into a regular pool-failure error instead of
+        // hanging.
+        const infos = await Promise.all(infoPromises);
+        if (this.state !== 'ready') {
+            throw new Error(`Shared-memory step interrupted because worker pool is ${this.state}`);
+        }
 
         // Record Batch Latency (only every 100 steps to reduce overhead)
         this._stepCount = (this._stepCount || 0) + 1;
@@ -629,6 +669,18 @@ export class WorkerPool {
                 // truncation. Fall back to the reconstruction only when the
                 // flag array is absent (e.g. mocked managers).
                 const term = terminated ? terminated[j] === 1 : done && !trunc;
+
+                // Merge the worker's full info dictionary onto the pooled
+                // info object so shared-memory results expose the same fields
+                // as message-passing mode (aiAlive, opponentsAlive, frameSkip,
+                // capZones, scoreBlue, scoreRed, aiTeam, tick). The SAB
+                // values remain authoritative for tick/terminated, and the
+                // terminal observation is re-extracted from the SAB so the
+                // pooled graph stays self-contained.
+                const workerInfo = infos[i][j];
+                if (workerInfo) {
+                    Object.assign(resultObj.info, workerInfo);
+                }
                 resultObj.observation = this.extractObservation(obs, j, resultIdx);
                 resultObj.reward = rewards[j];
                 resultObj.done = done;
@@ -1178,6 +1230,19 @@ export class WorkerPool {
             callback.reject(callbackError);
         }
         this.callbacks.clear();
+
+        // Resolve any pending shared-memory step-info deliveries so an
+        // in-flight stepSharedMemory cannot hang on its info promise after a
+        // failure (the state check after the await turns this into a regular
+        // pool-failure error).
+        for (let i = 0; i < this._sharedInfoResolvers.length; i++) {
+            const resolve = this._sharedInfoResolvers[i];
+            if (resolve) {
+                this._sharedInfoResolvers[i] = null as any;
+                resolve(null as any);
+            }
+        }
+        this._sharedInfoResolvers = [];
 
         const workers = this.workers;
         const sharedMemManagers = this.sharedMemManagers;

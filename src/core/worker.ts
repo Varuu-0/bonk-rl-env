@@ -218,6 +218,13 @@ parentPort.on('message', (msg) => {
                     sharedMem!.writeTick(i, res.info.tick || stepCounter);
                 });
 
+                // Ship the full info dictionaries over the message channel,
+                // mirroring the wait-for-action step path.
+                parentPort!.postMessage({
+                    type: 'step-infos',
+                    infos: results.map(res => res.info),
+                });
+
                 // Signal that worker has consumed the actions
                 sharedMem.signalWorkerConsumed();
 
@@ -301,6 +308,16 @@ parentPort.on('message', (msg) => {
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                             sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                             sharedMem!.writeTick(i, res.info.tick || stepCounter);
+                        });
+
+                        // The SAB carries only scalars; ship the full info
+                        // dictionaries (aiAlive, opponentsAlive, frameSkip,
+                        // capZones, scoreBlue, scoreRed, aiTeam, tick) over
+                        // the message channel so shared-memory results expose
+                        // the same info contract as message-passing mode.
+                        parentPort!.postMessage({
+                            type: 'step-infos',
+                            infos: results.map(res => res.info),
                         });
 
                         sharedMem.signalWorkerConsumed();
