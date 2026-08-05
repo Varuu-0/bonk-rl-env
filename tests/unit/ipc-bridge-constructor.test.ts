@@ -336,4 +336,9 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 0 } } as any);
     expect((bridge as any).maxClientSessions).toBe(1);
   });
+
+  it('falls back to the default session cap when the cap is omitted', () => {
+    const bridge = new IpcBridge({} as any);
+    expect((bridge as any).maxClientSessions).toBe(32);
+  });
 });
