@@ -152,6 +152,11 @@ parentPort.on('message', (msg) => {
         if (msg.type === 'init') {
             const numEnvsParam = msg.numEnvs;
             const config = msg.config || {};
+            // The global env index base must be assigned BEFORE the env loop:
+            // construction seeds are derived from it, and workers k ≥ 1 would
+            // otherwise reuse the previous/zero offset and duplicate worker 0's
+            // streams (review of #200).
+            globalOffset = msg.startId || 0;
             // Size the shared-memory observation buffer and manager for the
             // configured opponent count so all opponents are transported.
             _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents);
@@ -168,7 +173,6 @@ parentPort.on('message', (msg) => {
                 envs.push(new BonkEnvironment({ ...config, seed: (config.seed ?? 0) + globalOffset + i }));
             }
             numEnvs = numEnvsParam;
-            globalOffset = msg.startId || 0;
 
             // If sharedBuffer is provided and is a valid SharedArrayBuffer, initialize SharedMemoryManager
             // Note: When passed via postMessage, SharedArrayBuffer becomes an empty object.
