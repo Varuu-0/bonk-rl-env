@@ -130,16 +130,21 @@ export interface EnvironmentConfig {
 // ─── Default Arena ───────────────────────────────────────────────────
 
 /**
- * Resolve a possibly repo-relative map path against the project root so a
- * relative path (such as the loader default `maps/...`) works regardless of
- * the process cwd. The worker inherits the parent's cwd, so a cwd-relative
- * default map path would otherwise silently box-fall-back when the server is
- * launched from a different directory (#199).
+ * Resolve a possibly relative map path for loading. Absolute paths are used
+ * as-is. Relative paths keep their legacy process-cwd meaning when the file
+ * exists there (programmatic `mapPath` compatibility); otherwise they are
+ * re-anchored against the project root so a repo-relative path such as the
+ * loader default `maps/...` cannot silently box-fall-back when the worker's
+ * inherited cwd differs from the repository root (#199).
  */
 function resolveMapPath(mapFile: string): string {
-    return path.isAbsolute(mapFile)
-        ? mapFile
-        : path.resolve(__dirname, '..', '..', mapFile);
+    if (path.isAbsolute(mapFile)) {
+        return mapFile;
+    }
+    if (fs.existsSync(mapFile)) {
+        return mapFile;
+    }
+    return path.resolve(__dirname, '..', '..', mapFile);
 }
 
 /**
