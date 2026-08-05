@@ -64,7 +64,7 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.getConfig.mockClear();
-  mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+  mocks.getConfig.mockReturnValue({ server: { port: 5555, maxClientSessions: 32 }, environment: { seed: 0 } });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
@@ -300,5 +300,40 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
     await simulateSteps(bridge, 10000);
     expect((bridge as any).stepCount).toBe(10000);
     expect((bridge as any).stepCount % 5000).toBe(0);
+  });
+});
+
+describe('IpcBridge per-client session cap (issue #193)', () => {
+  function lastResponse(): any {
+    const call = sendSpy.mock.calls[sendSpy.mock.calls.length - 1];
+    const frames = call[0] as any[];
+    return JSON.parse(frames[1].toString());
+  }
+
+  it('rejects a new client init beyond the cap loudly and without touching the first session', async () => {
+    const bridge = new IpcBridge({ server: { port: 12370, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const rejected = lastResponse();
+    expect(rejected.status).toBe('error');
+    expect(rejected.error).toContain('Too many active client sessions (max 1)');
+
+    // The rejected identity must fail loudly on reset/step (no silent
+    // fallback to another pool), and the first session keeps working.
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'reset', seeds: [1] }));
+    expect(lastResponse().status).toBe('error');
+    expect(lastResponse().error).toBe('Worker pool not initialized');
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'reset', seeds: [1] }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
+  it('clamps an invalid (zero/negative) session cap to 1 instead of rejecting every init', () => {
+    const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 0 } } as any);
+    expect((bridge as any).maxClientSessions).toBe(1);
   });
 });
