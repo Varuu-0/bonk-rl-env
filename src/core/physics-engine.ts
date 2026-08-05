@@ -51,11 +51,43 @@ export const GRAVITY_Y = 20;
 /** Default player circle radius in metres */
 export const DEFAULT_PPM = 12;
 
-/** Default player density */
-export const PLAYER_DENSITY = 1.0;
+/**
+ * Verified native player-disc fixture (DEOBFUSCATION §35.4 / §38.6, live
+ * 2026-07-29 fixture, alpha2s.pretty.js 7397-7401; Node-verified index labels
+ * 216=density / 217=friction / 218=restitution):
+ * - density is the radius-normalized baseline `1 / (pi * r^2)` so the disc
+ *   mass is exactly 1 (heavy scales density up to 4.7x per §35.4);
+ * - friction `0.001337`;
+ * - restitution `0.95`.
+ */
+export const PLAYER_FRICTION = 0.001337;
+export const PLAYER_RESTITUTION = 0.95;
 
 /** Heavy/action reduces applied movement force; it does not change disc mass. */
 export const HEAVY_FORCE_MULTIPLIER = 0.7;
+
+// ─── Grapple / swing (DEOBFUSCATION §32, 2026-07-29 build) ──────────────
+/**
+ * Verified native grapple constants:
+ * - Targeting: QueryAABB ±10 world units around the disc center, candidates
+ *   scored by center-to-surface distance `d < 10` (§32.1).
+ * - Joint: `frequencyHz = (sep < swing.l) ? 0.01 : swingF`,
+ *   `dampingRatio = swingD`, with the only table-proven writers being
+ *   `swingF = 2` (Hz) and `swingD = 0` (§32.4). `fh`/`dr` are map `d`-joint
+ *   fields and never apply to the grapple.
+ * - `a1a` energy meter (§32.3): spawn 1000, fire gate `a1a > 500`, drain
+ *   4/step while swinging, recharge 3/step otherwise, forced release and
+ *   zeroing below 500. The literal 500 is this energy threshold, NOT a reach.
+ */
+export const GRAPPLE_TARGET_WINDOW = 10.0;
+export const GRAPPLE_FREQUENCY_HZ = 2.0;   // native swingF
+export const GRAPPLE_DAMPING_RATIO = 0.0;  // native swingD
+export const GRAPPLE_SLACK_FREQUENCY_HZ = 0.01;
+export const A1A_SPAWN = 1000;
+export const A1A_MAX = 1000;
+export const A1A_FIRE_THRESHOLD = 500;
+export const A1A_SWING_DRAIN = 4;
+export const A1A_RECHARGE = 3;
 
 /** Arena bounds (in metres). Players outside these are considered dead. */
 export const ARENA_HALF_WIDTH = 25;
@@ -114,7 +146,7 @@ export interface MapBodyDef {
   dampingRatio?: number;
   noPhysics?: boolean;           // When true, body should be a sensor (no collision response)
   noGrapple?: boolean;           // When true, cannot be grappled
-  innerGrapple?: boolean;        // Inner grapple behavior
+  innerGrapple?: boolean;        // When true, grappable from inside the shape (§32.1 gate); outside grappling is unaffected
   friction?: number;             // Surface friction coefficient
   collides?: {                   // Collision group filtering
     g1: boolean;
@@ -168,6 +200,10 @@ export class PhysicsEngine {
    * never read a destroyed b2Body. Entries live until the next reset(). */
   private detachedPlayerStates: Map<number, DetachedPlayerSnapshot> = new Map();
   private playerGrappleJoints: Map<number, any> = new Map();
+  /** Native a1a grapple/energy meter (0-1000), per player (DEOBFUSCATION §32.3). */
+  private grappleEnergy: Map<number, number> = new Map();
+  /** Reused QueryAABB result buffer for grapple targeting (fire is rare). */
+  private _grappleQueryShapes: any[] = new Array(256);
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
@@ -671,9 +707,12 @@ export class PhysicsEngine {
 
     const circleDef = new b2CircleDef();
     circleDef.radius = this.ppm / SCALE;
-    circleDef.density = PLAYER_DENSITY;
-    circleDef.friction = 0;
-    circleDef.restitution = 0.8;
+    // Verified native disc fixture: density = 1/(pi*r^2) baseline so the disc
+    // mass is exactly 1 (DEOBFUSCATION §35.4 / §38.6), friction 0.001337,
+    // restitution 0.95 (live 2026-07-29 fixture).
+    circleDef.density = 1 / (Math.PI * circleDef.radius * circleDef.radius);
+    circleDef.friction = PLAYER_FRICTION;
+    circleDef.restitution = PLAYER_RESTITUTION;
 
     // Assign collision category based on player ID
     // Player 0 = team g1 (category 0x0002), Player 1+ = team g2 (category 0x0004)
@@ -694,6 +733,16 @@ export class PhysicsEngine {
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
     this.playerDeathType.set(id, 0);
+    // Native a1a spawn value (DEOBFUSCATION §32.3, line 6866).
+    this.grappleEnergy.set(id, A1A_SPAWN);
+  }
+
+  /**
+   * Native a1a grapple/energy meter for a player (0-1000). Used by the
+   * §32.3 fire gate (a1a > 500), 4/step swing drain, and 3/step recharge.
+   */
+  getGrappleEnergy(playerId: number): number {
+    return this.grappleEnergy.get(playerId) ?? 0;
   }
 
   /**
@@ -726,51 +775,179 @@ export class PhysicsEngine {
   }
 
   /**
-   * Fires a grapple to attach to the closest eligible platform.
-   * The verified native max reach is 500 map coordinates, converted through
-   * this port's export scale. The invented "slingshot" mechanic was removed —
-   * it has no native evidence.
+   * Fires a grapple to the closest eligible platform surface.
+   *
+   * Verified native semantics (DEOBFUSCATION §32, 2026-07-29 build):
+   * - Gate: the a1a energy meter must be above 500 (the 500 literal is an
+   *   energy threshold, NOT a reach).
+   * - Targeting: a QueryAABB ±10 world units around the disc center collects
+   *   map phys bodies only (noGrapple/capzone/players excluded); candidates
+   *   are scored by center-to-surface distance `d < 10`, sorted ascending,
+   *   and the first candidate that is `innerGrapple` or does not contain the
+   *   disc center wins (TestPoint gate).
+   * - Anchor: body-local surface point (`swing.p = body.GetLocalPoint(world
+   *   surface point)`); rest length = distance from disc center to surface.
+   * - Joint tuning: `frequencyHz = swingF` (2 Hz) / `dampingRatio = swingD`
+   *   (0); the slack/taut 0.01 Hz branch is applied per tick. Map `fh`/`dr`
+   *   belong to `d` joints and never apply to the grapple.
    */
   private fireGrapple(playerId: number): void {
     const body = this.playerBodies.get(playerId);
     if (!body) return;
 
+    // a1a energy gate (§32.3): fire requires a1a > 500.
+    const energy = this.grappleEnergy.get(playerId) ?? 0;
+    if (energy <= A1A_FIRE_THRESHOLD) return;
+
     globalProfiler.increment('grapple_fire');
 
-    const startPos = body.GetPosition();
+    const playerPos = body.GetPosition();
 
-    // Exported map coordinates are converted through SCALE for this Box2D port.
-    // The grapple always hooks to the closest surface, not in the velocity direction
-    let closestPlatform: any = null;
-    let closestDist = Infinity;
+    // §32.1: QueryAABB ±10 world units around the disc center.
+    const aabb = new b2AABB();
+    aabb.lowerBound.Set(playerPos.x - GRAPPLE_TARGET_WINDOW, playerPos.y - GRAPPLE_TARGET_WINDOW);
+    aabb.upperBound.Set(playerPos.x + GRAPPLE_TARGET_WINDOW, playerPos.y + GRAPPLE_TARGET_WINDOW);
 
-    for (const pBody of this.platformBodies) {
-      const pPos = pBody.GetPosition();
-      const dx = pPos.x - startPos.x;
-      const dy = pPos.y - startPos.y;
-      const dist = Math.sqrt(dx * dx + dy * dy);
+    const shapes = this._grappleQueryShapes;
+    const count = this.world.Query(aabb, shapes, shapes.length);
 
-      if (dist < 500 / SCALE && dist < closestDist) {
-        const ud = pBody.GetUserData() || {};
-        // Skip noGrapple and innerGrapple surfaces early
-        if (ud.noGrapple || ud.innerGrapple) continue;
-        closestDist = dist;
-        closestPlatform = pBody;
+    const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
+    for (let i = 0; i < count; i++) {
+      const shape = shapes[i];
+      const pBody = shape.GetBody();
+      if (!pBody) continue;
+      const ud = pBody.GetUserData() || {};
+      // Native query filter (lines 8148-8161): map phys bodies only — players
+      // and capzones are never grappleable; noGrapple fixtures are excluded.
+      if (ud.playerId !== undefined || ud.isCapZone || ud.noGrapple) continue;
+
+      const surface = this.closestSurfacePoint(shape, pBody, playerPos);
+      if (surface.d < GRAPPLE_TARGET_WINDOW) {
+        candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
       }
     }
 
-    if (closestPlatform) {
-      const ud = closestPlatform.GetUserData() || {};
+    if (candidates.length === 0) return;
 
-      // Attach joint
-      const jointDef = new b2DistanceJointDef();
-      jointDef.Initialize(body, closestPlatform, startPos, closestPlatform.GetPosition());
-      jointDef.collideConnected = true;
-      jointDef.frequencyHz = ud.frequencyHz ?? 4.0;
-      jointDef.dampingRatio = ud.dampingRatio ?? 0.5;
+    // §32.1: candidates sorted by distance ascending (lines 8288-8295).
+    candidates.sort((a, b) => a.d - b.d);
 
-      const joint = this.world.CreateJoint(jointDef);
-      this.playerGrappleJoints.set(playerId, joint);
+    // §32.1 final gate (lines 8297-8306): the first candidate that is
+    // innerGrapple or does NOT contain the disc center wins.
+    let chosen: typeof candidates[number] | null = null;
+    for (const c of candidates) {
+      const ud = c.body.GetUserData() || {};
+      if (ud.innerGrapple || !c.shape.TestPoint(c.body.GetXForm(), playerPos)) {
+        chosen = c;
+        break;
+      }
+    }
+    if (!chosen) return;
+
+    // §32.2: joint with body-local surface anchor and rest length = distance
+    // from the disc center to the surface point (`swing.p` / `swing.l`).
+    const jointDef = new b2DistanceJointDef();
+    jointDef.Initialize(body, chosen.body, playerPos, chosen.point);
+    jointDef.collideConnected = true;
+    jointDef.frequencyHz = GRAPPLE_FREQUENCY_HZ;
+    jointDef.dampingRatio = GRAPPLE_DAMPING_RATIO;
+
+    const joint = this.world.CreateJoint(jointDef);
+    this.playerGrappleJoints.set(playerId, joint);
+  }
+
+  /**
+   * §32.1 scoring: closest point on a shape's surface to the disc center and
+   * the center-to-surface distance. Circles: `d = |center - player| - radius`
+   * with the surface point on the rim toward the player. Polygons (rects
+   * included): per-edge point-to-segment projection, closest wins, matching
+   * the native edge/chain scoring.
+   */
+  private closestSurfacePoint(shape: any, body: any, playerPos: any): { d: number; point: { x: number; y: number } } {
+    const xf = body.GetXForm();
+    if (shape.constructor.name === 'b2CircleShape' || typeof shape.m_radius === 'number') {
+      const center = body.GetWorldPoint(shape.GetLocalPosition());
+      const dx = center.x - playerPos.x;
+      const dy = center.y - playerPos.y;
+      const dist = Math.sqrt(dx * dx + dy * dy);
+      const radius = shape.m_radius;
+      if (dist < 1e-9) {
+        // Degenerate: player exactly at the circle center; any rim point works.
+        return { d: -radius, point: { x: center.x + radius, y: center.y } };
+      }
+      return {
+        d: dist - radius,
+        point: { x: center.x - (dx / dist) * radius, y: center.y - (dy / dist) * radius },
+      };
+    }
+
+    // Polygon: per-edge point-to-segment projection.
+    const vertices = shape.m_vertices;
+    const count = shape.m_vertexCount;
+    let bestD = Infinity;
+    let bestPoint = { x: 0, y: 0 };
+    for (let i = 0; i < count; i++) {
+      const a = body.GetWorldPoint(vertices[i]);
+      const b = body.GetWorldPoint(vertices[(i + 1) % count]);
+      const abx = b.x - a.x;
+      const aby = b.y - a.y;
+      const apx = playerPos.x - a.x;
+      const apy = playerPos.y - a.y;
+      const len2 = abx * abx + aby * aby;
+      let t = len2 > 0 ? (apx * abx + apy * aby) / len2 : 0;
+      t = Math.max(0, Math.min(1, t));
+      const px = a.x + t * abx;
+      const py = a.y + t * aby;
+      const ddx = px - playerPos.x;
+      const ddy = py - playerPos.y;
+      const d = Math.sqrt(ddx * ddx + ddy * ddy);
+      if (d < bestD) {
+        bestD = d;
+        bestPoint = { x: px, y: py };
+      }
+    }
+    return { d: bestD, point: bestPoint };
+  }
+
+  /**
+   * §32.4: the native rope rebuilds the joint every step with
+   * `frequencyHz = (separation < swing.l) ? 0.01 : swingF`. The port keeps
+   * the joint alive and instead re-reads the current separation each tick,
+   * mutating m_frequencyHz (this Box2D port's distance joint re-reads the
+   * field in InitVelocityConstraints every step).
+   */
+  private updateGrappleJointTuning(): void {
+    for (const [playerId, joint] of this.playerGrappleJoints) {
+      const body = this.playerBodies.get(playerId);
+      if (!body) continue;
+      const anchor = joint.GetBody2().GetWorldPoint(joint.m_localAnchor2);
+      const pos = body.GetPosition();
+      const dx = anchor.x - pos.x;
+      const dy = anchor.y - pos.y;
+      const sep = Math.sqrt(dx * dx + dy * dy);
+      joint.m_frequencyHz = sep < joint.m_length ? GRAPPLE_SLACK_FREQUENCY_HZ : GRAPPLE_FREQUENCY_HZ;
+    }
+  }
+
+  /**
+   * §32.3 a1a energy meter: drain 4/step while swinging with forced release
+   * (and zeroing) below 500; recharge 3/step otherwise, capped at 1000.
+   */
+  private updateGrappleEnergy(): void {
+    for (const [playerId, body] of Array.from(this.playerBodies)) {
+      if (!this.playerAlive.get(playerId)) continue;
+      let energy = this.grappleEnergy.get(playerId) ?? A1A_SPAWN;
+      if (this.playerGrappleJoints.has(playerId)) {
+        energy -= A1A_SWING_DRAIN;
+        if (energy < 0) energy = 0;
+        if (energy < A1A_FIRE_THRESHOLD) {
+          energy = 0;
+          this.releaseGrapple(playerId); // forced release below 500
+        }
+      } else {
+        energy = Math.min(energy + A1A_RECHARGE, A1A_MAX);
+      }
+      this.grappleEnergy.set(playerId, energy);
     }
   }
 
@@ -824,6 +1001,11 @@ export class PhysicsEngine {
       }
     }
 
+    // Native §32.3 a1a energy update (may force-release a depleted swing),
+    // then §32.4 slack/taut joint tuning for the coming step.
+    this.updateGrappleEnergy();
+    this.updateGrappleJointTuning();
+
         this.world.Step(DT, VELOCITY_ITERATIONS, POSITION_ITERATIONS);
     this.tickCount++;
 
@@ -835,10 +1017,12 @@ export class PhysicsEngine {
     this.capZoneTouches.length = 0;
 
     // Process verified swingCollideDestroyEvents: discs that collided while
-    // swinging lose their grapple joint after the step.
+    // swinging lose their grapple joint after the step. A collision break
+    // also zeroes a1a (native line 8767).
     if (this.pendingSwingDestroy.size > 0) {
       for (const id of this.pendingSwingDestroy) {
         this.releaseGrapple(id);
+        this.grappleEnergy.set(id, 0);
       }
       this.pendingSwingDestroy.clear();
     }
@@ -1030,6 +1214,7 @@ export class PhysicsEngine {
     this.detachedPlayerStates.clear();
     this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
+    this.grappleEnergy.clear();
     this.playerTeams.clear();
     this.capZoneSensors = [];
     this.capZoneState.clear();

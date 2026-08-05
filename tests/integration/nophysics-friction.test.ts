@@ -55,7 +55,7 @@ const inputNone: PlayerInput = {
 
 describe('NoPhysicsFriction', () => {
   describe('noPhysics sensor tests', () => {
-    it('player passes through noPhysics wall (y < 85)', () => {
+    it('player falls through noPhysics wall (y > 115)', () => {
       const engine = new PhysicsEngine();
       const wall: MapBodyDef = {
         name: 'ghost-wall',
@@ -68,15 +68,15 @@ describe('NoPhysicsFriction', () => {
         noPhysics: true,
       };
       engine.addBody(wall);
-      engine.addPlayer(0, 0, 120);
-      // 30 ticks is enough to cross the sensor; sustained thrust for 180 ticks
-      // would carry the disc beyond the verified 850-map-unit OOB circle.
-      for (let i = 0; i < 30; i++) {
-        engine.applyInput(0, inputUp);
+      // Verified disc mass 1: up-thrust (12 N) cannot overcome gravity
+      // (20 N), so the disc falls DOWN through the sensor wall instead.
+      engine.addPlayer(0, 0, 60);
+      for (let i = 0; i < 25; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 85).toBe(true);
+      expect(state.y > 115).toBe(true);
       expect(state.alive).toBe(true);
       safeDestroy(engine);
     });
@@ -126,7 +126,7 @@ describe('NoPhysicsFriction', () => {
       safeDestroy(engine);
     });
 
-    it('sensor passes player through (x > 70) and lethal sensor kills player', () => {
+    it('sensor passes player through (x > 60) and lethal sensor kills player', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'floor',
@@ -156,12 +156,14 @@ describe('NoPhysicsFriction', () => {
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.x > 70).toBe(true);
+      // Verified mass 1: the disc is killed at first contact with the sensor
+      // (center x ≈ 66-68 for a sensor spanning 80..90), not tunnelled past.
+      expect(state.x > 60).toBe(true);
       expect(state.alive).toBe(false);
       safeDestroy(engine);
     });
 
-    it('player passes through all three ghost walls (y < 50)', () => {
+    it('player falls through all three ghost walls (y > 110)', () => {
       const engine = new PhysicsEngine();
       const walls: MapBodyDef[] = [
         { name: 'ghost-1', type: 'rect', x: 0, y: 60, width: 800, height: 20, static: true, noPhysics: true },
@@ -169,27 +171,27 @@ describe('NoPhysicsFriction', () => {
         { name: 'ghost-3', type: 'rect', x: 0, y: 100, width: 800, height: 20, static: true, noPhysics: true },
       ];
       for (const w of walls) engine.addBody(w);
-      engine.addPlayer(0, 0, 130);
-      // Tuned for the verified 850-map-unit OOB circle: 80 ticks is enough to
-      // cross all three sensors while the disc stays inside the death circle
-      // (the old 180-tick duration relied on the incorrect ~2125-unit circle).
-      for (let i = 0; i < 80; i++) {
-        engine.applyInput(0, inputUp);
+      engine.addPlayer(0, 0, 30);
+      // Verified disc mass 1: the disc falls down through all three sensors
+      // (20 ticks = 4.4 m ≈ 133 map units, safely below the 110-unit floor of
+      // the last wall and well inside the 850-map-unit OOB circle).
+      for (let i = 0; i < 20; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 50).toBe(true);
+      expect(state.y > 110).toBe(true);
       expect(state.alive).toBe(true);
       safeDestroy(engine);
     });
 
-    it('player passes through ghost wall (y < 100) and is blocked by solid wall (y >= 50)', () => {
+    it('player falls through ghost wall (y > 100) and is blocked by solid wall (y < 190)', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'ghost-wall',
         type: 'rect',
         x: 0,
-        y: 110,
+        y: 100,
         width: 800,
         height: 20,
         static: true,
@@ -199,20 +201,24 @@ describe('NoPhysicsFriction', () => {
         name: 'solid-wall',
         type: 'rect',
         x: 0,
-        y: 60,
+        y: 200,
         width: 800,
         height: 20,
         static: true,
         noPhysics: false,
       });
-      engine.addPlayer(0, 0, 125);
+      engine.addPlayer(0, 0, 60);
+      // Verified disc mass 1: the disc falls through the ghost wall (90..110)
+      // and is caught by the solid wall (top at 190); verified restitution
+      // 0.95 keeps it bouncing above the wall top, never penetrating it.
       for (let i = 0; i < 180; i++) {
-        engine.applyInput(0, inputUp);
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 100).toBe(true);
-      expect(state.y >= 50).toBe(true);
+      expect(state.y > 100).toBe(true);
+      expect(state.y < 190).toBe(true);
+      expect(state.alive).toBe(true);
       safeDestroy(engine);
     });
   });
@@ -371,7 +377,7 @@ describe('NoPhysicsFriction', () => {
   });
 
   describe('noPhysics shape variants', () => {
-    it('player passes through noPhysics circle (y < 40)', () => {
+    it('player falls through noPhysics circle (y > 120)', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'ghost-circle',
@@ -382,17 +388,18 @@ describe('NoPhysicsFriction', () => {
         static: true,
         noPhysics: true,
       });
-      engine.addPlayer(0, 0, 130);
-      for (let i = 0; i < 180; i++) {
-        engine.applyInput(0, inputUp);
+      engine.addPlayer(0, 0, 30);
+      // Falls through the 40..120 circle region (verified mass 1).
+      for (let i = 0; i < 25; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 40).toBe(true);
+      expect(state.y > 120).toBe(true);
       safeDestroy(engine);
     });
 
-    it('player passes through noPhysics polygon (y < 85)', () => {
+    it('player falls through noPhysics polygon (y > 115)', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'ghost-poly',
@@ -407,17 +414,17 @@ describe('NoPhysicsFriction', () => {
         static: true,
         noPhysics: true,
       });
-      engine.addPlayer(0, 0, 130);
-      for (let i = 0; i < 180; i++) {
-        engine.applyInput(0, inputUp);
+      engine.addPlayer(0, 0, 60);
+      for (let i = 0; i < 25; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 85).toBe(true);
+      expect(state.y > 115).toBe(true);
       safeDestroy(engine);
     });
 
-    it('player passes through noPhysics body with high restitution (y < 85)', () => {
+    it('player falls through noPhysics body with high restitution (y > 115)', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'bouncy-ghost',
@@ -430,17 +437,17 @@ describe('NoPhysicsFriction', () => {
         noPhysics: true,
         restitution: 0.9,
       });
-      engine.addPlayer(0, 0, 130);
-      for (let i = 0; i < 180; i++) {
-        engine.applyInput(0, inputUp);
+      engine.addPlayer(0, 0, 60);
+      for (let i = 0; i < 25; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 85).toBe(true);
+      expect(state.y > 115).toBe(true);
       safeDestroy(engine);
     });
 
-    it('player passes through noPhysics+noGrapple body (y < 85)', () => {
+    it('player falls through noPhysics+noGrapple body (y > 115)', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'ghost-no-grapple',
@@ -453,13 +460,13 @@ describe('NoPhysicsFriction', () => {
         noPhysics: true,
         noGrapple: true,
       });
-      engine.addPlayer(0, 0, 130);
-      for (let i = 0; i < 180; i++) {
-        engine.applyInput(0, inputUp);
+      engine.addPlayer(0, 0, 60);
+      for (let i = 0; i < 25; i++) {
+        engine.applyInput(0, inputNone);
         engine.tick();
       }
       const state = engine.getPlayerState(0);
-      expect(state.y < 85).toBe(true);
+      expect(state.y > 115).toBe(true);
       safeDestroy(engine);
     });
   });
@@ -556,7 +563,7 @@ describe('NoPhysicsFriction', () => {
   });
 
   describe('combined noPhysics + friction scenarios', () => {
-    it('player settles on floor before lethal sensor, passes through sensor wall (x > 90), and lethal sensor kills player', () => {
+    it('player settles on floor before lethal sensor, passes through sensor wall (x > 80), and lethal sensor kills player', () => {
       const engine = new PhysicsEngine();
       engine.addBody({
         name: 'floor',
@@ -587,7 +594,9 @@ describe('NoPhysicsFriction', () => {
         engine.tick();
       }
       const finalState = engine.getPlayerState(0);
-      expect(finalState.x > 90).toBe(true);
+      // Verified mass 1: killed at first contact with the sensor spanning
+      // 90..110 (center x ≈ 89-91), not tunnelled past.
+      expect(finalState.x > 80).toBe(true);
       expect(finalState.alive).toBe(false);
       safeDestroy(engine);
     });

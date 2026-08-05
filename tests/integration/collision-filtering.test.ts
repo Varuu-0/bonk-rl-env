@@ -333,12 +333,17 @@ describe('CollisionFiltering', () => {
         collides: { g1: false, g2: true, g3: false, g4: false },
       });
       engine.addPlayer(1, 0, 0);
-      for (let i = 0; i < 12; i++) {
+      // Verified mass 1 halves the old acceleration. The disc passes the g1
+      // wall (20..40) and is stopped by the g2 wall at x=48, then bounces back
+      // (verified restitution 0.95), so assert the peak x reached instead of
+      // the final position.
+      let maxX = 0;
+      for (let i = 0; i < 20; i++) {
         engine.applyInput(1, RIGHT_INPUT);
         engine.tick();
+        maxX = Math.max(maxX, engine.getPlayerState(1).x);
       }
-      const p1 = engine.getPlayerState(1);
-      expect(p1.x > 35).toBe(true);
+      expect(maxX > 35).toBe(true);
     });
 
     it('player 1 blocked by g2 wall at x=70', () => {

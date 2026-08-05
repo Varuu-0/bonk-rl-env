@@ -863,10 +863,12 @@ describe('config-loader env vars and CLI', () => {
             expect(example.physics.gravityY).toBe(20);
             expect(example.physics.solverIterations).toBe(2);
             expect(example.physics.positionIterations).toBeUndefined();
-            expect(example.player.friction).toBe(0);
-            expect(example.player.restitution).toBe(0.8);
+            expect(example.player.friction).toBe(0.001337);
+            expect(example.player.restitution).toBe(0.95);
             expect(example.player.moveForce).toBe(12);
             expect(example.grapple.maxDistance).toBe(10);
+            expect(example.grapple.jointFrequencyHz).toBe(2);
+            expect(example.grapple.jointDampingRatio).toBe(0);
         });
 
         it('returns the default config object', () => {
@@ -875,6 +877,18 @@ describe('config-loader env vars and CLI', () => {
             expect(defaults.physics.ticksPerSecond).toBe(30);
             expect(defaults.telemetry.enabled).toBe(false);
             expect(defaults.workerPool.maxWorkers).toBe(8);
+        });
+
+        it('defaults match the verified native player/grapple values (C2 re-audit)', () => {
+            const defaults = getDefaults();
+            expect(defaults.player.friction).toBe(0.001337);
+            expect(defaults.player.restitution).toBe(0.95);
+            expect(defaults.player.moveForce).toBe(12.0);
+            expect((defaults.player as any).density).toBeUndefined();
+            expect(defaults.grapple.maxDistance).toBe(10.0);
+            expect(defaults.grapple.jointFrequencyHz).toBe(2.0);
+            expect(defaults.grapple.jointDampingRatio).toBe(0.0);
+            expect((defaults.grapple as any).slingshotImpulse).toBeUndefined();
         });
 
         it('returns same reference on repeated calls', () => {

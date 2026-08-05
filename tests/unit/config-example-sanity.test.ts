@@ -20,18 +20,28 @@ describe('config.example.json verified physics values', () => {
     expect(config.physics.solverIterations).toBe(2);
   });
 
-  it('player friction is 0 and restitution is 0.8', () => {
-    expect(config.player.friction).toBe(0.0);
-    expect(config.player.restitution).toBe(0.8);
+  it('player friction is 0.001337 and restitution is 0.95 (verified live fixture)', () => {
+    expect(config.player.friction).toBe(0.001337);
+    expect(config.player.restitution).toBe(0.95);
   });
 
   it('player moveForce is 12', () => {
     expect(config.player.moveForce).toBe(12.0);
   });
 
-  it('documents grapple maxDistance as an inert compatibility field', () => {
+  it('no stale player density key (density is derived as 1/(pi*r^2))', () => {
+    expect(config.player.density).toBeUndefined();
+  });
+
+  it('documents grapple maxDistance as the 10-unit native target window', () => {
     expect(config.grapple.maxDistance).toBe(10.0);
     expect(config.grapple._doc_maxDistance).toContain('not consumed');
+  });
+
+  it('grapple joint tuning matches verified swingF=2 / swingD=0', () => {
+    expect(config.grapple.jointFrequencyHz).toBe(2.0);
+    expect(config.grapple.jointDampingRatio).toBe(0.0);
+    expect(config.grapple.slingshotImpulse).toBeUndefined();
   });
 
   it('heavyMassMultiplier is a force multiplier of 0.7 (not mass)', () => {

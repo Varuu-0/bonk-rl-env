@@ -56,6 +56,27 @@ describe('PhysicsEngine', () => {
       expect(state.isHeavy).toBe(false);
     });
 
+    it('player disc fixture matches the verified native values (mass exactly 1)', () => {
+      const body = (engine as any).playerBodies.get(0);
+      const shape = body.GetShapeList();
+
+      // density = 1/(pi*r^2) with r = ppm/SCALE = 0.4 -> mass exactly 1
+      expect(shape.m_density).toBeCloseTo(1 / (Math.PI * 0.4 * 0.4), 10);
+      expect(body.GetMass()).toBeCloseTo(1.0, 10);
+      expect(shape.m_friction).toBe(0.001337);
+      expect(shape.m_restitution).toBe(0.95);
+    });
+
+    it('player disc density is radius-normalized for other ppm values too', () => {
+      engine = new PhysicsEngine();
+      engine.setScale(6); // radius 6/30 = 0.2
+      engine.addPlayer(0, 0, 0);
+      const body = (engine as any).playerBodies.get(0);
+      const shape = body.GetShapeList();
+      expect(shape.m_density).toBeCloseTo(1 / (Math.PI * 0.2 * 0.2), 10);
+      expect(body.GetMass()).toBeCloseTo(1.0, 10);
+    });
+
     it('player has zero velocity', () => {
       const state = engine!.getPlayerState(0);
       expect(state.velX).toBe(0);
