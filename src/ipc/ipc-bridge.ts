@@ -48,13 +48,16 @@ export class IpcBridge {
         this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
         // A cap below 1 is meaningless: clamp so a bad config loudly enforces
         // a single concurrent session instead of rejecting every init. A
-        // missing/non-finite value (e.g. a partial mock config) falls back to
-        // the loader-provided default instead of producing NaN, and numeric
-        // strings from env-style configs are honored like real numbers.
-        const configuredCap = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
-        const cap = typeof configuredCap === 'string' ? Number(configuredCap) : configuredCap;
-        this.maxClientSessions = Number.isFinite(cap)
-            ? Math.max(1, cap as number)
+        // missing/non-finite value (e.g. a partial mock config, or empty
+        // string env overrides) falls back to the loader-provided default
+        // instead of producing NaN or clamping to 1, and numeric strings from
+        // env-style configs are honored like real numbers.
+        const rawCap: unknown = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
+        const parsedCap = typeof rawCap === 'string'
+            ? (rawCap.trim() === '' ? NaN : Number(rawCap))
+            : rawCap;
+        this.maxClientSessions = Number.isFinite(parsedCap as number)
+            ? Math.max(1, parsedCap as number)
             : DEFAULT_MAX_CLIENT_SESSIONS;
         this.sock = new zmq.Router();
         this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
