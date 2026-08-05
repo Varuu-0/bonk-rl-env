@@ -1,5 +1,5 @@
 import { parentPort } from 'worker_threads';
-import { BonkEnvironment, Action, Observation } from './environment';
+import { BonkEnvironment, Action, Observation, StepResult } from './environment';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // Type for SharedArrayBuffer (available in Node.js >= 9.1.0)
@@ -124,6 +124,29 @@ function quantizeObservation(obs: Observation): Observation {
     };
 }
 
+/**
+ * Applies the per-env auto-reset rule for a step result. The terminal
+ * observation is always captured on a done step. The environment itself is
+ * reset only once its frame-skip terminal hold window has been served: with
+ * frameSkip > 1 the env keeps returning done for the whole window, so an
+ * unconditional reset on the first done step would discard the hold and
+ * surface a fresh episode one step after the terminal one (#228). On the
+ * reset step the result keeps the ended episode's observation, so the
+ * returned graph stays internally consistent (observation.tick aligns with
+ * info.tick, and the fresh episode's observation only appears on the next
+ * step, #222).
+ */
+function applyStepAutoReset(env: BonkEnvironment, res: StepResult): StepResult {
+    if (!res.done) return res;
+    res.info.terminal_observation = res.observation;
+    if (!env.isTerminalHoldActive()) {
+        const terminalObservation = res.observation;
+        env.reset();
+        res.observation = terminalObservation;
+    }
+    return res;
+}
+
 parentPort.on('message', (msg) => {
     try {
         if (msg.type === 'init') {
@@ -200,14 +223,7 @@ parentPort.on('message', (msg) => {
             // Handle step with message passing (fallback mode)
             const actions: Action[] = msg.actions;
 
-            const results = envs.map((env, i) => {
-                const res = env.step(actions[i]);
-                if (res.done) {
-                    res.info.terminal_observation = res.observation;
-                    res.observation = env.reset();
-                }
-                return res;
-            });
+            const results = envs.map((env, i) => applyStepAutoReset(env, env.step(actions[i])));
 
             stepCounter++;
             if (stepCounter % 1000 === 0) {
@@ -251,14 +267,7 @@ parentPort.on('message', (msg) => {
             const actions = sharedMem.readActions(sharedMem.readActionSlot());
 
             // Process environments
-            const results = envs.map((env, i) => {
-                const res = env.step(actions[i]);
-                if (res.done) {
-                    res.info.terminal_observation = res.observation;
-                    res.observation = env.reset();
-                }
-                return res;
-            });
+            const results = envs.map((env, i) => applyStepAutoReset(env, env.step(actions[i])));
 
             stepCounter++;
             if (stepCounter % 100 === 0) {
@@ -274,7 +283,12 @@ parentPort.on('message', (msg) => {
                     } else {
                         sharedMem!.writeHasTerminalObs(i, 0);
                     }
-                    sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
+                    // The observation region must describe the same episode
+                    // as info.tick: on a done step the environment may
+                    // already have been auto-reset (hold complete), so write
+                    // the result's terminal observation instead of the next
+                    // episode's fresh spawn (#222).
+                    sharedMem!.writeObservation(i, res.done ? observationToArray(res.observation) : observationFastToArray(envs[i]));
                     sharedMem!.writeReward(i, res.reward);
                     sharedMem!.writeDone(i, res.done ? 1 : 0);
                     sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
@@ -345,14 +359,7 @@ parentPort.on('message', (msg) => {
                         const actionSlot = sharedMem.readActionSlot();
                         const actions = sharedMem.getActionsView(actionSlot);
 
-                        const results = envs.map((env, i) => {
-                            const res = env.step(actions[i]);
-                            if (res.done) {
-                                res.info.terminal_observation = res.observation;
-                                res.observation = env.reset();
-                            }
-                            return res;
-                        });
+                        const results = envs.map((env, i) => applyStepAutoReset(env, env.step(actions[i])));
 
                         stepCounter++;
                         if (verbose && stepCounter % 1000 === 0) {
@@ -366,7 +373,13 @@ parentPort.on('message', (msg) => {
                             } else {
                                 sharedMem!.writeHasTerminalObs(i, 0);
                             }
-                            sharedMem!.writeObservation(i, observationFastToArray(envs[i]));
+                            // The observation region must describe the same
+                            // episode as info.tick: on a done step the
+                            // environment may already have been auto-reset
+                            // (hold complete), so write the result's terminal
+                            // observation instead of the next episode's fresh
+                            // spawn (#222).
+                            sharedMem!.writeObservation(i, res.done ? observationToArray(res.observation) : observationFastToArray(envs[i]));
                             sharedMem!.writeReward(i, res.reward);
                             sharedMem!.writeDone(i, res.done ? 1 : 0);
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);

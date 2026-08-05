@@ -1095,18 +1095,26 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.done).toBe(true);
     });
 
-    it('returns truncated=false after terminal reached (not truncation)', async () => {
+    it('keeps reporting truncated for the ended episode after terminal reached', async () => {
+      // #197: the terminal-hold tail must replay the recorded terminal cause
+      // instead of hardcoding truncated:false / info.terminated:true, which
+      // inverted a maxTicks truncation into a termination.
       env = new BonkEnvironment({ maxTicks: 1, numOpponents: 0 });
       env.reset();
-      env.step(0);
+      expect(env.step(0).truncated).toBe(true);
       const result = env.step(0);
-      expect(result.truncated).toBe(false);
+      expect(result.done).toBe(true);
+      expect(result.truncated).toBe(true);
+      expect(result.info.terminated).toBe(false);
     });
   });
 
   describe('frame skip with terminal', () => {
-    it('terminalReached clears after frame skip cycle completes', async () => {
-      const mapData: MapDef = makeMap({});
+    it('episode stays terminal after the frame skip cycle completes', async () => {
+      // #197: once the hold window elapses the env must stay idle (done,
+      // stable flags, no physics advance) instead of resuming physics past
+      // maxTicks and inverting truncated/terminated on alternating steps.
+      const mapData = makeMap({});
       env = new BonkEnvironment({ mapData, maxTicks: 2, frameSkip: 2, numOpponents: 0 });
       env.reset();
       env.step(0);
@@ -1114,6 +1122,9 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.done).toBe(true);
       const afterCycle = env.step(0);
       expect(afterCycle.done).toBe(true);
+      expect(afterCycle.truncated).toBe(true);
+      expect(afterCycle.info.terminated).toBe(false);
+      expect(afterCycle.observation.tick).toBe(2);
     });
   });
 });

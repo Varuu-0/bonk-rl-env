@@ -34,7 +34,11 @@ interface SegmentResult {
 }
 
 function benchNativeStability(): BenchmarkResult {
-    const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1 });
+    // A horizon far beyond the measured window keeps every step on the
+    // physics path: the environment now settles into a terminal (no physics
+    // advance) state once maxTicks is reached (#197), so the default 900-tick
+    // horizon would turn ~99% of a 100K-step run into trivial steps.
+    const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1, maxTicks: 1_000_000 });
     env.reset();
 
     for (let i = 0; i < WARMUP; i++) env.step(0);

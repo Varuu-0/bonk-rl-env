@@ -148,6 +148,11 @@ export class BonkEnvironment {
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
     private terminalReached: boolean = false;
+    // Terminal cause as recorded when the episode ended: the tail (hold)
+    // steps replay these flags instead of hardcoding `truncated: false` /
+    // `terminated: true`, which inverted truncation into termination (#197).
+    private terminalTruncated: boolean = false;
+    private terminalTerminated: boolean = false;
     private _obsBuffer: Float32Array = new Float32Array(16);
     private ppm: number = 12;
     private capZones: Array<{ index: number; owner: string; type: number }> = [];
@@ -396,6 +401,8 @@ export class BonkEnvironment {
         // Reset frame skip state
         this.frameSkipTicks = 0;
         this.terminalReached = false;
+        this.terminalTruncated = false;
+        this.terminalTerminated = false;
         this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
 
         return this.getObservation();
@@ -413,27 +420,32 @@ export class BonkEnvironment {
      *   - Bit 5: grapple
      */
     step(action: Action): StepResult {
-        // If terminal was already reached in a previous tick of this cycle, return done immediately
-        // without stepping physics further (rewards were already accumulated)
+        // If terminal was already reached in a previous tick of this cycle,
+        // return done immediately without stepping physics further (rewards
+        // were already accumulated). terminalReached is only cleared by an
+        // explicit reset(): once the frame-skip hold window elapses, the
+        // episode stays idle (no physics advance, same flags) instead of
+        // resuming physics past maxTicks (#197). frameSkipTicks keeps
+        // counting terminal reports so isTerminalHoldActive() can tell the
+        // worker layer when the hold window has been served.
         if (this.terminalReached) {
-            this.frameSkipTicks++;
-            if (this.frameSkipTicks >= this.config.frameSkip) {
-                this.frameSkipTicks = 0;
-                this.terminalReached = false;
-            }
+            // Cap the counter at frameSkip so a long idle terminal stretch
+            // (until an explicit reset) never grows it unboundedly; the
+            // hold-active predicate reads only whether it is below frameSkip.
+            this.frameSkipTicks = Math.min(this.frameSkipTicks + 1, this.config.frameSkip);
             const observation = this.getObservation();
             return {
                 observation,
                 reward: 0,
                 done: true,
-                truncated: false,
+                truncated: this.terminalTruncated,
                 info: {
                     tick: this.physics.getTickCount(),
                     aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
                     opponentsAlive: this.opponentIds.filter(
                         id => this.physics.getPlayerState(id).alive,
                     ).length,
-                    terminated: true,
+                    terminated: this.terminalTerminated,
                     frameSkip: this.config.frameSkip,
                     capZones: this.capZones,
                     scoreBlue: this.scoreBlue,
@@ -482,21 +494,25 @@ export class BonkEnvironment {
         const terminated = !aiState.alive || allOpponentsDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 
-        // If terminal reached, set flag to report done immediately on subsequent ticks
+        // If terminal reached, set flag to report done immediately on subsequent ticks.
+        // Record the terminal cause so the hold tail reports the same flags as
+        // the ending step instead of inverting truncation into termination (#197).
         if (terminated || truncated) {
             this.terminalReached = true;
+            this.terminalTruncated = truncated;
+            this.terminalTerminated = terminated;
         }
 
         // Increment frame skip counter
         this.frameSkipTicks++;
 
-        // Reset frame skip counter for next action after completing the cycle
-        if (this.frameSkipTicks >= this.config.frameSkip) {
+        // A normal cycle boundary (no terminal state) starts a fresh frame-skip
+        // cycle. When the episode ends on this step the counter is left at the
+        // boundary value: the hold window is measured through the current cycle,
+        // and a terminal step that lands exactly on the boundary serves no hold
+        // tail steps (isTerminalHoldActive already reports false).
+        if (this.frameSkipTicks >= this.config.frameSkip && !terminated && !truncated) {
             this.frameSkipTicks = 0;
-            // Only clear terminalReached if we're not in a terminal state
-            if (!terminated && !truncated) {
-                this.terminalReached = false;
-            }
         }
 
         const observation = this.getObservation();
@@ -695,6 +711,20 @@ export class BonkEnvironment {
         this._obsBuffer[14] = arenaBounds.halfHeight;
         this._obsBuffer[15] = this.physics.getTickCount();
         return this._obsBuffer;
+    }
+
+    /**
+     * True while the environment is inside the frame-skip terminal hold
+     * window: the episode has ended (this.terminalReached) but the current
+     * action cycle has not yet crossed its boundary (frameSkipTicks below
+     * frameSkip). The worker layer uses this to defer auto-reset until the
+     * entire hold window has been reported, so with frameSkip > 1 the
+     * terminal done result is delivered for the full window before a fresh
+     * episode begins (#228). Once the window elapses the environment stays
+     * terminal (no physics advance, same flags) until reset() (#197).
+     */
+    isTerminalHoldActive(): boolean {
+        return this.terminalReached && this.frameSkipTicks < this.config.frameSkip;
     }
 
     /**
