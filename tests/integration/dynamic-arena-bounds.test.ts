@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { safeDestroy } from '../utils/test-helpers';
 
@@ -170,6 +170,52 @@ describe('DynamicArenaBounds', () => {
         name: 'small', type: 'rect',
         x: 0, y: 0, width: 100, height: 30, static: true,
       });
+      const afterReset = { ...(engine as any).getArenaBounds() };
+      expect(afterReset.halfWidth).toBeLessThan(beforeReset.halfWidth);
+    });
+  });
+
+  describe('incremental bounds (linear per addBody)', () => {
+    it('addBody folds extents incrementally instead of rescanning all bodies', () => {
+      engine = new PhysicsEngine();
+      const spy = vi.spyOn(engine as any, 'calculateArenaBounds');
+      for (let i = 0; i < 200; i++) {
+        engine.addBody({
+          name: `b${i}`,
+          type: 'rect',
+          x: i * 10,
+          y: 0,
+          width: 10,
+          height: 10,
+          static: true,
+        });
+      }
+      // The quadratic path rescaned every body once per add; after the fix a
+      // full build must not trigger a single full-world scan from addBody.
+      expect(spy).not.toHaveBeenCalled();
+      spy.mockRestore();
+
+      // Bounds are still correct after 200 adds, and identical to a recompute.
+      const incremental = { ...(engine as any).getArenaBounds() };
+      expect(incremental.halfWidth).toBeGreaterThan(2000); // 66.5m extent + 5m margin
+      engine.calculateArenaBounds();
+      expect((engine as any).getArenaBounds()).toEqual(incremental);
+    });
+
+    it('reset rebases incremental extents on the fresh world', () => {
+      engine = new PhysicsEngine();
+      engine.addBody({
+        name: 'far', type: 'rect',
+        x: 500, y: 0, width: 200, height: 30, static: true,
+      });
+      const beforeReset = { ...(engine as any).getArenaBounds() };
+
+      engine.reset();
+      engine.addBody({
+        name: 'small', type: 'rect',
+        x: 0, y: 0, width: 100, height: 30, static: true,
+      });
+      engine.calculateArenaBounds();
       const afterReset = { ...(engine as any).getArenaBounds() };
       expect(afterReset.halfWidth).toBeLessThan(beforeReset.halfWidth);
     });

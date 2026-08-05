@@ -224,6 +224,13 @@ export class PhysicsEngine {
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
+  /** Running arena extents in metres, folded in O(1) per addBody so map build
+   *  and episode reset stay linear instead of rescanning every platform body
+   *  (the old per-add full pass was O(bodies²)). */
+  private arenaMinX: number = Infinity;
+  private arenaMaxX: number = -Infinity;
+  private arenaMinY: number = Infinity;
+  private arenaMaxY: number = -Infinity;
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
@@ -526,7 +533,11 @@ export class PhysicsEngine {
 
     this.platformBodies.push(body);
     if (def.name) this.platformBodyMap.set(def.name, body);
-    this.calculateArenaBounds();
+
+    // Fold this body's AABB into the running arena extents instead of
+    // rescanning every platform body, keeping map build and episode reset
+    // O(bodies) rather than O(bodies²).
+    this.extendArenaExtents(body);
   }
 
   addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
@@ -602,29 +613,41 @@ export class PhysicsEngine {
   }
 
   /**
-   * Calculate arena bounds based on map body extents.
-   * Call this after adding all map bodies.
+   * Fold one body's shape AABBs into the running arena extents and refresh
+   * arenaHalfWidth/Height. O(1) per body; addBody calls this instead of a
+   * full-world rescan.
    */
-  calculateArenaBounds(): void {
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-
-    for (const body of this.platformBodies) {
-      const aabb = new b2AABB();
-      const transform = body.GetXForm();
-      for (let shape = body.GetShapeList(); shape !== null; shape = shape.GetNext()) {
-        shape.ComputeAABB(aabb, transform);
-        minX = Math.min(minX, aabb.lowerBound.x);
-        maxX = Math.max(maxX, aabb.upperBound.x);
-        minY = Math.min(minY, aabb.lowerBound.y);
-        maxY = Math.max(maxY, aabb.upperBound.y);
-      }
+  private extendArenaExtents(body: any): void {
+    const aabb = new b2AABB();
+    const transform = body.GetXForm();
+    for (let shape = body.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+      shape.ComputeAABB(aabb, transform);
+      this.arenaMinX = Math.min(this.arenaMinX, aabb.lowerBound.x);
+      this.arenaMaxX = Math.max(this.arenaMaxX, aabb.upperBound.x);
+      this.arenaMinY = Math.min(this.arenaMinY, aabb.lowerBound.y);
+      this.arenaMaxY = Math.max(this.arenaMaxY, aabb.upperBound.y);
     }
 
-    if (isFinite(minX)) {
+    if (isFinite(this.arenaMinX)) {
       const margin = 5; // 5 metres extra buffer
-      this.arenaHalfWidth = Math.max(Math.abs(minX), Math.abs(maxX)) + margin;
-      this.arenaHalfHeight = Math.max(Math.abs(minY), Math.abs(maxY)) + margin;
+      this.arenaHalfWidth = Math.max(Math.abs(this.arenaMinX), Math.abs(this.arenaMaxX)) + margin;
+      this.arenaHalfHeight = Math.max(Math.abs(this.arenaMinY), Math.abs(this.arenaMaxY)) + margin;
+    }
+  }
+
+  /**
+   * Calculate arena bounds based on map body extents.
+   * Call this after adding all map bodies (or at any time; it rebases the
+   * running extents on a full scan of every current platform body).
+   */
+  calculateArenaBounds(): void {
+    this.arenaMinX = Infinity;
+    this.arenaMaxX = -Infinity;
+    this.arenaMinY = Infinity;
+    this.arenaMaxY = -Infinity;
+
+    for (const body of this.platformBodies) {
+      this.extendArenaExtents(body);
     }
   }
 
@@ -1293,6 +1316,12 @@ export class PhysicsEngine {
     this.lastHitTicks.clear();
     this.platformBodies = [];
     this.platformBodyMap = new Map();
+    // Running arena extents belong to the fresh world; bodies re-added after
+    // reset() rebuild them incrementally.
+    this.arenaMinX = Infinity;
+    this.arenaMaxX = -Infinity;
+    this.arenaMinY = Infinity;
+    this.arenaMaxY = -Infinity;
     this.tickCount = 0;
     // Reset the OOB death-circle center to the origin default. Although it is
     // map-level configuration, it must not survive across maps: reusing this
