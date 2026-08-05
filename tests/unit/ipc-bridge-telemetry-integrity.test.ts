@@ -65,6 +65,7 @@ vi.mock('../../src/core/worker-pool', () => ({
 }));
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  DEFAULT_MAX_CLIENT_SESSIONS: 32,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
 }));

@@ -16,6 +16,13 @@ import * as os from 'os';
 
 // ─── Type Definitions ──────────────────────────────────────────────────────
 
+/**
+ * Default cap for concurrent per-client worker-pool sessions (see
+ * ServerConfig.maxClientSessions). Shared with IpcBridge so the bridge's
+ * missing-cap fallback can never drift from the loader default.
+ */
+export const DEFAULT_MAX_CLIENT_SESSIONS = 32;
+
 export interface ServerConfig {
     port: number;
     bindAddress: string;
@@ -170,7 +177,7 @@ const DEFAULTS: AppConfig = {
         zmqBacklog: 100,
         maxRuntimeSeconds: 0,
         shutdownTimeoutMs: 10000,
-        maxClientSessions: 32,
+        maxClientSessions: DEFAULT_MAX_CLIENT_SESSIONS,
     },
     physics: {
         ticksPerSecond: 30,
