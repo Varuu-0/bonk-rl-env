@@ -148,6 +148,26 @@ describe('Worker thread integration', () => {
         }
       }
     });
+
+    it('returns telemetry snapshots immediately in shared memory mode (issue #240)', async () => {
+      if (WorkerPool.isSupported()) {
+        await pool.init(2, {}, true);
+        await pool.reset([1, 2]);
+        await pool.step([0, 0]);
+
+        // Shared-mode workers block in Atomics.wait and can never service
+        // GET_TELEMETRY, so the snapshot must resolve within a small bound
+        // (empty set) instead of burning messageTimeoutMs, and the pool must
+        // remain usable afterwards.
+        const started = Date.now();
+        const snapshots = await pool.getTelemetrySnapshots();
+        expect(Date.now() - started).toBeLessThan(1000);
+        expect(snapshots).toHaveLength(0);
+
+        const results = await pool.step([0, 0]);
+        expect(results).toHaveLength(2);
+      }
+    });
   });
 
   describe('multi-worker coordination', () => {
