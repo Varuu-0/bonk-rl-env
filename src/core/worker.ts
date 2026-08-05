@@ -40,6 +40,9 @@ function signalSyncCompleted(status: number = WORKER_COMPLETE) {
 // Pre-allocated buffer for zero-allocation observation conversion
 let _obsBuffer = new Float32Array(16);
 let _obsNumOpponents = 1;
+// Pre-allocated per-env dynamic info floats (aiAlive, opponentsAlive,
+// scoreBlue, scoreRed) written into the SAB info region.
+const _infoBuffer = new Float32Array(4);
 
 function observationToArray(obs: Observation): Float32Array {
     _obsBuffer[0] = obs.playerX;
@@ -50,15 +53,10 @@ function observationToArray(obs: Observation): Float32Array {
     _obsBuffer[5] = obs.playerAngularVel;
     _obsBuffer[6] = obs.playerIsHeavy ? 1 : 0;
 
-    // Zero every opponent block first so stale data never survives a shorter
-    // opponent list (defensive; the layout is fixed per config).
-    for (let i = 0; i < _obsNumOpponents; i++) {
-        const base = i === 0 ? 7 : 16 + 6 * (i - 1);
-        for (let k = 0; k < 6; k++) {
-            _obsBuffer[base + k] = 0;
-        }
-    }
-
+    // The opponent count is fixed per config and every reset spawns exactly
+    // that many, so each block is rewritten on every call (blocks beyond the
+    // live count stay zero because the buffer is fresh and never had values
+    // written into them).
     const numOpponents = Math.min(obs.opponents.length, _obsNumOpponents);
     for (let i = 0; i < numOpponents; i++) {
         const opp = obs.opponents[i];
@@ -88,7 +86,7 @@ parentPort.on('message', (msg) => {
             const config = msg.config || {};
             // Size the shared-memory observation buffer and manager for the
             // configured opponent count so all opponents are transported.
-            _obsNumOpponents = Math.max(0, Math.floor(Number(config.numOpponents ?? 1)));
+            _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents);
             _obsBuffer = new Float32Array(16 + 6 * Math.max(0, _obsNumOpponents - 1));
             envs = [];
             for (let i = 0; i < numEnvsParam; i++) {
@@ -118,7 +116,13 @@ parentPort.on('message', (msg) => {
                 parentPort!.postMessage({
                     id: msg.id,
                     status: 'ok',
-                    data: { mode: 'shared' }  // Include mode in data for compatibility
+                    data: {
+                        mode: 'shared',  // Include mode in data for compatibility
+                        // Static info fields (frameSkip, capZones, aiTeam) are
+                        // constant per environment; transport them once here
+                        // instead of per step.
+                        staticInfos: envs.map(env => env.getStaticInfo()),
+                    }
                 });
             } else {
                 console.log(`[Worker] Using message passing mode`);
@@ -216,13 +220,13 @@ parentPort.on('message', (msg) => {
                     sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                     sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                     sharedMem!.writeTick(i, res.info.tick || stepCounter);
-                });
-
-                // Ship the full info dictionaries over the message channel,
-                // mirroring the wait-for-action step path.
-                parentPort!.postMessage({
-                    type: 'step-infos',
-                    infos: results.map(res => res.info),
+                    // Dynamic info fields travel as SAB floats; the static
+                    // fields were shipped once at init.
+                    _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
+                    _infoBuffer[1] = res.info.opponentsAlive;
+                    _infoBuffer[2] = res.info.scoreBlue;
+                    _infoBuffer[3] = res.info.scoreRed;
+                    sharedMem!.writeInfo(i, _infoBuffer);
                 });
 
                 // Signal that worker has consumed the actions
@@ -308,16 +312,15 @@ parentPort.on('message', (msg) => {
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                             sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                             sharedMem!.writeTick(i, res.info.tick || stepCounter);
-                        });
-
-                        // The SAB carries only scalars; ship the full info
-                        // dictionaries (aiAlive, opponentsAlive, frameSkip,
-                        // capZones, scoreBlue, scoreRed, aiTeam, tick) over
-                        // the message channel so shared-memory results expose
-                        // the same info contract as message-passing mode.
-                        parentPort!.postMessage({
-                            type: 'step-infos',
-                            infos: results.map(res => res.info),
+                            // Dynamic info fields travel as SAB floats; the
+                            // static fields were shipped once at init. This
+                            // keeps the shared-memory step zero-message (no
+                            // per-step postMessage).
+                            _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
+                            _infoBuffer[1] = res.info.opponentsAlive;
+                            _infoBuffer[2] = res.info.scoreBlue;
+                            _infoBuffer[3] = res.info.scoreRed;
+                            sharedMem!.writeInfo(i, _infoBuffer);
                         });
 
                         sharedMem.signalWorkerConsumed();

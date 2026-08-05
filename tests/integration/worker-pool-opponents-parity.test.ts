@@ -12,6 +12,19 @@
 import { describe, it, expect } from 'vitest';
 import { WorkerPool } from '../../src/core/worker-pool';
 import { BonkEnvironment } from '../../src/core/environment';
+import { SharedMemoryManager } from '../../src/ipc/shared-memory';
+
+describe('canonical numOpponents normalization', () => {
+  it('the environment spawn count always matches the SAB layout count', () => {
+    for (const raw of [1, 3, 2.9, 0, -2, NaN, undefined, '3']) {
+      const env = new BonkEnvironment({ maxTicks: 10, numOpponents: raw as any });
+      const obs = env.reset();
+      const expected = SharedMemoryManager.normalizeNumOpponents(raw);
+      expect(obs.opponents.length).toBe(expected);
+      expect(env.getObservationFast().length).toBe(SharedMemoryManager.floatsPerEnv(raw));
+    }
+  });
+});
 
 describe('SAB multi-opponent parity (issue #210)', () => {
   it('returns every opponent in reset and step observations in both transports', async () => {

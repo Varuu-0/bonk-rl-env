@@ -18,11 +18,21 @@ const fakes = vi.hoisted(() => {
     getObservationFast(): Float32Array {
       return new Float32Array(16);
     }
+
+    getStaticInfo(): { frameSkip: number; capZones: never[]; aiTeam: string } {
+      return { frameSkip: 1, capZones: [], aiTeam: 'blue' };
+    }
   }
 
   class FakeSharedMemoryManager {
     static isSupported(): boolean {
       return true;
+    }
+
+    static normalizeNumOpponents(value: unknown): number {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 1;
+      return Math.max(0, Math.floor(n));
     }
 
     constructor(_numEnvs: number, _ringSize: number, _buffer: SharedArrayBuffer) {}

@@ -102,6 +102,12 @@ const fakes = vi.hoisted(() => {
       return true;
     }
 
+    static normalizeNumOpponents(value: unknown): number {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 1;
+      return Math.max(0, Math.floor(n));
+    }
+
     getBuffer(): SharedArrayBuffer {
       return this.buffer;
     }
@@ -129,15 +135,6 @@ const fakes = vi.hoisted(() => {
 
       if (!this.sync) throw new Error('fake manager was not connected');
       this.ready = behavior === 'complete';
-      if (behavior === 'complete') {
-        // A real worker posts its step info payloads over the message
-        // channel before signalling completion; mirror that so the pool's
-        // per-batch info-delivery promise resolves.
-        this.worker?.emit('message', {
-          type: 'step-infos',
-          infos: Array.from({ length: this.numEnvs }, () => ({ tick: 0 })),
-        });
-      }
       Atomics.store(this.sync, this.workerIndex + 1, behavior === 'complete' ? 1 : -1);
       Atomics.add(this.sync, 0, 1);
       Atomics.notify(this.sync, 0);
@@ -163,6 +160,7 @@ const fakes = vi.hoisted(() => {
         truncated: new Uint8Array(this.numEnvs),
         terminated: new Uint8Array(this.numEnvs),
         ticks: new Uint32Array(this.numEnvs),
+        info: new Float32Array(this.numEnvs * 4),
       };
     }
 
