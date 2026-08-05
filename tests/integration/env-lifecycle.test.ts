@@ -268,6 +268,39 @@ describe('BonkEnv lifecycle', () => {
     });
   });
 
+  describe('init validation (#227)', () => {
+    it('rejects start with zero numEnvs and stays inactive', async () => {
+      env = new BonkEnv({ numEnvs: 0, portManager: pm });
+      await expect(env.start()).rejects.toThrow(
+        'Invalid environment count: expected a positive integer, got 0',
+      );
+      expect(env.isActive()).toBe(false);
+    });
+
+    it('rejects start with a negative numEnvs and stays inactive', async () => {
+      env = new BonkEnv({ numEnvs: -1, portManager: pm });
+      await expect(env.start()).rejects.toThrow(
+        'Invalid environment count: expected a positive integer, got -1',
+      );
+      expect(env.isActive()).toBe(false);
+      expect(pm.isAllocated(env.port)).toBe(false);
+    });
+
+    it('a rejected start is stop-able and a valid environment still starts', { timeout: 30000 }, async () => {
+      env = new BonkEnv({ numEnvs: 0, portManager: pm });
+      await expect(env.start()).rejects.toThrow('Invalid environment count');
+      await expect(env.stop()).resolves.toBeUndefined();
+
+      const good = new BonkEnv({ numEnvs: 1, portManager: pm });
+      try {
+        await good.start();
+        expect(good.isActive()).toBe(true);
+      } finally {
+        await good.stop();
+      }
+    });
+  });
+
   describe('reset', () => {
     it('reset works after start', { timeout: 30000 }, async () => {
       env = new BonkEnv({ numEnvs: 1, portManager: pm });
