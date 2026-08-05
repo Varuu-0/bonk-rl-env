@@ -71,15 +71,21 @@ export const HEAVY_FORCE_MULTIPLIER = 0.7;
 /**
  * Verified native grapple constants:
  * - Targeting: QueryAABB ±10 world units around the disc center, candidates
- *   scored by center-to-surface distance `d < 10` (§32.1).
+ *   scored by center-to-surface distance `d < 10` (§32.1). The 10 is in
+ *   NATIVE world units (`map px / ppm`); this port's world is `map px / SCALE`,
+ *   so the window is consumed as `GRAPPLE_TARGET_WINDOW * ppm / SCALE` port
+ *   units — 4.0 at the default ppm = 12 (120 map px = 10 disc radii, not the
+ *   300 map px a bare 10.0 port-unit window would reach).
  * - Joint: `frequencyHz = (sep < swing.l) ? 0.01 : swingF`,
  *   `dampingRatio = swingD`, with the only table-proven writers being
  *   `swingF = 2` (Hz) and `swingD = 0` (§32.4). `fh`/`dr` are map `d`-joint
  *   fields and never apply to the grapple.
  * - `a1a` energy meter (§32.3): spawn 1000, fire gate `a1a > 500`, drain
- *   4/step while swinging, recharge 3/step otherwise, forced release and
- *   zeroing below 500. The literal 500 is this energy threshold, NOT a reach.
+ *   4/step while swinging from the tick AFTER attach, recharge 3/step
+ *   otherwise, forced release and zeroing below 500. The literal 500 is this
+ *   energy threshold, NOT a reach.
  */
+/** Native QueryAABB half-extent (native world units). Consumed as `* ppm / SCALE`. */
 export const GRAPPLE_TARGET_WINDOW = 10.0;
 export const GRAPPLE_FREQUENCY_HZ = 2.0;   // native swingF
 export const GRAPPLE_DAMPING_RATIO = 0.0;  // native swingD
@@ -228,6 +234,14 @@ export class PhysicsEngine {
   private playerGrappleJoints: Map<number, any> = new Map();
   /** Native a1a grapple/energy meter (0-1000), per player (DEOBFUSCATION §32.3). */
   private grappleEnergy: Map<number, number> = new Map();
+  /**
+   * Disc IDs whose grapple joint was created this tick. Native §32.3 runs the
+   * a1a update BEFORE the fire gate in the same step, so the attach step never
+   * drains the new rope; this marker makes updateGrappleEnergy() recharge
+   * (instead of draining) on exactly that tick and lets a re-fire at the 501
+   * crossing survive instead of being force-released in the same tick.
+   */
+  private swingJustStarted: Set<number> = new Set();
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
@@ -869,17 +883,22 @@ export class PhysicsEngine {
 
     const playerPos = body.GetPosition();
 
-    // §32.1: candidates must lie within a ±10 world-unit window of the disc
-    // center, scored by center-to-surface distance `d < 10`. The native
-    // QueryAABB is a broadphase pre-filter over that same window; iterating
-    // the port's platform bodies (the only grappable "phys" bodies) with the
-    // identical d < 10 scoring yields exactly the same candidate set. The
-    // per-shape AABB overlap test below reproduces the broadphase filter
-    // without a fixed-size result buffer: a shape whose surface is within 10
-    // units of the disc center always overlaps the ±10 box.
+    // §32.1: candidates must lie within the native ±10 world-unit window of
+    // the disc center, scored by center-to-surface distance `d < 10`. The 10
+    // is a NATIVE world unit (= map px / ppm); this port's world is
+    // map px / SCALE, so the window is converted once here to
+    // `10 * ppm / SCALE` port units (4.0 at the default ppm = 12 → 120 map px
+    // = 10 disc radii, not the 300 map px a bare 10.0 value would reach). The
+    // native QueryAABB is a broadphase pre-filter over that same window;
+    // iterating the port's platform bodies (the only grappable "phys" bodies)
+    // with the identical `d < window` scoring yields exactly the same candidate
+    // set. The per-shape AABB overlap test below reproduces the broadphase
+    // filter without a fixed-size result buffer: a shape whose surface is
+    // within `window` units of the disc center always overlaps the ±window box.
+    const windowUnits = (GRAPPLE_TARGET_WINDOW * this.ppm) / SCALE;
     const queryAabb = new b2AABB();
-    queryAabb.lowerBound.Set(playerPos.x - GRAPPLE_TARGET_WINDOW, playerPos.y - GRAPPLE_TARGET_WINDOW);
-    queryAabb.upperBound.Set(playerPos.x + GRAPPLE_TARGET_WINDOW, playerPos.y + GRAPPLE_TARGET_WINDOW);
+    queryAabb.lowerBound.Set(playerPos.x - windowUnits, playerPos.y - windowUnits);
+    queryAabb.upperBound.Set(playerPos.x + windowUnits, playerPos.y + windowUnits);
 
     const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
     const shapeAabb = new b2AABB();
@@ -894,10 +913,10 @@ export class PhysicsEngine {
         shape.ComputeAABB(shapeAabb, xf);
         if (shapeAabb.lowerBound.x > queryAabb.upperBound.x || shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
             shapeAabb.lowerBound.y > queryAabb.upperBound.y || shapeAabb.upperBound.y < queryAabb.lowerBound.y) {
-          continue; // broadphase window miss — cannot satisfy d < 10
+          continue; // broadphase window miss — cannot satisfy d < window
         }
         const surface = this.closestSurfacePoint(shape, pBody, playerPos);
-        if (surface.d < GRAPPLE_TARGET_WINDOW) {
+        if (surface.d < windowUnits) {
           candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
         }
       }
@@ -930,6 +949,13 @@ export class PhysicsEngine {
 
     const joint = this.world.CreateJoint(jointDef);
     this.playerGrappleJoints.set(playerId, joint);
+    // §32.3 native step order: the a1a update runs before the fire gate in the
+    // same physics step, so the attach tick must not drain (or force-release)
+    // the new rope — updateGrappleEnergy() recharges it instead so the first
+    // drain hits on the next tick. Without this a re-fire at exactly 501 is
+    // force-released in the same tick (501 - 4 = 497 < 500) and the recharge
+    // path is dead.
+    this.swingJustStarted.add(playerId);
   }
 
   /**
@@ -1008,7 +1034,9 @@ export class PhysicsEngine {
   }
 
   /**
-   * §32.3 a1a energy meter: drain 4/step while swinging with forced release
+   * §32.3 a1a energy meter: drain 4/step while swinging (from the tick AFTER
+   * the rope attaches; the attach tick recharges because the native runs its
+   * a1a update before the fire gate in the same step) with forced release
    * (and zeroing) below 500; recharge 3/step otherwise, capped at 1000.
    */
   private updateGrappleEnergy(): void {
@@ -1016,11 +1044,20 @@ export class PhysicsEngine {
       if (!this.playerAlive.get(playerId)) continue;
       let energy = this.grappleEnergy.get(playerId) ?? A1A_SPAWN;
       if (this.playerGrappleJoints.has(playerId)) {
-        energy -= A1A_SWING_DRAIN;
-        if (energy < 0) energy = 0;
-        if (energy < A1A_FIRE_THRESHOLD) {
-          energy = 0;
-          this.releaseGrapple(playerId); // forced release below 500
+        if (this.swingJustStarted.delete(playerId)) {
+          // Attach tick (§32.3 native order): the step's energy update already
+          // ran before the fire gate, so it applies the not-yet-swinging
+          // recharge branch. A re-fire at 501 recharges to 504 and thus
+          // survives its first drain instead of being released in the same
+          // tick (501 - 4 = 497 < 500).
+          energy = Math.min(energy + A1A_RECHARGE, A1A_MAX);
+        } else {
+          energy -= A1A_SWING_DRAIN;
+          if (energy < 0) energy = 0;
+          if (energy < A1A_FIRE_THRESHOLD) {
+            energy = 0;
+            this.releaseGrapple(playerId); // forced release below 500
+          }
         }
       } else {
         energy = Math.min(energy + A1A_RECHARGE, A1A_MAX);
@@ -1030,6 +1067,11 @@ export class PhysicsEngine {
   }
 
   private releaseGrapple(playerId: number): void {
+    // The swingJustStarted marker only ever accompanies a live joint: purge it
+    // on every release (button release, forced drain-out, collision break,
+    // detachPlayer) so it can never outlive the joint and mis-flag a later
+    // re-fire as an attach tick.
+    this.swingJustStarted.delete(playerId);
     const joint = this.playerGrappleJoints.get(playerId);
     if (joint) {
       this.world.DestroyJoint(joint);
@@ -1304,6 +1346,7 @@ export class PhysicsEngine {
     this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
     this.grappleEnergy.clear();
+    this.swingJustStarted.clear();
     this.playerTeams.clear();
     this.capZoneSensors = [];
     this.capZoneState.clear();
