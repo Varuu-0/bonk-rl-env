@@ -83,6 +83,29 @@ describe('per-env config forwarding (#201)', () => {
       const res = (await env.step([0])) as any[];
       expect(res[0].info.frameSkip).toBe(3);
     });
+
+    it('per-env reward config reaches the worker reward calc (#220)', { timeout: 30000 }, async () => {
+      // The client-facing shape (`reward` sub-object in the per-env config)
+      // must drive the worker's reward function: a non-terminal tick with the
+      // configured -0.5 time penalty must report exactly -0.5.
+      const env = await track(new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: {
+          maxTicks: 100,
+          numOpponents: 0,
+          randomOpponent: false,
+          seed: 42,
+          reward: { timePenalty: -0.5 },
+        },
+      }));
+      await env.start();
+
+      await env.reset([1]);
+      const res = (await env.step([0])) as any[];
+      expect(res[0].done).toBe(false);
+      expect(res[0].reward).toBeCloseTo(-0.5, 6);
+    });
   });
 
   describe('EnvManager', () => {

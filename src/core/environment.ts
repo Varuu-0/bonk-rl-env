@@ -111,6 +111,18 @@ export interface EnvironmentConfig {
     teamsEnabled?: boolean;
     /** Native no-collision physics mode (`nc`): discs never collide (default false) */
     noCollide?: boolean;
+    /** Reward for eliminating an opponent (config-loader reward.killReward; default 1.0) */
+    killReward?: number;
+    /** Penalty for being eliminated (config-loader reward.deathPenalty; default -1.0) */
+    deathPenalty?: number;
+    /** Per-tick penalty to encourage efficiency (config-loader reward.timePenalty; default -0.001) */
+    timePenalty?: number;
+    /** Reward-section alias carried by the worker config (reward.killReward / deathPenalty / timePenalty) */
+    reward?: {
+        killReward?: number;
+        deathPenalty?: number;
+        timePenalty?: number;
+    };
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -196,6 +208,13 @@ export class BonkEnvironment {
         const oppHeavyProb = config.oppHeavyProb ?? config.randomOppHeavyProb ?? 0.05;
         const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
 
+        // Reward shaping weights: the flat keys win over the nested reward
+        // section alias; the literals calculateReward used to hardcode are
+        // the fallback so config-free environments keep the same rewards (#220).
+        const killReward = config.killReward ?? config.reward?.killReward ?? 1.0;
+        const deathPenalty = config.deathPenalty ?? config.reward?.deathPenalty ?? -1.0;
+        const timePenalty = config.timePenalty ?? config.reward?.timePenalty ?? -0.001;
+
         this.config = {
             numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
@@ -217,6 +236,10 @@ export class BonkEnvironment {
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
+            killReward,
+            deathPenalty,
+            timePenalty,
+            reward: { killReward, deathPenalty, timePenalty },
         };
 
         this.rng = new PRNG(this.config.seed);
@@ -588,13 +611,15 @@ export class BonkEnvironment {
     /**
      * Calculate reward for the current tick.
      *
-     * Reward structure:
-     *   +1.0  — opponent knocked off the map (killed)
-     *   -1.0  — AI player knocked off the map (death)
+     * Reward structure (weights configurable via reward.killReward /
+     * reward.deathPenalty / reward.timePenalty; documented defaults are the
+     * legacy literals when unset, #220):
+     *   +killReward   — opponent knocked off the map (killed)
+     *   +deathPenalty — AI player knocked off the map (death; default -1.0)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
      *           count as kills)
-     *   -0.001 — time penalty (encourages action)
+     *   +timePenalty — per-tick penalty (encourages action; default -0.001)
      */
     private calculateReward(aiState: PlayerState, opponentStates: PlayerState[]): number {
         let reward = 0;
@@ -603,7 +628,7 @@ export class BonkEnvironment {
         // capture branch below instead of double-counting as a death)
         const aiWasAlive = this.previousAliveState.get(this.aiPlayerId) ?? true;
         if (aiWasAlive && !aiState.alive && aiState.deathType !== 3) {
-            reward -= 1.0;
+            reward += this.config.deathPenalty;
         }
 
         // Check if any opponent just died this tick
@@ -611,7 +636,7 @@ export class BonkEnvironment {
             const opState = opponentStates[i];
             const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
             if (opWasAlive && !opState.alive && opState.deathType !== 3) {
-                reward += 1.0;
+                reward += this.config.killReward;
             }
         }
 
@@ -631,8 +656,8 @@ export class BonkEnvironment {
             }
         }
 
-        // Small time penalty
-        reward -= 0.001;
+        // Per-tick time penalty
+        reward += this.config.timePenalty;
 
         return reward;
     }

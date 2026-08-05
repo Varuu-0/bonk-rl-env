@@ -696,6 +696,106 @@ describe('BonkEnvironment edge cases', () => {
       }
       expect(totalReward).toBeLessThan(0);
     });
+
+    it('configurable killReward: an opponent kill pays the configured +10', async () => {
+      // The opponent spawns inside a lethal platform and dies on tick 1, so
+      // the done step's reward is deterministically killReward + timePenalty
+      // (no random policy, no cap zones, AI staged far away) (#220).
+      const mapData: MapDef = {
+        name: 'kill-config',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [
+          { name: 'lethal', type: 'rect', x: 200, y: -100, width: 100, height: 100, static: true, isLethal: true },
+        ],
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset();
+      const result = env.step(0);
+      expect(result.done).toBe(true);
+      expect(result.info.terminated).toBe(true);
+      expect(result.info.aiAlive).toBe(true);
+      expect(result.info.opponentsAlive).toBe(0);
+      expect(result.reward).toBeCloseTo(10, 6);
+    });
+
+    it('configurable deathPenalty: AI death pays the configured -5', async () => {
+      const mapData: MapDef = {
+        name: 'death-config',
+        spawnPoints: {
+          team_blue: { x: 0, y: 0 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [
+          { name: 'lethal', type: 'rect', x: 0, y: 0, width: 100, height: 100, static: true, isLethal: true },
+        ],
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 0,
+        maxTicks: 10,
+        deathPenalty: -5,
+        timePenalty: 0,
+      });
+      env.reset();
+      const result = env.step(0);
+      expect(result.info.aiAlive).toBe(false);
+      expect(result.reward).toBeCloseTo(-5, 6);
+    });
+
+    it('configurable timePenalty applies on every non-terminal tick', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 100,
+        numOpponents: 0,
+        randomOpponent: false,
+        seed: 42,
+        timePenalty: -0.5,
+      });
+      env.reset();
+      const result = env.step(0);
+      expect(result.done).toBe(false);
+      expect(result.reward).toBeCloseTo(-0.5, 6);
+    });
+
+    it('falls back to the documented +1/-1/-0.001 weights when unset', async () => {
+      env = new BonkEnvironment({ maxTicks: 10, numOpponents: 0 });
+      const cfg = (env as any).config;
+      expect(cfg.killReward).toBe(1.0);
+      expect(cfg.deathPenalty).toBe(-1.0);
+      expect(cfg.timePenalty).toBe(-0.001);
+    });
+
+    it('resolves the nested reward section alias carried by the worker config', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 10,
+        numOpponents: 0,
+        reward: { killReward: 2, timePenalty: -0.01 },
+      });
+      const cfg = (env as any).config;
+      expect(cfg.killReward).toBe(2);
+      expect(cfg.deathPenalty).toBe(-1.0);
+      expect(cfg.timePenalty).toBe(-0.01);
+    });
+
+    it('flat reward keys win over the nested reward section alias', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 10,
+        numOpponents: 0,
+        killReward: 5,
+        reward: { killReward: 2 },
+      });
+      expect((env as any).config.killReward).toBe(5);
+    });
   });
 
   describe('reset with seed', () => {
