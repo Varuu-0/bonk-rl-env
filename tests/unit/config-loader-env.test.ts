@@ -11,7 +11,7 @@ describe('config-loader env vars and CLI', () => {
         'PORT', 'BIND_ADDRESS', 'MAX_RUNTIME', 'NUM_WORKERS', 'SEED',
         'DEFAULT_MAP_PATH', 'USE_SHARED_MEMORY', 'MANIFOLD_TELEMETRY',
         'MANIFOLD_TELEMETRY_OUTPUT', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG',
-        'TEST_MODE',
+        'TEST_MODE', 'AI_PLAYER_ID',
         'RANDOM_OPP_MOVE_PROB', 'RANDOM_OPP_UP_PROB', 'RANDOM_OPP_DOWN_PROB',
         'RANDOM_OPP_HEAVY_PROB', 'RANDOM_OPP_GRAPPLE_PROB',
     ];
@@ -93,6 +93,30 @@ describe('config-loader env vars and CLI', () => {
             process.env.DEFAULT_MAP_PATH = 'maps/custom_map.json';
             const cfg = loadConfig(testDir);
             expect(cfg.environment.defaultMapPath).toBe('maps/custom_map.json');
+        });
+
+        it('AI_PLAYER_ID overrides the default AI player slot', () => {
+            process.env.AI_PLAYER_ID = '3';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(3);
+        });
+
+        it('invalid AI_PLAYER_ID (negative) is ignored', () => {
+            process.env.AI_PLAYER_ID = '-1';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(0);
+        });
+
+        it('invalid AI_PLAYER_ID (non-numeric) is ignored', () => {
+            process.env.AI_PLAYER_ID = 'abc';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(0);
+        });
+
+        it('invalid AI_PLAYER_ID (out of the 0-7 player-slot range) is ignored', () => {
+            process.env.AI_PLAYER_ID = '9';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(0);
         });
 
         it('RANDOM_OPP_MOVE_PROB overrides the opponent move probability', () => {
@@ -533,6 +557,31 @@ describe('config-loader env vars and CLI', () => {
             process.argv = ['node', 'script.js', '--map'];
             const cfg = loadConfig(testDir);
             expect(cfg.environment.defaultMapPath).toBe('maps/bonk_WDB__No_Mapshake__716916.json');
+        });
+
+        it('--ai-player-id sets the AI player slot', () => {
+            process.argv = ['node', 'script.js', '--ai-player-id', '2'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(2);
+        });
+
+        it('--ai-player-id rejects negative and out-of-range values', () => {
+            process.argv = ['node', 'script.js', '--ai-player-id', '-1'];
+            expect(loadConfig(testDir).environment.aiPlayerId).toBe(0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--ai-player-id', '8'];
+            expect(loadConfig(testDir).environment.aiPlayerId).toBe(0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--ai-player-id', 'abc'];
+            expect(loadConfig(testDir).environment.aiPlayerId).toBe(0);
+        });
+
+        it('missing value for --ai-player-id is ignored', () => {
+            process.argv = ['node', 'script.js', '--ai-player-id'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.aiPlayerId).toBe(0);
         });
 
         it('missing value for --profile is ignored', () => {
