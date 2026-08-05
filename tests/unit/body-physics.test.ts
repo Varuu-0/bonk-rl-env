@@ -306,7 +306,7 @@ describe('Body Physics', () => {
     });
 
     describe('collidesWithPlayers', () => {
-        it('player falls through floor with collidesWithPlayers=false', () => {
+        it('player rests on floor with collidesWithPlayers=false', () => {
             engine = new PhysicsEngine();
 
             const floor: MapBodyDef = {
@@ -324,12 +324,16 @@ describe('Body Physics', () => {
             engine.addBody(floor);
             engine.addPlayer(0, 0, 95);
 
-            for (let i = 0; i < 30; i++) {
+            for (let i = 0; i < 45; i++) {
                 engine.tick();
             }
 
             const state = engine.getPlayerState(0);
-            expect(state.y).toBeGreaterThan(110);
+            // Platforms stay solid to players regardless of collidesWithPlayers:
+            // the native `f_p` flag clears only bit 0, never the player categories
+            // (DEOBFUSCATION §33.4). A pass-through floor leaves the player at
+            // y ≈ 785 px and still falling.
+            expect(state.y).toBeLessThanOrEqual(100);
         });
 
         it('player is stopped by floor with default collidesWithPlayers', () => {

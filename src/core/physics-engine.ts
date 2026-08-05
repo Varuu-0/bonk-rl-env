@@ -161,7 +161,11 @@ export interface MapBodyDef {
   angularDamping?: number;       // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
   angularVelocity?: number;      // Starting rotational velocity
-  collidesWithPlayers?: boolean; // If false, exclude player categories from maskBits
+  /** Map passthrough only — no engine behavior reads this; kept for map-data
+   * fidelity, not a mechanic. The native `f_p` flag clears only category bit
+   * 0 from maskBits (DEOBFUSCATION §33.4), never the player categories, so
+   * platforms are always solid to players regardless of this field. */
+  collidesWithPlayers?: boolean;
   aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
 }
 
@@ -486,12 +490,17 @@ export class PhysicsEngine {
         shapeDef.isSensor = true;
       }
 
-      // Apply collision filtering if specified
+      // Apply collision filtering: `collides` gates only the player-group bits
+      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010).
+      // `collidesWithPlayers` is map passthrough only: the native `f_p` flag
+      // subtracts just category bit 0 from maskBits (DEOBFUSCATION §33.4),
+      // never the player bits 0x0002/0x0004 — so platforms must remain solid
+      // to players in every case.
       if (def.collides || def.collidesWithPlayers === false) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
         filter.maskBits = 0xFFFF; // Start with collide-all
-        
+
         if (def.collides) {
           filter.maskBits = 0x0000;
           if (def.collides.g1) filter.maskBits |= 0x0002;
@@ -499,13 +508,7 @@ export class PhysicsEngine {
           if (def.collides.g3) filter.maskBits |= 0x0008;
           if (def.collides.g4) filter.maskBits |= 0x0010;
         }
-        
-        // collidesWithPlayers=false → exclude player categories from mask
-        if (def.collidesWithPlayers === false) {
-          filter.maskBits &= ~0x0002; // exclude g1 (player 0)
-          filter.maskBits &= ~0x0004; // exclude g2 (player 1+)
-        }
-        
+
         shapeDef.filter = filter;
       }
 

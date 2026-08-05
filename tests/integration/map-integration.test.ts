@@ -276,6 +276,27 @@ describe('MapIntegration', () => {
                 expect(true).toBe(true);
             });
 
+            it('player lands and rests on the platform (collidesWithPlayers=false must stay solid)', () => {
+                const map = loadMap(MAP_FILES.simple1v1);
+                const dc = (map as any).physics?.deathCenter;
+                engine = new PhysicsEngine();
+                addAllBodies(engine, map);
+                if (dc) engine.setDeathCircleCenter(dc.x, dc.y);
+                const sp = getSpawnXY(map);
+                const platform = map.bodies[0];
+                const top = platform.y - (platform.height || 0) / 2;
+                engine.addPlayer(0, sp.x, sp.y);
+                for (let i = 0; i < 120; i++) {
+                    engine.tick();
+                }
+                const state = engine.getPlayerState(0);
+                expect(state.alive).toBe(true);
+                // The bundled map sets collidesWithPlayers:false on its only
+                // body; the player must land on it (resting disc center stays
+                // above the platform top surface) instead of falling through.
+                expect(state.y).toBeLessThan(top);
+            });
+
             it('player spawns at spawn position', () => {
                 const map = loadMap(MAP_FILES.simple1v1);
                 expect(!!map.spawnPoints.team_red).toBe(true);
