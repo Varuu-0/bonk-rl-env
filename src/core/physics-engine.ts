@@ -491,23 +491,21 @@ export class PhysicsEngine {
       }
 
       // Apply collision filtering: `collides` gates only the player-group bits
-      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010).
-      // `collidesWithPlayers` is map passthrough only: the native `f_p` flag
-      // subtracts just category bit 0 from maskBits (DEOBFUSCATION §33.4),
-      // never the player bits 0x0002/0x0004 — so platforms must remain solid
-      // to players in every case.
-      if (def.collides || def.collidesWithPlayers === false) {
+      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010). The map-body
+      // category 0x0001 always stays in maskBits so map geometry stays solid to
+      // other map bodies. `collidesWithPlayers` is map passthrough only: the
+      // native `f_p` flag subtracts just category bit 0 from maskBits
+      // (DEOBFUSCATION §33.4), which is this port's map-body category — never
+      // the player bits 0x0002/0x0004 — so platforms must remain solid to
+      // players in every case.
+      if (def.collides) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
-        filter.maskBits = 0xFFFF; // Start with collide-all
-
-        if (def.collides) {
-          filter.maskBits = 0x0000;
-          if (def.collides.g1) filter.maskBits |= 0x0002;
-          if (def.collides.g2) filter.maskBits |= 0x0004;
-          if (def.collides.g3) filter.maskBits |= 0x0008;
-          if (def.collides.g4) filter.maskBits |= 0x0010;
-        }
+        filter.maskBits = 0x0001;     // Map bodies always collide with each other
+        if (def.collides.g1) filter.maskBits |= 0x0002;
+        if (def.collides.g2) filter.maskBits |= 0x0004;
+        if (def.collides.g3) filter.maskBits |= 0x0008;
+        if (def.collides.g4) filter.maskBits |= 0x0010;
 
         shapeDef.filter = filter;
       }

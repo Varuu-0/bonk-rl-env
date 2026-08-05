@@ -6,7 +6,8 @@ import {
     ARENA_HALF_WIDTH,
     ARENA_HALF_HEIGHT,
     TPS,
-    DT
+    DT,
+    SCALE
 } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
@@ -456,6 +457,38 @@ describe('MapIntegration', () => {
                 } else {
                     expect(completedTicks).toBeGreaterThanOrEqual(30);
                 }
+            });
+
+            it('dynamic balls stay inside the container instead of falling through', () => {
+                const map = loadMap(MAP_FILES.ballPit);
+                engine = new PhysicsEngine();
+
+                // All 52 bodies share the fixture name "Unnamed Shape", so give
+                // each a unique tracking name before adding.
+                const dynamic: MapBodyDef[] = [];
+                map.bodies.forEach((b: any, i: number) => {
+                    engine!.addBody({ ...b, name: `ballpit_${i}` });
+                    if (b.static !== true) {
+                        dynamic.push({ ...b, name: `ballpit_${i}` });
+                    }
+                });
+                expect(dynamic.length).toBeGreaterThan(0);
+
+                const bodyMap = engine.getBodyMap();
+                for (let i = 0; i < 120; i++) {
+                    engine.tick();
+                }
+
+                // Every dynamic ball must remain bounded by the container: the
+                // broken map-body maskBits let all 48 dynamic balls fall
+                // straight out of the world (y > 2000 px within 120 ticks).
+                let fellThrough = 0;
+                for (const def of dynamic) {
+                    const body = bodyMap.get(def.name)!;
+                    const y = body.GetPosition().y * SCALE;
+                    if (y > 2000) fellThrough++;
+                }
+                expect(fellThrough).toBe(0);
             });
         });
 
