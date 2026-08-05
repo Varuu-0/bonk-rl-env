@@ -64,7 +64,9 @@ const results = {
   rssMB: diff('rss'),
   thresholdMB: 20,
 };
-console.log(JSON.stringify(results));
-
-const growthExceeded = results.heapUsedMB >= results.thresholdMB || results.externalMB >= results.thresholdMB;
-process.exit(growthExceeded ? 1 : 0);
+// Write via process.stdout and exit via process.exitCode (natural process
+// end) so the piped JSON report always flushes before the child terminates;
+// process.exit() could truncate stdout and produce a flaky parse in the test.
+process.stdout.write(`${JSON.stringify(results)}\n`);
+process.exitCode =
+  results.heapUsedMB >= results.thresholdMB || results.externalMB >= results.thresholdMB ? 1 : 0;
