@@ -339,9 +339,10 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
   });
 
   it('falls back to the default session cap when the cap is omitted', () => {
-    // The getConfig mock normally reports 32; omit the cap entirely so the
-    // only path to a finite cap is the bridge's built-in default fallback.
-    mocks.getConfig.mockReturnValueOnce({ server: { port: 5555 }, environment: { seed: 0 } });
+    // The getConfig mock normally reports 32; override it for both constructor
+    // reads (port, then cap) with a cap-less config so the only path to a
+    // finite cap is the bridge's built-in default fallback.
+    mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
     const bridge = new IpcBridge({} as any);
     expect((bridge as any).maxClientSessions).toBe(32);
   });
