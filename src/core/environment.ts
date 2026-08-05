@@ -95,6 +95,12 @@ export interface EnvironmentConfig {
     ppm?: number;
     /** Optional path to a map JSON file, used when mapData is absent */
     mapPath?: string;
+    /**
+     * Config-loader map path (`--map` | `DEFAULT_MAP_PATH` | `environment.defaultMapPath`),
+     * used when both mapData and mapPath are absent. The worker forwards the merged
+     * environment config verbatim, so this is the end-to-end documented surface (#199).
+     */
+    defaultMapPath?: string;
     /** Opponent random-policy probabilities */
     oppMoveProb?: number;
     oppUpProb?: number;
@@ -169,16 +175,23 @@ export class BonkEnvironment {
         const rawConfig = config as any;
         const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
-        // Load map from file or use provided config
+        // Load map from file or use provided config. `mapData` (programmatic)
+        // wins; otherwise the documented map-path surface is honored end to
+        // end: the config-loader resolves `--map` / `DEFAULT_MAP_PATH` /
+        // `environment.defaultMapPath` into `defaultMapPath`, which the worker
+        // forwards verbatim. `mapPath` is the per-env programmatic override;
+        // the hardcoded WDB path is only the last-resort fallback.
         let mapDef: MapDef;
+        let mapFile = '';
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = config.mapPath || path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+            const mapPath = config.mapPath || config.defaultMapPath || path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+                mapFile = mapPath;
             } catch (e) {
-                console.warn("Could not load default map, using fallback box");
+                console.warn(`Could not load map "${mapPath}", using fallback box`);
                 mapDef = getDefaultMap();
             }
         }
@@ -204,7 +217,8 @@ export class BonkEnvironment {
             seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
-            mapPath: config.mapPath ?? '',
+            mapPath: mapFile,
+            defaultMapPath: config.defaultMapPath ?? '',
             oppMoveProb,
             oppUpProb,
             oppDownProb,
