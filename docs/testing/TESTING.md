@@ -216,6 +216,16 @@ def test_factorial(input, expected):
     assert factorial(input) == expected
 ```
 
+## Performance Tests (`tests/perf`)
+
+Run the perf suite alone:
+
+```sh
+npm run test:perf
+```
+
+`tests/perf/memory-stability.test.ts` asserts there is no significant heap growth after many `env.reset()` and `env.step()` iterations. To measure actual retained memory rather than GC timing, `vitest.config.ts` passes `--expose-gc` to the test fork pool via `execArgv`, which makes `global.gc` available inside the test process. The test asserts `global.gc` is a function before sampling the heap, so the GC precondition can never silently regress into a no-op assertion.
+
 ## Coverage Goals
 
 | Module | Target | Current |

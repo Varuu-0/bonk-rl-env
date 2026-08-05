@@ -21,6 +21,9 @@ export default defineConfig({
     pool: 'forks',
     isolate: true,
     maxForks: 4,
+    // Expose `global.gc` to test forks so heap assertions in tests/perf/
+    // measure actual retained growth after a forced GC instead of GC timing.
+    execArgv: ['--expose-gc'],
     server: {
       deps: {
         inline: ['box2d'],
