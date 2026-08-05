@@ -423,8 +423,10 @@ export class BonkEnvironment {
             this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
         }
 
-        // Check for terminal state (death or maxTicks)
-        const allOpponentsDead = opponentStates.every(s => !s.alive);
+        // Check for terminal state (death or maxTicks). With zero opponents
+        // the empty-state check must not be vacuously true: an episode with
+        // no opponents can only end via the AI's death or truncation.
+        const allOpponentsDead = opponentStates.length > 0 && opponentStates.every(s => !s.alive);
         const terminated = !aiState.alive || allOpponentsDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 

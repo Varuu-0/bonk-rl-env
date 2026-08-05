@@ -222,7 +222,17 @@ describe('BonkEnvironment edge cases', () => {
 
   describe('auto-reset on done', () => {
     it('resets environment when player dies', async () => {
-      env = new BonkEnvironment({ maxTicks: 10, numOpponents: 0 });
+      const mapData: MapDef = {
+        name: 'death-map',
+        spawnPoints: {
+          team_blue: { x: 0, y: 0 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [
+          { name: 'lethal', type: 'rect', x: 0, y: 0, width: 100, height: 100, static: true, isLethal: true },
+        ],
+      };
+      env = new BonkEnvironment({ mapData, maxTicks: 10, numOpponents: 0 });
       env.reset();
       let done = false;
       for (let i = 0; i < 100; i++) {
@@ -821,6 +831,44 @@ describe('BonkEnvironment edge cases', () => {
         expect(result.info.aiAlive).toBe(false);
 
         previousWorld = world;
+      }
+    });
+  });
+
+  describe('no-opponent episodes (numOpponents: 0)', () => {
+    it('first step is not instantly terminal', async () => {
+      env = new BonkEnvironment({ maxTicks: 900, numOpponents: 0, randomOpponent: false, seed: 42 });
+      env.reset();
+      const r1 = env.step(0);
+      expect(r1.done).toBe(false);
+      expect(r1.truncated).toBe(false);
+      expect(r1.info.terminated).toBe(false);
+    });
+
+    it('episode lasts until maxTicks instead of one tick', async () => {
+      env = new BonkEnvironment({ maxTicks: 5, numOpponents: 0, randomOpponent: false, seed: 42 });
+      env.reset();
+
+      let doneStep = -1;
+      let truncated = false;
+      for (let i = 1; i <= 20; i++) {
+        const result = env.step(0);
+        if (doneStep === -1 && result.done) {
+          doneStep = i;
+          truncated = result.truncated;
+        }
+      }
+      expect(doneStep).toBe(5);
+      expect(truncated).toBe(true);
+    });
+
+    it('every pre-horizon step returns done=false (no vacuous termination)', async () => {
+      env = new BonkEnvironment({ maxTicks: 4, numOpponents: 0, randomOpponent: false, seed: 42 });
+      env.reset();
+      for (let i = 1; i <= 3; i++) {
+        const result = env.step(0);
+        expect(result.done).toBe(false);
+        expect(result.observation.tick).toBe(i);
       }
     });
   });
