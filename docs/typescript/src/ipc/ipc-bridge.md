@@ -57,6 +57,12 @@ Starts the IPC bridge and begins listening for requests.
 }
 ```
 
+`numEnvs` must be a positive integer. Numeric strings consisting of decimal
+digits only (e.g. `"2"`) are coerced; fractional numbers, `0`/negatives,
+non-decimal strings, and missing values are rejected with
+`Invalid numEnvs: must be a positive integer` (#195). The same validation
+applies to `IpcBridge.initEnv`.
+
 #### Reset Request
 ```json
 {
@@ -86,6 +92,29 @@ Starts the IPC bridge and begins listening for requests.
   }
 }
 ```
+
+---
+
+### Step Reply and Telemetry Semantics (issues #185, #229, #240)
+
+A completed `step` is serialized and **transmitted before** any best-effort
+post-step telemetry runs, and telemetry never holds up the request path:
+
+- The reply of a step that already executed must not be discarded or replaced
+  by an error when telemetry fails (`recordMemory()` throwing, a snapshot
+  fetch rejecting) — the client would otherwise retry and double-step the
+  environments (#185).
+- On the every-5000-steps telemetry boundary the reply is sent eagerly, then
+  the telemetry block (`recordMemory`, `getTelemetrySnapshots`, the heatmap
+  report) runs detached (`void this.runPostStepTelemetry(...)`) and catches
+  its own errors, so a slow or hung worker snapshot fetch (up to
+  `messageTimeoutMs` in message mode) can never delay this reply or stall the
+  single-threaded ZMQ loop (#229).
+- Snapshot fetching is non-blocking: in shared-memory mode workers blocked in
+  `Atomics.wait` can never service `GET_TELEMETRY`, so the pool returns an
+  empty set immediately; in message mode a snapshot timeout still fails the
+  pool per worker-pool semantics, surfacing on the next request (#240). The
+  telemetry call targets the **requesting session's** pool (issue #193).
 
 ---
 
