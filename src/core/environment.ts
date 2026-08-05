@@ -214,6 +214,13 @@ export class BonkEnvironment {
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
 
+        // Size the fast-observation buffer for the configured opponent count
+        // (7 player floats + 6 per opponent + 2 arena + 1 tick). The first
+        // opponent keeps offsets 7-12 and arena/tick stay at 13-15, so the
+        // default single-opponent layout matches the legacy 16-float record;
+        // additional opponents append 6-float blocks after the tick.
+        this._obsBuffer = new Float32Array(16 + 6 * Math.max(0, Math.floor(this.config.numOpponents) - 1));
+
         // Apply verified native game settings before adding bodies
         this.physics.setTeamsEnabled(this.config.teamsEnabled);
         this.physics.setNoCollide(this.config.noCollide);
@@ -630,14 +637,14 @@ export class BonkEnvironment {
     }
 
     /**
-     * Fast observation extraction — returns a pre-allocated Float32Array(16)
+     * Fast observation extraction — returns a pre-allocated Float32Array
      * directly from physics state, skipping intermediate object creation.
-     * Layout matches worker.ts observationToArray() output.
+     * Layout matches worker.ts observationToArray() output: 7 player floats,
+     * 6 floats per opponent (first opponent at 7-12, extras appended after
+     * the tick at 16+), 2 arena floats at 13-14, tick at 15.
      */
     getObservationFast(): Float32Array {
         const aiState = this.physics.getPlayerState(this.aiPlayerId);
-        const oppId = this.opponentIds[0];
-        const oppState = oppId !== undefined ? this.physics.getPlayerState(oppId) : null;
 
         this._obsBuffer[0] = aiState.x;
         this._obsBuffer[1] = aiState.y;
@@ -647,20 +654,26 @@ export class BonkEnvironment {
         this._obsBuffer[5] = aiState.angularVel;
         this._obsBuffer[6] = aiState.isHeavy ? 1 : 0;
 
-        if (oppState) {
-            this._obsBuffer[7] = oppState.x;
-            this._obsBuffer[8] = oppState.y;
-            this._obsBuffer[9] = oppState.velX;
-            this._obsBuffer[10] = oppState.velY;
-            this._obsBuffer[11] = oppState.isHeavy ? 1 : 0;
-            this._obsBuffer[12] = oppState.alive ? 1 : 0;
-        } else {
-            this._obsBuffer[7] = 0;
-            this._obsBuffer[8] = 0;
-            this._obsBuffer[9] = 0;
-            this._obsBuffer[10] = 0;
-            this._obsBuffer[11] = 0;
-            this._obsBuffer[12] = 0;
+        // Zero every opponent block first so stale data never survives a
+        // shorter opponent list (defensive; the layout is fixed per config).
+        const layoutOpponents = Math.max(0, Math.floor(this.config.numOpponents));
+        for (let i = 0; i < layoutOpponents; i++) {
+            const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+            for (let k = 0; k < 6; k++) {
+                this._obsBuffer[base + k] = 0;
+            }
+        }
+
+        const numOpponents = Math.min(this.opponentIds.length, layoutOpponents);
+        for (let i = 0; i < numOpponents; i++) {
+            const state = this.physics.getPlayerState(this.opponentIds[i]);
+            const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+            this._obsBuffer[base] = state.x;
+            this._obsBuffer[base + 1] = state.y;
+            this._obsBuffer[base + 2] = state.velX;
+            this._obsBuffer[base + 3] = state.velY;
+            this._obsBuffer[base + 4] = state.isHeavy ? 1 : 0;
+            this._obsBuffer[base + 5] = state.alive ? 1 : 0;
         }
 
         const arenaBounds = this.physics.getArenaBounds();

@@ -74,6 +74,10 @@ export class WorkerPool {
     // Terminal observations must not reuse the live-observation templates.
     private _terminalObsPool: any[] = [];
     private _obsPoolSize: number = 0;
+    // Shared-memory observation layout: 7 player floats + 6 per opponent +
+    // 2 arena + 1 tick, with additional opponents appended after the tick.
+    private _obsNumOpponents: number = 1;
+    private _obsFloatsPerEnv: number = 16;
 
     // Pre-allocated finished buffer for step/reset
     private _finished: Uint8Array = new Uint8Array(0);
@@ -98,6 +102,7 @@ export class WorkerPool {
     private initObsPool(totalEnvs: number): void {
         this._obsPool = [];
         this._terminalObsPool = [];
+        const numOpponents = this._obsNumOpponents;
         for (let i = 0; i < totalEnvs; i++) {
             const createTemplate = () => ({
                 playerX: 0,
@@ -107,14 +112,14 @@ export class WorkerPool {
                 playerAngle: 0,
                 playerAngularVel: 0,
                 playerIsHeavy: false,
-                opponents: [{
+                opponents: Array.from({ length: numOpponents }, () => ({
                     x: 0,
                     y: 0,
                     velX: 0,
                     velY: 0,
                     isHeavy: false,
                     alive: false,
-                }],
+                })),
                 arenaHalfWidth: ARENA_HALF_WIDTH * SCALE,
                 arenaHalfHeight: ARENA_HALF_HEIGHT * SCALE,
                 tick: 0,
@@ -136,6 +141,15 @@ export class WorkerPool {
 
         // Set default ring size
         this.ringSize = getConfig().workerPool.ringBufferSize;
+
+        // The shared-memory observation layout is sized from the configured
+        // opponent count (mirroring BonkEnvironment's normalization) so every
+        // opponent's state fits in the per-env record. All writers and
+        // readers (this pool, the workers, the SharedMemoryManager) derive
+        // the same layout from the same config object.
+        const numOpponents = Math.max(0, Math.floor(Number(config?.numOpponents ?? 1)));
+        this._obsNumOpponents = numOpponents;
+        this._obsFloatsPerEnv = 16 + 6 * Math.max(0, numOpponents - 1);
 
         // Ensure we don't start more workers than environment instances
         const activeWorkers = Math.min(this.numWorkers, totalEnvs);
@@ -190,7 +204,7 @@ export class WorkerPool {
 
                     // Initialize shared memory if enabled
                     if (this.useSharedMemory) {
-                        const shm = new SharedMemoryManager(numEnvs, this.ringSize);
+                        const shm = new SharedMemoryManager(numEnvs, this.ringSize, undefined, numOpponents);
                         this.sharedMemManagers.push(shm);
 
                         // Send init and wait for it
@@ -878,9 +892,21 @@ export class WorkerPool {
      * @param poolIdx Global env index for _obsPool template
      */
     private extractObservation(obs: Float32Array, sabIdx: number, poolIdx: number, pool = this._obsPool): any {
-        const offset = sabIdx * 16;
+        const offset = sabIdx * this._obsFloatsPerEnv;
         const template = pool[poolIdx];
         if (!template) {
+            const opponents = [];
+            for (let i = 0; i < this._obsNumOpponents; i++) {
+                const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+                opponents.push({
+                    x: obs[offset + base + 0],
+                    y: obs[offset + base + 1],
+                    velX: obs[offset + base + 2],
+                    velY: obs[offset + base + 3],
+                    isHeavy: obs[offset + base + 4] === 1,
+                    alive: obs[offset + base + 5] === 1,
+                });
+            }
             return {
                 playerX: obs[offset + 0],
                 playerY: obs[offset + 1],
@@ -889,14 +915,7 @@ export class WorkerPool {
                 playerAngle: obs[offset + 4],
                 playerAngularVel: obs[offset + 5],
                 playerIsHeavy: obs[offset + 6] === 1,
-                opponents: [{
-                    x: obs[offset + 7],
-                    y: obs[offset + 8],
-                    velX: obs[offset + 9],
-                    velY: obs[offset + 10],
-                    isHeavy: obs[offset + 11] === 1,
-                    alive: obs[offset + 12] === 1,
-                }],
+                opponents,
                 arenaHalfWidth: obs[offset + 13],
                 arenaHalfHeight: obs[offset + 14],
                 tick: obs[offset + 15],
@@ -911,13 +930,16 @@ export class WorkerPool {
         template.playerAngularVel = obs[offset + 5];
         template.playerIsHeavy = obs[offset + 6] === 1;
 
-        const opp = template.opponents[0];
-        opp.x = obs[offset + 7];
-        opp.y = obs[offset + 8];
-        opp.velX = obs[offset + 9];
-        opp.velY = obs[offset + 10];
-        opp.isHeavy = obs[offset + 11] === 1;
-        opp.alive = obs[offset + 12] === 1;
+        for (let i = 0; i < template.opponents.length; i++) {
+            const opp = template.opponents[i];
+            const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+            opp.x = obs[offset + base + 0];
+            opp.y = obs[offset + base + 1];
+            opp.velX = obs[offset + base + 2];
+            opp.velY = obs[offset + base + 3];
+            opp.isHeavy = obs[offset + base + 4] === 1;
+            opp.alive = obs[offset + base + 5] === 1;
+        }
 
         template.arenaHalfWidth = obs[offset + 13];
         template.arenaHalfHeight = obs[offset + 14];

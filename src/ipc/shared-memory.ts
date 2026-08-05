@@ -2,7 +2,7 @@
  * SharedMemoryManager - Zero-Copy IPC using SharedArrayBuffer
  */
 export class SharedMemoryManager {
-    private static readonly OBSERVATION_FLOATS = 16;
+    private observationFloats: number;
     private buffer: SharedArrayBuffer;
     private views: {
         actions: Uint8Array;
@@ -31,7 +31,7 @@ export class SharedMemoryManager {
     private currentActionSlot: number = 0;
     private ownsBuffer: boolean = false;
 
-    constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer) {
+    constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer, numOpponents: number = 1) {
         this.numEnvs = numEnvs;
         if (ringSize < 2 || (ringSize & (ringSize - 1)) !== 0) {
             throw new Error(`SharedMemoryManager: ringSize must be a power of 2 (got ${ringSize})`);
@@ -39,10 +39,17 @@ export class SharedMemoryManager {
         this.ringSize = ringSize;
         this.actionRingMask = ringSize - 1;
 
+        // Per-env observation record: 7 player floats, 6 floats per opponent,
+        // 2 arena floats, 1 tick. The first opponent keeps the legacy offsets
+        // 7-12 and arena/tick stay at 13-15, so the default single-opponent
+        // layout is byte-identical to the old fixed 16-float record; extra
+        // opponents append 6-float blocks after the tick (offsets 16+).
+        this.observationFloats = 16 + 6 * Math.max(0, Math.floor(numOpponents ?? 1) - 1);
+
         const align8 = (n: number) => (n + 7) & ~7;
         const actionBytes = align8(numEnvs * ringSize);
-        const obsBytes = align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4);
-        const terminalObsBytes = align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4);
+        const obsBytes = align8(numEnvs * this.observationFloats * 4);
+        const terminalObsBytes = align8(numEnvs * this.observationFloats * 4);
         const hasTerminalObsBytes = align8(numEnvs * 1);
         const rewardBytes = align8(numEnvs * 4);
         const doneBytes = align8(numEnvs * 1);
@@ -76,10 +83,10 @@ export class SharedMemoryManager {
         };
         offset = align8(offset + actionBytes);
 
-        this.views.observations = new Float32Array(this.buffer, offset, numEnvs * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.observations = new Float32Array(this.buffer, offset, numEnvs * this.observationFloats);
         offset = align8(offset + obsBytes);
 
-        this.views.terminalObservations = new Float32Array(this.buffer, offset, numEnvs * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.terminalObservations = new Float32Array(this.buffer, offset, numEnvs * this.observationFloats);
         offset = align8(offset + terminalObsBytes);
 
         this.views.hasTerminalObs = new Uint8Array(this.buffer, offset, numEnvs);
@@ -119,9 +126,22 @@ export class SharedMemoryManager {
 
     static isSupported() { return typeof SharedArrayBuffer !== 'undefined'; }
 
-    static calculateBufferSize(numEnvs: number, ringSize: number = 16): number {
+    /**
+     * Floats per environment in the shared-memory observation record:
+     * 7 player + 6 * numOpponents + 2 arena + 1 tick.
+     */
+    static floatsPerEnv(numOpponents: number = 1): number {
+        return 16 + 6 * Math.max(0, Math.floor(numOpponents ?? 1) - 1);
+    }
+
+    getObservationFloats(): number {
+        return this.observationFloats;
+    }
+
+    static calculateBufferSize(numEnvs: number, ringSize: number = 16, numOpponents: number = 1): number {
         const align8 = (n: number) => (n + 7) & ~7;
-        return align8(numEnvs * ringSize) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) +
+        const floats = SharedMemoryManager.floatsPerEnv(numOpponents);
+        return align8(numEnvs * ringSize) + align8(numEnvs * floats * 4) + align8(numEnvs * floats * 4) +
             align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 1) + align8(numEnvs * 1) +
             align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 4) + 64;
     }
@@ -208,11 +228,11 @@ export class SharedMemoryManager {
     }
 
     writeObservation(envIndex: number, obs: number[] | Float32Array) {
-        this.views.observations.set(obs, envIndex * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.observations.set(obs, envIndex * this.observationFloats);
     }
 
     writeTerminalObservation(envIndex: number, obs: number[] | Float32Array) {
-        this.views.terminalObservations.set(obs, envIndex * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.terminalObservations.set(obs, envIndex * this.observationFloats);
     }
 
     writeHasTerminalObs(envIndex: number, has: number) { this.views.hasTerminalObs[envIndex] = has; }
