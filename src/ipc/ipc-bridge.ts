@@ -1,6 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
+import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
 import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
@@ -55,6 +56,9 @@ export class IpcBridge {
         // Step responses are serialized eagerly so the borrowed pool graph is
         // consumed before the telemetry branch awaits worker replies.
         let serialized: string | null = null;
+        // True once the step reply was transmitted eagerly ahead of the
+        // post-step telemetry block, so the trailing send below is skipped.
+        let replied = false;
         try {
             const payload = parseJson(rawMsg);
             const command = payload.command;
@@ -135,28 +139,17 @@ export class IpcBridge {
                     globalProfiler.tick();
 
                     if (this.stepCount % 5000 === 0) {
-                        // The step above already completed and its reply is
-                        // serialized. Telemetry is best-effort: a failure here
-                        // must not discard that reply or double-report the step
-                        // as an error (see #185), so it is isolated and logged.
-                        try {
-                            globalProfiler.recordMemory();
-
-                            const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
-                            if (telemetryEnabled) {
-                                // Workers blocked in Atomics.wait (shared-memory
-                                // mode) can never service GET_TELEMETRY, so the
-                                // snapshot fetch would always time out there;
-                                // skip it and report without worker snapshots.
-                                if (!this.pool.isUsingSharedMemory()) {
-                                    const snapshots = await this.pool.getTelemetrySnapshots();
-                                    setLatestWorkerTelemetry(snapshots);
-                                }
-                                globalProfiler.report(5000);
-                            }
-                        } catch (telemetryError) {
-                            console.error('[IPC] Telemetry error after step:', telemetryError);
-                        }
+                        // Issue #229: the completed step's reply must be
+                        // transmitted before any best-effort telemetry work and
+                        // must never await it. A slow or failing snapshot fetch
+                        // (up to messageTimeoutMs in message mode) must not
+                        // delay this reply or stall the single-threaded ZMQ
+                        // loop. The telemetry block runs detached below and
+                        // catches its own errors (see #185).
+                        await this._wrappedSend([identity, serialized]);
+                        serialized = null;
+                        replied = true;
+                        void this.runPostStepTelemetry();
                     }
                 }
             } else if (command === "close") {
@@ -182,15 +175,45 @@ export class IpcBridge {
             serialized = null;
         }
 
-        try {
-            await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
-        } catch (sendError) {
-            console.error("[IPC] Error sending response:", sendError);
+        if (!replied) {
+            try {
+                await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
+            } catch (sendError) {
+                console.error("[IPC] Error sending response:", sendError);
+            }
         }
 
         if (this._shouldClose) {
             this._shouldClose = false;
             await this.close();
+        }
+    }
+
+    /**
+     * Best-effort post-step telemetry: memory gauges, worker snapshot fetch,
+     * and the heatmap report. Detached from the request path — it never
+     * affects the step reply and cannot stall the ZMQ loop (issue #229).
+     * Errors are caught and logged so a telemetry failure is never reported
+     * as a step failure or discards an already-serialized reply (issue
+     * #185); a message-mode snapshot timeout still fails the pool per
+     * worker-pool semantics, surfacing on the next request.
+     */
+    private async runPostStepTelemetry(): Promise<void> {
+        try {
+            globalProfiler.recordMemory();
+
+            if (isTelemetryControllerEnabled()) {
+                // getTelemetrySnapshots is non-blocking in shared-memory mode
+                // (workers blocked in Atomics.wait cannot service
+                // GET_TELEMETRY, so the pool returns an empty set
+                // immediately) and performs a bounded worker round-trip in
+                // message mode.
+                const snapshots = await this.pool.getTelemetrySnapshots();
+                setLatestWorkerTelemetry(snapshots);
+                globalProfiler.report(5000);
+            }
+        } catch (telemetryError) {
+            console.error('[IPC] Telemetry error after step:', telemetryError);
         }
     }
 
