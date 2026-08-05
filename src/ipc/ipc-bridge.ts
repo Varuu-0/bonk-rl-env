@@ -122,13 +122,27 @@ export class IpcBridge {
                     globalProfiler.tick();
 
                     if (this.stepCount % 5000 === 0) {
-                        globalProfiler.recordMemory();
+                        // The step above already completed and its reply is
+                        // serialized. Telemetry is best-effort: a failure here
+                        // must not discard that reply or double-report the step
+                        // as an error (see #185), so it is isolated and logged.
+                        try {
+                            globalProfiler.recordMemory();
 
-                        const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
-                        if (telemetryEnabled) {
-                            const snapshots = await this.pool.getTelemetrySnapshots();
-                            setLatestWorkerTelemetry(snapshots);
-                            globalProfiler.report(5000);
+                            const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
+                            if (telemetryEnabled) {
+                                // Workers blocked in Atomics.wait (shared-memory
+                                // mode) can never service GET_TELEMETRY, so the
+                                // snapshot fetch would always time out there;
+                                // skip it and report without worker snapshots.
+                                if (!this.pool.isUsingSharedMemory()) {
+                                    const snapshots = await this.pool.getTelemetrySnapshots();
+                                    setLatestWorkerTelemetry(snapshots);
+                                }
+                                globalProfiler.report(5000);
+                            }
+                        } catch (telemetryError) {
+                            console.error('[IPC] Telemetry error after step:', telemetryError);
                         }
                     }
                 }
