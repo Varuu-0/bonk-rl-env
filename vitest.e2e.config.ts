@@ -4,7 +4,6 @@ export default defineConfig({
   test: {
     globals: true,
     include: ['tests/e2e/**/*.test.ts'],
-    exclude: [],
     testTimeout: 60000,
     hookTimeout: 60000,
     // Native modules (zeromq, box2d) crash with an access violation during

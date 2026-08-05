@@ -97,8 +97,21 @@ describe('IpcBridge black-box E2E', () => {
         expect(typeof obs.playerY).toBe('number');
         expect(typeof obs.playerVelX).toBe('number');
         expect(typeof obs.playerVelY).toBe('number');
+        expect(typeof obs.playerAngle).toBe('number');
+        expect(typeof obs.playerAngularVel).toBe('number');
+        expect(typeof obs.playerIsHeavy).toBe('boolean');
         expect(typeof obs.tick).toBe('number');
+        expect(typeof obs.arenaHalfWidth).toBe('number');
+        expect(typeof obs.arenaHalfHeight).toBe('number');
         expect(Array.isArray(obs.opponents)).toBe(true);
+        for (const opponent of obs.opponents) {
+          expect(typeof opponent.x).toBe('number');
+          expect(typeof opponent.y).toBe('number');
+          expect(typeof opponent.velX).toBe('number');
+          expect(typeof opponent.velY).toBe('number');
+          expect(typeof opponent.isHeavy).toBe('boolean');
+          expect(typeof opponent.alive).toBe('boolean');
+        }
       }
     });
 
