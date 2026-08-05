@@ -464,7 +464,7 @@ describe('WorkerPool failure state', () => {
     await pool.init(1, {}, true);
     await pool.reset([1]);
 
-    await expect(pool.step([0, 0])).rejects.toThrow('Invalid action batch: expected 1 actions for 1 environments, got 2');
+    await expect(pool.step([0, 0])).rejects.toThrow('Invalid action batch: expected 1 action for 1 environment, got 2');
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
     await expect(pool.step([0])).resolves.toHaveLength(1);

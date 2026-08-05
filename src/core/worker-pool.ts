@@ -436,7 +436,7 @@ export class WorkerPool {
         if (!Array.isArray(actions) || actions.length !== totalEnvs) {
             const received = Array.isArray(actions) ? actions.length : typeof actions;
             throw new Error(
-                `Invalid action batch: expected ${totalEnvs} actions for ${totalEnvs} environments, got ${received}`,
+                `Invalid action batch: expected ${totalEnvs} action${totalEnvs === 1 ? '' : 's'} for ${totalEnvs} environment${totalEnvs === 1 ? '' : 's'}, got ${received}`,
             );
         }
         try {
@@ -481,7 +481,6 @@ export class WorkerPool {
         // untouched and the caller may retry. It is tagged so step() can treat
         // it as transient rather than failing the pool.
         let actionIdx = 0;
-        const encodedBatches: Uint8Array[] = [];
         try {
             for (let i = 0; i < this.workers.length; i++) {
                 const wEnvs = this.workerEnvs[i];
@@ -491,7 +490,6 @@ export class WorkerPool {
                     encodedActions[j] = this.encodeAction(actions[actionIdx + j]);
                 }
                 actionIdx += wEnvs;
-                encodedBatches.push(encodedActions);
             }
         } catch (error) {
             const tagged = error instanceof Error ? error : new Error(String(error));
@@ -506,7 +504,7 @@ export class WorkerPool {
 
         for (let i = 0; i < this.workers.length; i++) {
             const shm = this.requireSharedMemoryManager(i);
-            shm.writeActionsQuiet(encodedBatches[i]);
+            shm.writeActionsQuiet(this.actionBufferPool[i]);
             shm.sendCommand(0); // STEP command (also notifies worker)
         }
 

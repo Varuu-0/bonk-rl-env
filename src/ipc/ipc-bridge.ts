@@ -102,9 +102,10 @@ export class IpcBridge {
                     // touched, mirroring the Python client's exact-count
                     // check. A short array must not reach the pool as an
                     // encoding error that could fail it in shared-memory mode.
+                    const n = this._numEnvs;
                     response = {
                         status: "error",
-                        error: `Invalid actions: expected ${this._numEnvs} actions for ${this._numEnvs} environments, got ${actions.length}`,
+                        error: `Invalid actions: expected ${n} action${n === 1 ? '' : 's'} for ${n} environment${n === 1 ? '' : 's'}, got ${actions.length}`,
                     };
                 } else {
                     // Requests are serialized by the server loop, and the
@@ -188,6 +189,7 @@ export class IpcBridge {
     async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
         await this.pool.init(numEnvs, config, useSharedMemory);
         this._initialized = true;
+        this._numEnvs = numEnvs;
     }
 
     /**

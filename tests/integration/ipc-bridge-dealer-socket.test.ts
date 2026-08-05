@@ -11,13 +11,17 @@ import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { WorkerPool } from '../../src/core/worker-pool';
+import { PortManager } from '../../src/utils/port-manager';
 
 describe('IpcBridge DEALER-socket action batch validation (issue #191)', () => {
   let bridge: IpcBridge;
   let client: zmq.Dealer;
-  const port = 15601;
+  let portManager: PortManager;
+  let port: number;
 
   beforeAll(async () => {
+    portManager = new PortManager({ startPort: 15600, endPort: 15699 });
+    port = portManager.allocate();
     bridge = new IpcBridge({ server: { port } } as any);
     // start() runs the serve loop until close(), so do not await it.
     void bridge.start();
@@ -29,6 +33,7 @@ describe('IpcBridge DEALER-socket action batch validation (issue #191)', () => {
   afterAll(async () => {
     try { client.close(); } catch { /* ignore */ }
     try { await bridge.close(); } catch { /* ignore */ }
+    portManager.release(port);
   }, 10000);
 
   async function sendCommand(cmd: object): Promise<any> {
@@ -60,5 +65,17 @@ describe('IpcBridge DEALER-socket action batch validation (issue #191)', () => {
   it('shared-memory mode: short batch is a per-request error and the pool recovers', async () => {
     if (!WorkerPool.isSupported()) return;
     await expectShortBatchIsTransient(true);
+  }, 60000);
+
+  it('programmatic initEnv tracks the env count for IPC step validation', async () => {
+    await bridge.initEnv(2, {}, false);
+
+    const good = await sendCommand({ command: 'step', actions: [0, 0] });
+    expect(good.status).toBe('ok');
+    expect(good.data).toHaveLength(2);
+
+    const short = await sendCommand({ command: 'step', actions: [0] });
+    expect(short.status).toBe('error');
+    expect(short.error).toContain('Invalid actions: expected 2 actions for 2 environments, got 1');
   }, 60000);
 });
