@@ -81,8 +81,9 @@ export const HEAVY_FORCE_MULTIPLIER = 0.7;
  *   `swingF = 2` (Hz) and `swingD = 0` (§32.4). `fh`/`dr` are map `d`-joint
  *   fields and never apply to the grapple.
  * - `a1a` energy meter (§32.3): spawn 1000, fire gate `a1a > 500`, drain
- *   4/step while swinging, recharge 3/step otherwise, forced release and
- *   zeroing below 500. The literal 500 is this energy threshold, NOT a reach.
+ *   4/step while swinging from the tick AFTER attach, recharge 3/step
+ *   otherwise, forced release and zeroing below 500. The literal 500 is this
+ *   energy threshold, NOT a reach.
  */
 /** Native QueryAABB half-extent (native world units). Consumed as `* ppm / SCALE`. */
 export const GRAPPLE_TARGET_WINDOW = 10.0;
@@ -215,6 +216,14 @@ export class PhysicsEngine {
   private playerGrappleJoints: Map<number, any> = new Map();
   /** Native a1a grapple/energy meter (0-1000), per player (DEOBFUSCATION §32.3). */
   private grappleEnergy: Map<number, number> = new Map();
+  /**
+   * Disc IDs whose grapple joint was created this tick. Native §32.3 runs the
+   * a1a update BEFORE the fire gate in the same step, so the attach step never
+   * drains the new rope; this marker makes updateGrappleEnergy() recharge
+   * (instead of draining) on exactly that tick and lets a re-fire at the 501
+   * crossing survive instead of being force-released in the same tick.
+   */
+  private swingJustStarted: Set<number> = new Set();
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
@@ -917,6 +926,13 @@ export class PhysicsEngine {
 
     const joint = this.world.CreateJoint(jointDef);
     this.playerGrappleJoints.set(playerId, joint);
+    // §32.3 native step order: the a1a update runs before the fire gate in the
+    // same physics step, so the attach tick must not drain (or force-release)
+    // the new rope — updateGrappleEnergy() recharges it instead so the first
+    // drain hits on the next tick. Without this a re-fire at exactly 501 is
+    // force-released in the same tick (501 - 4 = 497 < 500) and the recharge
+    // path is dead.
+    this.swingJustStarted.add(playerId);
   }
 
   /**
@@ -995,7 +1011,9 @@ export class PhysicsEngine {
   }
 
   /**
-   * §32.3 a1a energy meter: drain 4/step while swinging with forced release
+   * §32.3 a1a energy meter: drain 4/step while swinging (from the tick AFTER
+   * the rope attaches; the attach tick recharges because the native runs its
+   * a1a update before the fire gate in the same step) with forced release
    * (and zeroing) below 500; recharge 3/step otherwise, capped at 1000.
    */
   private updateGrappleEnergy(): void {
@@ -1003,11 +1021,20 @@ export class PhysicsEngine {
       if (!this.playerAlive.get(playerId)) continue;
       let energy = this.grappleEnergy.get(playerId) ?? A1A_SPAWN;
       if (this.playerGrappleJoints.has(playerId)) {
-        energy -= A1A_SWING_DRAIN;
-        if (energy < 0) energy = 0;
-        if (energy < A1A_FIRE_THRESHOLD) {
-          energy = 0;
-          this.releaseGrapple(playerId); // forced release below 500
+        if (this.swingJustStarted.delete(playerId)) {
+          // Attach tick (§32.3 native order): the step's energy update already
+          // ran before the fire gate, so it applies the not-yet-swinging
+          // recharge branch. A re-fire at 501 recharges to 504 and thus
+          // survives its first drain instead of being released in the same
+          // tick (501 - 4 = 497 < 500).
+          energy = Math.min(energy + A1A_RECHARGE, A1A_MAX);
+        } else {
+          energy -= A1A_SWING_DRAIN;
+          if (energy < 0) energy = 0;
+          if (energy < A1A_FIRE_THRESHOLD) {
+            energy = 0;
+            this.releaseGrapple(playerId); // forced release below 500
+          }
         }
       } else {
         energy = Math.min(energy + A1A_RECHARGE, A1A_MAX);
@@ -1291,6 +1318,7 @@ export class PhysicsEngine {
     this.playerDeathType.clear();
     this.playerGrappleJoints.clear();
     this.grappleEnergy.clear();
+    this.swingJustStarted.clear();
     this.playerTeams.clear();
     this.capZoneSensors = [];
     this.capZoneState.clear();

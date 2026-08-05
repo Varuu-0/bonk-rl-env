@@ -415,8 +415,9 @@ describe('GrappleMechanics', () => {
 
   describe('a1a grapple energy meter', () => {
     // Verified native (§32.3): spawn 1000; fire gate a1a > 500; drain 4/step
-    // while swinging with forced release and zeroing below 500; recharge
-    // 3/step otherwise, capped at 1000.
+    // while swinging from the tick AFTER attach (the native a1a update runs
+    // before the fire gate in the same step); forced release and zeroing below
+    // 500; recharge 3/step otherwise, capped at 1000.
     it('spawns with full energy and can fire immediately', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
@@ -433,10 +434,12 @@ describe('GrappleMechanics', () => {
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
-      for (let i = 0; i < 125; i++) {
+      for (let i = 0; i < 126; i++) {
         engine.applyInput(0, GRAPPLE_INPUT);
         engine.tick();
       }
+      // The attach tick does not drain (§32.3 native order: the a1a update
+      // already ran before the fire gate), so 126 ticks = 125 drains:
       // 1000 - 125*4 = 500: exactly at the threshold, still swinging.
       expect(engine.hasGrappleJoint(0)).toBe(true);
       expect(engine.getGrappleEnergy(0)).toBe(500);
@@ -448,17 +451,17 @@ describe('GrappleMechanics', () => {
       expect(engine.getGrappleEnergy(0)).toBe(0);
     });
 
-    it('cannot re-fire while energy is below 500 and recharges 3/step', () => {
+    it('exhausts the meter, recharges 3/step, and a re-fire after recovery attaches and survives a tick', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({ name: 'p', x: 0, y: 50 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
-      for (let i = 0; i < 126; i++) {
+      for (let i = 0; i < 127; i++) {
         engine.applyInput(0, GRAPPLE_INPUT);
         engine.tick();
       }
-      // Forced release at 126 ticks; energy zeroed.
+      // Forced release on the 127th swing tick (126 drains): meter zeroed.
       expect(engine.hasGrappleJoint(0)).toBe(false);
       expect(engine.getGrappleEnergy(0)).toBe(0);
 
@@ -466,15 +469,23 @@ describe('GrappleMechanics', () => {
       engine.applyInput(0, GRAPPLE_INPUT);
       expect(engine.hasGrappleJoint(0)).toBe(false);
 
-      // Recharge 3/step: after 167 ticks energy = 501 > 500 -> re-fire.
+      // Recharge 3/step: after 167 ticks energy = 501 > 500 -> the fire gate
+      // re-opens.
       for (let i = 0; i < 167; i++) {
         engine.applyInput(0, GRAPPLE_INPUT);
         engine.tick();
       }
       expect(engine.getGrappleEnergy(0)).toBe(501);
-      // The energy gate re-opens above 500: the next grapple press attaches.
+
+      // Re-fire after recovery: the rope attaches and — because the attach
+      // tick recharges (+3 → 504) instead of draining (§32.3 native step
+      // order) — it survives the burn-in tick instead of being force-released
+      // at 497 in the same tick.
       engine.applyInput(0, GRAPPLE_INPUT);
       expect(engine.hasGrappleJoint(0)).toBe(true);
+      engine.tick();
+      expect(engine.hasGrappleJoint(0)).toBe(true);
+      expect(engine.getGrappleEnergy(0)).toBe(504);
     });
   });
 
