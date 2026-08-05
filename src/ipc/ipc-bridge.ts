@@ -76,6 +76,18 @@ export class IpcBridge {
             } else if (command === "reset") {
                 if (!this._initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
+                } else if (payload.seeds !== undefined && !Array.isArray(payload.seeds)) {
+                    response = { status: "error", error: "Invalid seeds: must be an array" };
+                } else if (payload.seeds !== undefined && payload.seeds.length > this._numEnvs) {
+                    // Reject an over-long seed batch before any pool state is
+                    // touched, mirroring the pool-level check: surplus seeds
+                    // would otherwise be silently dropped in both transports.
+                    // Short seed lists stay legal (tail envs reset unseeded).
+                    const n = this._numEnvs;
+                    response = {
+                        status: "error",
+                        error: `Invalid seeds: expected at most ${n} seed${n === 1 ? '' : 's'} for ${n} environment${n === 1 ? '' : 's'}, got ${payload.seeds.length}`,
+                    };
                 } else {
                     console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
                     // JSON serialization below is the ownership boundary, so

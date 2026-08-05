@@ -25,6 +25,7 @@ import {
     TPS,
 } from './physics-engine';
 import { PRNG } from './prng';
+import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -189,7 +190,7 @@ export class BonkEnvironment {
         const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
 
         this.config = {
-            numOpponents: config.numOpponents ?? rawConfig.num_opponents ?? 1,
+            numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
@@ -213,6 +214,13 @@ export class BonkEnvironment {
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
+
+        // Size the fast-observation buffer for the configured opponent count
+        // (7 player floats + 6 per opponent + 2 arena + 1 tick). The first
+        // opponent keeps offsets 7-12 and arena/tick stay at 13-15, so the
+        // default single-opponent layout matches the legacy 16-float record;
+        // additional opponents append 6-float blocks after the tick.
+        this._obsBuffer = new Float32Array(16 + 6 * Math.max(0, this.config.numOpponents - 1));
 
         // Apply verified native game settings before adding bodies
         this.physics.setTeamsEnabled(this.config.teamsEnabled);
@@ -630,14 +638,14 @@ export class BonkEnvironment {
     }
 
     /**
-     * Fast observation extraction — returns a pre-allocated Float32Array(16)
+     * Fast observation extraction — returns a pre-allocated Float32Array
      * directly from physics state, skipping intermediate object creation.
-     * Layout matches worker.ts observationToArray() output.
+     * Layout matches worker.ts observationToArray() output: 7 player floats,
+     * 6 floats per opponent (first opponent at 7-12, extras appended after
+     * the tick at 16+), 2 arena floats at 13-14, tick at 15.
      */
     getObservationFast(): Float32Array {
         const aiState = this.physics.getPlayerState(this.aiPlayerId);
-        const oppId = this.opponentIds[0];
-        const oppState = oppId !== undefined ? this.physics.getPlayerState(oppId) : null;
 
         this._obsBuffer[0] = aiState.x;
         this._obsBuffer[1] = aiState.y;
@@ -647,20 +655,20 @@ export class BonkEnvironment {
         this._obsBuffer[5] = aiState.angularVel;
         this._obsBuffer[6] = aiState.isHeavy ? 1 : 0;
 
-        if (oppState) {
-            this._obsBuffer[7] = oppState.x;
-            this._obsBuffer[8] = oppState.y;
-            this._obsBuffer[9] = oppState.velX;
-            this._obsBuffer[10] = oppState.velY;
-            this._obsBuffer[11] = oppState.isHeavy ? 1 : 0;
-            this._obsBuffer[12] = oppState.alive ? 1 : 0;
-        } else {
-            this._obsBuffer[7] = 0;
-            this._obsBuffer[8] = 0;
-            this._obsBuffer[9] = 0;
-            this._obsBuffer[10] = 0;
-            this._obsBuffer[11] = 0;
-            this._obsBuffer[12] = 0;
+        // The opponent count is fixed per config and reset() spawns exactly
+        // that many, so every block is rewritten each call (blocks beyond the
+        // live count stay zero because the buffer is fresh and never had
+        // values written into them).
+        const numOpponents = Math.min(this.opponentIds.length, this.config.numOpponents);
+        for (let i = 0; i < numOpponents; i++) {
+            const state = this.physics.getPlayerState(this.opponentIds[i]);
+            const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+            this._obsBuffer[base] = state.x;
+            this._obsBuffer[base + 1] = state.y;
+            this._obsBuffer[base + 2] = state.velX;
+            this._obsBuffer[base + 3] = state.velY;
+            this._obsBuffer[base + 4] = state.isHeavy ? 1 : 0;
+            this._obsBuffer[base + 5] = state.alive ? 1 : 0;
         }
 
         const arenaBounds = this.physics.getArenaBounds();
@@ -668,5 +676,20 @@ export class BonkEnvironment {
         this._obsBuffer[14] = arenaBounds.halfHeight;
         this._obsBuffer[15] = this.physics.getTickCount();
         return this._obsBuffer;
+    }
+
+    /**
+     * Static fields of the step info contract (constant for the environment's
+     * lifetime): frame skip, map cap zones, and the AI team. Shared-memory
+     * mode transports these once at init instead of every step; the dynamic
+     * info fields (aiAlive, opponentsAlive, scoreBlue, scoreRed, tick) travel
+     * with each step.
+     */
+    getStaticInfo(): { frameSkip: number; capZones: Array<{ index: number; owner: string; type: number }>; aiTeam: string } {
+        return {
+            frameSkip: this.config.frameSkip,
+            capZones: this.capZones,
+            aiTeam: this.aiTeam,
+        };
     }
 }

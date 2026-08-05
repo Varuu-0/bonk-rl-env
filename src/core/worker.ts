@@ -30,16 +30,21 @@ function signalSyncCompleted(status: number = WORKER_COMPLETE) {
 }
 
 /**
- * Converts an Observation to a flat number array for shared memory storage
- * Uses 16 values: playerX, playerY, playerVelX, playerVelY, playerAngle,
- * playerAngularVel, playerIsHeavy, opponentX, opponentY, opponentVelX, 
- * opponentVelY, opponentIsHeavy, opponentAlive, arenaHalfWidth, arenaHalfHeight, tick
+ * Converts an Observation to a flat number array for shared memory storage.
+ * Layout: playerX, playerY, playerVelX, playerVelY, playerAngle,
+ * playerAngularVel, playerIsHeavy (0-6), first opponent block (7-12:
+ * x, y, velX, velY, isHeavy, alive), arenaHalfWidth (13), arenaHalfHeight
+ * (14), tick (15), then one 6-float block per additional opponent (16+).
+ * The buffer is sized for the configured opponent count at init.
  */
 // Pre-allocated buffer for zero-allocation observation conversion
-const _obsBuffer = new Float32Array(16);
+let _obsBuffer = new Float32Array(16);
+let _obsNumOpponents = 1;
+// Pre-allocated per-env dynamic info floats (aiAlive, opponentsAlive,
+// scoreBlue, scoreRed) written into the SAB info region.
+const _infoBuffer = new Float32Array(4);
 
 function observationToArray(obs: Observation): Float32Array {
-    const opp = obs.opponents[0];
     _obsBuffer[0] = obs.playerX;
     _obsBuffer[1] = obs.playerY;
     _obsBuffer[2] = obs.playerVelX;
@@ -47,21 +52,23 @@ function observationToArray(obs: Observation): Float32Array {
     _obsBuffer[4] = obs.playerAngle;
     _obsBuffer[5] = obs.playerAngularVel;
     _obsBuffer[6] = obs.playerIsHeavy ? 1 : 0;
-    if (opp) {
-        _obsBuffer[7] = opp.x;
-        _obsBuffer[8] = opp.y;
-        _obsBuffer[9] = opp.velX;
-        _obsBuffer[10] = opp.velY;
-        _obsBuffer[11] = opp.isHeavy ? 1 : 0;
-        _obsBuffer[12] = opp.alive ? 1 : 0;
-    } else {
-        _obsBuffer[7] = 0;
-        _obsBuffer[8] = 0;
-        _obsBuffer[9] = 0;
-        _obsBuffer[10] = 0;
-        _obsBuffer[11] = 0;
-        _obsBuffer[12] = 0;
+
+    // The opponent count is fixed per config and every reset spawns exactly
+    // that many, so each block is rewritten on every call (blocks beyond the
+    // live count stay zero because the buffer is fresh and never had values
+    // written into them).
+    const numOpponents = Math.min(obs.opponents.length, _obsNumOpponents);
+    for (let i = 0; i < numOpponents; i++) {
+        const opp = obs.opponents[i];
+        const base = i === 0 ? 7 : 16 + 6 * (i - 1);
+        _obsBuffer[base] = opp.x;
+        _obsBuffer[base + 1] = opp.y;
+        _obsBuffer[base + 2] = opp.velX;
+        _obsBuffer[base + 3] = opp.velY;
+        _obsBuffer[base + 4] = opp.isHeavy ? 1 : 0;
+        _obsBuffer[base + 5] = opp.alive ? 1 : 0;
     }
+
     _obsBuffer[13] = obs.arenaHalfWidth;
     _obsBuffer[14] = obs.arenaHalfHeight;
     _obsBuffer[15] = obs.tick;
@@ -77,6 +84,10 @@ parentPort.on('message', (msg) => {
         if (msg.type === 'init') {
             const numEnvsParam = msg.numEnvs;
             const config = msg.config || {};
+            // Size the shared-memory observation buffer and manager for the
+            // configured opponent count so all opponents are transported.
+            _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents);
+            _obsBuffer = new Float32Array(16 + 6 * Math.max(0, _obsNumOpponents - 1));
             envs = [];
             for (let i = 0; i < numEnvsParam; i++) {
                 envs.push(new BonkEnvironment(config));
@@ -95,7 +106,8 @@ parentPort.on('message', (msg) => {
                 sharedMem = new SharedMemoryManager(
                     numEnvsParam,
                     ringSize,
-                    msg.sharedBuffer as SharedArrayBuffer
+                    msg.sharedBuffer as SharedArrayBuffer,
+                    _obsNumOpponents
                 );
                 if (msg.syncBuffer) {
                     syncCompleted = new Int32Array(msg.syncBuffer);
@@ -104,7 +116,13 @@ parentPort.on('message', (msg) => {
                 parentPort!.postMessage({
                     id: msg.id,
                     status: 'ok',
-                    data: { mode: 'shared' }  // Include mode in data for compatibility
+                    data: {
+                        mode: 'shared',  // Include mode in data for compatibility
+                        // Static info fields (frameSkip, capZones, aiTeam) are
+                        // constant per environment; transport them once here
+                        // instead of per step.
+                        staticInfos: envs.map(env => env.getStaticInfo()),
+                    }
                 });
             } else {
                 console.log(`[Worker] Using message passing mode`);
@@ -202,6 +220,13 @@ parentPort.on('message', (msg) => {
                     sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                     sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                     sharedMem!.writeTick(i, res.info.tick || stepCounter);
+                    // Dynamic info fields travel as SAB floats; the static
+                    // fields were shipped once at init.
+                    _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
+                    _infoBuffer[1] = res.info.opponentsAlive;
+                    _infoBuffer[2] = res.info.scoreBlue;
+                    _infoBuffer[3] = res.info.scoreRed;
+                    sharedMem!.writeInfo(i, _infoBuffer);
                 });
 
                 // Signal that worker has consumed the actions
@@ -287,6 +312,15 @@ parentPort.on('message', (msg) => {
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                             sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                             sharedMem!.writeTick(i, res.info.tick || stepCounter);
+                            // Dynamic info fields travel as SAB floats; the
+                            // static fields were shipped once at init. This
+                            // keeps the shared-memory step zero-message (no
+                            // per-step postMessage).
+                            _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
+                            _infoBuffer[1] = res.info.opponentsAlive;
+                            _infoBuffer[2] = res.info.scoreBlue;
+                            _infoBuffer[3] = res.info.scoreRed;
+                            sharedMem!.writeInfo(i, _infoBuffer);
                         });
 
                         sharedMem.signalWorkerConsumed();

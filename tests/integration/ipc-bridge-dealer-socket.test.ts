@@ -78,4 +78,41 @@ describe('IpcBridge DEALER-socket action batch validation (issue #191)', () => {
     expect(short.status).toBe('error');
     expect(short.error).toContain('Invalid actions: expected 2 actions for 2 environments, got 1');
   }, 60000);
+
+  const expectOverlongBatchIsTransient = async (useSharedMemory: boolean) => {
+    await sendCommand({ command: 'init', numEnvs: 2, useSharedMemory });
+
+    // Over-long step actions: rejected before any pool state is touched.
+    const badStep = await sendCommand({ command: 'step', actions: [0, 0, 0] });
+    expect(badStep.status).toBe('error');
+    expect(badStep.error).toContain('Invalid actions: expected 2 actions for 2 environments, got 3');
+
+    // Over-long reset seeds: same per-request error, pool untouched.
+    const badReset = await sendCommand({ command: 'reset', seeds: [1, 2, 3] });
+    expect(badReset.status).toBe('error');
+    expect(badReset.error).toContain('Invalid seeds: expected at most 2 seeds for 2 environments, got 3');
+
+    // Non-array seeds are rejected with a clean error reply.
+    const badSeeds = await sendCommand({ command: 'reset', seeds: 42 });
+    expect(badSeeds.status).toBe('error');
+    expect(badSeeds.error).toContain('Invalid seeds: must be an array');
+
+    // Correctly sized follow-ups succeed.
+    const goodStep = await sendCommand({ command: 'step', actions: [0, 0] });
+    expect(goodStep.status).toBe('ok');
+    expect(goodStep.data).toHaveLength(2);
+
+    const goodReset = await sendCommand({ command: 'reset', seeds: [1, 2] });
+    expect(goodReset.status).toBe('ok');
+    expect(goodReset.data.observation).toHaveLength(2);
+  };
+
+  it('message-passing mode: over-long batches are per-request errors and the pool recovers', async () => {
+    await expectOverlongBatchIsTransient(false);
+  }, 60000);
+
+  it('shared-memory mode: over-long batches are per-request errors and the pool recovers', async () => {
+    if (!WorkerPool.isSupported()) return;
+    await expectOverlongBatchIsTransient(true);
+  }, 60000);
 });

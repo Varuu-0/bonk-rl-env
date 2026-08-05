@@ -2,7 +2,7 @@
  * SharedMemoryManager - Zero-Copy IPC using SharedArrayBuffer
  */
 export class SharedMemoryManager {
-    private static readonly OBSERVATION_FLOATS = 16;
+    private observationFloats: number;
     private buffer: SharedArrayBuffer;
     private views: {
         actions: Uint8Array;
@@ -14,6 +14,7 @@ export class SharedMemoryManager {
         truncated: Uint8Array;
         terminated: Uint8Array;
         ticks: Uint32Array;
+        info: Float32Array;
     };
     private seeds: Uint32Array;
     private control: {
@@ -31,7 +32,7 @@ export class SharedMemoryManager {
     private currentActionSlot: number = 0;
     private ownsBuffer: boolean = false;
 
-    constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer) {
+    constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer, numOpponents: number = 1) {
         this.numEnvs = numEnvs;
         if (ringSize < 2 || (ringSize & (ringSize - 1)) !== 0) {
             throw new Error(`SharedMemoryManager: ringSize must be a power of 2 (got ${ringSize})`);
@@ -39,10 +40,17 @@ export class SharedMemoryManager {
         this.ringSize = ringSize;
         this.actionRingMask = ringSize - 1;
 
+        // Per-env observation record: 7 player floats, 6 floats per opponent,
+        // 2 arena floats, 1 tick. The first opponent keeps the legacy offsets
+        // 7-12 and arena/tick stay at 13-15, so the default single-opponent
+        // layout is byte-identical to the old fixed 16-float record; extra
+        // opponents append 6-float blocks after the tick (offsets 16+).
+        this.observationFloats = SharedMemoryManager.floatsPerEnv(numOpponents);
+
         const align8 = (n: number) => (n + 7) & ~7;
         const actionBytes = align8(numEnvs * ringSize);
-        const obsBytes = align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4);
-        const terminalObsBytes = align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4);
+        const obsBytes = align8(numEnvs * this.observationFloats * 4);
+        const terminalObsBytes = align8(numEnvs * this.observationFloats * 4);
         const hasTerminalObsBytes = align8(numEnvs * 1);
         const rewardBytes = align8(numEnvs * 4);
         const doneBytes = align8(numEnvs * 1);
@@ -50,9 +58,14 @@ export class SharedMemoryManager {
         const terminatedBytes = align8(numEnvs * 1);
         const tickBytes = align8(numEnvs * 4);
         const seedBytes = align8(numEnvs * 4);
+        // Per-env dynamic step-info floats: aiAlive, opponentsAlive,
+        // scoreBlue, scoreRed. The static info fields (frameSkip, capZones,
+        // aiTeam) are constant for an environment's lifetime and are
+        // transported once at init instead of every step.
+        const infoBytes = align8(numEnvs * 4 * 4);
         const controlBytes = 64; // Reserve plenty
 
-        const totalBytes = actionBytes + obsBytes + terminalObsBytes + hasTerminalObsBytes + rewardBytes + doneBytes + truncatedBytes + terminatedBytes + tickBytes + seedBytes + controlBytes;
+        const totalBytes = actionBytes + obsBytes + terminalObsBytes + hasTerminalObsBytes + rewardBytes + doneBytes + truncatedBytes + terminatedBytes + tickBytes + seedBytes + infoBytes + controlBytes;
 
         if (existingBuffer) {
             this.buffer = existingBuffer;
@@ -72,14 +85,15 @@ export class SharedMemoryManager {
             dones: null as any,
             truncated: null as any,
             terminated: null as any,
-            ticks: null as any
+            ticks: null as any,
+            info: null as any
         };
         offset = align8(offset + actionBytes);
 
-        this.views.observations = new Float32Array(this.buffer, offset, numEnvs * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.observations = new Float32Array(this.buffer, offset, numEnvs * this.observationFloats);
         offset = align8(offset + obsBytes);
 
-        this.views.terminalObservations = new Float32Array(this.buffer, offset, numEnvs * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.terminalObservations = new Float32Array(this.buffer, offset, numEnvs * this.observationFloats);
         offset = align8(offset + terminalObsBytes);
 
         this.views.hasTerminalObs = new Uint8Array(this.buffer, offset, numEnvs);
@@ -103,6 +117,9 @@ export class SharedMemoryManager {
         this.seeds = new Uint32Array(this.buffer, offset, numEnvs);
         offset = align8(offset + seedBytes);
 
+        this.views.info = new Float32Array(this.buffer, offset, numEnvs * 4);
+        offset = align8(offset + infoBytes);
+
         this.control = {
             stepCounter: new Int32Array(this.buffer, offset, 1),
             workerReady: new Int32Array(this.buffer, offset + 4, 1),
@@ -119,11 +136,38 @@ export class SharedMemoryManager {
 
     static isSupported() { return typeof SharedArrayBuffer !== 'undefined'; }
 
-    static calculateBufferSize(numEnvs: number, ringSize: number = 16): number {
+    /**
+     * Canonical numOpponents normalization shared by every SAB layout
+     * participant (manager, worker, pool, environment). null/undefined/NaN
+     * and other non-finite values fall back to the documented default of 1
+     * (matching the historical `numOpponents ?? 1` semantics); a finite
+     * number is floored and clamped to >= 0 so the environment's spawned
+     * opponent count always matches the SAB record size.
+     */
+    static normalizeNumOpponents(value: unknown): number {
+        const n = Number(value);
+        if (value == null || !Number.isFinite(n)) return 1;
+        return Math.max(0, Math.floor(n));
+    }
+
+    /**
+     * Floats per environment in the shared-memory observation record:
+     * 7 player + 6 * numOpponents + 2 arena + 1 tick.
+     */
+    static floatsPerEnv(numOpponents: unknown = 1): number {
+        return 16 + 6 * Math.max(0, SharedMemoryManager.normalizeNumOpponents(numOpponents) - 1);
+    }
+
+    getObservationFloats(): number {
+        return this.observationFloats;
+    }
+
+    static calculateBufferSize(numEnvs: number, ringSize: number = 16, numOpponents: number = 1): number {
         const align8 = (n: number) => (n + 7) & ~7;
-        return align8(numEnvs * ringSize) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) +
+        const floats = SharedMemoryManager.floatsPerEnv(numOpponents);
+        return align8(numEnvs * ringSize) + align8(numEnvs * floats * 4) + align8(numEnvs * floats * 4) +
             align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 1) + align8(numEnvs * 1) +
-            align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 4) + 64;
+            align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 4) + align8(numEnvs * 4 * 4) + 64;
     }
 
     getBuffer() { return this.buffer; }
@@ -203,16 +247,17 @@ export class SharedMemoryManager {
             dones: this.views.dones,
             truncated: this.views.truncated,
             terminated: this.views.terminated,
-            ticks: this.views.ticks
+            ticks: this.views.ticks,
+            info: this.views.info
         };
     }
 
     writeObservation(envIndex: number, obs: number[] | Float32Array) {
-        this.views.observations.set(obs, envIndex * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.observations.set(obs, envIndex * this.observationFloats);
     }
 
     writeTerminalObservation(envIndex: number, obs: number[] | Float32Array) {
-        this.views.terminalObservations.set(obs, envIndex * SharedMemoryManager.OBSERVATION_FLOATS);
+        this.views.terminalObservations.set(obs, envIndex * this.observationFloats);
     }
 
     writeHasTerminalObs(envIndex: number, has: number) { this.views.hasTerminalObs[envIndex] = has; }
@@ -222,6 +267,14 @@ export class SharedMemoryManager {
     writeTruncated(envIndex: number, truncated: number) { this.views.truncated[envIndex] = truncated; }
     writeTerminated(envIndex: number, terminated: number) { this.views.terminated[envIndex] = terminated; }
     writeTick(envIndex: number, tick: number) { this.views.ticks[envIndex] = tick; }
+
+    /**
+     * Writes the per-env dynamic info floats (aiAlive, opponentsAlive,
+     * scoreBlue, scoreRed) into the shared info region.
+     */
+    writeInfo(envIndex: number, values: number[] | Float32Array) {
+        this.views.info.set(values, envIndex * 4);
+    }
 
     incrementStepCounter() { return Atomics.add(this.control.stepCounter, 0, 1); }
 
@@ -255,6 +308,7 @@ export class SharedMemoryManager {
         this.views.terminated.fill(0);
         this.views.ticks.fill(0);
         this.seeds.fill(0);
+        this.views.info.fill(0);
         Atomics.store(this.control.stepCounter, 0, 0);
         Atomics.store(this.control.workerReady, 0, 0);
         Atomics.store(this.control.mainReady, 0, 0);

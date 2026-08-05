@@ -102,6 +102,12 @@ const fakes = vi.hoisted(() => {
       return true;
     }
 
+    static normalizeNumOpponents(value: unknown): number {
+      const n = Number(value);
+      if (!Number.isFinite(n)) return 1;
+      return Math.max(0, Math.floor(n));
+    }
+
     getBuffer(): SharedArrayBuffer {
       return this.buffer;
     }
@@ -154,6 +160,7 @@ const fakes = vi.hoisted(() => {
         truncated: new Uint8Array(this.numEnvs),
         terminated: new Uint8Array(this.numEnvs),
         ticks: new Uint32Array(this.numEnvs),
+        info: new Float32Array(this.numEnvs * 4),
       };
     }
 
