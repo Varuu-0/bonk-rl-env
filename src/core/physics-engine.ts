@@ -185,7 +185,6 @@ export interface MapBodyDef {
   angularDamping?: number;       // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
   angularVelocity?: number;      // Starting rotational velocity
-  collidesWithPlayers?: boolean; // If false, exclude player categories from maskBits
   aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
 }
 
@@ -252,6 +251,13 @@ export class PhysicsEngine {
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
+  /** Running arena extents in metres, folded in O(1) per addBody so map build
+   *  and episode reset stay linear instead of rescanning every platform body
+   *  (the old per-add full pass was O(bodies²)). */
+  private arenaMinX: number = Infinity;
+  private arenaMaxX: number = -Infinity;
+  private arenaMinY: number = Infinity;
+  private arenaMaxY: number = -Infinity;
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
@@ -518,26 +524,32 @@ export class PhysicsEngine {
         shapeDef.isSensor = true;
       }
 
-      // Apply collision filtering if specified
-      if (def.collides || def.collidesWithPlayers === false) {
+      // Apply collision filtering: `collides` gates only the player-group bits
+      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010), mirroring the
+      // native mask construction (DEOBFUSCATION §33.4) where maskBits starts at
+      // the full mask and only false group flags subtract their bit — the map
+      // category is never subtracted. Here that means the map category 0x0001
+      // stays in maskBits whenever at least one player group is enabled, so map
+      // geometry stays solid to other map bodies. An all-false `collides` body
+      // (legacy "ghost geometry" such as visual/no-Physics-style barriers)
+      // keeps its fully-ghost mask 0x0000 so third-party-map behavior is
+      // unchanged. (The bundled exports also carry a "collidesWithPlayers"
+      // key on every fixture; it is not part of MapBodyDef and has no native
+      // player-collision effect — native `f_p` clears only bit 0, this port's
+      // map category — so it is deliberately ignored and platforms stay solid
+      // to players.)
+      if (def.collides) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
-        filter.maskBits = 0xFFFF; // Start with collide-all
-        
-        if (def.collides) {
-          filter.maskBits = 0x0000;
-          if (def.collides.g1) filter.maskBits |= 0x0002;
-          if (def.collides.g2) filter.maskBits |= 0x0004;
-          if (def.collides.g3) filter.maskBits |= 0x0008;
-          if (def.collides.g4) filter.maskBits |= 0x0010;
-        }
-        
-        // collidesWithPlayers=false → exclude player categories from mask
-        if (def.collidesWithPlayers === false) {
-          filter.maskBits &= ~0x0002; // exclude g1 (player 0)
-          filter.maskBits &= ~0x0004; // exclude g2 (player 1+)
-        }
-        
+        filter.maskBits =
+          (def.collides.g1 || def.collides.g2 || def.collides.g3 || def.collides.g4)
+            ? 0x0001 // Map bodies always collide with each other
+            : 0x0000; // All-false legacy ghost geometry
+        if (def.collides.g1) filter.maskBits |= 0x0002;
+        if (def.collides.g2) filter.maskBits |= 0x0004;
+        if (def.collides.g3) filter.maskBits |= 0x0008;
+        if (def.collides.g4) filter.maskBits |= 0x0010;
+
         shapeDef.filter = filter;
       }
 
@@ -557,7 +569,11 @@ export class PhysicsEngine {
 
     this.platformBodies.push(body);
     if (def.name) this.platformBodyMap.set(def.name, body);
-    this.calculateArenaBounds();
+
+    // Fold this body's AABB into the running arena extents instead of
+    // rescanning every platform body, keeping map build and episode reset
+    // O(bodies) rather than O(bodies²).
+    this.extendArenaExtents(body);
   }
 
   addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
@@ -633,29 +649,41 @@ export class PhysicsEngine {
   }
 
   /**
-   * Calculate arena bounds based on map body extents.
-   * Call this after adding all map bodies.
+   * Fold one body's shape AABBs into the running arena extents and refresh
+   * arenaHalfWidth/Height. O(1) per body; addBody calls this instead of a
+   * full-world rescan.
    */
-  calculateArenaBounds(): void {
-    let minX = Infinity, maxX = -Infinity;
-    let minY = Infinity, maxY = -Infinity;
-
-    for (const body of this.platformBodies) {
-      const aabb = new b2AABB();
-      const transform = body.GetXForm();
-      for (let shape = body.GetShapeList(); shape !== null; shape = shape.GetNext()) {
-        shape.ComputeAABB(aabb, transform);
-        minX = Math.min(minX, aabb.lowerBound.x);
-        maxX = Math.max(maxX, aabb.upperBound.x);
-        minY = Math.min(minY, aabb.lowerBound.y);
-        maxY = Math.max(maxY, aabb.upperBound.y);
-      }
+  private extendArenaExtents(body: any): void {
+    const aabb = new b2AABB();
+    const transform = body.GetXForm();
+    for (let shape = body.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+      shape.ComputeAABB(aabb, transform);
+      this.arenaMinX = Math.min(this.arenaMinX, aabb.lowerBound.x);
+      this.arenaMaxX = Math.max(this.arenaMaxX, aabb.upperBound.x);
+      this.arenaMinY = Math.min(this.arenaMinY, aabb.lowerBound.y);
+      this.arenaMaxY = Math.max(this.arenaMaxY, aabb.upperBound.y);
     }
 
-    if (isFinite(minX)) {
+    if (isFinite(this.arenaMinX)) {
       const margin = 5; // 5 metres extra buffer
-      this.arenaHalfWidth = Math.max(Math.abs(minX), Math.abs(maxX)) + margin;
-      this.arenaHalfHeight = Math.max(Math.abs(minY), Math.abs(maxY)) + margin;
+      this.arenaHalfWidth = Math.max(Math.abs(this.arenaMinX), Math.abs(this.arenaMaxX)) + margin;
+      this.arenaHalfHeight = Math.max(Math.abs(this.arenaMinY), Math.abs(this.arenaMaxY)) + margin;
+    }
+  }
+
+  /**
+   * Calculate arena bounds based on map body extents.
+   * Call this after adding all map bodies (or at any time; it rebases the
+   * running extents on a full scan of every current platform body).
+   */
+  calculateArenaBounds(): void {
+    this.arenaMinX = Infinity;
+    this.arenaMaxX = -Infinity;
+    this.arenaMinY = Infinity;
+    this.arenaMaxY = -Infinity;
+
+    for (const body of this.platformBodies) {
+      this.extendArenaExtents(body);
     }
   }
 
@@ -1358,6 +1386,12 @@ export class PhysicsEngine {
     this.lastHitTicks.clear();
     this.platformBodies = [];
     this.platformBodyMap = new Map();
+    // Running arena extents belong to the fresh world; bodies re-added after
+    // reset() rebuild them incrementally.
+    this.arenaMinX = Infinity;
+    this.arenaMaxX = -Infinity;
+    this.arenaMinY = Infinity;
+    this.arenaMaxY = -Infinity;
     this.tickCount = 0;
     // Reset the OOB death-circle center to the origin default. Although it is
     // map-level configuration, it must not survive across maps: reusing this

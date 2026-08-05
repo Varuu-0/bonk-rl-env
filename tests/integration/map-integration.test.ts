@@ -6,7 +6,8 @@ import {
     ARENA_HALF_WIDTH,
     ARENA_HALF_HEIGHT,
     TPS,
-    DT
+    DT,
+    SCALE
 } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
@@ -276,6 +277,27 @@ describe('MapIntegration', () => {
                 expect(true).toBe(true);
             });
 
+            it('player lands and rests on the platform (collidesWithPlayers=false must stay solid)', () => {
+                const map = loadMap(MAP_FILES.simple1v1);
+                const dc = (map as any).physics?.deathCenter;
+                engine = new PhysicsEngine();
+                addAllBodies(engine, map);
+                if (dc) engine.setDeathCircleCenter(dc.x, dc.y);
+                const sp = getSpawnXY(map);
+                const platform = map.bodies[0];
+                const top = platform.y - (platform.height || 0) / 2;
+                engine.addPlayer(0, sp.x, sp.y);
+                for (let i = 0; i < 120; i++) {
+                    engine.tick();
+                }
+                const state = engine.getPlayerState(0);
+                expect(state.alive).toBe(true);
+                // The bundled map sets collidesWithPlayers:false on its only
+                // body; the player must land on it (resting disc center stays
+                // above the platform top surface) instead of falling through.
+                expect(state.y).toBeLessThan(top);
+            });
+
             it('player spawns at spawn position', () => {
                 const map = loadMap(MAP_FILES.simple1v1);
                 expect(!!map.spawnPoints.team_red).toBe(true);
@@ -435,6 +457,38 @@ describe('MapIntegration', () => {
                 } else {
                     expect(completedTicks).toBeGreaterThanOrEqual(30);
                 }
+            });
+
+            it('dynamic balls stay inside the container instead of falling through', () => {
+                const map = loadMap(MAP_FILES.ballPit);
+                engine = new PhysicsEngine();
+
+                // All 52 bodies share the fixture name "Unnamed Shape", so give
+                // each a unique tracking name before adding.
+                const dynamic: MapBodyDef[] = [];
+                map.bodies.forEach((b: any, i: number) => {
+                    engine!.addBody({ ...b, name: `ballpit_${i}` });
+                    if (b.static !== true) {
+                        dynamic.push({ ...b, name: `ballpit_${i}` });
+                    }
+                });
+                expect(dynamic.length).toBe(48);
+
+                const bodyMap = engine.getBodyMap();
+                for (let i = 0; i < 120; i++) {
+                    engine.tick();
+                }
+
+                // Every dynamic ball must remain bounded by the container: the
+                // broken map-body maskBits let all 48 dynamic balls fall
+                // straight out of the world (y > 2000 px within 120 ticks).
+                let fellThrough = 0;
+                for (const def of dynamic) {
+                    const body = bodyMap.get(def.name)!;
+                    const y = body.GetPosition().y * SCALE;
+                    if (y > 2000) fellThrough++;
+                }
+                expect(fellThrough).toBe(0);
             });
         });
 

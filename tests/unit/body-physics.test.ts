@@ -305,10 +305,14 @@ describe('Body Physics', () => {
         });
     });
 
-    describe('collidesWithPlayers', () => {
-        it('player falls through floor with collidesWithPlayers=false', () => {
+    describe('player-platform collision', () => {
+        it('player rests on floor carrying collidesWithPlayers:false passthrough map data', () => {
             engine = new PhysicsEngine();
 
+            // The bundled map exporter emits collidesWithPlayers on every
+            // fixture (map-data passthrough; not part of MapBodyDef). Like the
+            // shipped maps, it must not gate player collision: platforms stay
+            // solid to players.
             const floor: MapBodyDef = {
                 name: 'ghostFloor',
                 type: 'rect',
@@ -319,17 +323,43 @@ describe('Body Physics', () => {
                 static: true,
                 collides: { g1: true, g2: true, g3: true, g4: true },
                 collidesWithPlayers: false,
-            };
+            } as MapBodyDef;
 
             engine.addBody(floor);
             engine.addPlayer(0, 0, 95);
 
-            for (let i = 0; i < 30; i++) {
+            for (let i = 0; i < 45; i++) {
                 engine.tick();
             }
 
             const state = engine.getPlayerState(0);
-            expect(state.y).toBeGreaterThan(110);
+            // A pass-through floor leaves the player at y ≈ 785 px and falling.
+            expect(state.y).toBeLessThanOrEqual(100);
+        });
+
+        it('player rests on floor carrying collidesWithPlayers:false with default filter', () => {
+            engine = new PhysicsEngine();
+
+            const floor: MapBodyDef = {
+                name: 'defaultFilterFloor',
+                type: 'rect',
+                x: 0,
+                y: 100,
+                width: 800,
+                height: 30,
+                static: true,
+                collidesWithPlayers: false,
+            } as MapBodyDef;
+
+            engine.addBody(floor);
+            engine.addPlayer(0, 0, 95);
+
+            for (let i = 0; i < 45; i++) {
+                engine.tick();
+            }
+
+            const state = engine.getPlayerState(0);
+            expect(state.y).toBeLessThanOrEqual(100);
         });
 
         it('player is stopped by floor with default collidesWithPlayers', () => {

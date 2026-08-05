@@ -252,6 +252,41 @@ describe('CollisionFiltering', () => {
     });
   });
 
+  describe('all-false collides keeps legacy ghost behavior', () => {
+    it('all-false collides body does not collide with a static floor', () => {
+      engine = new PhysicsEngine();
+      engine.addBody({
+        name: 'floor',
+        type: 'rect',
+        x: 0,
+        y: 100,
+        width: 800,
+        height: 30,
+        static: true,
+      });
+      engine.addBody({
+        name: 'ghostCrate',
+        type: 'rect',
+        x: 0,
+        y: 10,
+        width: 40,
+        height: 40,
+        static: false,
+        density: 1.0,
+        collides: { g1: false, g2: false, g3: false, g4: false },
+      });
+      const body = engine.getBodyMap().get('ghostCrate')!;
+      for (let i = 0; i < 90; i++) {
+        engine.tick();
+      }
+      // Falls through the floor (floor top at y=85): a fully-ghost mask
+      // (0x0000) is preserved for all-false collides bodies, so third-party
+      // map behavior is unchanged.
+      const y = body.GetPosition().y * SCALE;
+      expect(y).toBeGreaterThan(200);
+    });
+  });
+
   describe('dynamic body with collides', () => {
     it('player 0 passes through dynamic body with g1=false', () => {
       engine = new PhysicsEngine();
