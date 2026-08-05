@@ -263,6 +263,13 @@ describe('SharedMemoryManager', () => {
       const seeds = shm.readSeeds();
       expect(Array.from(seeds)).toEqual([1, 2, 3, 4]);
     });
+
+    it('writeSeeds clears the stale region for short lists (issue #183)', () => {
+      shm.writeSeeds([7, 8, 9, 10]);
+      shm.writeSeeds([1, 2]);
+      const seeds = shm.readSeeds();
+      expect(Array.from(seeds)).toEqual([1, 2, 0, 0]);
+    });
   });
 
   // ---- command read/write ----
