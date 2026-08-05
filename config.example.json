@@ -46,7 +46,7 @@
   "grapple": {
     "_doc_grapple": "Grapple hook mechanics: verified native targeting window, joint tuning, and the a1a energy meter",
     "maxDistance": 10.0,
-    "_doc_maxDistance": "Verified native grapple target window (DEOBFUSCATION 32.1): QueryAABB +/-10 world units around the disc center, scored by center-to-surface distance < 10. not consumed by the engine, which hardcodes the verified window. The literal 500 is the a1a energy threshold, NOT a reach. Default: 10.0.",
+    "_doc_maxDistance": "Verified native grapple target window (DEOBFUSCATION 32.1): QueryAABB +/-10 world units around the disc center, scored by center-to-surface distance < 10. It is not consumed by the engine, which hardcodes the verified window. The literal 500 is the a1a energy threshold, NOT a reach. Default: 10.0.",
     "jointFrequencyHz": 2.0,
     "_doc_jointFrequencyHz": "Verified native grapple spring frequency: swingF = 2 Hz (DEOBFUSCATION 32.4), with a 0.01 Hz slack branch while the rope is not taut. Map fh/dr are 'd'-joint fields and never apply to the grapple. Not consumed by the engine, which hardcodes the verified values. Type: float. Range: 0.01+. Default: 2.0. Env: GRAPPLE_JOINT_FREQUENCY_HZ. CLI: --grapple-joint-frequency-hz",
     "jointDampingRatio": 0.0,

@@ -56,7 +56,8 @@ export const DEFAULT_PPM = 12;
  * 2026-07-29 fixture, alpha2s.pretty.js 7397-7401; Node-verified index labels
  * 216=density / 217=friction / 218=restitution):
  * - density is the radius-normalized baseline `1 / (pi * r^2)` so the disc
- *   mass is exactly 1 (heavy scales density up to 4.7x per §35.4);
+ *   mass is exactly 1. Native heavy mode additionally scales density up to
+ *   4.7x (§35.4) — that scaling is documented but not ported here;
  * - friction `0.001337`;
  * - restitution `0.95`.
  */
@@ -202,8 +203,6 @@ export class PhysicsEngine {
   private playerGrappleJoints: Map<number, any> = new Map();
   /** Native a1a grapple/energy meter (0-1000), per player (DEOBFUSCATION §32.3). */
   private grappleEnergy: Map<number, number> = new Map();
-  /** Reused QueryAABB result buffer for grapple targeting (fire is rare). */
-  private _grappleQueryShapes: any[] = new Array(256);
   private playerTeams: Map<number, string> = new Map();
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
@@ -780,11 +779,12 @@ export class PhysicsEngine {
    * Verified native semantics (DEOBFUSCATION §32, 2026-07-29 build):
    * - Gate: the a1a energy meter must be above 500 (the 500 literal is an
    *   energy threshold, NOT a reach).
-   * - Targeting: a QueryAABB ±10 world units around the disc center collects
-   *   map phys bodies only (noGrapple/capzone/players excluded); candidates
-   *   are scored by center-to-surface distance `d < 10`, sorted ascending,
-   *   and the first candidate that is `innerGrapple` or does not contain the
-   *   disc center wins (TestPoint gate).
+   * - Targeting: a ±10 world-unit window around the disc center (native
+   *   QueryAABB, equivalent here to iterating the port's platform bodies).
+   *   Candidates are map phys bodies only (noGrapple/capzone/players
+   *   excluded), scored by center-to-surface distance `d < 10`, sorted
+   *   ascending, and the first candidate that is `innerGrapple` or does not
+   *   contain the disc center wins (TestPoint gate).
    * - Anchor: body-local surface point (`swing.p = body.GetLocalPoint(world
    *   surface point)`); rest length = distance from disc center to surface.
    * - Joint tuning: `frequencyHz = swingF` (2 Hz) / `dampingRatio = swingD`
@@ -803,27 +803,24 @@ export class PhysicsEngine {
 
     const playerPos = body.GetPosition();
 
-    // §32.1: QueryAABB ±10 world units around the disc center.
-    const aabb = new b2AABB();
-    aabb.lowerBound.Set(playerPos.x - GRAPPLE_TARGET_WINDOW, playerPos.y - GRAPPLE_TARGET_WINDOW);
-    aabb.upperBound.Set(playerPos.x + GRAPPLE_TARGET_WINDOW, playerPos.y + GRAPPLE_TARGET_WINDOW);
-
-    const shapes = this._grappleQueryShapes;
-    const count = this.world.Query(aabb, shapes, shapes.length);
-
+    // §32.1: candidates must lie within a ±10 world-unit window of the disc
+    // center, scored by center-to-surface distance `d < 10`. The native
+    // QueryAABB is a broadphase pre-filter over that same window; iterating
+    // the port's platform bodies (the only grappable "phys" bodies) with the
+    // identical d < 10 scoring yields exactly the same candidate set with no
+    // fixed-size result buffer.
     const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
-    for (let i = 0; i < count; i++) {
-      const shape = shapes[i];
-      const pBody = shape.GetBody();
-      if (!pBody) continue;
+    for (const pBody of this.platformBodies) {
       const ud = pBody.GetUserData() || {};
-      // Native query filter (lines 8148-8161): map phys bodies only — players
-      // and capzones are never grappleable; noGrapple fixtures are excluded.
-      if (ud.playerId !== undefined || ud.isCapZone || ud.noGrapple) continue;
+      // Native query filter (lines 8148-8161): noGrapple surfaces excluded;
+      // players and capzones are never in platformBodies so never grappleable.
+      if (ud.noGrapple) continue;
 
-      const surface = this.closestSurfacePoint(shape, pBody, playerPos);
-      if (surface.d < GRAPPLE_TARGET_WINDOW) {
-        candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
+      for (let shape = pBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        const surface = this.closestSurfacePoint(shape, pBody, playerPos);
+        if (surface.d < GRAPPLE_TARGET_WINDOW) {
+          candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
+        }
       }
     }
 
@@ -864,8 +861,9 @@ export class PhysicsEngine {
    * the native edge/chain scoring.
    */
   private closestSurfacePoint(shape: any, body: any, playerPos: any): { d: number; point: { x: number; y: number } } {
-    const xf = body.GetXForm();
-    if (shape.constructor.name === 'b2CircleShape' || typeof shape.m_radius === 'number') {
+    // This Box2D port exposes GetLocalPosition only on b2CircleShape; polygon
+    // shapes have no such method and their m_radius is undefined.
+    if (typeof shape.GetLocalPosition === 'function') {
       const center = body.GetWorldPoint(shape.GetLocalPosition());
       const dx = center.x - playerPos.x;
       const dy = center.y - playerPos.y;
