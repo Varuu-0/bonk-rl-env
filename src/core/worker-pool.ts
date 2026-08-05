@@ -144,6 +144,9 @@ export class WorkerPool {
     }
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
+        if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
+            throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
+        }
         await this.close(); // Clean up existing if re-initialized
         this.state = 'initializing';
         this.failure = null;

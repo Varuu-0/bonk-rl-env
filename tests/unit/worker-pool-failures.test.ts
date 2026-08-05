@@ -515,4 +515,64 @@ describe('WorkerPool failure state', () => {
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
   });
+
+  describe('init validation (#195, #227)', () => {
+    it('rejects init(0) in message mode with a clear error and no workers', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(0, {}, false)).rejects.toThrow(
+        'Invalid environment count: expected a positive integer, got 0',
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects init(0) in shared-memory mode with the same error and no workers', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(0, {}, true)).rejects.toThrow(
+        'Invalid environment count: expected a positive integer, got 0',
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects init(-1) with a clear error in both transports (no RangeError)', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(1);
+        await expect(p.init(-1, {}, useShared)).rejects.toThrow(
+          'Invalid environment count: expected a positive integer, got -1',
+        );
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        await p.close();
+      }
+    });
+
+    it('rejects a non-integer totalEnvs in both transports', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(1);
+        await expect(p.init(2.5, {}, useShared)).rejects.toThrow(
+          'Invalid environment count: expected a positive integer, got 2.5',
+        );
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        await p.close();
+      }
+    });
+
+    it('keeps the pool usable after a rejected init', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(0, {}, true)).rejects.toThrow(
+        'Invalid environment count: expected a positive integer, got 0',
+      );
+
+      await pool.init(1, {}, true);
+      expect((pool as any).state).toBe('ready');
+      const results = await pool.step([0]);
+      expect(results).toHaveLength(1);
+    });
+  });
 });

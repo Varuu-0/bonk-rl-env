@@ -60,9 +60,12 @@ export class IpcBridge {
             const command = payload.command;
 
             if (command === "init") {
-                const numEnvs = payload.numEnvs;
-                if (typeof numEnvs !== 'number' || numEnvs < 1) {
-                    response = { status: "error", error: "Invalid numEnvs: must be a positive number" };
+                let numEnvs = payload.numEnvs;
+                if (typeof numEnvs === 'string' && /^\d+$/.test(numEnvs)) {
+                    numEnvs = Number(numEnvs);
+                }
+                if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
+                    response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
@@ -199,6 +202,9 @@ export class IpcBridge {
      * Used by BonkEnv for programmatic control.
      */
     async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
+        if (!Number.isInteger(numEnvs) || numEnvs < 1) {
+            throw new Error('Invalid numEnvs: must be a positive integer');
+        }
         await this.pool.init(numEnvs, config, useSharedMemory);
         this._initialized = true;
         this._numEnvs = numEnvs;
