@@ -86,25 +86,37 @@ function observationFastToArray(env: BonkEnvironment): Float32Array {
  * Float32Array views filled from the Float32 _obsBuffer and storage), so
  * message-passing replies quantize here with Math.fround (identical
  * round-to-nearest-even) to make both transports bit-identical for the same
- * (seed, actions). Boolean/flag fields and integer tick are exact in Float32
- * and are left untouched.
+ * (seed, actions). This is the transport contract we ship to all consumers:
+ * the shared-memory transport is the default and the Python client already
+ * consumes float32 observations, so message-mode previously returning raw
+ * Float64 values was the observable inconsistency.
+ *
+ * A fresh observation object is returned and the input is never mutated, so
+ * physics-visible state can never be affected even if a future environment
+ * caches or reuses observation objects. Boolean/flag fields and the integer
+ * tick are exact in Float32 and are copied through untouched.
  */
 function quantizeObservation(obs: Observation): Observation {
-    obs.playerX = Math.fround(obs.playerX);
-    obs.playerY = Math.fround(obs.playerY);
-    obs.playerVelX = Math.fround(obs.playerVelX);
-    obs.playerVelY = Math.fround(obs.playerVelY);
-    obs.playerAngle = Math.fround(obs.playerAngle);
-    obs.playerAngularVel = Math.fround(obs.playerAngularVel);
-    obs.arenaHalfWidth = Math.fround(obs.arenaHalfWidth);
-    obs.arenaHalfHeight = Math.fround(obs.arenaHalfHeight);
-    for (const opp of obs.opponents) {
-        opp.x = Math.fround(opp.x);
-        opp.y = Math.fround(opp.y);
-        opp.velX = Math.fround(opp.velX);
-        opp.velY = Math.fround(opp.velY);
-    }
-    return obs;
+    return {
+        playerX: Math.fround(obs.playerX),
+        playerY: Math.fround(obs.playerY),
+        playerVelX: Math.fround(obs.playerVelX),
+        playerVelY: Math.fround(obs.playerVelY),
+        playerAngle: Math.fround(obs.playerAngle),
+        playerAngularVel: Math.fround(obs.playerAngularVel),
+        playerIsHeavy: obs.playerIsHeavy,
+        opponents: obs.opponents.map(opp => ({
+            x: Math.fround(opp.x),
+            y: Math.fround(opp.y),
+            velX: Math.fround(opp.velX),
+            velY: Math.fround(opp.velY),
+            isHeavy: opp.isHeavy,
+            alive: opp.alive,
+        })),
+        arenaHalfWidth: Math.fround(obs.arenaHalfWidth),
+        arenaHalfHeight: Math.fround(obs.arenaHalfHeight),
+        tick: obs.tick,
+    };
 }
 
 parentPort.on('message', (msg) => {
@@ -173,7 +185,7 @@ parentPort.on('message', (msg) => {
                 signalSyncCompleted();
             }
             // Always include observation data in the response (shared memory is for step(), not reset())
-            obs.forEach(quantizeObservation);
+            obs.forEach((o, i) => { obs[i] = quantizeObservation(o); });
             parentPort!.postMessage({
                 id: msg.id,
                 status: 'ok',
@@ -204,9 +216,9 @@ parentPort.on('message', (msg) => {
             // terminal observation is a distinct object from the post-reset
             // observation, so both are quantized.
             for (const res of results) {
-                quantizeObservation(res.observation);
+                res.observation = quantizeObservation(res.observation);
                 if (res.info.terminal_observation) {
-                    quantizeObservation(res.info.terminal_observation);
+                    res.info.terminal_observation = quantizeObservation(res.info.terminal_observation);
                 }
                 res.reward = Math.fround(res.reward);
             }

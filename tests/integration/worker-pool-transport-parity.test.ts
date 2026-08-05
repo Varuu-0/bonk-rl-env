@@ -56,10 +56,9 @@ describe('transport precision parity (issue #236)', () => {
         // penalty reward); step [2] exercises a directional input.
         results.push((await pool.step([0]))[0]);
         results.push((await pool.step([2]))[0]);
-        return { resetObs, results, pool };
-      } catch (e) {
+        return { resetObs, results };
+      } finally {
         await pool.close();
-        throw e;
       }
     };
 
@@ -80,9 +79,6 @@ describe('transport precision parity (issue #236)', () => {
       // -0.001 time penalty is the Float32-quantized -0.0010000000474974513.
       expect(s.reward).toBe(Math.fround(s.reward));
     }
-
-    await shared.pool.close();
-    await message.pool.close();
   });
 
   it('returns bit-identical terminal observations and rewards on terminal steps', async () => {
@@ -95,10 +91,9 @@ describe('transport precision parity (issue #236)', () => {
         await pool.init(1, { maxTicks: 1, seed: 7 }, useSharedMemory);
         await pool.reset([7]);
         const result = (await pool.step([0]))[0];
-        return { result, pool };
-      } catch (e) {
+        return { result };
+      } finally {
         await pool.close();
-        throw e;
       }
     };
 
@@ -115,8 +110,5 @@ describe('transport precision parity (issue #236)', () => {
       shared.result.info.terminal_observation,
       message.result.info.terminal_observation,
     );
-
-    await shared.pool.close();
-    await message.pool.close();
   });
 });
