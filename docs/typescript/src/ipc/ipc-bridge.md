@@ -89,6 +89,34 @@ Starts the IPC bridge and begins listening for requests.
 
 ---
 
+### Client Session Isolation (issue #193)
+
+The bridge supports multiple concurrent ZMQ clients, each identified by its
+DEALER `routingId` (or the identity the ROUTER assigns when none is set). The
+worker pool is **owned per client session**:
+
+- The first `init` from a given routing identity creates a private `WorkerPool`
+  for that identity; `reset`/`step` requests are routed to the caller's own
+  pool and are validated against that pool's environment count.
+- A second client's `init` only (re)creates **its own** pool — it never
+  touches the first client's environments, so the first client's episode
+  (tick counters, seeds, env count) is preserved.
+- A session `close` (no `"shutdown": true`) tears down **only the closing
+  client's** pool and removes that client's session; every other client keeps
+  working.
+- `"shutdown": true` or `IpcBridge.close()` is a full server shutdown: every
+  session pool and the router socket are closed.
+- Requests from an identity that never called `init` fall back to the
+  bridge's local/bypass pool (`initEnv`/`resetEnv`/`stepEnv`); if that pool is
+  also uninitialized, `reset`/`step` are rejected loudly with
+  `Worker pool not initialized`.
+
+Caveat: a client that disconnects without sending `close` leaves its session
+pool running until the next full server shutdown; sessions are only torn down
+by an explicit `close` from that identity.
+
+---
+
 ### Usage Example
 
 ```typescript
