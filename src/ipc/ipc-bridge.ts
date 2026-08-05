@@ -2,7 +2,7 @@ import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
-import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig, mergeEngineSections } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -73,9 +73,14 @@ export class IpcBridge {
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
-                    const mergedConfig = mergeEnvironmentConfig(envDefaults as any, payload.config || {});
+                    const payloadCfg = payload.config || {};
+                    const mergedConfig = mergeEnvironmentConfig(envDefaults as any, payloadCfg);
+                    // The physics/arena/player tuning sections ride the spawn
+                    // config so values supplied over IPC (Python client
+                    // `config` dict) reach the workers' engines (issue #217).
+                    const engineSections = mergeEngineSections(payloadCfg);
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
-                    await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                    await this.pool.init(numEnvs, { ...mergedConfig, ...engineSections }, useSharedMemory);
                     this._initialized = true;
                     this._numEnvs = numEnvs;
                     response = { status: "ok" };

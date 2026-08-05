@@ -67,6 +67,7 @@ vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  mergeEngineSections: (override: Record<string, any>) => ({ physics: {}, arena: {}, player: {} }),
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
