@@ -579,6 +579,7 @@ export class WorkerPool {
             const rewards = rawResults.rewards;
             const dones = rawResults.dones;
             const truncated = rawResults.truncated;
+            const terminated = rawResults.terminated;
             const ticks = rawResults.ticks;
             const terminalObs = rawResults.terminalObservations;
             const hasTerminalObs = rawResults.hasTerminalObs;
@@ -589,13 +590,20 @@ export class WorkerPool {
                 const resultObj = this._resultPool[resultIdx];
                 const done = dones[j] === 1;
                 const trunc = truncated[j] === 1;
+                // The worker's per-env terminated flag is the environment's
+                // own info.terminated (a death on the maxTicks boundary
+                // reports both flags, #208); reconstructing it as
+                // done && !trunc would turn that death into a pure
+                // truncation. Fall back to the reconstruction only when the
+                // flag array is absent (e.g. mocked managers).
+                const term = terminated ? terminated[j] === 1 : done && !trunc;
                 resultObj.observation = this.extractObservation(obs, j, resultIdx);
                 resultObj.reward = rewards[j];
                 resultObj.done = done;
                 resultObj.truncated = trunc;
-                resultObj.terminated = done && !trunc;
+                resultObj.terminated = term;
                 resultObj.info.tick = ticks[j];
-                resultObj.info.terminated = done && !trunc;
+                resultObj.info.terminated = term;
                 if (hasTerminalObs[j] === 1) {
                     resultObj.info.terminal_observation = this.extractObservation(
                         terminalObs, j, resultIdx, this._terminalObsPool,
@@ -685,12 +693,18 @@ export class WorkerPool {
             globalProfiler.gauge('Sync Gap (ms)', gapMs);
         }
 
-        // Normalize termination flags in place (no per-result spreads) so
-        // message mode reports the same values as the SAB path: a truncation
-        // is never a natural termination, in both modes.
+        // Normalize termination flags in place (no per-result spreads). The
+        // environment's own info.terminated is authoritative: a death on the
+        // same tick maxTicks is reached reports terminated=true AND
+        // truncated=true, and reconstructing terminated as done && !truncated
+        // would destroy the death signal (#208). The reconstruction is only a
+        // fill-in for worker results that omitted the flag.
         const flat = results.flat();
         for (const result of flat) {
-            const terminated = Boolean(result.done && !result.truncated);
+            const envTerminated = result.info ? result.info.terminated : undefined;
+            const terminated = envTerminated !== undefined
+                ? Boolean(envTerminated)
+                : Boolean(result.done && !result.truncated);
             result.terminated = result.terminated ?? terminated;
             if (result.info) {
                 result.info.terminated = terminated;
