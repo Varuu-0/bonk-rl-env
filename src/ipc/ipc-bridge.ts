@@ -37,6 +37,12 @@ export class IpcBridge {
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+
+        // The standalone server path awaits only bridge.start(). When the
+        // bind fails, both start() and ready reject; mark ready's rejection
+        // as handled so it cannot surface as an unhandled-rejection crash for
+        // consumers (such as src/server.ts) that never await ready.
+        this.ready.catch(() => {});
     }
 
     private markBound(): void {

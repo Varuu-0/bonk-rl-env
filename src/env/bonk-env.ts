@@ -100,26 +100,22 @@ export class BonkEnv {
             throw error;
         }
 
-        // When IPC server mode is requested (enableIpcServer, or an explicit
-        // port for IPC server mode), bind an IpcBridge to this.port so
-        // external clients can connect. start() does not resolve until the
-        // Router socket is actually bound, so isActive() can never report
-        // success before the advertised port is reachable (issue #223).
+        // When IPC server mode is requested (enableIpcServer), bind an
+        // IpcBridge to this.port so external clients can connect. start()
+        // does not resolve until the Router socket is actually bound, so
+        // isActive() can never report success before the advertised port is
+        // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
+        // of silently completing (issue #223).
         try {
-            if (this.config.enableIpcServer === true || this.config.port !== undefined) {
+            if (this.config.enableIpcServer === true) {
                 const bridge = new IpcBridge({ server: { port: this.port } });
                 this.bridge = bridge;
+                // start() keeps the serve loop alive until close(); bind
+                // failures surface through bridge.ready (which rejects on a
+                // bind error), so await ready rather than the serve promise.
                 const serve = bridge.start();
-                await Promise.race([
-                    bridge.ready,
-                    // bridge.start() stays pending until close(), so race its
-                    // settle only to surface a bind failure (e.g. EADDRINUSE)
-                    // as a start() rejection instead of a silent hang.
-                    serve.then(
-                        () => { throw new Error(`IPC server for ${this.id} stopped before becoming ready on port ${this.port}`); },
-                        (err: unknown) => { throw err; }
-                    ),
-                ]);
+                serve.catch(() => { /* bind failures surface via bridge.ready */ });
+                await bridge.ready;
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
         } catch (error) {

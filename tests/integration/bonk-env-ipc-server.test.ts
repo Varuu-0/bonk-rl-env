@@ -82,7 +82,7 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
     expect(await canConnectTcp(env.port)).toBe(false);
   });
 
-  it('starts a server when a port is explicitly configured for IPC server mode', { timeout: 60000 }, async () => {
+  it('binds an explicitly configured port when IPC server mode is enabled', { timeout: 60000 }, async () => {
     const port = IPC_SERVER_TEST_START + 50;
     const portManager = new PortManager({ startPort: port, endPort: port + 10 });
     const env = new BonkEnv({
@@ -90,6 +90,7 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
       useSharedMemory: false,
       portManager,
       port,
+      enableIpcServer: true,
     });
 
     await env.start();
@@ -120,6 +121,28 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
       numEnvs: 1,
       useSharedMemory: false,
       portManager,
+    });
+
+    await env.start();
+
+    try {
+      expect(env.isActive()).toBe(true);
+      expect(await canConnectTcp(env.port)).toBe(false);
+    } finally {
+      await env.stop();
+    }
+
+    expect(portManager.isAllocated(env.port)).toBe(false);
+  });
+
+  it('does not bind an explicitly configured port without enableIpcServer', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 150;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const env = new BonkEnv({
+      numEnvs: 1,
+      useSharedMemory: false,
+      portManager,
+      port,
     });
 
     await env.start();
