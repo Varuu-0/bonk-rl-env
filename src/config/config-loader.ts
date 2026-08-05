@@ -388,6 +388,21 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         const v = parseInt(env.SEED, 10);
         if (!isNaN(v) && v >= 0) config.environment.seed = v;
     }
+    // Opponent random-policy probabilities (documented env vars)
+    const oppProbEnvVars: Array<[string, keyof EnvironmentConfig]> = [
+        ['RANDOM_OPP_MOVE_PROB', 'randomOppMoveProb'],
+        ['RANDOM_OPP_UP_PROB', 'randomOppUpProb'],
+        ['RANDOM_OPP_DOWN_PROB', 'randomOppDownProb'],
+        ['RANDOM_OPP_HEAVY_PROB', 'randomOppHeavyProb'],
+        ['RANDOM_OPP_GRAPPLE_PROB', 'randomOppGrappleProb'],
+    ];
+    for (const [envVar, key] of oppProbEnvVars) {
+        const rawValue = env[envVar];
+        if (rawValue !== undefined) {
+            const v = parseFloat(rawValue);
+            if (!isNaN(v) && v >= 0 && v <= 1) (config.environment as any)[key] = v;
+        }
+    }
 
     return config;
 }
@@ -501,6 +516,26 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 if (next) {
                     config.environment.defaultMapPath = next;
                     i++;
+                }
+                break;
+
+            case '--random-opp-move-prob':
+            case '--random-opp-up-prob':
+            case '--random-opp-down-prob':
+            case '--random-opp-heavy-prob':
+            case '--random-opp-grapple-prob':
+                if (next) {
+                    const v = parseFloat(next);
+                    if (!isNaN(v) && v >= 0 && v <= 1) {
+                        switch (arg) {
+                            case '--random-opp-move-prob': config.environment.randomOppMoveProb = v; break;
+                            case '--random-opp-up-prob': config.environment.randomOppUpProb = v; break;
+                            case '--random-opp-down-prob': config.environment.randomOppDownProb = v; break;
+                            case '--random-opp-heavy-prob': config.environment.randomOppHeavyProb = v; break;
+                            case '--random-opp-grapple-prob': config.environment.randomOppGrappleProb = v; break;
+                        }
+                        i++;
+                    }
                 }
                 break;
 

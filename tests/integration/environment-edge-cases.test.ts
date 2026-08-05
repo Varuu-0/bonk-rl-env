@@ -979,6 +979,78 @@ describe('BonkEnvironment edge cases', () => {
         expect(result).toBeDefined();
       }
     });
+
+    it('normalizes randomOpp*Prob keys into the opponent policy config', async () => {
+      env = new BonkEnvironment({
+        numOpponents: 1,
+        randomOppMoveProb: 0.99,
+        randomOppUpProb: 0.88,
+        randomOppDownProb: 0.77,
+        randomOppHeavyProb: 0.66,
+        randomOppGrappleProb: 0.55,
+      });
+      const cfg = (env as any).config;
+      expect(cfg.oppMoveProb).toBe(0.99);
+      expect(cfg.oppUpProb).toBe(0.88);
+      expect(cfg.oppDownProb).toBe(0.77);
+      expect(cfg.oppHeavyProb).toBe(0.66);
+      expect(cfg.oppGrappleProb).toBe(0.55);
+    });
+
+    it('explicit opp*Prob keys still win over randomOpp* keys', async () => {
+      env = new BonkEnvironment({
+        numOpponents: 1,
+        oppMoveProb: 0.3,
+        randomOppMoveProb: 0.99,
+      });
+      expect((env as any).config.oppMoveProb).toBe(0.3);
+    });
+
+    it('randomOppMoveProb=1.0 makes the opponent always apply left/right', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 20,
+        numOpponents: 1,
+        randomOpponent: true,
+        seed: 42,
+        randomOppMoveProb: 1.0,
+      });
+      env.reset();
+      const applySpy = vi.spyOn((env as any).physics, 'applyInput');
+      for (let i = 0; i < 10; i++) env.step(0);
+      const oppCalls = applySpy.mock.calls.filter(call => call[0] === 1);
+      expect(oppCalls.length).toBeGreaterThan(0);
+      for (const call of oppCalls) {
+        const input = call[1] as any;
+        expect(input.left).toBe(true);
+        expect(input.right).toBe(true);
+      }
+      applySpy.mockRestore();
+    });
+
+    it('randomOppMoveProb=0.0 makes the opponent never apply left/right', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 20,
+        numOpponents: 1,
+        randomOpponent: true,
+        seed: 42,
+        randomOppMoveProb: 0.0,
+        randomOppUpProb: 0.0,
+        randomOppDownProb: 0.0,
+        randomOppHeavyProb: 0.0,
+        randomOppGrappleProb: 0.0,
+      });
+      env.reset();
+      const applySpy = vi.spyOn((env as any).physics, 'applyInput');
+      for (let i = 0; i < 10; i++) env.step(0);
+      const oppCalls = applySpy.mock.calls.filter(call => call[0] === 1);
+      expect(oppCalls.length).toBeGreaterThan(0);
+      for (const call of oppCalls) {
+        const input = call[1] as any;
+        expect(input.left).toBe(false);
+        expect(input.right).toBe(false);
+      }
+      applySpy.mockRestore();
+    });
   });
 
   describe('joint support', () => {

@@ -100,6 +100,12 @@ export interface EnvironmentConfig {
     oppDownProb?: number;
     oppHeavyProb?: number;
     oppGrappleProb?: number;
+    /** Config-loader aliases for the opponent random-policy probabilities */
+    randomOppMoveProb?: number;
+    randomOppUpProb?: number;
+    randomOppDownProb?: number;
+    randomOppHeavyProb?: number;
+    randomOppGrappleProb?: number;
     /** Native team mode (`tea`): same-team discs do not collide (default false) */
     teamsEnabled?: boolean;
     /** Native no-collision physics mode (`nc`): discs never collide (default false) */
@@ -168,6 +174,15 @@ export class BonkEnvironment {
         this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 12;
         this.capZones = (mapDef as any).capZones ?? [];
 
+        // Opponent random-policy probabilities: accept both the direct
+        // opp*Prob names and the config-loader's documented randomOpp*Prob
+        // aliases; an explicit opp*Prob value wins over the alias.
+        const oppMoveProb = config.oppMoveProb ?? config.randomOppMoveProb ?? 0.2;
+        const oppUpProb = config.oppUpProb ?? config.randomOppUpProb ?? 0.15;
+        const oppDownProb = config.oppDownProb ?? config.randomOppDownProb ?? 0.1;
+        const oppHeavyProb = config.oppHeavyProb ?? config.randomOppHeavyProb ?? 0.05;
+        const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
+
         this.config = {
             numOpponents: config.numOpponents ?? 1,
             maxTicks: config.maxTicks ?? MAX_TICKS,
@@ -177,11 +192,16 @@ export class BonkEnvironment {
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
             mapPath: config.mapPath ?? '',
-            oppMoveProb: config.oppMoveProb ?? 0.2,
-            oppUpProb: config.oppUpProb ?? 0.15,
-            oppDownProb: config.oppDownProb ?? 0.1,
-            oppHeavyProb: config.oppHeavyProb ?? 0.05,
-            oppGrappleProb: config.oppGrappleProb ?? 0.05,
+            oppMoveProb,
+            oppUpProb,
+            oppDownProb,
+            oppHeavyProb,
+            oppGrappleProb,
+            randomOppMoveProb: oppMoveProb,
+            randomOppUpProb: oppUpProb,
+            randomOppDownProb: oppDownProb,
+            randomOppHeavyProb: oppHeavyProb,
+            randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
         };
