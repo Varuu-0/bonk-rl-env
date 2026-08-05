@@ -307,14 +307,6 @@ describe('TelemetryController', () => {
       expect((TelemetryController as any).instance).toBeNull();
     });
 
-    it('clears worker pool reference', () => {
-      const controller = TelemetryController.getInstance();
-      controller.setWorkerPool({ test: true });
-      controller.shutdown();
-      // Worker pool should be cleared
-      expect((controller as any).workerPoolRef).toBeNull();
-    });
-
     it('resets singleton instance', () => {
       const controller = TelemetryController.getInstance();
       controller.shutdown();
@@ -326,14 +318,12 @@ describe('TelemetryController', () => {
     it('generates final report when telemetry is enabled', () => {
       process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
       const controller = TelemetryController.getInstance();
-      // Simulate ticks to trigger report
-      for (let i = 0; i < 10; i++) {
-        controller.tick();
-      }
-      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      // Simulate steps to advance the profiler window
+      globalProfiler.tick();
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
       controller.shutdown();
-      // Should have generated a report during shutdown
-      logSpy.mockRestore();
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      reportSpy.mockRestore();
     });
 
     it('does not generate report when telemetry is disabled', () => {
@@ -355,18 +345,20 @@ describe('TelemetryController', () => {
       expect(controller.getTickCount()).toBe(2);
     });
 
-    it('generates report at report interval', () => {
+    it('signals a report is due at the configured interval and reportNow emits', () => {
       process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '3'];
       const controller = TelemetryController.getInstance();
       const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
-      
-      controller.tick();
-      controller.tick();
+
+      expect(controller.tick()).toBe(false);
+      expect(controller.tick()).toBe(false);
+      // Interval bookkeeping only — no report is emitted by tick() itself.
+      expect(controller.tick()).toBe(true);
       expect(reportSpy).not.toHaveBeenCalled();
-      
-      controller.tick();
+
+      controller.reportNow();
       expect(reportSpy).toHaveBeenCalledTimes(1);
-      
+
       reportSpy.mockRestore();
     });
 
@@ -380,173 +372,56 @@ describe('TelemetryController', () => {
     });
   });
 
-  describe('setWorkerPool', () => {
-    it('sets worker pool reference', () => {
-      const controller = TelemetryController.getInstance();
-      const mockPool = { getTelemetrySnapshots: vi.fn() };
-      controller.setWorkerPool(mockPool);
-      expect((controller as any).workerPoolRef).toBe(mockPool);
-    });
-  });
-
-  describe('worker telemetry during report', () => {
-    it('gathers worker telemetry when worker pool is set and profile is not minimal', () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
+  describe('reportNow', () => {
+    it('emits a report when telemetry is enabled', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
-
-      const mockSnapshots = [new BigUint64Array(5)];
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn().mockResolvedValue(mockSnapshots),
-      };
-      controller.setWorkerPool(mockPool);
-
-      controller.tick();
-
-      expect(mockPool.getTelemetrySnapshots).toHaveBeenCalled();
-    });
-
-    it('skips worker telemetry when profile is minimal', () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'minimal', '--report-interval', '1'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn().mockResolvedValue([new BigUint64Array(5)]),
-      };
-      controller.setWorkerPool(mockPool);
-
-      controller.tick();
-
-      expect(mockPool.getTelemetrySnapshots).not.toHaveBeenCalled();
-    });
-
-    it('skips worker telemetry when no worker pool', () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
       const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
-      controller.tick();
+      globalProfiler.tick();
 
-      expect(reportSpy).toHaveBeenCalled();
-      reportSpy.mockRestore();
-    });
-
-    it('does not overlap reports while a worker snapshot is pending', async () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-      let resolveSnapshots!: (value: BigUint64Array[]) => void;
-      const snapshots = new Promise<BigUint64Array[]>((resolve) => { resolveSnapshots = resolve; });
-      const mockPool = { getTelemetrySnapshots: vi.fn().mockReturnValue(snapshots) };
-      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
-      controller.setWorkerPool(mockPool);
-
-      controller.tick();
-      controller.tick();
-      expect(mockPool.getTelemetrySnapshots).toHaveBeenCalledTimes(1);
-
-      resolveSnapshots([new BigUint64Array(5)]);
-      await snapshots;
-      await Promise.resolve();
+      expect(controller.reportNow()).toBe(true);
       expect(reportSpy).toHaveBeenCalledTimes(1);
+
       reportSpy.mockRestore();
     });
 
-    it('does not retry emission when report generation throws', async () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--report-interval', '1'];
+    it('is a no-op when telemetry is disabled', () => {
+      process.argv = ['node', 'script.js'];
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
-      const mockPool = { getTelemetrySnapshots: vi.fn().mockResolvedValue([new BigUint64Array(5)]) };
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+
+      expect(controller.reportNow()).toBe(false);
+      expect(reportSpy).not.toHaveBeenCalled();
+
+      reportSpy.mockRestore();
+    });
+
+    it('does not retry emission when report generation throws', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
       const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => { throw new Error('report failed'); });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      controller.setWorkerPool(mockPool);
 
-      controller.tick();
-      await Promise.resolve();
-      await Promise.resolve();
-
+      expect(controller.reportNow()).toBe(false);
       expect(reportSpy).toHaveBeenCalledTimes(1);
+
       warnSpy.mockRestore();
       reportSpy.mockRestore();
     });
   });
 
-  describe('gatherWorkerTelemetry error handling', () => {
-    it('logs full error in verbose debug mode', async () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--debug', 'verbose'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
-      const error = new Error('Worker connection failed');
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn().mockRejectedValue(error),
-      };
-      controller.setWorkerPool(mockPool);
-
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await (controller as any).gatherWorkerTelemetry();
-
-      expect(errorSpy).toHaveBeenCalledWith('[Telemetry] Error gathering worker telemetry:', error);
-      errorSpy.mockRestore();
-    });
-
-    it('logs generic error in error debug mode', async () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--debug', 'error'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn().mockRejectedValue(new Error('Worker connection failed')),
-      };
-      controller.setWorkerPool(mockPool);
-
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await (controller as any).gatherWorkerTelemetry();
-
-      expect(errorSpy).toHaveBeenCalledWith('[Telemetry] Error gathering worker telemetry');
-      errorSpy.mockRestore();
-    });
-
-    it('silently fails in none debug mode', async () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--profile', 'detailed', '--debug', 'none'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn().mockRejectedValue(new Error('Worker connection failed')),
-      };
-      controller.setWorkerPool(mockPool);
-
-      const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-      await (controller as any).gatherWorkerTelemetry();
-
-      expect(errorSpy).not.toHaveBeenCalled();
-      errorSpy.mockRestore();
-    });
-
-    it('returns early when telemetry is disabled', async () => {
+  describe('tick with telemetry disabled', () => {
+    it('never signals a report when telemetry is disabled', () => {
       process.argv = ['node', 'script.js'];
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
 
-      const mockPool = {
-        getTelemetrySnapshots: vi.fn(),
-      };
-      controller.setWorkerPool(mockPool);
-
-      await (controller as any).gatherWorkerTelemetry();
-
-      expect(mockPool.getTelemetrySnapshots).not.toHaveBeenCalled();
-    });
-
-    it('returns early when worker pool is null', async () => {
-      process.argv = ['node', 'script.js', '--telemetry'];
-      TelemetryController.getInstance().shutdown();
-      const controller = TelemetryController.getInstance();
-
-      await expect((controller as any).gatherWorkerTelemetry()).resolves.toBeUndefined();
+      for (let i = 0; i < 100; i++) {
+        expect(controller.tick()).toBe(false);
+      }
     });
   });
 
@@ -596,14 +471,15 @@ describe('TelemetryController', () => {
         outputFormat: 'file',
         retentionDays: 30,
         dashboardPort: 5000,
-        reportInterval: 1000,
+        reportIntervalMs: 1000,
       });
       const flags = controller.getFlags();
       expect(flags.enableTelemetry).toBe(true);
       expect(flags.outputFormat).toBe('file');
       expect(flags.retentionDays).toBe(30);
       expect(flags.dashboardPort).toBe(5000);
-      expect(flags.reportInterval).toBe(1000);
+      // 1000ms converts to a 30-tick window at the default 30 TPS.
+      expect(flags.reportInterval).toBe(30);
     });
 
     it('does not reinitialize if already initialized', () => {

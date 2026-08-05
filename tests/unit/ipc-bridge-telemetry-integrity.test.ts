@@ -31,9 +31,14 @@ const mocks = vi.hoisted(() => {
     close: vi.fn(),
     getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
   };
+  const controller = {
+    tick: vi.fn(() => false),
+    reportNow: vi.fn(() => true),
+  };
   return {
     sock,
     pool,
+    controller,
     Router: function Router() { return sock; },
     WorkerPool: vi.fn(function WorkerPool() { return pool; }),
     getConfig: vi.fn(),
@@ -59,6 +64,7 @@ vi.mock('../../src/telemetry/profiler', () => ({
 }));
 vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
+  getTelemetryController: () => mocks.controller,
 }));
 vi.mock('../../src/core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
@@ -71,6 +77,10 @@ vi.mock('../../src/config/config-loader', () => ({
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 
+// The bridge decides report boundaries via the controller's tick(), so the
+// mock keeps the historical 5000-step boundary by consulting the live bridge.
+let currentBridge: any = null;
+
 describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () => {
   let sendSpy: ReturnType<typeof vi.spyOn>;
 
@@ -81,16 +91,20 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     mocks.isTelemetryEnabled.mockReturnValue(true);
     mocks.pool.step.mockResolvedValue([stepResult]);
     mocks.pool.getTelemetrySnapshots.mockResolvedValue([]);
+    mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
+    mocks.controller.reportNow.mockReturnValue(true);
     sendSpy = vi.spyOn(mocks.sock, 'send').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    currentBridge = null;
     sendSpy.mockRestore();
   });
 
   async function initAndStepAtBoundary(port: number) {
     const bridge = new IpcBridge({ server: { port } } as any);
+    currentBridge = bridge;
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     (bridge as any).stepCount = 4999;
