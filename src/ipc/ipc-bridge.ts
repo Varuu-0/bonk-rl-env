@@ -146,7 +146,16 @@ export class IpcBridge {
                         // delay this reply or stall the single-threaded ZMQ
                         // loop. The telemetry block runs detached below and
                         // catches its own errors (see #185).
-                        await this._wrappedSend([identity, serialized]);
+                        try {
+                            await this._wrappedSend([identity, serialized]);
+                        } catch (sendError) {
+                            // A send failure must not fabricate a step-error
+                            // reply for a step that already executed — the
+                            // client would retry and double-step it (the #185
+                            // hazard). Log and send nothing, matching the
+                            // trailing send's failure handling.
+                            console.error("[IPC] Error sending response:", sendError);
+                        }
                         serialized = null;
                         replied = true;
                         void this.runPostStepTelemetry();

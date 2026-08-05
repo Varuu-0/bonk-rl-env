@@ -30,7 +30,6 @@ const mocks = vi.hoisted(() => {
     step: vi.fn().mockResolvedValue([]),
     close: vi.fn(),
     getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
-    isUsingSharedMemory: vi.fn(() => false),
   };
   return {
     sock,
@@ -133,16 +132,15 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     consoleErrorSpy.mockRestore();
   });
 
-  it('fetches telemetry snapshots in shared-memory mode without blocking (issue #240)', async () => {
-    mocks.pool.isUsingSharedMemory.mockReturnValueOnce(true);
-
+  it('fetches telemetry snapshots on the boundary step, including in shared-memory mode (issue #240)', async () => {
     await initAndStepAtBoundary(12365);
 
     const response = lastSentResponse();
     expect(response.status).toBe('ok');
-    // getTelemetrySnapshots is non-blocking in shared mode (it returns an
-    // empty set immediately instead of waiting on unanswerable worker
-    // messages), so the bridge always fetches instead of skipping.
+    // The bridge always fetches instead of skipping: getTelemetrySnapshots
+    // is non-blocking in shared mode (it returns an empty set immediately
+    // instead of waiting on unanswerable worker messages), so no mode check
+    // is needed at the bridge.
     expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalled();
   });
 
