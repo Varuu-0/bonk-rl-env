@@ -204,10 +204,57 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
             heavyForceMultiplier: 0.3,
         });
         const anyEng: any = engine;
+        // World construction consumed every numeric/boolean option.
+        expect(anyEng.tps).toBe(60);
+        expect(anyEng.dt).toBeCloseTo(1 / 60, 12);
+        expect(anyEng.velocityIterations).toBe(12);
+        expect(anyEng.scale).toBe(60);
+        expect(anyEng.gravityX).toBe(1);
+        expect(anyEng.gravityY).toBe(5);
+        expect(anyEng.enableSleeping).toBe(false);
+        expect(anyEng.worldAabbExtent).toBe(250);
+        expect(anyEng.arenaHalfWidth).toBe(40);
+        expect(anyEng.arenaHalfHeight).toBe(30);
+        expect(anyEng.arenaBoundsMargin).toBe(0);
+        expect(anyEng.moveForce).toBe(77);
+        expect(anyEng.heavyForceMultiplier).toBe(0.3);
+        // The world itself was built from them.
         expect(anyEng.world.m_gravity.x).toBe(1);
         expect(anyEng.world.m_gravity.y).toBe(5);
         expect(anyEng.world.m_allowSleep).toBe(false);
         expect(anyEng.world.m_broadPhase.m_worldAABB.upperBound.y).toBe(250);
+        // The resolved scale drives conversions (death circle stays 850 map px => 850/scale).
+        expect(anyEng.oobRadiusSquared).toBeCloseTo(Math.pow(850 / 60, 2), 10);
+        engine.destroy();
+    });
+
+    it('a bare engine falls back to sanity defaults for invalid options', () => {
+        const engine = new PhysicsEngine({
+            ticksPerSecond: 0,            // would make dt = Infinity
+            velocityIterations: 0,
+            scale: 0,                     // would make coordinates Infinity
+            gravityX: Infinity,           // would NaN the simulation
+            gravityY: Number.NaN,
+            worldAabbExtent: -100,        // would invert the AABB
+            arenaHalfWidth: -1,
+            arenaBoundsMargin: -5,
+            moveForce: 0,
+            heavyForceMultiplier: -1,
+        });
+        const anyEng: any = engine;
+        expect(anyEng.tps).toBe(30);
+        expect(anyEng.dt).toBeCloseTo(1 / 30, 12);
+        expect(anyEng.velocityIterations).toBe(2);
+        expect(anyEng.scale).toBe(30);
+        expect(anyEng.gravityX).toBe(0);
+        expect(anyEng.gravityY).toBe(20);
+        expect(anyEng.enableSleeping).toBe(true);
+        expect(anyEng.worldAabbExtent).toBe(5000);
+        expect(anyEng.arenaHalfWidth).toBe(25);
+        expect(anyEng.arenaHalfHeight).toBe(20);
+        expect(anyEng.arenaBoundsMargin).toBe(5);
+        expect(anyEng.moveForce).toBe(30);
+        expect(anyEng.heavyForceMultiplier).toBe(0.7);
         engine.destroy();
     });
 });
@@ -255,5 +302,80 @@ describe('physics/arena/player config reaches workers through the pool (#217)', 
         }
         const accel = (v2 - v1) / 10;
         expect(accel).toBeCloseTo(5, 1);
+    });
+
+    it('physics.scale set in the per-env config changes worker arena observations', { timeout: 30000 }, async () => {
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: { physics: { scale: 60 } },
+        });
+        envs.push(env);
+        await env.start();
+
+        const obs = (await env.reset([1])) as any[];
+        expect(obs[0].arenaHalfWidth).toBeCloseTo(815, 0);
+        expect(obs[0].arenaHalfHeight).toBeCloseTo(600, 0);
+    });
+
+    it('physics.ticksPerSecond set in the per-env config halves worker fall acceleration', { timeout: 30000 }, async () => {
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: { physics: { ticksPerSecond: 60 }, numOpponents: 0 },
+        });
+        envs.push(env);
+        await env.start();
+
+        await env.reset([1]);
+        let v1 = 0;
+        let v2 = 0;
+        for (let i = 0; i < 12; i++) {
+            const res = (await env.step([0])) as any[];
+            if (i === 1) v1 = res[0].observation.playerVelY;
+            if (i === 11) v2 = res[0].observation.playerVelY;
+        }
+        // Per-tick Δv = g * dt * scale with dt = 1/60: 10, half of the 30-TPS 20.
+        expect((v2 - v1) / 10).toBeCloseTo(10, 1);
+    });
+
+    it('player.moveForce set in the per-env config changes worker thrust', { timeout: 30000 }, async () => {
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: { player: { moveForce: 60 }, numOpponents: 0 },
+        });
+        envs.push(env);
+        await env.start();
+
+        await env.reset([1]);
+        let v1 = 0;
+        let v2 = 0;
+        for (let i = 0; i < 12; i++) {
+            const res = (await env.step([2])) as any[]; // action 2 = right
+            if (i === 1) v1 = res[0].observation.playerVelX;
+            if (i === 11) v2 = res[0].observation.playerVelX;
+        }
+        expect((v2 - v1) / 10).toBeCloseTo(60, 1);
+    });
+
+    it('player.heavyMassMultiplier set in the per-env config changes worker heavy thrust', { timeout: 30000 }, async () => {
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: { player: { heavyMassMultiplier: 0.35 }, numOpponents: 0 },
+        });
+        envs.push(env);
+        await env.start();
+
+        await env.reset([1]);
+        let v1 = 0;
+        let v2 = 0;
+        for (let i = 0; i < 12; i++) {
+            const res = (await env.step([18])) as any[]; // action 18 = right + heavy
+            if (i === 1) v1 = res[0].observation.playerVelX;
+            if (i === 11) v2 = res[0].observation.playerVelX;
+        }
+        expect((v2 - v1) / 10).toBeCloseTo(10.5, 1);
     });
 });
