@@ -146,7 +146,6 @@ function applyStepAutoReset(env: BonkEnvironment, res: StepResult): StepResult {
     }
     return res;
 }
-}
 
 parentPort.on('message', (msg) => {
     try {

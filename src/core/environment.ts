@@ -429,7 +429,10 @@ export class BonkEnvironment {
         // counting terminal reports so isTerminalHoldActive() can tell the
         // worker layer when the hold window has been served.
         if (this.terminalReached) {
-            this.frameSkipTicks++;
+            // Cap the counter at frameSkip so a long idle terminal stretch
+            // (until an explicit reset) never grows it unboundedly; the
+            // hold-active predicate reads only whether it is below frameSkip.
+            this.frameSkipTicks = Math.min(this.frameSkipTicks + 1, this.config.frameSkip);
             const observation = this.getObservation();
             return {
                 observation,

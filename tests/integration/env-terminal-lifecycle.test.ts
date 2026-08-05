@@ -2,18 +2,20 @@
  * env-terminal-lifecycle.test.ts — Regression coverage for issues #197,
  * #222 and #228, which share the environment's terminal state machine:
  *
- *   #197 — A maxTicks-truncated episode must settle: after done, the
- *          environment keeps reporting the recorded terminal cause
- *          (truncated=true / info.terminated=false) and never advances
- *          physics past maxTicks until an explicit reset().
+ *   #197 — A maxTicks-truncated (or death-terminated) episode must settle:
+ *          after done, the environment keeps reporting the recorded terminal
+ *          cause (never inverted) and never advances physics until an
+ *          explicit reset().
  *   #222 — The terminal step result must be internally consistent:
  *          observation.tick === info.tick on the done step in both
  *          transports (it was always 0 before — the post-auto-reset fresh
  *          episode — while info.tick reported the ended episode's tick).
  *   #228 — With frameSkip > 1 the terminal done result must be held for the
- *          full frame-skip window before the worker auto-resets, so the
- *          caller's action cycle stays aligned and a fresh episode only
- *          appears after the cycle boundary.
+ *          remainder of the frame-skip cycle before the worker auto-resets,
+ *          so the caller's action cycle stays aligned and a fresh episode
+ *          only appears after the cycle boundary. Covered at every cycle
+ *          alignment: episode ending at the cycle start, mid-cycle, and
+ *          exactly on the boundary (maxTicks % frameSkip === 0).
  */
 import { describe, it, expect } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
@@ -31,6 +33,22 @@ const boxMap: MapDef = {
     { name: 'left', type: 'rect', x: -500, y: 0, width: 30, height: 600, static: true },
     { name: 'right', type: 'rect', x: 500, y: 0, width: 30, height: 600, static: true },
   ],
+};
+
+const lethalMap: MapDef = {
+  name: 'terminal-lifecycle-lethal',
+  spawnPoints: { team_blue: { x: 0, y: -300 }, team_red: { x: 200, y: -100 } },
+  bodies: [
+    { name: 'lethal', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true, isLethal: true },
+  ],
+};
+
+// Spawns the AI beyond the 850-unit death circle, so it dies on the very
+// first tick (the position used by worker-pool-termination-flags.test.ts).
+const deathAtTickOneMap: MapDef = {
+  name: 'death_at_tick_one',
+  spawnPoints: { team_blue: { x: 900, y: 0 }, team_red: { x: 200, y: -100 } },
+  bodies: [{ name: 'floor', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true }],
 };
 
 describe('maxTicks-truncated episodes settle (issue #197)', () => {
@@ -119,6 +137,49 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
       env.close();
     }
   });
+
+  it('direct environment replays a death termination without inverting it into a truncation', () => {
+    const env = new BonkEnvironment({
+      mapData: lethalMap,
+      maxTicks: 400,
+      frameSkip: 4,
+      numOpponents: 0,
+      randomOpponent: false,
+      seed: 42,
+    });
+    try {
+      env.reset(42);
+
+      let death: ReturnType<typeof env.step> | null = null;
+      for (let i = 0; i < 300; i++) {
+        const res = env.step(0);
+        if (res.done) {
+          death = res;
+          break;
+        }
+      }
+      expect(death).not.toBeNull();
+      expect(death!.truncated).toBe(false);
+      expect(death!.info.terminated).toBe(true);
+      const deathTick = death!.info.tick;
+
+      // Forward from the death: the tail must keep replaying the recorded
+      // death cause (truncated=false / terminated=true) with the tick frozen
+      // — never inverting the termination into a truncation and never
+      // advancing physics past the death tick.
+      for (let i = 0; i < 12; i++) {
+        const res = env.step(0);
+        expect(res.done).toBe(true);
+        expect(res.truncated).toBe(false);
+        expect(res.info.terminated).toBe(true);
+        expect(res.info.tick).toBe(deathTick);
+        expect(res.observation.tick).toBe(deathTick);
+        expect(res.reward).toBe(0);
+      }
+    } finally {
+      env.close();
+    }
+  });
 });
 
 describe('frame_skip terminal hold survives auto-reset (issue #228)', () => {
@@ -173,6 +234,151 @@ describe('frame_skip terminal hold survives auto-reset (issue #228)', () => {
 
   it('message-passing mode reports the full terminal hold before auto-reset', async () => {
     await runHold(false);
+  });
+
+  // The hold serves the remainder of the current action cycle, so its
+  // length depends on where in the cycle the episode ends. These two cases
+  // pin the alignment semantics: mid-cycle truncation holds for the rest of
+  // the cycle, boundary-aligned truncation holds only its own step.
+  const runMidCycleTruncation = async (useSharedMemory: boolean) => {
+    const pool = new WorkerPool(1);
+    try {
+      // maxTicks=6 lands on tick 6, the second tick of the 5-8 cycle, so
+      // the hold covers ticks 6-8 (3 done steps) before the cycle boundary.
+      await pool.init(
+        1,
+        { mapData: boxMap, maxTicks: 6, frameSkip: 4, numOpponents: 0, randomOpponent: false },
+        useSharedMemory,
+      );
+      await pool.reset([1]);
+
+      const steps: Array<{ done: boolean; truncated: boolean; infoTick: number; obsTick: number }> = [];
+      for (let i = 1; i <= 9; i++) {
+        const [res] = await pool.step([0]);
+        steps.push({
+          done: res.done,
+          truncated: res.truncated,
+          infoTick: res.info.tick,
+          obsTick: res.observation.tick,
+        });
+      }
+
+      for (let i = 0; i < 5; i++) {
+        expect(steps[i].done).toBe(false);
+        expect(steps[i].obsTick).toBe(i + 1);
+        expect(steps[i].infoTick).toBe(i + 1);
+      }
+      for (let i = 5; i < 8; i++) {
+        expect(steps[i].done).toBe(true);
+        expect(steps[i].truncated).toBe(true);
+        expect(steps[i].obsTick).toBe(6);
+        expect(steps[i].infoTick).toBe(6);
+      }
+      expect(steps[8].done).toBe(false);
+      expect(steps[8].obsTick).toBe(1);
+      expect(steps[8].infoTick).toBe(1);
+    } finally {
+      await pool.close();
+    }
+  };
+
+  it('shared-memory mode holds a mid-cycle truncation until the cycle boundary', async () => {
+    if (!WorkerPool.isSupported()) return;
+    await runMidCycleTruncation(true);
+  });
+
+  it('message-passing mode holds a mid-cycle truncation until the cycle boundary', async () => {
+    await runMidCycleTruncation(false);
+  });
+
+  const runBoundaryAlignedTruncation = async (useSharedMemory: boolean) => {
+    const pool = new WorkerPool(1);
+    try {
+      // maxTicks=4 is a multiple of frameSkip, so the episode ends exactly
+      // on the cycle boundary: the hold window contains only the terminal
+      // step itself, and the fresh episode starts at the next boundary.
+      await pool.init(
+        1,
+        { mapData: boxMap, maxTicks: 4, frameSkip: 4, numOpponents: 0, randomOpponent: false },
+        useSharedMemory,
+      );
+      await pool.reset([1]);
+
+      const steps: Array<{ done: boolean; truncated: boolean; infoTick: number; obsTick: number }> = [];
+      for (let i = 1; i <= 6; i++) {
+        const [res] = await pool.step([0]);
+        steps.push({
+          done: res.done,
+          truncated: res.truncated,
+          infoTick: res.info.tick,
+          obsTick: res.observation.tick,
+        });
+      }
+
+      for (let i = 0; i < 3; i++) {
+        expect(steps[i].done).toBe(false);
+        expect(steps[i].obsTick).toBe(i + 1);
+        expect(steps[i].infoTick).toBe(i + 1);
+      }
+      expect(steps[3].done).toBe(true);
+      expect(steps[3].truncated).toBe(true);
+      expect(steps[3].obsTick).toBe(4);
+      expect(steps[3].infoTick).toBe(4);
+      expect(steps[4].done).toBe(false);
+      expect(steps[4].obsTick).toBe(1);
+      expect(steps[4].infoTick).toBe(1);
+      expect(steps[5].done).toBe(false);
+      expect(steps[5].obsTick).toBe(2);
+      expect(steps[5].infoTick).toBe(2);
+    } finally {
+      await pool.close();
+    }
+  };
+
+  it('shared-memory mode emits a single done for a boundary-aligned truncation', async () => {
+    if (!WorkerPool.isSupported()) return;
+    await runBoundaryAlignedTruncation(true);
+  });
+
+  it('message-passing mode emits a single done for a boundary-aligned truncation', async () => {
+    await runBoundaryAlignedTruncation(false);
+  });
+
+  const runDeathHold = async (useSharedMemory: boolean) => {
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(
+        1,
+        { mapData: deathAtTickOneMap, maxTicks: 100, frameSkip: 4, numOpponents: 1 },
+        useSharedMemory,
+      );
+      await pool.reset([42]);
+
+      // The AI dies on tick 1 of every episode, so every cycle reports 4
+      // terminal steps (death + 3 hold). The death cause must be replayed —
+      // terminated=true, truncated=false — and observation/info must stay
+      // aligned on each done step. 8 steps = two full death cycles.
+      for (let i = 1; i <= 8; i++) {
+        const [res] = await pool.step([0]);
+        expect(res.done).toBe(true);
+        expect(res.truncated).toBe(false);
+        expect(res.terminated).toBe(true);
+        expect(res.info.terminated).toBe(true);
+        expect(res.info.tick).toBe(1);
+        expect(res.observation.tick).toBe(1);
+      }
+    } finally {
+      await pool.close();
+    }
+  };
+
+  it('shared-memory mode replays a death termination through the hold without inversion', async () => {
+    if (!WorkerPool.isSupported()) return;
+    await runDeathHold(true);
+  });
+
+  it('message-passing mode replays a death termination through the hold without inversion', async () => {
+    await runDeathHold(false);
   });
 });
 
