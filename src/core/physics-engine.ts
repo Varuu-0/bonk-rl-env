@@ -161,11 +161,6 @@ export interface MapBodyDef {
   angularDamping?: number;       // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
   angularVelocity?: number;      // Starting rotational velocity
-  /** Map passthrough only — no engine behavior reads this; kept for map-data
-   * fidelity, not a mechanic. The native `f_p` flag clears only category bit
-   * 0 from maskBits (DEOBFUSCATION §33.4), never the player categories, so
-   * platforms are always solid to players regardless of this field. */
-  collidesWithPlayers?: boolean;
   aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
 }
 
@@ -506,11 +501,11 @@ export class PhysicsEngine {
       // geometry stays solid to other map bodies. An all-false `collides` body
       // (legacy "ghost geometry" such as visual/no-Physics-style barriers)
       // keeps its fully-ghost mask 0x0000 so third-party-map behavior is
-      // unchanged. `collidesWithPlayers` is map passthrough only: the native
-      // `f_p` flag subtracts just category bit 0 from maskBits
-      // (DEOBFUSCATION §33.4), which is this port's map-body category — never
-      // the player bits 0x0002/0x0004 — so platforms must remain solid to
-      // players in every case.
+      // unchanged. (The bundled exports also carry a "collidesWithPlayers"
+      // key on every fixture; it is not part of MapBodyDef and has no native
+      // player-collision effect — native `f_p` clears only bit 0, this port's
+      // map category — so it is deliberately ignored and platforms stay solid
+      // to players.)
       if (def.collides) {
         const filter = new b2FilterData();
         filter.categoryBits = 0x0001; // Map bodies are category 1
