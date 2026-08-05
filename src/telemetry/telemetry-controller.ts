@@ -13,11 +13,45 @@
 
 import { TelemetryFlags, TelemetryConfig } from '../types/index.d';
 import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys } from './flags';
-import { globalProfiler, setLatestWorkerTelemetry } from './profiler';
+import { globalProfiler } from './profiler';
+import * as fs from 'fs';
+import * as path from 'path';
+import * as http from 'http';
 
 // Cached flags - set once at initialization
 let cachedFlags: TelemetryFlags | null = null;
 let initializationComplete = false;
+
+/**
+ * Cached result of the first argv scan. Once the controller is initialized
+ * this is unused (cachedFlags takes over), but the fallback path must not
+ * rescan process.argv on every physics tick when no one has initialized the
+ * controller (issue #237).
+ */
+let fallbackEnabled: boolean | null = null;
+
+/** Physics tick rate assumed when converting the ms report interval to ticks. */
+const DEFAULT_TICKS_PER_SECOND = 30;
+
+interface TelemetryFileEntry {
+  timestamp: string;
+  tick: number;
+  report: string;
+}
+
+/**
+ * Resolve the JSONL telemetry output path for the given date.
+ * Reports are appended to telemetry/telemetry-YYYYMMDD.jsonl under the
+ * process working directory.
+ */
+export function getTelemetryFilePath(date: Date = new Date()): string {
+  const stamp = [
+    date.getUTCFullYear(),
+    String(date.getUTCMonth() + 1).padStart(2, '0'),
+    String(date.getUTCDate()).padStart(2, '0'),
+  ].join('');
+  return path.join(process.cwd(), 'telemetry', `telemetry-${stamp}.jsonl`);
+}
 
 /**
  * TelemetryController - Singleton for managing telemetry settings
@@ -28,13 +62,12 @@ let initializationComplete = false;
 export class TelemetryController {
   private static instance: TelemetryController | null = null;
 
-  // Worker pool reference for telemetry aggregation
-  private workerPoolRef: unknown = null;
-
   // Telemetry state
   private tickCount: number = 0;
   private lastReportTick: number = 0;
   private reportInFlight: boolean = false;
+  private dashboardServer: http.Server | null = null;
+  private dashboardListened: boolean = false;
 
   /**
    * Private constructor - use getInstance() instead
@@ -64,12 +97,15 @@ export class TelemetryController {
 
   /**
    * Initialize the controller with CLI flags and config.
-   * This is called automatically on first access but can be called
-   * explicitly with a config object for testing.
+   * Called once during server startup so the parsed flags are cached and the
+   * documented config surfaces (reportIntervalMs, dashboardPort, outputFormat)
+   * take effect (issue #237).
    *
    * @param configTelemetry - Optional telemetry config from config.ts
+   * @param ticksPerSecond - Physics tick rate used to convert the millisecond
+   *   report interval into the tick-based report window (default 30).
    */
-  initialize(configTelemetry?: Partial<TelemetryConfig>): void {
+  initialize(configTelemetry?: Partial<TelemetryConfig>, ticksPerSecond: number = DEFAULT_TICKS_PER_SECOND): void {
     if (initializationComplete) {
       return;
     }
@@ -89,8 +125,15 @@ export class TelemetryController {
       flags.enableTelemetry = true;
     }
 
+    // Convert the documented millisecond report interval into a tick window
+    // unless the CLI set the tick-based --report-interval explicitly.
+    if (configTelemetry?.reportIntervalMs !== undefined && !getExplicitFlagKeys().has('reportInterval')) {
+      flags.reportInterval = Math.max(1, Math.round((configTelemetry.reportIntervalMs / 1000) * ticksPerSecond));
+    }
+
     // Cache the flags
     cachedFlags = flags;
+    fallbackEnabled = null;
     initializationComplete = true;
 
     // Log telemetry status
@@ -114,9 +157,12 @@ export class TelemetryController {
       return cachedFlags.enableTelemetry;
     }
 
-    // Check if any telemetry flags were passed
-    // This is a quick check that doesn't require full initialization
-    return isAnyTelemetryEnabled();
+    // Fallback: scan argv at most once and cache the result so the hot path
+    // never rescans process.argv on every physics tick (issue #237).
+    if (fallbackEnabled === null) {
+      fallbackEnabled = isAnyTelemetryEnabled();
+    }
+    return fallbackEnabled;
   }
 
   /**
@@ -182,75 +228,48 @@ export class TelemetryController {
   }
 
   /**
-   * Set the worker pool reference for telemetry aggregation.
-   * This is called from the main server initialization.
+   * Increment the tick counter and report whether the configured interval has
+   * been reached. Entry bookkeeping replaces per-tick reporting so the driver
+   * (the IPC bridge) can emit reports without blocking the step path.
+   *
+   * @returns true when a report is due at the configured interval
    */
-  setWorkerPool(workerPool: unknown): void {
-    this.workerPoolRef = workerPool;
-  }
-
-  /**
-   * Increment the tick counter.
-   * Called from the physics loop.
-   */
-  tick(): void {
+  tick(): boolean {
     this.tickCount++;
 
-    // Check if it's time to generate a report
-    const interval = this.getReportInterval();
-    if (this.tickCount - this.lastReportTick >= interval) {
-      this.generateReport();
-      this.lastReportTick = this.tickCount;
+    // Skip interval bookkeeping entirely when telemetry is disabled.
+    if (!TelemetryController.isEnabled()) {
+      return false;
     }
+
+    return this.tickCount - this.lastReportTick >= this.getReportInterval();
   }
 
   /**
-   * Generate and output a telemetry report.
-   * This is called automatically based on the report interval.
+   * Emit a telemetry report immediately. The caller is responsible for having
+   * gathered worker telemetry (setLatestWorkerTelemetry) beforehand, so this
+   * stays synchronous and can never block the IPC step reply (issues #185,
+   * #229, #245).
+   *
+   * @returns true when a report was emitted
    */
-  private generateReport(): void {
-    // Only generate if telemetry is enabled
-    if (!TelemetryController.isEnabled()) {
-      return;
+  reportNow(): boolean {
+    if (!TelemetryController.isEnabled() || this.reportInFlight) {
+      return false;
     }
 
-    // Worker snapshots are asynchronous. A second report while the current
-    // snapshot is pending would emit duplicate/out-of-order windows.
-    if (this.reportInFlight) {
-      return;
-    }
-
-    const flags = this.getFlags();
-
-    // Gather worker telemetry if available, then emit the report.
-    // When a worker pool is set, the gather is async — we must wait for it
-    // before calling globalProfiler.report() so worker stats are included.
-    // When no worker pool, emit synchronously to preserve sync tick() behavior.
-    if (this.workerPoolRef && flags.profileLevel !== 'minimal') {
-        this.reportInFlight = true;
-        void this.gatherWorkerTelemetry()
-          .then(
-            () => {
-              try {
-                this.emitReport(flags);
-              } catch (error) {
-                // Do not retry emitReport here: an emit failure must not create a
-                // duplicate report after a successfully gathered snapshot.
-                console.warn('[Telemetry] Failed to generate report:', error);
-              }
-              this.reportInFlight = false;
-            },
-            (error) => {
-              console.warn('[Telemetry] Failed to generate report:', error);
-              this.reportInFlight = false;
-            },
-          );
-    } else {
-      try {
-        this.emitReport(flags);
-      } catch (error) {
-        console.warn('[Telemetry] Failed to generate report:', error);
-      }
+    this.reportInFlight = true;
+    try {
+      this.emitReport(this.getFlags());
+      this.lastReportTick = this.tickCount;
+      return true;
+    } catch (error) {
+      // Do not retry emission here: an emit failure must not create a
+      // duplicate report after a successfully gathered snapshot.
+      console.warn('[Telemetry] Failed to generate report:', error);
+      return false;
+    } finally {
+      this.reportInFlight = false;
     }
   }
 
@@ -258,54 +277,91 @@ export class TelemetryController {
    * Emit the profiler report and optional file output.
    */
   private emitReport(flags: TelemetryFlags): void {
-    // Generate the report using the existing profiler
-    globalProfiler.report(flags.reportInterval);
+    const consoleOutput = flags.outputFormat === 'console' || flags.outputFormat === 'both';
+    const fileOutput = flags.outputFormat === 'file' || flags.outputFormat === 'both';
 
-    // Output to console if enabled
-    if (flags.outputFormat === 'console' || flags.outputFormat === 'both') {
-      // Report is already printed to console by globalProfiler.report()
+    // Capture the current window before the console report resets the buffer.
+    const reportText = globalProfiler.formatReport();
+
+    if (consoleOutput) {
+      globalProfiler.report(flags.reportInterval);
+    } else {
+      // File-only mode: advance the reporting window without console output.
+      globalProfiler.reset();
     }
 
-    // Write to file if enabled (Phase 2 feature)
-    if (flags.outputFormat === 'file' || flags.outputFormat === 'both') {
-      this.writeToFile();
+    if (fileOutput) {
+      this.writeToFile({
+        timestamp: new Date().toISOString(),
+        tick: this.tickCount,
+        report: reportText,
+      });
     }
   }
 
   /**
-   * Gather telemetry from worker threads.
+   * Write telemetry to a JSONL file under telemetry/telemetry-YYYYMMDD.jsonl.
    */
-  private async gatherWorkerTelemetry(): Promise<void> {
-    // Skip if telemetry is not enabled
-    if (!TelemetryController.isEnabled() || !this.workerPoolRef) {
-      return;
-    }
+  private writeToFile(entry: TelemetryFileEntry): void {
+    const filePath = getTelemetryFilePath();
+    fs.mkdirSync(path.dirname(filePath), { recursive: true });
+    fs.appendFileSync(filePath, `${JSON.stringify(entry)}\n`);
+  }
 
+  /**
+   * Start the telemetry dashboard HTTP server on the configured port.
+   * Serves the current controller state as JSON. Binding failure (e.g. a
+   * busy port) is non-fatal and only logged.
+   */
+  startDashboard(port: number): void {
+    this.closeDashboard();
+    this.dashboardListened = false;
     try {
-      // Check if workerPool has getTelemetrySnapshots method
-      const workerPool = this.workerPoolRef as { getTelemetrySnapshots?: () => Promise<BigUint64Array[]> };
-      if (typeof workerPool.getTelemetrySnapshots === 'function') {
-        const snapshots = await workerPool.getTelemetrySnapshots();
-        setLatestWorkerTelemetry(snapshots);
-      }
+      const server = http.createServer((_req, res) => {
+        res.setHeader('Content-Type', 'application/json');
+        res.end(JSON.stringify({
+          enabled: TelemetryController.isEnabled(),
+          tick: this.tickCount,
+          profileLevel: this.getProfileLevel(),
+          debugLevel: this.getDebugLevel(),
+          outputFormat: this.getOutputFormat(),
+          reportInterval: this.getReportInterval(),
+          retentionDays: this.getRetentionDays(),
+        }));
+      });
+      server.on('error', (err) => {
+        if ((err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
+          console.warn(`[Telemetry] Dashboard port ${port} is already in use; dashboard disabled`);
+        } else {
+          console.warn('[Telemetry] Dashboard server error:', (err as Error).message);
+        }
+      });
+      server.once('listening', () => {
+        this.dashboardListened = true;
+        console.log(`[Telemetry] Dashboard listening on http://127.0.0.1:${port}`);
+      });
+      server.listen(port, '127.0.0.1');
+      this.dashboardServer = server;
     } catch (error) {
-      // Log errors based on debug level
-      const debugLevel = this.getDebugLevel();
-      if (debugLevel === 'verbose') {
-        console.error('[Telemetry] Error gathering worker telemetry:', error);
-      } else if (debugLevel === 'error') {
-        console.error('[Telemetry] Error gathering worker telemetry');
-      }
-      // In 'none' debug mode, silently fail - no error output
+      console.warn('[Telemetry] Failed to start dashboard:', (error as Error).message);
     }
   }
 
   /**
-   * Write telemetry to file (Phase 2 implementation).
+   * Close the dashboard HTTP server if one is listening.
    */
-  private writeToFile(): void {
-    // Placeholder for Phase 2 - JSONL file writing
-    // This will be implemented in the next phase
+  private closeDashboard(): void {
+    const server = this.dashboardServer;
+    this.dashboardServer = null;
+    if (!server) return;
+    if (this.dashboardListened) {
+      try {
+        server.close();
+      } catch {
+        // Already closed
+      }
+    }
+    this.dashboardListened = false;
   }
 
   /**
@@ -348,12 +404,13 @@ export class TelemetryController {
   shutdown(): void {
     // Generate final report
     if (TelemetryController.isEnabled()) {
-      this.generateReport();
+      this.reportNow();
     }
 
     // Cleanup
-    this.workerPoolRef = null;
+    this.closeDashboard();
     cachedFlags = null;
+    fallbackEnabled = null;
     initializationComplete = false;
     TelemetryController.instance = null;
   }

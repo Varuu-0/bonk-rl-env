@@ -1,7 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
-import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
+import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
 import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
@@ -141,7 +141,11 @@ export class IpcBridge {
                     this.stepCount++;
                     globalProfiler.tick();
 
-                    if (this.stepCount % 5000 === 0) {
+                    // Issue #237: the TelemetryController drives the report
+                    // cadence from the configured reportIntervalMs instead of
+                    // the old hardcoded 5000-step boundary.
+                    const reportDue = getTelemetryController().tick();
+                    if (reportDue && isTelemetryControllerEnabled()) {
                         // Issue #229: the completed step's reply must be
                         // transmitted before any best-effort telemetry work and
                         // must never await it. A slow or failing snapshot fetch
@@ -202,8 +206,8 @@ export class IpcBridge {
     }
 
     /**
-     * Best-effort post-step telemetry: memory gauges, worker snapshot fetch,
-     * and the heatmap report. Detached from the request path — it never
+     * Best-effort post-step telemetry: memory gauge, worker snapshot fetch,
+     * and the interval report. Detached from the request path — it never
      * affects the step reply and cannot stall the ZMQ loop (issue #229).
      * Errors are caught and logged so a telemetry failure is never reported
      * as a step failure or discards an already-serialized reply (issue
@@ -222,7 +226,7 @@ export class IpcBridge {
                 // message mode.
                 const snapshots = await this.pool.getTelemetrySnapshots();
                 setLatestWorkerTelemetry(snapshots);
-                globalProfiler.report(5000);
+                getTelemetryController().reportNow();
             }
         } catch (telemetryError) {
             console.error('[IPC] Telemetry error after step:', telemetryError);
