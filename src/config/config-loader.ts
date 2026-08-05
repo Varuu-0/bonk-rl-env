@@ -350,28 +350,75 @@ export interface EngineTuningSections {
 }
 
 /**
+ * snake_case → camelCase aliases accepted for the engine-tuning sections (the
+ * documented Python-client spelling). When an override supplies the snake_case
+ * alias, it is resolved into the camelCase slot so the injected camelCase
+ * default can never shadow the alias (mirrors ENVIRONMENT_KEY_ALIASES, #204).
+ */
+const PHYSICS_KEY_ALIASES: Array<[string, string]> = [
+    ['ticks_per_second', 'ticksPerSecond'],
+    ['solver_iterations', 'solverIterations'],
+    ['gravity_x', 'gravityX'],
+    ['gravity_y', 'gravityY'],
+    ['enable_sleeping', 'enableSleeping'],
+    ['world_aabb_extent', 'worldAabbExtent'],
+];
+const ARENA_KEY_ALIASES: Array<[string, string]> = [
+    ['default_half_width', 'defaultHalfWidth'],
+    ['default_half_height', 'defaultHalfHeight'],
+    ['bounds_margin', 'boundsMargin'],
+];
+const PLAYER_KEY_ALIASES: Array<[string, string]> = [
+    ['move_force', 'moveForce'],
+    ['heavy_mass_multiplier', 'heavyMassMultiplier'],
+];
+
+/** Deep-merge one tuning section with snake_case → camelCase alias resolution. */
+function mergeTuningSection(
+    base: Record<string, any>,
+    override: Record<string, any>,
+    aliases: Array<[string, string]>,
+): Record<string, any> {
+    const merged = deepMerge(base, override);
+    for (const [snake, camel] of aliases) {
+        const snakeVal = override[snake];
+        const camelVal = override[camel];
+        // Resolve the snake alias unless the override supplies an explicit
+        // camelCase value (deepMerge skips null/undefined overrides as absent).
+        if (snakeVal != null && camelVal == null) {
+            merged[camel] = snakeVal;
+        }
+    }
+    return merged;
+}
+
+/**
  * Resolve the engine-tuning sections for a spawn request by deep-merging the
  * caller's per-env overrides over the resolved config defaults. The result is
  * forwarded (via the worker pool / IPC bridge) to BonkEnvironment, which hands
- * the values to PhysicsEngine — so values set in config.json, env vars, or CLI
- * flags actually reach the simulation (issue #217). Overrides that are not
- * plain objects (e.g. null) are ignored, and proto-polluting keys are skipped
- * by deepMerge.
+ * the values to PhysicsEngine — so values set in config.json, env vars, CLI
+ * flags, or the Python client's spawn config actually reach the simulation
+ * (issue #217). Overrides that are not plain objects (e.g. null) are ignored,
+ * proto-polluting keys are skipped by deepMerge, and snake_case sub-keys
+ * (gravity_y, move_force, ...) are resolved into their camelCase slots.
  */
 export function mergeEngineSections(override: Record<string, any> = {}): EngineTuningSections {
     return {
-        physics: deepMerge(
+        physics: mergeTuningSection(
             getConfig().physics as any,
             isPlainObject(override.physics) ? override.physics : {},
-        ),
-        arena: deepMerge(
+            PHYSICS_KEY_ALIASES,
+        ) as PhysicsConfig,
+        arena: mergeTuningSection(
             getConfig().arena as any,
             isPlainObject(override.arena) ? override.arena : {},
-        ),
-        player: deepMerge(
+            ARENA_KEY_ALIASES,
+        ) as ArenaConfig,
+        player: mergeTuningSection(
             getConfig().player as any,
             isPlainObject(override.player) ? override.player : {},
-        ),
+            PLAYER_KEY_ALIASES,
+        ) as PlayerConfig,
     };
 }
 
@@ -494,7 +541,9 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         }
     }
 
-    // Physics (documented physics.* surfaces, issue #217)
+    // Physics (documented physics.* surfaces, issue #217). Every parsed float
+    // must be finite: parseFloat accepts 'Infinity'/'1e999', which would
+    // otherwise propagate NaN/infinite values into the simulation.
     if (env.TICKS_PER_SECOND !== undefined) {
         const v = parseInt(env.TICKS_PER_SECOND, 10);
         if (!isNaN(v) && v >= 1 && v <= 240) config.physics.ticksPerSecond = v;
@@ -505,47 +554,51 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     }
     if (env.PHYSICS_SCALE !== undefined) {
         const v = parseFloat(env.PHYSICS_SCALE);
-        if (!isNaN(v) && v > 0) config.physics.scale = v;
+        if (Number.isFinite(v) && v > 0) config.physics.scale = v;
     }
     if (env.GRAVITY_X !== undefined) {
         const v = parseFloat(env.GRAVITY_X);
-        if (!isNaN(v)) config.physics.gravityX = v;
+        if (Number.isFinite(v)) config.physics.gravityX = v;
     }
     if (env.GRAVITY_Y !== undefined) {
         const v = parseFloat(env.GRAVITY_Y);
-        if (!isNaN(v)) config.physics.gravityY = v;
+        if (Number.isFinite(v)) config.physics.gravityY = v;
     }
     if (env.ENABLE_SLEEPING !== undefined) {
         const v = env.ENABLE_SLEEPING.toLowerCase();
-        config.physics.enableSleeping = v !== 'false' && v !== '0' && v !== 'no';
+        if (v === 'true' || v === '1' || v === 'yes') {
+            config.physics.enableSleeping = true;
+        } else if (v === 'false' || v === '0' || v === 'no') {
+            config.physics.enableSleeping = false;
+        }
     }
     if (env.WORLD_AABB_EXTENT !== undefined) {
         const v = parseFloat(env.WORLD_AABB_EXTENT);
-        if (!isNaN(v) && v >= 100) config.physics.worldAabbExtent = v;
+        if (Number.isFinite(v) && v >= 100) config.physics.worldAabbExtent = v;
     }
 
     // Arena (documented arena.* surfaces)
     if (env.ARENA_HALF_WIDTH !== undefined) {
         const v = parseFloat(env.ARENA_HALF_WIDTH);
-        if (!isNaN(v) && v >= 1) config.arena.defaultHalfWidth = v;
+        if (Number.isFinite(v) && v >= 1) config.arena.defaultHalfWidth = v;
     }
     if (env.ARENA_HALF_HEIGHT !== undefined) {
         const v = parseFloat(env.ARENA_HALF_HEIGHT);
-        if (!isNaN(v) && v >= 1) config.arena.defaultHalfHeight = v;
+        if (Number.isFinite(v) && v >= 1) config.arena.defaultHalfHeight = v;
     }
     if (env.ARENA_BOUNDS_MARGIN !== undefined) {
         const v = parseFloat(env.ARENA_BOUNDS_MARGIN);
-        if (!isNaN(v) && v >= 0) config.arena.boundsMargin = v;
+        if (Number.isFinite(v) && v >= 0) config.arena.boundsMargin = v;
     }
 
     // Player movement (documented player.* surfaces)
     if (env.PLAYER_MOVE_FORCE !== undefined) {
         const v = parseFloat(env.PLAYER_MOVE_FORCE);
-        if (!isNaN(v) && v >= 0.01) config.player.moveForce = v;
+        if (Number.isFinite(v) && v >= 0.01) config.player.moveForce = v;
     }
     if (env.PLAYER_HEAVY_MASS_MULTIPLIER !== undefined) {
         const v = parseFloat(env.PLAYER_HEAVY_MASS_MULTIPLIER);
-        if (!isNaN(v) && v > 0) config.player.heavyMassMultiplier = v;
+        if (Number.isFinite(v) && v > 0) config.player.heavyMassMultiplier = v;
     }
 
     return config;
@@ -703,7 +756,7 @@ case '--ai-player-id':
             case '--scale':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v > 0) {
+                    if (Number.isFinite(v) && v > 0) {
                         config.physics.scale = v;
                         i++;
                     }
@@ -713,7 +766,7 @@ case '--ai-player-id':
             case '--gravity-x':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v)) {
+                    if (Number.isFinite(v)) {
                         config.physics.gravityX = v;
                         i++;
                     }
@@ -723,7 +776,7 @@ case '--ai-player-id':
             case '--gravity-y':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v)) {
+                    if (Number.isFinite(v)) {
                         config.physics.gravityY = v;
                         i++;
                     }
@@ -741,7 +794,7 @@ case '--ai-player-id':
             case '--world-aabb-extent':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v >= 100) {
+                    if (Number.isFinite(v) && v >= 100) {
                         config.physics.worldAabbExtent = v;
                         i++;
                     }
@@ -751,7 +804,7 @@ case '--ai-player-id':
             case '--arena-half-width':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v >= 1) {
+                    if (Number.isFinite(v) && v >= 1) {
                         config.arena.defaultHalfWidth = v;
                         i++;
                     }
@@ -761,7 +814,7 @@ case '--ai-player-id':
             case '--arena-half-height':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v >= 1) {
+                    if (Number.isFinite(v) && v >= 1) {
                         config.arena.defaultHalfHeight = v;
                         i++;
                     }
@@ -771,7 +824,7 @@ case '--ai-player-id':
             case '--arena-bounds-margin':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v >= 0) {
+                    if (Number.isFinite(v) && v >= 0) {
                         config.arena.boundsMargin = v;
                         i++;
                     }
@@ -781,7 +834,7 @@ case '--ai-player-id':
             case '--player-move-force':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v >= 0.01) {
+                    if (Number.isFinite(v) && v >= 0.01) {
                         config.player.moveForce = v;
                         i++;
                     }
@@ -791,7 +844,7 @@ case '--ai-player-id':
             case '--player-heavy-mass-multiplier':
                 if (next) {
                     const v = parseFloat(next);
-                    if (!isNaN(v) && v > 0) {
+                    if (Number.isFinite(v) && v > 0) {
                         config.player.heavyMassMultiplier = v;
                         i++;
                     }

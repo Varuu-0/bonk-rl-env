@@ -28,6 +28,15 @@ import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
+/**
+ * Default episode length in ticks (native 30 s at 30 TPS). Tick-counted by
+ * design — like every other native timer in the engine (a1a drain/recharge,
+ * last-hit attribution 120, cap-zone hold `(l ?? 3) * 30`), maxTicks does NOT
+ * rescale with a configured ticksPerSecond, so at a non-default TPS the
+ * real-time episode length changes with the fixed tick count.
+ */
+const MAX_TICKS_DEFAULT = 30 * TPS;
+
 // SPAWN_POSITIONS removed, now read dynamically from map
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -271,10 +280,7 @@ export class BonkEnvironment {
 
         this.config = {
             numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
-            // The maxTicks default is 30 seconds at the effective tick rate, so
-            // a configured ticksPerSecond keeps the same real-time episode
-            // length instead of silently truncating at 900 ticks (#217).
-            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? 30 * (config.physics?.ticksPerSecond ?? TPS),
+            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
             // Seed 0 is a valid deterministic seed and must reach the PRNG: a

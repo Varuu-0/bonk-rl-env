@@ -16,7 +16,7 @@
   "physics": {
     "_doc_physics": "Box2D physics engine parameters for deterministic simulation",
     "ticksPerSecond": 30,
-    "_doc_ticksPerSecond": "Fixed physics update rate. Type: int. Range: 1-240. Default: 30. Env: TICKS_PER_SECOND. CLI: --ticks-per-second",
+    "_doc_ticksPerSecond": "Fixed physics update rate. Type: int. Range: 1-240. Default: 30. Env: TICKS_PER_SECOND. CLI: --ticks-per-second. Consumed by the engine (issue #217). NOTE: this rescales only the per-tick simulation step (dt = 1/tps). Every native timer is tick-counted and therefore unchanged at a non-default rate: episode maxTicks (900), the a1a grapple meter drain/recharge (4/3 per tick), last-hit attribution (120 ticks) and cap-zone hold `(l ?? 3) * 30` all keep their tick counts, so their real-time duration changes with the tick rate.",
     "solverIterations": 2,
     "_doc_solverIterations": "Velocity constraint solver iterations per tick. Type: int. Range: 1-64. Default: 2. Env: SOLVER_ITERATIONS. CLI: --solver-iterations",
     "scale": 30.0,
@@ -24,7 +24,7 @@
     "gravityX": 0.0,
     "_doc_gravityX": "Horizontal gravity component. Type: float. Default: 0.0. Env: GRAVITY_X. CLI: --gravity-x",
     "gravityY": 20.0,
-    "_doc_gravityY": "Vertical gravity component (positive = down). Type: float. Default: 20.0. Env: GRAVITY_Y. CLI: --gravity-y",
+    "_doc_gravityY": "Vertical gravity component (positive = down). Type: float. Default: 20.0. Env: GRAVITY_Y. CLI: --gravity-y. Consumed by the engine (issue #217). NOTE: gravityX/gravityY and player.moveForce are independent knobs; the verified lift invariant at defaults (#234: moveForce 30 > gravity 20, so pure 'up' ascends, and 30 x 0.7 > 20 so up+heavy still ascends) only holds for that default pairing - raising gravityY or lowering moveForce below the heavy-lift threshold reverses it. Set both together deliberately.",
     "enableSleeping": true,
     "_doc_enableSleeping": "Allow inactive bodies to sleep for performance. Type: bool. Default: true. Env: ENABLE_SLEEPING. CLI: --enable-sleeping",
     "worldAabbExtent": 1000.0,

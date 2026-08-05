@@ -352,24 +352,46 @@ export class PhysicsEngine {
 
   constructor(options: PhysicsEngineOptions = {}) {
     // Resolve the documented tuning surface (config-loader physics/arena/player
-    // sections) onto the engine. Every key falls back to its sanity default
-    // (the module constant) when absent, so a bare `new PhysicsEngine()` keeps
-    // the exact behaviour it always had.
-    this.tps = options.ticksPerSecond ?? TPS;
+    // sections) onto the engine. Every key is sanitized: a missing or invalid
+    // value (0, Infinity, NaN, negatives, non-integers) falls back to its
+    // sanity default (the module constant), so garbage options can never build
+    // a broken world (dt = Infinity, inverted AABB, NaN gravity) and a bare
+    // `new PhysicsEngine()` keeps the exact behaviour it always had.
+    this.tps = PhysicsEngine.sanitizePositive(options.ticksPerSecond, TPS);
     this.dt = 1 / this.tps;
-    this.velocityIterations = options.velocityIterations ?? VELOCITY_ITERATIONS;
-    this.scale = options.scale ?? SCALE;
-    this.gravityX = options.gravityX ?? GRAVITY_X;
-    this.gravityY = options.gravityY ?? GRAVITY_Y;
-    this.enableSleeping = options.enableSleeping ?? true;
-    this.worldAabbExtent = options.worldAabbExtent ?? WORLD_AABB_EXTENT;
-    this.arenaHalfWidth = options.arenaHalfWidth ?? ARENA_HALF_WIDTH;
-    this.arenaHalfHeight = options.arenaHalfHeight ?? ARENA_HALF_HEIGHT;
-    this.arenaBoundsMargin = options.arenaBoundsMargin ?? ARENA_BOUNDS_MARGIN;
-    this.moveForce = options.moveForce ?? MOVE_FORCE;
-    this.heavyForceMultiplier = options.heavyForceMultiplier ?? HEAVY_FORCE_MULTIPLIER;
+    this.velocityIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.velocityIterations, VELOCITY_ITERATIONS, 1);
+    this.scale = PhysicsEngine.sanitizePositive(options.scale, SCALE);
+    this.gravityX = PhysicsEngine.sanitizeFinite(options.gravityX, GRAVITY_X);
+    this.gravityY = PhysicsEngine.sanitizeFinite(options.gravityY, GRAVITY_Y);
+    this.enableSleeping = options.enableSleeping === undefined ? true : Boolean(options.enableSleeping);
+    this.worldAabbExtent = PhysicsEngine.sanitizePositive(options.worldAabbExtent, WORLD_AABB_EXTENT);
+    this.arenaHalfWidth = PhysicsEngine.sanitizePositive(options.arenaHalfWidth, ARENA_HALF_WIDTH);
+    this.arenaHalfHeight = PhysicsEngine.sanitizePositive(options.arenaHalfHeight, ARENA_HALF_HEIGHT);
+    this.arenaBoundsMargin = PhysicsEngine.sanitizeNonNegative(options.arenaBoundsMargin, ARENA_BOUNDS_MARGIN);
+    this.moveForce = PhysicsEngine.sanitizePositive(options.moveForce, MOVE_FORCE);
+    this.heavyForceMultiplier = PhysicsEngine.sanitizeNonNegative(options.heavyForceMultiplier, HEAVY_FORCE_MULTIPLIER);
     this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
     this.createWorld();
+  }
+
+  /** Returns `v` when it is a finite number, otherwise the default. */
+  private static sanitizeFinite(v: number | undefined, def: number): number {
+    return typeof v === 'number' && Number.isFinite(v) ? v : def;
+  }
+
+  /** Returns `v` when it is a finite, strictly positive number, else the default. */
+  private static sanitizePositive(v: number | undefined, def: number): number {
+    return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : def;
+  }
+
+  /** Returns `v` when it is a finite, non-negative number, else the default. */
+  private static sanitizeNonNegative(v: number | undefined, def: number): number {
+    return typeof v === 'number' && Number.isFinite(v) && v >= 0 ? v : def;
+  }
+
+  /** Returns `v` when it is a finite integer >= min, else the default. */
+  private static sanitizeIntegerAtLeast(v: number | undefined, def: number, min: number): number {
+    return typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v >= min ? v : def;
   }
 
   /** Create a fresh world from the resolved instance tuning. Used by the
