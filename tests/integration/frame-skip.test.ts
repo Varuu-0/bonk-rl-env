@@ -1,5 +1,6 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, beforeEach } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
+import { getConfig, mergeEnvironmentConfig, resetConfig } from '../../src/config/config-loader';
 import { EMPTY_INPUT } from '../utils/test-helpers';
 
 describe('Frame Skip', () => {
@@ -259,6 +260,81 @@ describe('Frame Skip', () => {
       env.reset();
       const result = env.step(EMPTY_INPUT);
       expect('opponentsAlive' in result.info).toBe(true);
+    });
+  });
+
+  describe('snake_case keys vs merged defaults (#204)', () => {
+    beforeEach(() => {
+      resetConfig();
+    });
+
+    it('mergeEnvironmentConfig resolves frame_skip into the frameSkip slot', () => {
+      const merged = mergeEnvironmentConfig(getConfig().environment as any, { frame_skip: 4 });
+      expect((merged as any).frameSkip).toBe(4);
+      expect((merged as any).frame_skip).toBe(4);
+
+      env = new BonkEnvironment(merged as any);
+      env.reset();
+      expect((env as any).config.frameSkip).toBe(4);
+      const result = env.step(EMPTY_INPUT);
+      expect(result.info.frameSkip).toBe(4);
+    });
+
+    it('direct-constructor frame_skip is honored', () => {
+      env = new BonkEnvironment({ numOpponents: 1, maxTicks: 100, frame_skip: 3 } as any);
+      env.reset();
+      expect((env as any).config.frameSkip).toBe(3);
+      const result = env.step(EMPTY_INPUT);
+      expect(result.info.frameSkip).toBe(3);
+    });
+
+    it('resolves the snake_case alias when the override supplies a null camelCase key', () => {
+      const merged = mergeEnvironmentConfig(getConfig().environment as any, {
+        frame_skip: 3,
+        frameSkip: null as any,
+      });
+      expect((merged as any).frameSkip).toBe(3);
+      expect((merged as any).frame_skip).toBe(3);
+    });
+
+    it('camelCase frameSkip still wins when no snake_case key is present', () => {
+      env = new BonkEnvironment({ numOpponents: 1, maxTicks: 100, frameSkip: 2 });
+      env.reset();
+      expect((env as any).config.frameSkip).toBe(2);
+    });
+
+    it('explicit camelCase frameSkip wins when both keys are provided', () => {
+      env = new BonkEnvironment({ numOpponents: 1, maxTicks: 100, frameSkip: 2, frame_skip: 4 } as any);
+      env.reset();
+      expect((env as any).config.frameSkip).toBe(2);
+    });
+
+    it('snake_case num_opponents/max_ticks/random_opponent resolve over injected defaults', () => {
+      const merged = mergeEnvironmentConfig(getConfig().environment as any, {
+        num_opponents: 0,
+        max_ticks: 5,
+        random_opponent: false,
+      });
+      expect((merged as any).numOpponents).toBe(0);
+      expect((merged as any).num_opponents).toBe(0);
+      expect((merged as any).maxTicks).toBe(5);
+      expect((merged as any).randomOpponent).toBe(false);
+
+      env = new BonkEnvironment(merged as any);
+      env.reset();
+      const cfg = (env as any).config;
+      expect(cfg.numOpponents).toBe(0);
+      expect(cfg.maxTicks).toBe(5);
+      expect(cfg.randomOpponent).toBe(false);
+    });
+
+    it('direct-constructor snake_case num_opponents/max_ticks/random_opponent are honored', () => {
+      env = new BonkEnvironment({ num_opponents: 0, max_ticks: 5, random_opponent: false } as any);
+      env.reset();
+      const cfg = (env as any).config;
+      expect(cfg.numOpponents).toBe(0);
+      expect(cfg.maxTicks).toBe(5);
+      expect(cfg.randomOpponent).toBe(false);
     });
   });
 });

@@ -100,6 +100,12 @@ export interface EnvironmentConfig {
     oppDownProb?: number;
     oppHeavyProb?: number;
     oppGrappleProb?: number;
+    /** Config-loader aliases for the opponent random-policy probabilities */
+    randomOppMoveProb?: number;
+    randomOppUpProb?: number;
+    randomOppDownProb?: number;
+    randomOppHeavyProb?: number;
+    randomOppGrappleProb?: number;
     /** Native team mode (`tea`): same-team discs do not collide (default false) */
     teamsEnabled?: boolean;
     /** Native no-collision physics mode (`nc`): discs never collide (default false) */
@@ -147,8 +153,13 @@ export class BonkEnvironment {
     private mapBounds: { width: number; height: number } | null = null;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
-        // Normalize config: accept both camelCase and snake_case
-        const frameSkip = config.frameSkip !== undefined ? config.frameSkip : (config as any).frame_skip;
+        // Normalize config: accept both camelCase and snake_case. The
+        // camelCase key wins when present (an explicit per-env value); the
+        // snake_case alias is only consulted when the camelCase key is
+        // absent, which the alias-aware config merge guarantees for keys
+        // that only carry injected defaults (#204).
+        const rawConfig = config as any;
+        const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
         // Load map from file or use provided config
         let mapDef: MapDef;
@@ -168,20 +179,34 @@ export class BonkEnvironment {
         this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 12;
         this.capZones = (mapDef as any).capZones ?? [];
 
+        // Opponent random-policy probabilities: accept both the direct
+        // opp*Prob names and the config-loader's documented randomOpp*Prob
+        // aliases; an explicit opp*Prob value wins over the alias.
+        const oppMoveProb = config.oppMoveProb ?? config.randomOppMoveProb ?? 0.2;
+        const oppUpProb = config.oppUpProb ?? config.randomOppUpProb ?? 0.15;
+        const oppDownProb = config.oppDownProb ?? config.randomOppDownProb ?? 0.1;
+        const oppHeavyProb = config.oppHeavyProb ?? config.randomOppHeavyProb ?? 0.05;
+        const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
+
         this.config = {
-            numOpponents: config.numOpponents ?? 1,
-            maxTicks: config.maxTicks ?? MAX_TICKS,
-            randomOpponent: config.randomOpponent ?? true,
+            numOpponents: config.numOpponents ?? rawConfig.num_opponents ?? 1,
+            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
+            randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
             seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
             mapPath: config.mapPath ?? '',
-            oppMoveProb: config.oppMoveProb ?? 0.2,
-            oppUpProb: config.oppUpProb ?? 0.15,
-            oppDownProb: config.oppDownProb ?? 0.1,
-            oppHeavyProb: config.oppHeavyProb ?? 0.05,
-            oppGrappleProb: config.oppGrappleProb ?? 0.05,
+            oppMoveProb,
+            oppUpProb,
+            oppDownProb,
+            oppHeavyProb,
+            oppGrappleProb,
+            randomOppMoveProb: oppMoveProb,
+            randomOppUpProb: oppUpProb,
+            randomOppDownProb: oppDownProb,
+            randomOppHeavyProb: oppHeavyProb,
+            randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
         };
@@ -423,8 +448,10 @@ export class BonkEnvironment {
             this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
         }
 
-        // Check for terminal state (death or maxTicks)
-        const allOpponentsDead = opponentStates.every(s => !s.alive);
+        // Check for terminal state (death or maxTicks). With zero opponents
+        // the empty-state check must not be vacuously true: an episode with
+        // no opponents can only end via the AI's death or truncation.
+        const allOpponentsDead = opponentStates.length > 0 && opponentStates.every(s => !s.alive);
         const terminated = !aiState.alive || allOpponentsDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 

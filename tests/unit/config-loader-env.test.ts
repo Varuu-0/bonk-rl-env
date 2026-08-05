@@ -12,6 +12,8 @@ describe('config-loader env vars and CLI', () => {
         'DEFAULT_MAP_PATH', 'USE_SHARED_MEMORY', 'MANIFOLD_TELEMETRY',
         'MANIFOLD_TELEMETRY_OUTPUT', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG',
         'TEST_MODE',
+        'RANDOM_OPP_MOVE_PROB', 'RANDOM_OPP_UP_PROB', 'RANDOM_OPP_DOWN_PROB',
+        'RANDOM_OPP_HEAVY_PROB', 'RANDOM_OPP_GRAPPLE_PROB',
     ];
     let savedEnv: Record<string, string | undefined>;
     let savedArgv: string[];
@@ -91,6 +93,42 @@ describe('config-loader env vars and CLI', () => {
             process.env.DEFAULT_MAP_PATH = 'maps/custom_map.json';
             const cfg = loadConfig(testDir);
             expect(cfg.environment.defaultMapPath).toBe('maps/custom_map.json');
+        });
+
+        it('RANDOM_OPP_MOVE_PROB overrides the opponent move probability', () => {
+            process.env.RANDOM_OPP_MOVE_PROB = '0.9';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.randomOppMoveProb).toBe(0.9);
+        });
+
+        it('all five RANDOM_OPP_*_PROB env vars override their probabilities', () => {
+            process.env.RANDOM_OPP_MOVE_PROB = '0.91';
+            process.env.RANDOM_OPP_UP_PROB = '0.82';
+            process.env.RANDOM_OPP_DOWN_PROB = '0.73';
+            process.env.RANDOM_OPP_HEAVY_PROB = '0.64';
+            process.env.RANDOM_OPP_GRAPPLE_PROB = '0.55';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.randomOppMoveProb).toBe(0.91);
+            expect(cfg.environment.randomOppUpProb).toBe(0.82);
+            expect(cfg.environment.randomOppDownProb).toBe(0.73);
+            expect(cfg.environment.randomOppHeavyProb).toBe(0.64);
+            expect(cfg.environment.randomOppGrappleProb).toBe(0.55);
+        });
+
+        it('RANDOM_OPP_MOVE_PROB rejects values outside [0,1]', () => {
+            process.env.RANDOM_OPP_MOVE_PROB = '1.5';
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.randomOppMoveProb).toBe(0.2);
+
+            delete process.env.RANDOM_OPP_MOVE_PROB;
+            process.env.RANDOM_OPP_MOVE_PROB = '-0.1';
+            resetConfig();
+            expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
+
+            delete process.env.RANDOM_OPP_MOVE_PROB;
+            process.env.RANDOM_OPP_MOVE_PROB = 'abc';
+            resetConfig();
+            expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
         });
 
         it('USE_SHARED_MEMORY=true sets useSharedMemory to true', () => {
@@ -429,6 +467,42 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.environment.defaultMapPath).toBe('maps/test.json');
         });
 
+        it('--random-opp-move-prob sets the opponent move probability', () => {
+            process.argv = ['node', 'script.js', '--random-opp-move-prob', '0.9'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.randomOppMoveProb).toBe(0.9);
+        });
+
+        it('all five --random-opp-*-prob CLI flags set their probabilities', () => {
+            process.argv = [
+                'node', 'script.js',
+                '--random-opp-move-prob', '0.91',
+                '--random-opp-up-prob', '0.82',
+                '--random-opp-down-prob', '0.73',
+                '--random-opp-heavy-prob', '0.64',
+                '--random-opp-grapple-prob', '0.55',
+            ];
+            const cfg = loadConfig(testDir);
+            expect(cfg.environment.randomOppMoveProb).toBe(0.91);
+            expect(cfg.environment.randomOppUpProb).toBe(0.82);
+            expect(cfg.environment.randomOppDownProb).toBe(0.73);
+            expect(cfg.environment.randomOppHeavyProb).toBe(0.64);
+            expect(cfg.environment.randomOppGrappleProb).toBe(0.55);
+        });
+
+        it('--random-opp-move-prob rejects values outside [0,1] and missing values', () => {
+            process.argv = ['node', 'script.js', '--random-opp-move-prob', '1.5'];
+            expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--random-opp-move-prob', '-0.5'];
+            expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--random-opp-move-prob'];
+            expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
+        });
+
         it('--verbose enables telemetry, sets debug verbose, and logging debug', () => {
             process.argv = ['node', 'script.js', '--verbose'];
             const cfg = loadConfig(testDir);
@@ -718,6 +792,37 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.enabled).toBe(true);
             expect(cfg.telemetry.profileLevel).toBe('detailed');
             expect(cfg.telemetry.debugLevel).toBe('none');
+        });
+
+        it('config.json snake_case frame_skip resolves into the injected frameSkip slot', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ environment: { frame_skip: 4 } }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).frameSkip).toBe(4);
+            expect((cfg.environment as any).frame_skip).toBe(4);
+            expect(cfg.environment.numOpponents).toBe(1);
+            expect(cfg.environment.maxTicks).toBe(900);
+        });
+
+        it('config.json snake_case num_opponents/max_ticks/random_opponent resolve into their slots', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                environment: { num_opponents: 0, max_ticks: 5, random_opponent: false },
+            }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).numOpponents).toBe(0);
+            expect((cfg.environment as any).num_opponents).toBe(0);
+            expect((cfg.environment as any).maxTicks).toBe(5);
+            expect((cfg.environment as any).max_ticks).toBe(5);
+            expect((cfg.environment as any).randomOpponent).toBe(false);
+            expect((cfg.environment as any).random_opponent).toBe(false);
+        });
+
+        it('config.json explicit camelCase keys are kept alongside snake_case aliases', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                environment: { frameSkip: 2, frame_skip: 4 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).frameSkip).toBe(2);
+            expect((cfg.environment as any).frame_skip).toBe(4);
         });
 
         it('config.json array values replace defaults', () => {

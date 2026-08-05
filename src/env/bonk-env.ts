@@ -8,7 +8,7 @@
 
 import { WorkerPool, type ResultOwnershipOptions } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
-import { getConfig } from '../config/config-loader';
+import { getConfig, mergeEnvironmentConfig } from '../config/config-loader';
 
 export interface BonkEnvConfig {
     /** Number of environments to create internally (default: 1) */
@@ -79,12 +79,16 @@ export class BonkEnv {
         // Create worker pool
         this.pool = new WorkerPool();
         
-        // Initialize the worker pool with the configured number of envs
+        // Initialize the worker pool with the configured number of envs,
+        // forwarding the per-env config over the global environment defaults
+        // so per-environment hyperparameters (maxTicks, numOpponents,
+        // frameSkip, seed, mapData, ...) actually reach the workers.
         const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
+        const envConfig = mergeEnvironmentConfig(getConfig().environment as any, this.config.config ?? {});
         try {
             await this.pool.init(
                 this.config.numEnvs ?? 1,
-                getConfig().environment,
+                envConfig,
                 useSharedMemory
             );
         } catch (error) {
