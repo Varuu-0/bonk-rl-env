@@ -20,13 +20,15 @@ from utils.training_logger import TrainingLogger
 
 logger = TrainingLogger(log_dir="logs", filename="trajectory.csv")
 
-# In training loop
+# In training loop (single environment)
+env = BonkVecEnv(num_envs=1)
 for episode in range(num_episodes):
     obs = env.reset()
     for tick in range(max_ticks):
-        action = model.predict(obs)
+        action = np.array([model.predict(obs, deterministic=True)[0].item()])
         obs, rewards, dones, infos = env.step(action)
-        logger.log_step(episode, tick, obs, rewards, dones)
+        # log_step expects a single 14-dim observation, not the batch array
+        logger.log_step(episode, tick, obs[0], rewards[0], bool(dones[0]))
 
 logger.close()
 ```

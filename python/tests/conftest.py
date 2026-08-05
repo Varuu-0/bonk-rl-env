@@ -125,15 +125,16 @@ def _kill_process_tree(proc):
             return
         except subprocess.TimeoutExpired:
             pass
-        # Parent may be gone already (taskkill failed silently): enumerate
-        # surviving descendants from a fresh process snapshot and kill each.
-        table = _windows_process_table()
-        for pid in _process_tree_pids(table, proc.pid):
-            _taskkill(pid)
-        try:
-            proc.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            pass
+        # Parent is still alive but children survived (taskkill /T missed
+        # them). PIDs can be recycled after a process exits, so only resolve
+        # the descendant tree while the parent is provably alive.
+        if proc.poll() is None:
+            for pid in _process_tree_pids(_windows_process_table(), proc.pid):
+                _taskkill(pid)
+            try:
+                proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                pass
     else:
         try:
             os.killpg(proc.pid, signal.SIGTERM)
@@ -154,6 +155,13 @@ def bonk_server():
     The fixture owns port 5555 for the whole session: any stale server left
     over from a previous run is killed before spawning, and teardown kills
     the entire spawned process tree so no node processes survive pytest.
+
+    Windows-specific parts: the port is reclaimed with netstat + taskkill
+    (tsx spawns a child node process that actually binds the port, so killing
+    only the parent would leak it). On POSIX the server runs in its own
+    session and teardown kills the whole process group with killpg; stale
+    listeners are not reclaimed there, so a leftover server would be reused
+    rather than killed.
     """
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..")
@@ -176,6 +184,8 @@ def bonk_server():
     # A server orphaned by a previous run (or run manually outside pytest)
     # would hijack the port and serve stale state. Clear it before spawning
     # so the tests always talk to a server we control and can tear down.
+    # (_listening_pids uses netstat + taskkill, so this reclamation is
+    # Windows-only; POSIX spawns in a fresh session instead.)
     for pid in _listening_pids(port):
         _taskkill(pid)
         time.sleep(0.5)
@@ -229,10 +239,10 @@ def bonk_server():
     if proc is not None:
         _kill_process_tree(proc)
 
-    # Belt and suspenders: any listener still on the port belongs to our
-    # spawn (stale servers were removed at startup), so remove it too.
-    for pid in _listening_pids(port):
-        _taskkill(pid)
+        # Belt and suspenders: any listener still on the port belongs to our
+        # spawn (stale servers were removed at startup), so remove it too.
+        for pid in _listening_pids(port):
+            _taskkill(pid)
 
 
 @pytest.fixture

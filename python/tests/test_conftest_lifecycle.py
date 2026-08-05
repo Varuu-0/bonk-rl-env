@@ -92,6 +92,36 @@ def test_kill_process_tree_windows_falls_back_to_descendants(monkeypatch):
     assert ["taskkill", "/F", "/T", "/PID", "1000"] not in recorder.calls
 
 
+def test_kill_process_tree_windows_skips_descendants_once_parent_exited(
+    monkeypatch,
+):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    recorder = _RecordingSubprocess()
+    monkeypatch.setattr(conftest.subprocess, "run", recorder.run)
+    monkeypatch.setattr(
+        conftest,
+        "_windows_process_table",
+        lambda: {1000: 0, 1234: 1000, 5678: 1234},
+    )
+
+    # First wait times out, but the parent has exited by then: enumerating
+    # descendants would risk killing recycled PIDs, so only the direct
+    # taskkill /T attempt may run.
+    proc = _FakeProc(wait_error=subprocess.TimeoutExpired("fake", 5))
+    calls = {"poll": 0}
+
+    def flaky_poll():
+        calls["poll"] += 1
+        # Entry check reports alive; the post-timeout check reports dead.
+        return None if calls["poll"] == 1 else 42
+
+    proc.poll = flaky_poll
+    conftest._kill_process_tree(proc)
+
+    assert recorder.calls == [["taskkill", "/F", "/T", "/PID", "1234"]]
+    assert calls["poll"] == 2
+
+
 def test_kill_process_tree_posix_uses_killpg(monkeypatch):
     killed = []
     monkeypatch.setattr(conftest.os, "name", "posix")
