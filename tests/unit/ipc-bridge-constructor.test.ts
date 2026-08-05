@@ -52,6 +52,7 @@ vi.mock('../../src/core/worker-pool', () => ({
 }));
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  DEFAULT_MAX_CLIENT_SESSIONS: 32,
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
 }));
 
@@ -338,6 +339,9 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
   });
 
   it('falls back to the default session cap when the cap is omitted', () => {
+    // The getConfig mock normally reports 32; omit the cap entirely so the
+    // only path to a finite cap is the bridge's built-in default fallback.
+    mocks.getConfig.mockReturnValueOnce({ server: { port: 5555 }, environment: { seed: 0 } });
     const bridge = new IpcBridge({} as any);
     expect((bridge as any).maxClientSessions).toBe(32);
   });

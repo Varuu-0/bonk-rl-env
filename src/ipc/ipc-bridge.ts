@@ -2,7 +2,7 @@ import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
-import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig, DEFAULT_MAX_CLIENT_SESSIONS } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -19,8 +19,6 @@ interface PoolSession {
     initialized: boolean;
     numEnvs: number;
 }
-
-const DEFAULT_MAX_CLIENT_SESSIONS = 32;
 
 export class IpcBridge {
     private sock: zmq.Router;
@@ -48,10 +46,12 @@ export class IpcBridge {
         // A cap below 1 is meaningless: clamp so a bad config loudly enforces
         // a single concurrent session instead of rejecting every init. A
         // missing/non-finite value (e.g. a partial mock config) falls back to
-        // the built-in default instead of producing NaN.
+        // the loader-provided default instead of producing NaN, and numeric
+        // strings from env-style configs are honored like real numbers.
         const configuredCap = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
-        this.maxClientSessions = Number.isFinite(configuredCap)
-            ? Math.max(1, configuredCap as number)
+        const cap = typeof configuredCap === 'string' ? Number(configuredCap) : configuredCap;
+        this.maxClientSessions = Number.isFinite(cap)
+            ? Math.max(1, cap as number)
             : DEFAULT_MAX_CLIENT_SESSIONS;
         this.sock = new zmq.Router();
         this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
