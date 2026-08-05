@@ -421,6 +421,11 @@ export class BonkEnvironment {
         // here), then one opponent per remaining slot of [0, numOpponents]
         // (#221). The AI spawns on the blue team spawn and opponents on the
         // red team spawn regardless of slot numbering, as before.
+        //
+        // Re-apply the AI slot to the engine every reset (setPlayerTeam below
+        // is re-applied per episode too): the default collision categories
+        // keep the AI disc on g1 and opponents on g2 whatever their slots.
+        this.physics.setAiPlayerId(this.aiPlayerId);
         this.physics.addPlayer(
             this.aiPlayerId,
             teamB.x,

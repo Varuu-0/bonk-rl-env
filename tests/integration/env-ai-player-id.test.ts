@@ -1,6 +1,7 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy, EMPTY_INPUT } from '../utils/test-helpers';
+import type { MapDef } from '../../src/core/physics-engine';
 
 describe('Environment aiPlayerId wiring (#221)', () => {
   let env: BonkEnvironment | null = null;
@@ -43,6 +44,30 @@ describe('Environment aiPlayerId wiring (#221)', () => {
     expect(after.velX).toBeGreaterThan(before.velX);
     expect((env as any).aiPlayerId).toBe(1);
     expect((env as any).opponentIds).toEqual([0]);
+  });
+
+  it('keeps the AI disc on the g1 collision category whatever its slot', () => {
+    // A g1-only barrier between the blue and red spawns: the AI (slot 1 here)
+    // must still be blocked (AI disc = category g1), or the slot-based
+    // category rule would let it pass as g2 (#221).
+    const mapData: MapDef = {
+      name: 'g1-barrier',
+      spawnPoints: {
+        team_blue: { x: -150, y: 0 },
+        team_red: { x: 250, y: 0 },
+      },
+      bodies: [
+        { name: 'barrier', type: 'rect', x: 0, y: 50, width: 20, height: 1200, static: true, collides: { g1: true, g2: false, g3: false, g4: false } },
+        { name: 'floor', type: 'rect', x: 0, y: 500, width: 1000, height: 40, static: true },
+      ],
+    };
+    env = new BonkEnvironment({ aiPlayerId: 1, numOpponents: 1, mapData, maxTicks: 400, randomOpponent: false });
+    env.reset();
+    for (let i = 0; i < 150; i++) {
+      env.step({ ...EMPTY_INPUT, right: true });
+    }
+    const final = env.step(EMPTY_INPUT).observation;
+    expect(final.playerX).toBeLessThan(0);
   });
 
   it('out-of-range aiPlayerId fails loudly instead of being silently ignored', () => {
