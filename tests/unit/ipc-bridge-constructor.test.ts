@@ -126,6 +126,14 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getBindAddress()).toBe('localhost');
   });
 
+  it('passes interface names containing underscores through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: 'my_if0' } });
+    expect(bridge.getBindAddress()).toBe('my_if0');
+
+    const bridge2 = new IpcBridge({ server: { port: 12345, bindAddress: 'veth_1' } });
+    expect(bridge2.getBindAddress()).toBe('veth_1');
+  });
+
   it('passes the libzmq all-interfaces wildcard through unmodified', () => {
     const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '*' } });
     expect(bridge.getBindAddress()).toBe('*');
@@ -150,6 +158,13 @@ describe('IpcBridge constructor', () => {
 
   it('rejects a bare underscore bind address (issue #235)', () => {
     expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '_' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a purely numeric bind address that is not a valid IPv4 (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '12345' } }))
       .toThrowError(/Invalid server\.bindAddress/);
   });
 

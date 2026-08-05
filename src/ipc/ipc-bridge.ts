@@ -34,11 +34,12 @@ export class IpcBridge {
      * Empty/whitespace values fall back to the loopback default; `*` (the
      * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
      * wrapped in the brackets the tcp:// endpoint syntax requires. Everything
-     * else must be a valid IPv4 address, a valid IPv6 literal, or an RFC 1123
-     * hostname/interface name — malformed values (e.g. a host:port mistake,
-     * an out-of-range dotted-numeric octet, or a non-name) fail loudly at
-     * construction instead of surfacing as an opaque bind() error (issue
-     * #235).
+     * else must be a valid IPv4 address, a valid IPv6 literal, or a DNS /
+     * interface name (underscores tolerated, at least one alphanumeric
+     * character) — malformed values (e.g. a host:port mistake, out-of-range
+     * dotted-numeric octets, purely numeric or underscore-only labels) fail
+     * loudly at construction instead of surfacing as an opaque bind() error
+     * (issue #235).
      */
     private static normalizeBindAddress(raw: string | undefined): string {
         const addr = (raw ?? '').trim();
@@ -65,10 +66,16 @@ export class IpcBridge {
         if (/^\d+(\.\d+)+$/.test(bare)) {
             throw new Error(`Invalid server.bindAddress "${raw}": not a valid IPv4 address.`);
         }
-        // RFC 1123 hostname / interface name. Anything else — semicolons,
-        // whitespace, a trailing :port, a bare `_` label — is rejected rather
-        // than silently producing an invalid bind endpoint.
-        if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(bare)) {
+        // A purely numeric label (999, 12345) is neither an IP nor a usable
+        // hostname for binding.
+        if (/^\d+$/.test(bare)) {
+            throw new Error(`Invalid server.bindAddress "${raw}": not a valid IPv4 address.`);
+        }
+        // DNS / interface name: `[a-zA-Z0-9_-]` labels joined by dots, with
+        // at least one alphanumeric character so a bare `_`/`-` is rejected.
+        // Anything else — semicolons, whitespace, a trailing :port — is also
+        // rejected rather than silently producing an invalid bind endpoint.
+        if (/^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$/.test(bare) && /[a-zA-Z0-9]/.test(bare)) {
             return bare;
         }
         throw new Error(`Invalid server.bindAddress "${raw}": expected an IPv4/IPv6 address, hostname, or '*' (no port).`);
