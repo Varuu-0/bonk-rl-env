@@ -79,6 +79,34 @@ function observationFastToArray(env: BonkEnvironment): Float32Array {
     return env.getObservationFast();
 }
 
+/**
+ * Canonical transport precision (issue #236): observations and rewards are
+ * published as IEEE-754 Float32 in every transport. The shared-memory path
+ * quantizes by construction (the SAB observation/reward records are
+ * Float32Array views filled from the Float32 _obsBuffer and storage), so
+ * message-passing replies quantize here with Math.fround (identical
+ * round-to-nearest-even) to make both transports bit-identical for the same
+ * (seed, actions). Boolean/flag fields and integer tick are exact in Float32
+ * and are left untouched.
+ */
+function quantizeObservation(obs: Observation): Observation {
+    obs.playerX = Math.fround(obs.playerX);
+    obs.playerY = Math.fround(obs.playerY);
+    obs.playerVelX = Math.fround(obs.playerVelX);
+    obs.playerVelY = Math.fround(obs.playerVelY);
+    obs.playerAngle = Math.fround(obs.playerAngle);
+    obs.playerAngularVel = Math.fround(obs.playerAngularVel);
+    obs.arenaHalfWidth = Math.fround(obs.arenaHalfWidth);
+    obs.arenaHalfHeight = Math.fround(obs.arenaHalfHeight);
+    for (const opp of obs.opponents) {
+        opp.x = Math.fround(opp.x);
+        opp.y = Math.fround(opp.y);
+        opp.velX = Math.fround(opp.velX);
+        opp.velY = Math.fround(opp.velY);
+    }
+    return obs;
+}
+
 parentPort.on('message', (msg) => {
     try {
         if (msg.type === 'init') {
@@ -145,6 +173,7 @@ parentPort.on('message', (msg) => {
                 signalSyncCompleted();
             }
             // Always include observation data in the response (shared memory is for step(), not reset())
+            obs.forEach(quantizeObservation);
             parentPort!.postMessage({
                 id: msg.id,
                 status: 'ok',
@@ -166,6 +195,20 @@ parentPort.on('message', (msg) => {
             stepCounter++;
             if (stepCounter % 1000 === 0) {
                 globalProfiler.recordMemory();
+            }
+
+            // Canonical transport precision (issue #236): the shared-memory
+            // path stores observations and rewards as Float32, so message
+            // replies quantize to the same precision for bit-identical
+            // (seed, actions) replay across transports. On terminal steps the
+            // terminal observation is a distinct object from the post-reset
+            // observation, so both are quantized.
+            for (const res of results) {
+                quantizeObservation(res.observation);
+                if (res.info.terminal_observation) {
+                    quantizeObservation(res.info.terminal_observation);
+                }
+                res.reward = Math.fround(res.reward);
             }
 
             parentPort!.postMessage({
