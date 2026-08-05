@@ -1,4 +1,5 @@
 import * as zmq from "zeromq";
+import * as net from "net";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
@@ -32,14 +33,35 @@ export class IpcBridge {
      * Normalize a configured bind address into a ZMQ endpoint-ready host.
      * Empty/whitespace values fall back to the loopback default, and bare
      * IPv6 literals are wrapped in the brackets the tcp:// endpoint syntax
-     * requires (issue #235).
+     * requires. Hostnames/interface names pass through; malformed values
+     * (e.g. a host:port mistake, which a naive "contains a colon" IPv6 check
+     * would otherwise bracket into an invalid endpoint) fail loudly at
+     * construction instead of surfacing as an opaque bind() error (issue
+     * #235).
      */
     private static normalizeBindAddress(raw: string | undefined): string {
-        const addr = (raw ?? '').trim();
+        let addr = (raw ?? '').trim();
         if (addr.length === 0) {
             return '127.0.0.1';
         }
-        return addr.includes(':') && !addr.startsWith('[') ? `[${addr}]` : addr;
+        let bare = addr;
+        if (addr.startsWith('[') && addr.endsWith(']')) {
+            bare = addr.slice(1, -1);
+        }
+        const ipKind = net.isIP(bare);
+        if (ipKind === 6) {
+            return `[${bare}]`;
+        }
+        if (ipKind === 4) {
+            return bare;
+        }
+        // RFC 1123-style hostname / interface name (underscore tolerated).
+        // Anything else — semicolons, whitespace, a trailing :port — is
+        // rejected rather than silently producing an invalid bind endpoint.
+        if (!/^[a-zA-Z0-9_]([a-zA-Z0-9_-]*[a-zA-Z0-9_])?(\.[a-zA-Z0-9_]([a-zA-Z0-9_-]*[a-zA-Z0-9_])?)*$/.test(bare)) {
+            throw new Error(`Invalid server.bindAddress "${raw}": expected an IPv4/IPv6 address or hostname (no port).`);
+        }
+        return bare;
     }
 
     // Wrapped send function for telemetry

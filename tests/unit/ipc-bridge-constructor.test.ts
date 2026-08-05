@@ -121,6 +121,21 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getBindAddress()).toBe('[::1]');
   });
 
+  it('passes a hostname bind address through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: 'localhost' } });
+    expect(bridge.getBindAddress()).toBe('localhost');
+  });
+
+  it('rejects a host:port-style bind address with a clear error (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '127.0.0.1:5555' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a malformed bind address with a clear error (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: 'not a host' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
   it('falls back to the loopback default for an empty bind address', () => {
     const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '  ' } });
     expect(bridge.getBindAddress()).toBe('127.0.0.1');
