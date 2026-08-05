@@ -152,6 +152,7 @@ const fakes = vi.hoisted(() => {
         rewards: new Float32Array(this.numEnvs),
         dones: new Uint8Array(this.numEnvs),
         truncated: new Uint8Array(this.numEnvs),
+        terminated: new Uint8Array(this.numEnvs),
         ticks: new Uint32Array(this.numEnvs),
       };
     }

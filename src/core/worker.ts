@@ -200,6 +200,7 @@ parentPort.on('message', (msg) => {
                     sharedMem!.writeReward(i, res.reward);
                     sharedMem!.writeDone(i, res.done ? 1 : 0);
                     sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
+                    sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                     sharedMem!.writeTick(i, res.info.tick || stepCounter);
                 });
 
@@ -284,6 +285,7 @@ parentPort.on('message', (msg) => {
                             sharedMem!.writeReward(i, res.reward);
                             sharedMem!.writeDone(i, res.done ? 1 : 0);
                             sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
+                            sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                             sharedMem!.writeTick(i, res.info.tick || stepCounter);
                         });
 

@@ -12,6 +12,7 @@ export class SharedMemoryManager {
         rewards: Float32Array;
         dones: Uint8Array;
         truncated: Uint8Array;
+        terminated: Uint8Array;
         ticks: Uint32Array;
     };
     private seeds: Uint32Array;
@@ -46,11 +47,12 @@ export class SharedMemoryManager {
         const rewardBytes = align8(numEnvs * 4);
         const doneBytes = align8(numEnvs * 1);
         const truncatedBytes = align8(numEnvs * 1);
+        const terminatedBytes = align8(numEnvs * 1);
         const tickBytes = align8(numEnvs * 4);
         const seedBytes = align8(numEnvs * 4);
         const controlBytes = 64; // Reserve plenty
 
-        const totalBytes = actionBytes + obsBytes + terminalObsBytes + hasTerminalObsBytes + rewardBytes + doneBytes + truncatedBytes + tickBytes + seedBytes + controlBytes;
+        const totalBytes = actionBytes + obsBytes + terminalObsBytes + hasTerminalObsBytes + rewardBytes + doneBytes + truncatedBytes + terminatedBytes + tickBytes + seedBytes + controlBytes;
 
         if (existingBuffer) {
             this.buffer = existingBuffer;
@@ -69,6 +71,7 @@ export class SharedMemoryManager {
             rewards: null as any,
             dones: null as any,
             truncated: null as any,
+            terminated: null as any,
             ticks: null as any
         };
         offset = align8(offset + actionBytes);
@@ -90,6 +93,9 @@ export class SharedMemoryManager {
 
         this.views.truncated = new Uint8Array(this.buffer, offset, numEnvs);
         offset = align8(offset + truncatedBytes);
+
+        this.views.terminated = new Uint8Array(this.buffer, offset, numEnvs);
+        offset = align8(offset + terminatedBytes);
 
         this.views.ticks = new Uint32Array(this.buffer, offset, numEnvs);
         offset = align8(offset + tickBytes);
@@ -117,7 +123,7 @@ export class SharedMemoryManager {
         const align8 = (n: number) => (n + 7) & ~7;
         return align8(numEnvs * ringSize) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) + align8(numEnvs * SharedMemoryManager.OBSERVATION_FLOATS * 4) +
             align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 1) + align8(numEnvs * 1) +
-            align8(numEnvs * 4) + align8(numEnvs * 4) + 64;
+            align8(numEnvs * 1) + align8(numEnvs * 4) + align8(numEnvs * 4) + 64;
     }
 
     getBuffer() { return this.buffer; }
@@ -196,6 +202,7 @@ export class SharedMemoryManager {
             rewards: this.views.rewards,
             dones: this.views.dones,
             truncated: this.views.truncated,
+            terminated: this.views.terminated,
             ticks: this.views.ticks
         };
     }
@@ -213,6 +220,7 @@ export class SharedMemoryManager {
     writeReward(envIndex: number, reward: number) { this.views.rewards[envIndex] = reward; }
     writeDone(envIndex: number, done: number) { this.views.dones[envIndex] = done; }
     writeTruncated(envIndex: number, truncated: number) { this.views.truncated[envIndex] = truncated; }
+    writeTerminated(envIndex: number, terminated: number) { this.views.terminated[envIndex] = terminated; }
     writeTick(envIndex: number, tick: number) { this.views.ticks[envIndex] = tick; }
 
     incrementStepCounter() { return Atomics.add(this.control.stepCounter, 0, 1); }
@@ -244,6 +252,7 @@ export class SharedMemoryManager {
         this.views.rewards.fill(0);
         this.views.dones.fill(0);
         this.views.truncated.fill(0);
+        this.views.terminated.fill(0);
         this.views.ticks.fill(0);
         this.seeds.fill(0);
         Atomics.store(this.control.stepCounter, 0, 0);
