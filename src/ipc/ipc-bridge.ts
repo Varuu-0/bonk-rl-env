@@ -13,6 +13,7 @@ export class IpcBridge {
     private stepCount: number = 0;
     private _closed: boolean = false;
     private _initialized: boolean = false;
+    private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
@@ -69,6 +70,7 @@ export class IpcBridge {
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
                     await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
                     this._initialized = true;
+                    this._numEnvs = numEnvs;
                     response = { status: "ok" };
                 }
             } else if (command === "reset") {
@@ -95,6 +97,15 @@ export class IpcBridge {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
                 } else if (!this._initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
+                } else if (actions.length !== this._numEnvs) {
+                    // Reject a wrong-sized batch before any pool state is
+                    // touched, mirroring the Python client's exact-count
+                    // check. A short array must not reach the pool as an
+                    // encoding error that could fail it in shared-memory mode.
+                    response = {
+                        status: "error",
+                        error: `Invalid actions: expected ${this._numEnvs} actions for ${this._numEnvs} environments, got ${actions.length}`,
+                    };
                 } else {
                     // Requests are serialized by the server loop, and the
                     // borrowed graph below is only valid until the next pool
@@ -132,6 +143,7 @@ export class IpcBridge {
                     // server keep working.
                     await this.pool.close();
                     this._initialized = false;
+                    this._numEnvs = 0;
                     response = { status: "ok" };
                 }
             } else {

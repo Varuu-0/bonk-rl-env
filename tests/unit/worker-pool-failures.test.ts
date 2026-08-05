@@ -431,6 +431,60 @@ describe('WorkerPool failure state', () => {
     expect(results).toHaveLength(1);
   });
 
+  it('treats a short action batch in shared mode as a transient per-request error', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(2, {}, true);
+    await pool.reset([1, 2]);
+
+    await expect(pool.step([0])).rejects.toThrow('Invalid action batch: expected 2 actions for 2 environments, got 1');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(false);
+
+    const results = await pool.step([0, 0]);
+    expect(results).toHaveLength(2);
+    await expect(pool.reset([1, 2])).resolves.toHaveLength(2);
+  });
+
+  it('treats a short action batch in message mode as a transient per-request error', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(2, {}, false);
+    await pool.reset([1, 2]);
+
+    await expect(pool.step([0])).rejects.toThrow('Invalid action batch: expected 2 actions for 2 environments, got 1');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+
+    await expect(pool.step([0, 0])).resolves.toBeDefined();
+    expect((pool as any).state).toBe('ready');
+  });
+
+  it('rejects an over-long action batch without touching the pool', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, true);
+    await pool.reset([1]);
+
+    await expect(pool.step([0, 0])).rejects.toThrow('Invalid action batch: expected 1 actions for 1 environments, got 2');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    await expect(pool.step([0])).resolves.toHaveLength(1);
+  });
+
+  it('treats an invalid (null) action in shared mode as a transient per-request error', async () => {
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, true);
+    await pool.reset([1]);
+
+    await expect(pool.step([null as any])).rejects.toThrow('Invalid action: expected a PlayerInput object or an encoded number, got null');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(false);
+    expect((pool as any).state).toBe('ready');
+
+    const results = await pool.step([0]);
+    expect(results).toHaveLength(1);
+  });
+
   it('propagates telemetry snapshot errors without failing the pool', async () => {
     fakes.control.messageTimeoutMs = 20;
     pool = new WorkerPool(1);
