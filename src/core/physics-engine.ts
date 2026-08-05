@@ -1044,6 +1044,11 @@ export class PhysicsEngine {
   }
 
   private releaseGrapple(playerId: number): void {
+    // The swingJustStarted marker only ever accompanies a live joint: purge it
+    // on every release (button release, forced drain-out, collision break,
+    // detachPlayer) so it can never outlive the joint and mis-flag a later
+    // re-fire as an attach tick.
+    this.swingJustStarted.delete(playerId);
     const joint = this.playerGrappleJoints.get(playerId);
     if (joint) {
       this.world.DestroyJoint(joint);
