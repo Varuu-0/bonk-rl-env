@@ -91,13 +91,17 @@ def _windows_process_table():
     return table
 
 
-def _taskkill(pid):
-    """Force-kill ``pid`` and its whole child tree on Windows."""
+def _taskkill(pid, tree=True):
+    """Force-kill ``pid`` on Windows, optionally its whole child tree."""
     if os.name != "nt":
         return
+    args = ["taskkill", "/F"]
+    if tree:
+        args.append("/T")
+    args.extend(["/PID", str(pid)])
     try:
         subprocess.run(
-            ["taskkill", "/F", "/T", "/PID", str(pid)],
+            args,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=30,
@@ -234,19 +238,25 @@ def bonk_server():
         else:
             pytest.skip("bonk server did not start within 10s")
 
+    # Snapshot our spawn's process tree while the parent is provably alive,
+    # so the PIDs cannot have been recycled by the time teardown runs. This
+    # lets teardown reclaim the port from a straggler child even if the
+    # parent died later, without ever touching a foreign process.
+    spawned_pids = set()
+    if proc is not None and os.name == "nt":
+        spawned_pids = _process_tree_pids(_windows_process_table(), proc.pid)
+
     yield proc
 
     if proc is not None:
         _kill_process_tree(proc)
 
-        # Belt and suspenders: any listener still on the port while our
-        # server process is still alive belongs to our spawn (stale servers
-        # were removed at startup), so remove it too. If our process already
-        # exited, a listener could be a foreign server that took over the
-        # port — leave it alone.
-        if proc.poll() is None:
-            for pid in _listening_pids(port):
-                _taskkill(pid)
+        # Belt and suspenders: reclaim the port from any straggler child of
+        # our spawn that survived the tree-kill. Only PIDs that were verified
+        # descendants at snapshot time are killed, and only as leaves
+        # (no /T), so a foreign server that took over the port is untouched.
+        for pid in _listening_pids(port) & spawned_pids:
+            _taskkill(pid, tree=False)
 
 
 @pytest.fixture

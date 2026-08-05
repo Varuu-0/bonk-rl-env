@@ -157,6 +157,16 @@ def test_taskkill_is_noop_off_windows(monkeypatch):
     assert recorder.calls == []
 
 
+def test_taskkill_leaf_kill_omits_tree_flag(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    recorder = _RecordingSubprocess()
+    monkeypatch.setattr(conftest.subprocess, "run", recorder.run)
+
+    conftest._taskkill(42, tree=False)
+
+    assert recorder.calls == [["taskkill", "/F", "/PID", "42"]]
+
+
 def test_windows_process_table_parses_cim_json(monkeypatch):
     class _Result:
         returncode = 0
