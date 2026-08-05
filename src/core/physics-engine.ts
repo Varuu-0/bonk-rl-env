@@ -100,6 +100,18 @@ export const A1A_RECHARGE = 3;
 export const ARENA_HALF_WIDTH = 25;
 export const ARENA_HALF_HEIGHT = 20;
 
+/** Arena-bounds margin (metres) added to the extents derived from map bodies. */
+export const ARENA_BOUNDS_MARGIN = 5;
+
+/**
+ * World broadphase AABB half-extent (metres). Kept far larger than any playable
+ * map (the OOB death circle is 850 map px = 28.3 m) so the bundled port never
+ * brushes its boundary. The documented `physics.worldAabbExtent` default (1000)
+ * is applied by the config pipeline; this constant is the oversized fallback
+ * for engines constructed directly without options.
+ */
+export const WORLD_AABB_EXTENT = 5000;
+
 /**
  * Movement-force base for the player disc after the native radius^2 scale
  * and before the heavy damp (DEOBFUSCATION §35.5 movement branch, lines
@@ -210,6 +222,40 @@ export interface MapDef {
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
 
+/**
+ * Optional engine tuning surface. Each field maps 1:1 onto a documented
+ * config-loader key (`physics.*`, `arena.*`, `player.*`) that BonkEnvironment
+ * forwards to the engine; every field falls back to a sanity default (the
+ * module constants above) when absent, so `new PhysicsEngine()` keeps the
+ * exact behaviour it always had.
+ */
+export interface PhysicsEngineOptions {
+    /** Fixed physics update rate (ticks/second); dt = 1 / this value. Default: TPS (30). */
+    ticksPerSecond?: number;
+    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2). */
+    velocityIterations?: number;
+    /** Pixels-per-metre conversion for exported map coordinates. Default: SCALE (30). */
+    scale?: number;
+    /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
+    gravityX?: number;
+    /** Vertical world gravity (m/s², positive down). Default: GRAVITY_Y (20). */
+    gravityY?: number;
+    /** Allow inactive bodies to sleep. Default: true (native). */
+    enableSleeping?: boolean;
+    /** Half-extent of the world broadphase AABB. Default: WORLD_AABB_EXTENT (5000). */
+    worldAabbExtent?: number;
+    /** Fallback arena half-width (metres) when no map body defines the bounds. Default: ARENA_HALF_WIDTH (25). */
+    arenaHalfWidth?: number;
+    /** Fallback arena half-height (metres) when no map body defines the bounds. Default: ARENA_HALF_HEIGHT (20). */
+    arenaHalfHeight?: number;
+    /** Extra margin (metres) added to arena extents derived from map bodies. Default: ARENA_BOUNDS_MARGIN (5). */
+    arenaBoundsMargin?: number;
+    /** Movement-force base applied to all directions (× heavy for heavy). Default: MOVE_FORCE (30). */
+    moveForce?: number;
+    /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7). */
+    heavyForceMultiplier?: number;
+}
+
 /** Frozen final transforms of a dead disc, snapshotted when its body is detached
  * from the live world. Observations read these plain objects instead of the
  * destroyed b2Body, which this port may leave partially readable or recycle. */
@@ -251,6 +297,19 @@ export class PhysicsEngine {
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
+  /** Resolved instance tuning (from PhysicsEngineOptions; module constants used
+   *  when the corresponding option is absent). */
+  private tps: number = TPS;
+  private dt: number = DT;
+  private velocityIterations: number = VELOCITY_ITERATIONS;
+  private scale: number = SCALE;
+  private gravityX: number = GRAVITY_X;
+  private gravityY: number = GRAVITY_Y;
+  private enableSleeping: boolean = true;
+  private worldAabbExtent: number = WORLD_AABB_EXTENT;
+  private arenaBoundsMargin: number = ARENA_BOUNDS_MARGIN;
+  private moveForce: number = MOVE_FORCE;
+  private heavyForceMultiplier: number = HEAVY_FORCE_MULTIPLIER;
   /** Running arena extents in metres, folded in O(1) per addBody so map build
    *  and episode reset stay linear instead of rescanning every platform body
    *  (the old per-add full pass was O(bodies²)). */
@@ -273,7 +332,9 @@ export class PhysicsEngine {
   private lastHitBy: Map<number, number> = new Map();
   /** Native lht: remaining attribution ticks (starts at 120 = 4s at 30 TPS). */
   private lastHitTicks: Map<number, number> = new Map();
-  /** Cached squared OOB radius so tick() avoids per-player Math.sqrt. */
+  /** Cached squared OOB radius, computed from the resolved scale so a configured
+   *  pixels-per-metre value moves the death circle with it (still exactly 850
+   *  map px, verified native "Death Type 4"). */
   private oobRadiusSquared: number = Math.pow(OUT_OF_BOUNDS_DISTANCE / SCALE, 2);
   /** OOB death-circle center in world units. Defaults to the world origin;
    * setDeathCircleCenter() moves it to the map center for exported maps. */
@@ -282,14 +343,37 @@ export class PhysicsEngine {
   /** Reused by getArenaBounds so the zero-GC observation path allocates nothing per step. */
   private _arenaBoundsCache: { halfWidth: number; halfHeight: number } = { halfWidth: 0, halfHeight: 0 };
 
-  constructor() {
-    // Create world with AABB and gravity
-    const worldAABB = new b2AABB();
-    worldAABB.lowerBound.Set(-5000, -5000);
-    worldAABB.upperBound.Set(5000, 5000);
+  constructor(options: PhysicsEngineOptions = {}) {
+    // Resolve the documented tuning surface (config-loader physics/arena/player
+    // sections) onto the engine. Every key falls back to its sanity default
+    // (the module constant) when absent, so a bare `new PhysicsEngine()` keeps
+    // the exact behaviour it always had.
+    this.tps = options.ticksPerSecond ?? TPS;
+    this.dt = 1 / this.tps;
+    this.velocityIterations = options.velocityIterations ?? VELOCITY_ITERATIONS;
+    this.scale = options.scale ?? SCALE;
+    this.gravityX = options.gravityX ?? GRAVITY_X;
+    this.gravityY = options.gravityY ?? GRAVITY_Y;
+    this.enableSleeping = options.enableSleeping ?? true;
+    this.worldAabbExtent = options.worldAabbExtent ?? WORLD_AABB_EXTENT;
+    this.arenaHalfWidth = options.arenaHalfWidth ?? ARENA_HALF_WIDTH;
+    this.arenaHalfHeight = options.arenaHalfHeight ?? ARENA_HALF_HEIGHT;
+    this.arenaBoundsMargin = options.arenaBoundsMargin ?? ARENA_BOUNDS_MARGIN;
+    this.moveForce = options.moveForce ?? MOVE_FORCE;
+    this.heavyForceMultiplier = options.heavyForceMultiplier ?? HEAVY_FORCE_MULTIPLIER;
+    this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
+    this.createWorld();
+  }
 
-    const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
-    this.world = new b2World(worldAABB, gravity, true /* doSleep */);
+  /** Create a fresh world from the resolved instance tuning. Used by the
+   *  constructor and reset() so configuration survives world rebuilds. */
+  private createWorld(): void {
+    const worldAABB = new b2AABB();
+    worldAABB.lowerBound.Set(-this.worldAabbExtent, -this.worldAabbExtent);
+    worldAABB.upperBound.Set(this.worldAabbExtent, this.worldAabbExtent);
+
+    const gravity = new b2Vec2(this.gravityX, this.gravityY);
+    this.world = new b2World(worldAABB, gravity, this.enableSleeping);
     this.world.SetWarmStarting(false);
 
     // Set up collision listener for verified contact rules
@@ -482,7 +566,7 @@ export class PhysicsEngine {
    */
   addBody(def: MapBodyDef): void {
     const bodyDef = new b2BodyDef();
-    bodyDef.position.Set(def.x / SCALE, def.y / SCALE);
+    bodyDef.position.Set(def.x / this.scale, def.y / this.scale);
     if (def.angle) bodyDef.angle = def.angle;
     bodyDef.linearDamping = def.linearDamping ?? 0;
     bodyDef.angularDamping = def.angularDamping ?? 0;
@@ -494,10 +578,10 @@ export class PhysicsEngine {
       shapeDef = new b2PolygonDef();
       const hw = (def.width || 0) / 2;
       const hh = (def.height || 0) / 2;
-      shapeDef.SetAsBox(hw / SCALE, hh / SCALE);
+      shapeDef.SetAsBox(hw / this.scale, hh / this.scale);
      } else if (def.type === 'circle') {
        shapeDef = new b2CircleDef();
-       shapeDef.radius = (def.radius || 0) / SCALE;
+       shapeDef.radius = (def.radius || 0) / this.scale;
      } else if (def.type === 'polygon') {
        if (!def.vertices || def.vertices.length < 3) {
          console.warn(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
@@ -509,7 +593,7 @@ export class PhysicsEngine {
        const maxVertices = Math.min(def.vertices.length, 8);
        for (let i = 0; i < maxVertices; i++) {
          const v = def.vertices[i];
-         shapeDef.vertices[i].Set(v.x / SCALE, v.y / SCALE);
+         shapeDef.vertices[i].Set(v.x / this.scale, v.y / this.scale);
        }
        shapeDef.vertexCount = maxVertices;
      }
@@ -578,12 +662,12 @@ export class PhysicsEngine {
 
   addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
     const bodyDef = new b2BodyDef();
-    bodyDef.position.Set(x / SCALE, y / SCALE);
+    bodyDef.position.Set(x / this.scale, y / this.scale);
 
     const body = this.world.CreateBody(bodyDef);
 
     const shapeDef = new b2PolygonDef();
-    shapeDef.SetAsBox((width / 2) / SCALE, (height / 2) / SCALE);
+    shapeDef.SetAsBox((width / 2) / this.scale, (height / 2) / this.scale);
     shapeDef.density = 0;
     shapeDef.isSensor = true;
 
@@ -665,7 +749,8 @@ export class PhysicsEngine {
     }
 
     if (isFinite(this.arenaMinX)) {
-      const margin = 5; // 5 metres extra buffer
+      // Extra margin beyond the map extents (configured arena.boundsMargin).
+      const margin = this.arenaBoundsMargin;
       this.arenaHalfWidth = Math.max(Math.abs(this.arenaMinX), Math.abs(this.arenaMaxX)) + margin;
       this.arenaHalfHeight = Math.max(Math.abs(this.arenaMinY), Math.abs(this.arenaMaxY)) + margin;
     }
@@ -697,25 +782,25 @@ export class PhysicsEngine {
   }
 
   /**
-   * Per-map arena bounds in map coordinates (metres × SCALE).
+   * Per-map arena bounds in map coordinates (metres × this.scale).
    * Returns a cached object — callers must treat it as read-only.
    */
   getArenaBounds(): { halfWidth: number; halfHeight: number } {
-    this._arenaBoundsCache.halfWidth = this.arenaHalfWidth * SCALE;
-    this._arenaBoundsCache.halfHeight = this.arenaHalfHeight * SCALE;
+    this._arenaBoundsCache.halfWidth = this.arenaHalfWidth * this.scale;
+    this._arenaBoundsCache.halfHeight = this.arenaHalfHeight * this.scale;
     return this._arenaBoundsCache;
   }
 
   /**
    * Sets the map's player-disc radius setting before players are created.
-   * Exported map coordinates are converted through SCALE for this Box2D port.
+   * Exported map coordinates are converted through this.scale for this Box2D port.
    */
   setScale(ppm: number): void {
     if (Number.isFinite(ppm) && ppm > 0) {
       this.ppm = ppm;
-      // OOB stays 850/SCALE: the native 850/ppm rule is in native world units
+      // OOB stays 850/this.scale: the native 850/ppm rule is in native world units
       // (px/ppm); the map-coordinate death circle is exactly 850 px for every
-      // map, so in this port's px/SCALE world the ppm cancels. (DEOBFUSCATION
+      // map, so in this port's px/scale world the ppm cancels. (DEOBFUSCATION
       // §"Death Type 4", tracked in DEOBFUSCATION_FIX_TRACKER.)
     }
   }
@@ -748,8 +833,8 @@ export class PhysicsEngine {
       );
       return;
     }
-    this.oobCenterX = centerXMapUnits / SCALE;
-    this.oobCenterY = centerYMapUnits / SCALE;
+    this.oobCenterX = centerXMapUnits / this.scale;
+    this.oobCenterY = centerYMapUnits / this.scale;
   }
 
   getBodyMap(): Map<string, any> {
@@ -769,10 +854,10 @@ export class PhysicsEngine {
     }
     
     const anchorA = def.anchorA
-      ? new b2Vec2(def.anchorA.x / SCALE, def.anchorA.y / SCALE)
+      ? new b2Vec2(def.anchorA.x / this.scale, def.anchorA.y / this.scale)
       : bodyA.GetPosition();
     const anchorB = def.anchorB
-      ? new b2Vec2(def.anchorB.x / SCALE, def.anchorB.y / SCALE)
+      ? new b2Vec2(def.anchorB.x / this.scale, def.anchorB.y / this.scale)
       : bodyB.GetPosition();
     
     if (def.type === 'distance') {
@@ -803,12 +888,12 @@ export class PhysicsEngine {
    */
   addPlayer(id: number, x: number, y: number): void {
     const bodyDef = new b2BodyDef();
-    bodyDef.position.Set(x / SCALE, y / SCALE);
+    bodyDef.position.Set(x / this.scale, y / this.scale);
 
     const body = this.world.CreateBody(bodyDef);
 
     const circleDef = new b2CircleDef();
-    circleDef.radius = this.ppm / SCALE;
+    circleDef.radius = this.ppm / this.scale;
     // Verified native disc fixture: density = 1/(pi*r^2) baseline so the disc
     // mass is exactly 1 (DEOBFUSCATION §35.4 / §38.6), friction 0.001337,
     // restitution 0.95 (live 2026-07-29 fixture).
@@ -862,13 +947,15 @@ export class PhysicsEngine {
     // is the disc mass ratio `π·r²/(π·1²)`, which the verified mass-1 disc
     // fixture (#212) pins to exactly 1 for every disc radius — so the applied
     // force is constant and the net acceleration is radius/ppm-invariant, and
-    // no per-map `ppm` factor is needed. Heavy then damps the vector ×0.7.
-    if (input.left) force.x -= MOVE_FORCE;
-    if (input.right) force.x += MOVE_FORCE;
-    if (input.up) force.y -= MOVE_FORCE;
-    if (input.down) force.y += MOVE_FORCE;
+    // no per-map `ppm` factor is needed. Heavy then damps the vector via the
+    // configured heavy multiplier. The base and the heavy damp are the
+    // documented `player.moveForce` / `player.heavyMassMultiplier` surfaces.
+    if (input.left) force.x -= this.moveForce;
+    if (input.right) force.x += this.moveForce;
+    if (input.up) force.y -= this.moveForce;
+    if (input.down) force.y += this.moveForce;
 
-    if (input.heavy) force.Multiply(HEAVY_FORCE_MULTIPLIER);
+    if (input.heavy) force.Multiply(this.heavyForceMultiplier);
     body.ApplyForce(force, body.GetWorldCenter());
     this.playerHeavyState.set(playerId, input.heavy);
 
@@ -923,7 +1010,7 @@ export class PhysicsEngine {
     // set. The per-shape AABB overlap test below reproduces the broadphase
     // filter without a fixed-size result buffer: a shape whose surface is
     // within `window` units of the disc center always overlaps the ±window box.
-    const windowUnits = (GRAPPLE_TARGET_WINDOW * this.ppm) / SCALE;
+    const windowUnits = (GRAPPLE_TARGET_WINDOW * this.ppm) / this.scale;
     const queryAabb = new b2AABB();
     queryAabb.lowerBound.Set(playerPos.x - windowUnits, playerPos.y - windowUnits);
     queryAabb.upperBound.Set(playerPos.x + windowUnits, playerPos.y + windowUnits);
@@ -1119,10 +1206,10 @@ export class PhysicsEngine {
     const pos = body.GetPosition();
     const vel = body.GetLinearVelocity();
     this.detachedPlayerStates.set(id, {
-      x: pos.x * SCALE,
-      y: pos.y * SCALE,
-      velX: vel.x * SCALE,
-      velY: vel.y * SCALE,
+      x: pos.x * this.scale,
+      y: pos.y * this.scale,
+      velX: vel.x * this.scale,
+      velY: vel.y * this.scale,
       angle: body.GetAngle(),
       angularVel: body.GetAngularVelocity(),
     });
@@ -1137,7 +1224,8 @@ export class PhysicsEngine {
     tick(): void {
         if (!this.world) return;
         // This bundled Box2D v2.0 port accepts only one iteration count and
-        // ignores the third argument. The real client uses Step(dt, 2, 6).
+        // ignores the third argument. The real client uses Step(dt, 2, 6);
+        // the configured solver iterations drive the velocity-iteration count.
     // Count down last-hit attribution timers (native lht) before the step so
     // contacts created during this Step keep their full 120-tick window.
     for (const [id, ticks] of this.lastHitTicks) {
@@ -1154,7 +1242,7 @@ export class PhysicsEngine {
     this.updateGrappleEnergy();
     this.updateGrappleJointTuning();
 
-        this.world.Step(DT, VELOCITY_ITERATIONS, POSITION_ITERATIONS);
+        this.world.Step(this.dt, this.velocityIterations, POSITION_ITERATIONS);
     this.tickCount++;
 
     // Process cap-zone completion countdowns (before this tick's touches)
@@ -1320,10 +1408,10 @@ export class PhysicsEngine {
     const vel = body.GetLinearVelocity();
 
     return {
-      x: pos.x * SCALE,
-      y: pos.y * SCALE,
-      velX: vel.x * SCALE,
-      velY: vel.y * SCALE,
+      x: pos.x * this.scale,
+      y: pos.y * this.scale,
+      velX: vel.x * this.scale,
+      velY: vel.y * this.scale,
       angle: body.GetAngle(),
       angularVel: body.GetAngularVelocity(),
       isHeavy: this.playerHeavyState.get(playerId) || false,
@@ -1357,14 +1445,10 @@ export class PhysicsEngine {
    */
   reset(): void {
     // Don't try to destroy bodies one-by-one — box2d broadphase gets corrupted
-    // on complex maps. Just create a fresh world and let the old one be GC'd.
-    const worldAABB = new b2AABB();
-    worldAABB.lowerBound.Set(-5000, -5000);
-    worldAABB.upperBound.Set(5000, 5000);
-    const gravity = new b2Vec2(GRAVITY_X, GRAVITY_Y);
-    this.world = new b2World(worldAABB, gravity, true);
-    this.world.SetWarmStarting(false);
-    this.setupContactListener();
+    // on complex maps. Just create a fresh world (from the resolved instance
+    // tuning: gravity, sleeping, AABB all keep their configured values) and let
+    // the old one be GC'd.
+    this.createWorld();
 
     // Clear all state
     this.playerBodies.clear();
