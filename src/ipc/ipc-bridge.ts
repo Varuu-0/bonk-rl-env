@@ -16,6 +16,20 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    private _hostPool: boolean = false;
+    private _boundResolve: (() => void) | null = null;
+    private _boundReject: ((reason?: any) => void) | null = null;
+
+    /**
+     * Resolves once the ZMQ Router socket is bound and accepting connections,
+     * and rejects if the bind fails. Embedders that drive the serve loop
+     * without awaiting start() (which only exits on close()) can await this
+     * to know when the advertised port is actually reachable.
+     */
+    readonly ready: Promise<void> = new Promise<void>((resolve, reject) => {
+        this._boundResolve = resolve;
+        this._boundReject = reject;
+    });
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
@@ -24,6 +38,28 @@ export class IpcBridge {
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+
+        // The standalone server path awaits only bridge.start(). When the
+        // bind fails, both start() and ready reject; mark ready's rejection
+        // as handled so it cannot surface as an unhandled-rejection crash for
+        // consumers (such as src/server.ts) that never await ready.
+        this.ready.catch(() => {});
+    }
+
+    private markBound(): void {
+        if (this._boundResolve) {
+            this._boundResolve();
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
+    }
+
+    private markBindFailed(err: unknown): void {
+        if (this._boundReject) {
+            this._boundReject(err);
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
     }
 
     // Wrapped send function for telemetry
@@ -31,9 +67,15 @@ export class IpcBridge {
 
     async start() {
         const addr = `tcp://127.0.0.1:${this.port}`;
-        await this.sock.bind(addr);
+        try {
+            await this.sock.bind(addr);
+        } catch (err) {
+            this.markBindFailed(err);
+            throw err;
+        }
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
+        this.markBound();
 
         // Wait for incoming requests from Python
         try {
@@ -70,6 +112,21 @@ export class IpcBridge {
                 }
                 if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };
+                } else if (this._hostPool) {
+                    // The pool was adopted from an enclosing BonkEnv and is
+                    // already initialized with that env's numEnvs and config.
+                    // Never re-initialize it with client-default config (that
+                    // would discard the env-configured workers); accept an
+                    // init only when the requested env count matches.
+                    if (numEnvs === this._numEnvs) {
+                        this._initialized = true;
+                        response = { status: "ok" };
+                    } else {
+                        response = {
+                            status: "error",
+                            error: `Invalid init: this IPC server hosts ${this._numEnvs} environment(s), got ${numEnvs}`,
+                        };
+                    }
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
@@ -169,6 +226,12 @@ export class IpcBridge {
                     // Full server shutdown: close the Router after replying.
                     response = { status: "ok" };
                     this._shouldClose = true;
+                } else if (this._hostPool) {
+                    // Session close on an adopted pool: the host BonkEnv owns
+                    // the pool's lifecycle, so detach the client session
+                    // without tearing the env's workers down.
+                    this._initialized = false;
+                    response = { status: "ok" };
                 } else {
                     // Session close (default): free the client's env state but
                     // keep the server listening so other envs/tests on the same
@@ -238,6 +301,23 @@ export class IpcBridge {
             throw new Error('Invalid numEnvs: must be a positive integer');
         }
         await this.pool.init(numEnvs, config, useSharedMemory);
+        this._initialized = true;
+        this._numEnvs = numEnvs;
+    }
+
+    /**
+     * Adopt an already-initialized WorkerPool owned by an enclosing host
+     * (e.g. a BonkEnv). The IPC server then serves those env-configured
+     * workers instead of spawning its own, so external clients share the
+     * env's numEnvs/config/useSharedMemory rather than getting default
+     * workers. The host keeps owning the pool's lifecycle.
+     */
+    adoptPool(pool: WorkerPool, numEnvs: number): void {
+        if (this._hostPool || this._initialized) {
+            throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
+        }
+        this.pool = pool;
+        this._hostPool = true;
         this._initialized = true;
         this._numEnvs = numEnvs;
     }
