@@ -61,11 +61,8 @@ export class IpcBridge {
 
             if (command === "init") {
                 let numEnvs = payload.numEnvs;
-                if (typeof numEnvs === 'string') {
-                    const coerced = Number(numEnvs);
-                    if (Number.isInteger(coerced) && coerced >= 1) {
-                        numEnvs = coerced;
-                    }
+                if (typeof numEnvs === 'string' && /^\d+$/.test(numEnvs)) {
+                    numEnvs = Number(numEnvs);
                 }
                 if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };

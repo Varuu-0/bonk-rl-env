@@ -114,6 +114,15 @@ describe('IpcBridge handleRequest', () => {
       expect(response.error).toBe('Invalid numEnvs: must be a positive integer');
     });
 
+    it('rejects a non-decimal numeric-string numEnvs as error (#195)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: '0x2' }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Invalid numEnvs: must be a positive integer');
+    });
+
     it('coerces a numeric-string numEnvs to a positive integer (#195)', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: '2' }));
