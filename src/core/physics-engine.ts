@@ -409,10 +409,13 @@ export class PhysicsEngine {
    * categories (g1 for the AI, g2 for every other disc). The environment calls
    * this with its configured aiPlayerId so nonzero slots keep the AI on g1
    * instead of inverting the legacy `id === 0` mapping (issue #221). The
-   * default 0 keeps engine-only callers on the legacy mapping.
+   * default 0 keeps engine-only callers on the legacy mapping. Existing discs
+   * are re-filtered immediately, so callers may set the slot after adding
+   * players.
    */
   setAiPlayerId(playerId: number): void {
     this.aiSlot = playerId;
+    this.updateAllPlayerFilters();
   }
 
   private updateAllPlayerFilters(): void {
@@ -1396,6 +1399,10 @@ export class PhysicsEngine {
     this.grappleEnergy.clear();
     this.swingJustStarted.clear();
     this.playerTeams.clear();
+    // The AI-slot category mapping belongs to the episode: a fresh world
+    // starts with the legacy default (slot 0 = AI), and the environment
+    // re-applies setAiPlayerId() before spawning players each episode.
+    this.aiSlot = 0;
     this.capZoneSensors = [];
     this.capZoneState.clear();
     this.capZoneTouches = [];
