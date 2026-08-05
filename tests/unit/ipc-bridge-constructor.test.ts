@@ -126,6 +126,11 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getBindAddress()).toBe('localhost');
   });
 
+  it('passes the libzmq all-interfaces wildcard through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '*' } });
+    expect(bridge.getBindAddress()).toBe('*');
+  });
+
   it('rejects a host:port-style bind address with a clear error (issue #235)', () => {
     expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '127.0.0.1:5555' } }))
       .toThrowError(/Invalid server\.bindAddress/);
@@ -133,6 +138,18 @@ describe('IpcBridge constructor', () => {
 
   it('rejects a malformed bind address with a clear error (issue #235)', () => {
     expect(() => new IpcBridge({ server: { port: 12345, bindAddress: 'not a host' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a dotted-numeric bind address that is not a valid IPv4 (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999.999.999.999' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '1.2.3.4.5' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a bare underscore bind address (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '_' } }))
       .toThrowError(/Invalid server\.bindAddress/);
   });
 

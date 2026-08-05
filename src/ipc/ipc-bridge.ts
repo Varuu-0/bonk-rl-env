@@ -31,18 +31,23 @@ export class IpcBridge {
 
     /**
      * Normalize a configured bind address into a ZMQ endpoint-ready host.
-     * Empty/whitespace values fall back to the loopback default, and bare
-     * IPv6 literals are wrapped in the brackets the tcp:// endpoint syntax
-     * requires. Hostnames/interface names pass through; malformed values
-     * (e.g. a host:port mistake, which a naive "contains a colon" IPv6 check
-     * would otherwise bracket into an invalid endpoint) fail loudly at
+     * Empty/whitespace values fall back to the loopback default; `*` (the
+     * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
+     * wrapped in the brackets the tcp:// endpoint syntax requires. Everything
+     * else must be a valid IPv4 address, a valid IPv6 literal, or an RFC 1123
+     * hostname/interface name — malformed values (e.g. a host:port mistake,
+     * an out-of-range dotted-numeric octet, or a non-name) fail loudly at
      * construction instead of surfacing as an opaque bind() error (issue
      * #235).
      */
     private static normalizeBindAddress(raw: string | undefined): string {
-        let addr = (raw ?? '').trim();
+        const addr = (raw ?? '').trim();
         if (addr.length === 0) {
             return '127.0.0.1';
+        }
+        if (addr === '*') {
+            // libzmq wildcard: bind to all available interfaces.
+            return addr;
         }
         let bare = addr;
         if (addr.startsWith('[') && addr.endsWith(']')) {
@@ -55,13 +60,18 @@ export class IpcBridge {
         if (ipKind === 4) {
             return bare;
         }
-        // RFC 1123-style hostname / interface name (underscore tolerated).
-        // Anything else — semicolons, whitespace, a trailing :port — is
-        // rejected rather than silently producing an invalid bind endpoint.
-        if (!/^[a-zA-Z0-9_]([a-zA-Z0-9_-]*[a-zA-Z0-9_])?(\.[a-zA-Z0-9_]([a-zA-Z0-9_-]*[a-zA-Z0-9_])?)*$/.test(bare)) {
-            throw new Error(`Invalid server.bindAddress "${raw}": expected an IPv4/IPv6 address or hostname (no port).`);
+        // All-dotted-numeric values that net.isIP rejected (1.2.3.4.5,
+        // 999.999.999.999) are malformed IPv4s, not hostnames.
+        if (/^\d+(\.\d+)+$/.test(bare)) {
+            throw new Error(`Invalid server.bindAddress "${raw}": not a valid IPv4 address.`);
         }
-        return bare;
+        // RFC 1123 hostname / interface name. Anything else — semicolons,
+        // whitespace, a trailing :port, a bare `_` label — is rejected rather
+        // than silently producing an invalid bind endpoint.
+        if (/^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)*$/.test(bare)) {
+            return bare;
+        }
+        throw new Error(`Invalid server.bindAddress "${raw}": expected an IPv4/IPv6 address, hostname, or '*' (no port).`);
     }
 
     // Wrapped send function for telemetry
