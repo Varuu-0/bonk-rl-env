@@ -6,7 +6,7 @@ Flag-based telemetry activation, high-precision performance profiling, and runti
 
 | File | Purpose |
 |------|---------|
-| `flags.ts` | CLI flag parser — `--telemetry`, `--profile`, `--debug`, `--output`, `--dashboard-port`, `--report-interval`, `--retention` |
+| `flags.ts` | CLI flag parser — `--telemetry`, `--profile`, `--profile-level`, `--debug`, `--output`, `--dashboard-port`, `--report-interval`, `--retention` |
 | `profiler.ts` | High-precision profiler — `BigUint64Array` accumulator, `wrap()` decorator, heatmap reporting |
 | `telemetry-controller.ts` | Singleton controller — coordinates flags, config, and profiler lifecycle |
 
@@ -15,7 +15,7 @@ Flag-based telemetry activation, high-precision performance profiling, and runti
 | Flag | Alias | Type | Default | Description |
 |------|-------|------|---------|-------------|
 | `--telemetry` | `-t` | boolean | `false` | Master switch to enable telemetry |
-| `--profile` | `-p` | value | `standard` | Profile level: `minimal`, `standard`, `detailed` |
+| `--profile` / `--profile-level` | `-l` | value | `standard` | Profile level: `minimal`, `standard`, `detailed` |
 | `--debug` | `-d` | value | `none` | Debug level: `none`, `error`, `verbose` |
 | `--output` | `-o` | value | `console` | Output format: `console`, `file`, `both` |
 | `--dashboard-port` | — | number | `3001` | Telemetry dashboard port |

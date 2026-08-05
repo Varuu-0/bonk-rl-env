@@ -428,6 +428,17 @@ export class WorkerPool {
      */
     async step(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('step');
+        // Validate the batch before touching any worker state. A short or
+        // over-long action array is a per-request input error in both
+        // transports (mirroring the Python client's exact-count check) and
+        // must never fail or desync the pool.
+        const totalEnvs = this.totalEnvs();
+        if (!Array.isArray(actions) || actions.length !== totalEnvs) {
+            const received = Array.isArray(actions) ? actions.length : typeof actions;
+            throw new Error(
+                `Invalid action batch: expected ${totalEnvs} action${totalEnvs === 1 ? '' : 's'} for ${totalEnvs} environment${totalEnvs === 1 ? '' : 's'}, got ${received}`,
+            );
+        }
         try {
             // Shared memory mode honors `ownership`; message-passing mode always
             // returns caller-owned structured clones.
@@ -440,12 +451,15 @@ export class WorkerPool {
                 throw error;
             }
             const failure = this.createFailure('step', error);
-            // Shared-memory batches can corrupt or desync the pool, so any
-            // failure there is fatal. In message mode an error reply from a
-            // live worker is transient and must not kill the pool, but a
-            // timeout means the worker is hung/unreachable: fail so callers
-            // re-init instead of waiting out the full timeout on every step.
-            if (this.useSharedMemory || this.isWorkerTimeout(error)) {
+            // Failure policy is failure-class-aware. Message-mode error
+            // replies from live workers are transient and must not kill the
+            // pool. In shared mode, only failures that can plausibly corrupt
+            // or desync the pool are fatal (worker timeout/crash/exit,
+            // worker-reported errors, errors after signals were issued); a
+            // pre-signal encoding error leaves the pool untouched and is
+            // treated as a transient per-request error, exactly like message
+            // mode.
+            if (this.isWorkerTimeout(error) || (this.useSharedMemory && !this.isActionEncodeError(error))) {
                 await this.failPool(failure);
             }
             throw failure;
@@ -461,26 +475,39 @@ export class WorkerPool {
         this._returnTimes.fill(BigInt(0));
         const returnTimes = this._returnTimes;
 
-        // 1. Encode actions and signal all workers in parallel
+        // Phase 1 — encode every action into the per-worker buffers before any
+        // worker is signalled. An encoding failure (e.g. a null entry) is a
+        // per-request input error: no command has been sent, so the pool is
+        // untouched and the caller may retry. It is tagged so step() can treat
+        // it as transient rather than failing the pool.
         let actionIdx = 0;
+        try {
+            for (let i = 0; i < this.workers.length; i++) {
+                const wEnvs = this.workerEnvs[i];
 
+                const encodedActions = this.actionBufferPool[i];
+                for (let j = 0; j < wEnvs; j++) {
+                    encodedActions[j] = this.encodeAction(actions[actionIdx + j]);
+                }
+                actionIdx += wEnvs;
+            }
+        } catch (error) {
+            const tagged = error instanceof Error ? error : new Error(String(error));
+            (tagged as Error & { code?: string }).code = 'ACTION_ENCODE';
+            throw tagged;
+        }
+
+        // Phase 2 — signal all workers and wait for results without blocking
+        // worker event delivery. From here on any failure may have left worker
+        // state inconsistent, so the step() handler treats it as fatal.
         const completedArr = this.prepareSharedBatch();
 
         for (let i = 0; i < this.workers.length; i++) {
-            const wEnvs = this.workerEnvs[i];
-
-            const encodedActions = this.actionBufferPool[i];
-            for (let j = 0; j < wEnvs; j++) {
-                encodedActions[j] = this.encodeAction(actions[actionIdx + j]);
-            }
-            actionIdx += wEnvs;
-
             const shm = this.requireSharedMemoryManager(i);
-            shm.writeActionsQuiet(encodedActions);
+            shm.writeActionsQuiet(this.actionBufferPool[i]);
             shm.sendCommand(0); // STEP command (also notifies worker)
         }
 
-        // 2. Wait for results from all workers without blocking worker event delivery.
         const finished = this._finished;
         finished.fill(0);  // Reset from previous step
 
@@ -657,10 +684,19 @@ export class WorkerPool {
     /**
      * Encodes a PlayerInput action to a number for shared memory storage
      * Uses bit flags: left=1, right=2, up=4, down=8, heavy=16, grapple=32
+     *
+     * Null/undefined or otherwise malformed entries throw a labeled error
+     * instead of failing with an unlabelled TypeError, so callers can tell a
+     * bad request apart from a pool failure.
      */
     private encodeAction(action: PlayerInput | number): number {
         if (typeof action === 'number') {
             return action; // Already encoded
+        }
+        if (action === null || typeof action !== 'object') {
+            throw new Error(
+                `Invalid action: expected a PlayerInput object or an encoded number, got ${action === null ? 'null' : typeof action}`,
+            );
         }
         let encoded = 0;
         if (action.left) encoded |= 1;
@@ -888,6 +924,19 @@ export class WorkerPool {
 
     private isWorkerTimeout(error: unknown): boolean {
         return (error as { code?: string })?.code === 'WORKER_TIMEOUT';
+    }
+
+    /**
+     * True when the error was thrown while encoding actions, before any worker
+     * was signalled. Such errors leave the shared-memory pool untouched and are
+     * transient per-request failures rather than pool-fatal ones.
+     */
+    private isActionEncodeError(error: unknown): boolean {
+        return (error as { code?: string })?.code === 'ACTION_ENCODE';
+    }
+
+    private totalEnvs(): number {
+        return this.workerEnvs.reduce((sum, n) => sum + n, 0);
     }
 
     /**

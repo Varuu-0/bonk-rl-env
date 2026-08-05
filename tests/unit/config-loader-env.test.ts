@@ -306,6 +306,20 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.enabled).toBe(true);
         });
 
+        it('--profile-level sets profile level and enables telemetry', () => {
+            process.argv = ['node', 'script.js', '--profile-level', 'detailed'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.profileLevel).toBe('detailed');
+            expect(cfg.telemetry.enabled).toBe(true);
+        });
+
+        it('-l sets profile level (short form)', () => {
+            process.argv = ['node', 'script.js', '-l', 'minimal'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.profileLevel).toBe('minimal');
+            expect(cfg.telemetry.enabled).toBe(true);
+        });
+
         it('--profile rejects invalid value', () => {
             process.argv = ['node', 'script.js', '--profile', 'extreme'];
             const cfg = loadConfig(testDir);

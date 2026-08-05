@@ -142,6 +142,11 @@ export class SharedMemoryManager {
     }
 
     writeSeeds(seeds: number[]) {
+        // Fill every slot first so environments beyond a short seed list get
+        // the no-seed sentinel (0) instead of silently replaying whatever the
+        // previous batch wrote. Without this, a partial reset would re-run the
+        // previous batch's seeds for the tail environments.
+        this.seeds.fill(0);
         this.seeds.set(seeds.slice(0, this.numEnvs));
     }
 

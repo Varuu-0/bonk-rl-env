@@ -112,7 +112,7 @@ Telemetry is controlled via CLI flags. All flags are optional; the system defaul
 | Flag | Alias | Description | Default |
 |:-----|:------|:------------|:--------|
 | `--telemetry` | `-t` | Master switch to enable telemetry | `false` |
-| `--profile` | `-p` | Profiling detail level: `minimal`, `standard`, `detailed` | `standard` |
+| `--profile` / `--profile-level` | `-l` | Profiling detail level: `minimal`, `standard`, `detailed` | `standard` |
 | `--debug` | `-d` | Debug output level: `none`, `error`, `verbose` | `none` |
 | `--output` | `-o` | Output format: `console`, `file`, `both` | `console` |
 | `--dashboard-port` | — | HTTP port for telemetry dashboard | `3001` |
@@ -144,11 +144,20 @@ Environment variables provide an alternative way to configure telemetry. They ta
 
 #### Precedence Order
 
-Configuration priority (highest to lowest):
-1. Environment variables
-2. CLI flags
+Configuration priority (highest to lowest) for the server/config-loader settings
+(`--port`, `--workers`, `--seed`, `--map`, telemetry flags, ...):
+
+1. CLI flags
+2. Environment variables
 3. Config file settings
 4. Default values
+
+Note: `-p` is the short form of `--port` (server port) only — it is not a
+telemetry alias. Use `--profile-level` or `-l` for the profiling level.
+
+Telemetry-only settings additionally merge the `MANIFOLD_*` environment
+variables after CLI parsing inside the telemetry controller, so for those
+specific flags the environment takes precedence over the CLI.
 
 ### Usage Examples
 

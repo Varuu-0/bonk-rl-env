@@ -294,10 +294,25 @@ describe('Flags uncovered paths', () => {
       expect(flags.profileLevel).toBe('detailed');
     });
 
-    it('parses -p short alias', () => {
-      process.argv = ['node', 'script.js', '-p', 'minimal'];
+    it('parses -l short alias', () => {
+      process.argv = ['node', 'script.js', '-l', 'minimal'];
       const flags = parseFlags();
       expect(flags.profileLevel).toBe('minimal');
+    });
+
+    it('parses --profile-level long alias', () => {
+      process.argv = ['node', 'script.js', '--profile-level', 'detailed'];
+      const flags = parseFlags();
+      expect(flags.profileLevel).toBe('detailed');
+    });
+
+    it('does not treat -p as a profile alias (it belongs to --port, issue #184)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.argv = ['node', 'script.js', '-p', 'minimal'];
+      const flags = parseFlags();
+      expect(flags.profileLevel).toBe('standard');
+      expect(warnSpy).not.toHaveBeenCalled();
+      warnSpy.mockRestore();
     });
 
     it('warns on invalid profile level and uses default', () => {
@@ -622,6 +637,16 @@ describe('Flags uncovered paths', () => {
     it('returns true for --profile flag', () => {
       process.argv = ['node', 'script.js', '--profile', 'detailed'];
       expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true for -l flag', () => {
+      process.argv = ['node', 'script.js', '-l', 'minimal'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for -p flag (belongs to --port, issue #184)', () => {
+      process.argv = ['node', 'script.js', '-p', 'minimal'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
     });
 
     it('returns true for --debug flag', () => {

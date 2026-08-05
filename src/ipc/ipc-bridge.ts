@@ -13,6 +13,7 @@ export class IpcBridge {
     private stepCount: number = 0;
     private _closed: boolean = false;
     private _initialized: boolean = false;
+    private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
@@ -69,6 +70,7 @@ export class IpcBridge {
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
                     await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
                     this._initialized = true;
+                    this._numEnvs = numEnvs;
                     response = { status: "ok" };
                 }
             } else if (command === "reset") {
@@ -95,6 +97,16 @@ export class IpcBridge {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
                 } else if (!this._initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
+                } else if (actions.length !== this._numEnvs) {
+                    // Reject a wrong-sized batch before any pool state is
+                    // touched, mirroring the Python client's exact-count
+                    // check. A short array must not reach the pool as an
+                    // encoding error that could fail it in shared-memory mode.
+                    const n = this._numEnvs;
+                    response = {
+                        status: "error",
+                        error: `Invalid actions: expected ${n} action${n === 1 ? '' : 's'} for ${n} environment${n === 1 ? '' : 's'}, got ${actions.length}`,
+                    };
                 } else {
                     // Requests are serialized by the server loop, and the
                     // borrowed graph below is only valid until the next pool
@@ -111,13 +123,27 @@ export class IpcBridge {
                     globalProfiler.tick();
 
                     if (this.stepCount % 5000 === 0) {
-                        globalProfiler.recordMemory();
+                        // The step above already completed and its reply is
+                        // serialized. Telemetry is best-effort: a failure here
+                        // must not discard that reply or double-report the step
+                        // as an error (see #185), so it is isolated and logged.
+                        try {
+                            globalProfiler.recordMemory();
 
-                        const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
-                        if (telemetryEnabled) {
-                            const snapshots = await this.pool.getTelemetrySnapshots();
-                            setLatestWorkerTelemetry(snapshots);
-                            globalProfiler.report(5000);
+                            const telemetryEnabled = require('../telemetry/telemetry-controller').isTelemetryEnabled();
+                            if (telemetryEnabled) {
+                                // Workers blocked in Atomics.wait (shared-memory
+                                // mode) can never service GET_TELEMETRY, so the
+                                // snapshot fetch would always time out there;
+                                // skip it and report without worker snapshots.
+                                if (!this.pool.isUsingSharedMemory()) {
+                                    const snapshots = await this.pool.getTelemetrySnapshots();
+                                    setLatestWorkerTelemetry(snapshots);
+                                }
+                                globalProfiler.report(5000);
+                            }
+                        } catch (telemetryError) {
+                            console.error('[IPC] Telemetry error after step:', telemetryError);
                         }
                     }
                 }
@@ -132,6 +158,7 @@ export class IpcBridge {
                     // server keep working.
                     await this.pool.close();
                     this._initialized = false;
+                    this._numEnvs = 0;
                     response = { status: "ok" };
                 }
             } else {
@@ -162,6 +189,7 @@ export class IpcBridge {
     async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
         await this.pool.init(numEnvs, config, useSharedMemory);
         this._initialized = true;
+        this._numEnvs = numEnvs;
     }
 
     /**
