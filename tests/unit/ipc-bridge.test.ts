@@ -117,6 +117,58 @@ describe('IpcBridge handleRequest', () => {
       expect(response.status).toBe('ok');
     });
 
+    it('forwards snake_case frame_skip through init to the worker (#204)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: 4, maxTicks: 100 }
+      }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'reset', seeds: [1] }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0] }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('ok');
+      expect(response.data[0].info.frameSkip).toBe(4);
+    });
+
+    it('forwards snake_case max_ticks through init to the worker (#204)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { max_ticks: 5, frame_skip: 1 }
+      }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'reset', seeds: [1] }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      let firstDone = -1;
+      let truncated = false;
+      for (let i = 1; i <= 10; i++) {
+        sentMessages.length = 0;
+        await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0] }));
+        const stepResponse = JSON.parse(sentMessages[0]);
+        expect(stepResponse.status).toBe('ok');
+        if (firstDone === -1 && stepResponse.data[0].done) {
+          firstDone = i;
+          truncated = stepResponse.data[0].truncated;
+        }
+      }
+      expect(firstDone).toBe(5);
+      expect(truncated).toBe(true);
+    });
+
     it('handles reset command', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 1 }));

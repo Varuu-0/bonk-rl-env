@@ -153,8 +153,13 @@ export class BonkEnvironment {
     private mapBounds: { width: number; height: number } | null = null;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
-        // Normalize config: accept both camelCase and snake_case
-        const frameSkip = config.frameSkip !== undefined ? config.frameSkip : (config as any).frame_skip;
+        // Normalize config: accept both camelCase and snake_case. The
+        // camelCase key wins when present (an explicit per-env value); the
+        // snake_case alias is only consulted when the camelCase key is
+        // absent, which the alias-aware config merge guarantees for keys
+        // that only carry injected defaults (#204).
+        const rawConfig = config as any;
+        const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
         // Load map from file or use provided config
         let mapDef: MapDef;
@@ -184,9 +189,9 @@ export class BonkEnvironment {
         const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
 
         this.config = {
-            numOpponents: config.numOpponents ?? 1,
-            maxTicks: config.maxTicks ?? MAX_TICKS,
-            randomOpponent: config.randomOpponent ?? true,
+            numOpponents: config.numOpponents ?? rawConfig.num_opponents ?? 1,
+            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
+            randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
             seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,

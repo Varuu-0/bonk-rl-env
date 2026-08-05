@@ -256,3 +256,75 @@ class TestBonkVecEnvSb3Contract:
         model = PPO("MlpPolicy", bonk_vec_env, n_steps=16, batch_size=8, seed=0)
         model.learn(total_timesteps=32)
         assert model.num_timesteps == 32
+
+
+@pytest.mark.slow
+class TestBonkVecEnvFrameSkipConfig:
+    """Regression tests for #204.
+
+    ``frame_skip`` sent through the init config must reach the worker and
+    hold each action for the configured number of physics ticks. The
+    horizontal velocity direction is the observable: while the first action
+    (left) is held, later right actions are ignored and ``playerVelX`` stays
+    negative; with ``frame_skip`` 1 every action applies immediately.
+    """
+
+    def test_frame_skip_holds_first_action_across_ticks(self, bonk_vec_env_factory):
+        env = bonk_vec_env_factory(num_envs=1, config={"frame_skip": 8})
+        env.reset(seeds=[1])
+
+        # First action: left (1). The next four steps send right (2), which
+        # must be ignored while the left action is held for 8 ticks.
+        env.step_async(np.array([1]))
+        env.step_wait()
+        for _ in range(4):
+            env.step_async(np.array([2]))
+            obs, _, _, _ = env.step_wait()
+            # playerVelX (index 2) must stay negative: left is still held.
+            assert obs[0][2] < 0
+
+    def test_frame_skip_1_applies_every_action_immediately(self, bonk_vec_env_factory):
+        env = bonk_vec_env_factory(num_envs=1, config={"frame_skip": 1})
+        env.reset(seeds=[1])
+
+        env.step_async(np.array([1]))
+        env.step_wait()
+        for _ in range(4):
+            env.step_async(np.array([2]))
+            obs, _, _, _ = env.step_wait()
+        # playerVelX (index 2) must be positive: the right action applied.
+        assert obs[0][2] > 0
+
+
+@pytest.mark.slow
+class TestBonkVecEnvPythonConfigKeys:
+    """Regression tests for #204 review follow-up.
+
+    The documented Python-client config keys ``num_opponents``, ``max_ticks``
+    and ``random_opponent`` must reach the worker through the server instead
+    of being shadowed by the backend's camelCase defaults.
+    """
+
+    def test_max_ticks_truncates_at_configured_horizon(self, bonk_vec_env_factory):
+        env = bonk_vec_env_factory(num_envs=1, config={"max_ticks": 5, "frame_skip": 1})
+        env.reset(seeds=[1])
+
+        first_done = None
+        for step in range(1, 11):
+            env.step_async(np.array([0]))
+            _, _, dones, infos = env.step_wait()
+            if dones[0]:
+                first_done = step
+                assert infos[0].get("TimeLimit.truncated") is True
+                break
+        assert first_done == 5
+
+    def test_num_opponents_zero_episodes_are_not_instantly_terminal(self, bonk_vec_env_factory):
+        env = bonk_vec_env_factory(num_envs=1, config={"num_opponents": 0})
+        env.reset(seeds=[1])
+
+        for _ in range(3):
+            env.step_async(np.array([0]))
+            _, _, dones, infos = env.step_wait()
+            assert bool(dones[0]) is False
+            assert infos[0]["_episode"]["truncated"] is False

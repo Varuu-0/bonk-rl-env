@@ -59,6 +59,7 @@ vi.mock('../../src/core/worker-pool', () => ({
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';

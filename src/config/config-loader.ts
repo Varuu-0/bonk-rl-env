@@ -292,6 +292,48 @@ export function deepMerge<T extends Record<string, any>>(base: T, override: Deep
     return result as T;
 }
 
+// ─── Environment Config Merge ───────────────────────────────────────────────
+
+/**
+ * snake_case → camelCase aliases accepted by BonkEnvironment (the documented
+ * Python-client keys). When an override supplies the snake_case alias, it is
+ * resolved into the camelCase slot so the injected camelCase default can
+ * never shadow the alias (#204).
+ */
+export const ENVIRONMENT_KEY_ALIASES: Array<[string, string]> = [
+    ['frame_skip', 'frameSkip'],
+    ['num_opponents', 'numOpponents'],
+    ['max_ticks', 'maxTicks'],
+    ['random_opponent', 'randomOpponent'],
+];
+
+/**
+ * Merge a per-env override over the environment defaults with snake_case
+ * alias resolution. If the override supplies a snake_case alias
+ * (frame_skip, num_opponents, max_ticks, random_opponent), its value is
+ * resolved into the camelCase slot, so the base's (default) camelCase value
+ * can never shadow the alias while every declared-required environment field
+ * stays defined. An override that supplies the camelCase key directly is
+ * always kept as-is and takes precedence.
+ */
+export function mergeEnvironmentConfig(
+    base: Record<string, any>,
+    override: Record<string, any>,
+): Record<string, any> {
+    const merged = deepMerge(base, override);
+    for (const [snake, camel] of ENVIRONMENT_KEY_ALIASES) {
+        const snakeVal = override[snake];
+        const camelVal = override[camel];
+        // Resolve the snake alias unless the override supplies an explicit
+        // camelCase value. deepMerge already skips null/undefined overrides
+        // as absent, so a null camelCase key must not block resolution.
+        if (snakeVal != null && camelVal == null) {
+            merged[camel] = snakeVal;
+        }
+    }
+    return merged;
+}
+
 // ─── Config File Loader ────────────────────────────────────────────────────
 
 function findConfigFile(): string | null {
@@ -585,6 +627,16 @@ export function loadConfig(projectRoot?: string): AppConfig {
         const fileConfig = loadConfigFile(configPath);
         if (fileConfig) {
             config = deepMerge(config, fileConfig);
+            if (isPlainObject(fileConfig.environment)) {
+                // Resolve snake_case aliases against the injected camelCase
+                // defaults so a config.json `frame_skip`/`num_opponents`/
+                // `max_ticks`/`random_opponent` is not shadowed by the
+                // always-present camelCase default (#204).
+                config.environment = mergeEnvironmentConfig(
+                    config.environment as any,
+                    fileConfig.environment as any,
+                ) as EnvironmentConfig;
+            }
         }
     } else {
         // Try to find config.json anywhere in the search list
@@ -593,6 +645,12 @@ export function loadConfig(projectRoot?: string): AppConfig {
             const fileConfig = loadConfigFile(found);
             if (fileConfig) {
                 config = deepMerge(config, fileConfig);
+                if (isPlainObject(fileConfig.environment)) {
+                    config.environment = mergeEnvironmentConfig(
+                        config.environment as any,
+                        fileConfig.environment as any,
+                    ) as EnvironmentConfig;
+                }
             }
         }
     }

@@ -794,6 +794,37 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.debugLevel).toBe('none');
         });
 
+        it('config.json snake_case frame_skip resolves into the injected frameSkip slot', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ environment: { frame_skip: 4 } }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).frameSkip).toBe(4);
+            expect((cfg.environment as any).frame_skip).toBe(4);
+            expect(cfg.environment.numOpponents).toBe(1);
+            expect(cfg.environment.maxTicks).toBe(900);
+        });
+
+        it('config.json snake_case num_opponents/max_ticks/random_opponent resolve into their slots', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                environment: { num_opponents: 0, max_ticks: 5, random_opponent: false },
+            }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).numOpponents).toBe(0);
+            expect((cfg.environment as any).num_opponents).toBe(0);
+            expect((cfg.environment as any).maxTicks).toBe(5);
+            expect((cfg.environment as any).max_ticks).toBe(5);
+            expect((cfg.environment as any).randomOpponent).toBe(false);
+            expect((cfg.environment as any).random_opponent).toBe(false);
+        });
+
+        it('config.json explicit camelCase keys are kept alongside snake_case aliases', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                environment: { frameSkip: 2, frame_skip: 4 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect((cfg.environment as any).frameSkip).toBe(2);
+            expect((cfg.environment as any).frame_skip).toBe(4);
+        });
+
         it('config.json array values replace defaults', () => {
             fs.writeFileSync(configPath, JSON.stringify({
                 benchmark: { scalingEnvCounts: [1, 2, 3] },

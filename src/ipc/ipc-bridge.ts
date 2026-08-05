@@ -1,7 +1,7 @@
 import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
-import { getConfig, type AppConfig, type DeepPartial, deepMerge } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -66,7 +66,7 @@ export class IpcBridge {
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
-                    const mergedConfig = deepMerge(envDefaults as any, payload.config || {});
+                    const mergedConfig = mergeEnvironmentConfig(envDefaults as any, payload.config || {});
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
                     await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
                     this._initialized = true;
