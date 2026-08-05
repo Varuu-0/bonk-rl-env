@@ -138,14 +138,15 @@ export class SharedMemoryManager {
 
     /**
      * Canonical numOpponents normalization shared by every SAB layout
-     * participant (manager, worker, pool, environment). Non-finite values
-     * fall back to the documented default of 1, and the count is floored so
-     * the environment's spawned opponent count always matches the SAB
-     * record size.
+     * participant (manager, worker, pool, environment). null/undefined/NaN
+     * and other non-finite values fall back to the documented default of 1
+     * (matching the historical `numOpponents ?? 1` semantics); a finite
+     * number is floored and clamped to >= 0 so the environment's spawned
+     * opponent count always matches the SAB record size.
      */
     static normalizeNumOpponents(value: unknown): number {
         const n = Number(value);
-        if (!Number.isFinite(n)) return 1;
+        if (value == null || !Number.isFinite(n)) return 1;
         return Math.max(0, Math.floor(n));
     }
 

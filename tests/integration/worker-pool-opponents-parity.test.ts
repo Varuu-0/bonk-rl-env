@@ -16,13 +16,22 @@ import { SharedMemoryManager } from '../../src/ipc/shared-memory';
 
 describe('canonical numOpponents normalization', () => {
   it('the environment spawn count always matches the SAB layout count', () => {
-    for (const raw of [1, 3, 2.9, 0, -2, NaN, undefined, '3']) {
+    for (const raw of [1, 3, 2.9, 0, -2, NaN, undefined, null, '3']) {
       const env = new BonkEnvironment({ maxTicks: 10, numOpponents: raw as any });
       const obs = env.reset();
       const expected = SharedMemoryManager.normalizeNumOpponents(raw);
       expect(obs.opponents.length).toBe(expected);
       expect(env.getObservationFast().length).toBe(SharedMemoryManager.floatsPerEnv(raw));
     }
+  });
+
+  it('null/undefined/NaN/other non-finite configs fall back to the default 1 (the ?? 1 contract)', () => {
+    // These must never produce an empty opponent list, which would make the
+    // episode end immediately via a vacuous all-opponents-dead check.
+    expect(SharedMemoryManager.normalizeNumOpponents(null)).toBe(1);
+    expect(SharedMemoryManager.normalizeNumOpponents(undefined)).toBe(1);
+    expect(SharedMemoryManager.normalizeNumOpponents(NaN)).toBe(1);
+    expect(SharedMemoryManager.normalizeNumOpponents('not-a-number')).toBe(1);
   });
 });
 
