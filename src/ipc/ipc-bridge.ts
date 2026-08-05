@@ -2,28 +2,74 @@ import * as zmq from "zeromq";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
-import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig, DEFAULT_MAX_CLIENT_SESSIONS } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
 
+/**
+ * Per-client session state. Each ZMQ routing identity that calls `init` owns
+ * its own WorkerPool (and its own environment count and initialization flag),
+ * so one client's `init` re-creates only its own pool and one client's session
+ * `close` only tears down its own pool — other clients' episodes are never
+ * silently reset or broken (issue #193).
+ */
+interface PoolSession {
+    pool: WorkerPool;
+    initialized: boolean;
+    numEnvs: number;
+}
+
 export class IpcBridge {
     private sock: zmq.Router;
-    private pool: WorkerPool;
     private port: number;
     private stepCount: number = 0;
     private _closed: boolean = false;
-    private _initialized: boolean = false;
-    private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    private readonly maxClientSessions: number;
+
+    // Worker pools are owned per client: keyed by the ZMQ routing identity of
+    // the client that called `init` (issue #193).
+    private sessions: Map<string, PoolSession> = new Map();
+    // Identities that have called `init` (and whose session may have since
+    // been closed). A registered identity must never silently fall back to
+    // another client's pool after closing its own session — only identities
+    // that never called `init` fall back to the local/bypass session.
+    private registeredIdentities: Set<string> = new Set();
+    // Bypass/local session for initEnv/resetEnv/stepEnv. IPC requests from an
+    // identity that never called `init` fall back to this session, so
+    // programmatic init followed by IPC reset/step keeps working.
+    private localSession: PoolSession;
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
+        // A cap below 1 is meaningless: clamp so a bad config loudly enforces
+        // a single concurrent session instead of rejecting every init. A
+        // missing/non-finite value (e.g. a partial mock config, or empty
+        // string env overrides) falls back to the loader-provided default
+        // instead of producing NaN or clamping to 1, and numeric strings from
+        // env-style configs are honored like real numbers.
+        const rawCap: unknown = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
+        const parsedCap = typeof rawCap === 'string'
+            ? (rawCap.trim() === '' ? NaN : Number(rawCap))
+            : rawCap;
+        this.maxClientSessions = Number.isFinite(parsedCap as number)
+            ? Math.max(1, parsedCap as number)
+            : DEFAULT_MAX_CLIENT_SESSIONS;
         this.sock = new zmq.Router();
-        this.pool = new WorkerPool();
+        this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+    }
+
+    /**
+     * The local/bypass worker pool (used by initEnv/resetEnv/stepEnv). Kept as
+     * a property so programmatic callers that bypass IPC get the pool the
+     * constructor always created.
+     */
+    get pool(): WorkerPool {
+        return this.localSession.pool;
     }
 
     // Wrapped send function for telemetry
@@ -51,6 +97,26 @@ export class IpcBridge {
         }
     }
 
+    /**
+     * Resolve the pool a request should be routed to:
+     * - an identity with an active session uses its own pool;
+     * - an identity that called `init` before but closed its session gets no
+     *   pool (its reset/step fail loudly — the "Worker pool not initialized"
+     *   contract) and must NOT silently fall back to another client's pool;
+     * - a brand-new identity that never called `init` falls back to the
+     *   local/bypass session (preserving programmatic init + IPC reset/step).
+     */
+    private resolveSession(sessionKey: string): PoolSession | undefined {
+        const session = this.sessions.get(sessionKey);
+        if (session) {
+            return session;
+        }
+        if (this.registeredIdentities.has(sessionKey)) {
+            return undefined;
+        }
+        return this.localSession;
+    }
+
     async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         // Step responses are serialized eagerly so the borrowed pool graph is
@@ -59,6 +125,9 @@ export class IpcBridge {
         // True once the step reply was transmitted eagerly ahead of the
         // post-step telemetry block, so the trailing send below is skipped.
         let replied = false;
+        // Sessions are keyed by the client's ZMQ routing identity so every
+        // request is applied to that client's own pool only (issue #193).
+        const sessionKey = identity.toString('hex');
         try {
             const payload = parseJson(rawMsg);
             const command = payload.command;
@@ -75,22 +144,48 @@ export class IpcBridge {
                     const envDefaults = getConfig().environment;
                     const mergedConfig = mergeEnvironmentConfig(envDefaults as any, payload.config || {});
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
-                    await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
-                    this._initialized = true;
-                    this._numEnvs = numEnvs;
-                    response = { status: "ok" };
+                    // This init only (re)creates this client's own pool; if the
+                    // client reinitializes, WorkerPool.init() tears down that
+                    // same session's previous pool and nothing else.
+                    let session = this.sessions.get(sessionKey);
+                    if (!session) {
+                        if (this.sessions.size >= this.maxClientSessions) {
+                            // Bounds worker accumulation from clients that
+                            // disconnect without a session `close`. Rejecting
+                            // loudly beats silently evicting a live session.
+                            // The identity is marked registered so its
+                            // subsequent reset/step fail loudly instead of
+                            // silently falling back to another pool.
+                            this.registeredIdentities.add(sessionKey);
+                            response = {
+                                status: "error",
+                                error: `Too many active client sessions (max ${this.maxClientSessions}): close an existing session before initializing a new one`,
+                            };
+                        } else {
+                            session = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
+                            this.sessions.set(sessionKey, session);
+                            this.registeredIdentities.add(sessionKey);
+                        }
+                    }
+                    if (session) {
+                        await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                        session.initialized = true;
+                        session.numEnvs = numEnvs;
+                        response = { status: "ok" };
+                    }
                 }
             } else if (command === "reset") {
-                if (!this._initialized) {
+                const session = this.resolveSession(sessionKey);
+                if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else if (payload.seeds !== undefined && !Array.isArray(payload.seeds)) {
                     response = { status: "error", error: "Invalid seeds: must be an array" };
-                } else if (payload.seeds !== undefined && payload.seeds.length > this._numEnvs) {
+                } else if (payload.seeds !== undefined && payload.seeds.length > session.numEnvs) {
                     // Reject an over-long seed batch before any pool state is
                     // touched, mirroring the pool-level check: surplus seeds
                     // would otherwise be silently dropped in both transports.
                     // Short seed lists stay legal (tail envs reset unseeded).
-                    const n = this._numEnvs;
+                    const n = session.numEnvs;
                     response = {
                         status: "error",
                         error: `Invalid seeds: expected at most ${n} seed${n === 1 ? '' : 's'} for ${n} environment${n === 1 ? '' : 's'}, got ${payload.seeds.length}`,
@@ -99,7 +194,7 @@ export class IpcBridge {
                     console.log(`[IPC] Reset request: seeds=${payload.seeds ? payload.seeds.length : 0}`);
                     // JSON serialization below is the ownership boundary, so
                     // avoid an otherwise redundant snapshot allocation here.
-                    const obs = await this.pool.reset(payload.seeds, { ownership: 'borrowed' });
+                    const obs = await session.pool.reset(payload.seeds, { ownership: 'borrowed' });
                     console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
                     response = {
                         status: "ok",
@@ -109,19 +204,20 @@ export class IpcBridge {
                     };
                 }
             } else if (command === "step") {
+                const session = this.resolveSession(sessionKey);
                 const actions = payload.actions;
                 if (!Array.isArray(actions)) {
                     response = { status: "error", error: "Invalid actions: must be an array" };
                 } else if (actions.length === 0) {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
-                } else if (!this._initialized) {
+                } else if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
-                } else if (actions.length !== this._numEnvs) {
+                } else if (actions.length !== session.numEnvs) {
                     // Reject a wrong-sized batch before any pool state is
                     // touched, mirroring the Python client's exact-count
                     // check. A short array must not reach the pool as an
                     // encoding error that could fail it in shared-memory mode.
-                    const n = this._numEnvs;
+                    const n = session.numEnvs;
                     response = {
                         status: "error",
                         error: `Invalid actions: expected ${n} action${n === 1 ? '' : 's'} for ${n} environment${n === 1 ? '' : 's'}, got ${actions.length}`,
@@ -130,7 +226,7 @@ export class IpcBridge {
                     // Requests are serialized by the server loop, and the
                     // borrowed graph below is only valid until the next pool
                     // call, so serialize it before the telemetry branch awaits.
-                    const results = await this.pool.step(actions, { ownership: 'borrowed' });
+                    const results = await session.pool.step(actions, { ownership: 'borrowed' });
 
                     // JSON.stringify is the ownership boundary: it consumes the
                     // borrowed `_convertedResults` graph immediately, before any
@@ -161,7 +257,7 @@ export class IpcBridge {
                         }
                         serialized = null;
                         replied = true;
-                        void this.runPostStepTelemetry();
+                        void this.runPostStepTelemetry(session.pool);
                     }
                 }
             } else if (command === "close") {
@@ -170,12 +266,15 @@ export class IpcBridge {
                     response = { status: "ok" };
                     this._shouldClose = true;
                 } else {
-                    // Session close (default): free the client's env state but
+                    // Session close (default): free this client's env state but
                     // keep the server listening so other envs/tests on the same
-                    // server keep working.
-                    await this.pool.close();
-                    this._initialized = false;
-                    this._numEnvs = 0;
+                    // server keep working. Only this client's pool is closed;
+                    // every other session is untouched (issue #193).
+                    const session = this.sessions.get(sessionKey);
+                    if (session) {
+                        await session.pool.close();
+                        this.sessions.delete(sessionKey);
+                    }
                     response = { status: "ok" };
                 }
             } else {
@@ -210,7 +309,7 @@ export class IpcBridge {
      * #185); a message-mode snapshot timeout still fails the pool per
      * worker-pool semantics, surfacing on the next request.
      */
-    private async runPostStepTelemetry(): Promise<void> {
+    private async runPostStepTelemetry(pool: WorkerPool): Promise<void> {
         try {
             globalProfiler.recordMemory();
 
@@ -220,7 +319,7 @@ export class IpcBridge {
                 // GET_TELEMETRY, so the pool returns an empty set
                 // immediately) and performs a bounded worker round-trip in
                 // message mode.
-                const snapshots = await this.pool.getTelemetrySnapshots();
+                const snapshots = await pool.getTelemetrySnapshots();
                 setLatestWorkerTelemetry(snapshots);
                 globalProfiler.report(5000);
             }
@@ -237,9 +336,9 @@ export class IpcBridge {
         if (!Number.isInteger(numEnvs) || numEnvs < 1) {
             throw new Error('Invalid numEnvs: must be a positive integer');
         }
-        await this.pool.init(numEnvs, config, useSharedMemory);
-        this._initialized = true;
-        this._numEnvs = numEnvs;
+        await this.localSession.pool.init(numEnvs, config, useSharedMemory);
+        this.localSession.initialized = true;
+        this.localSession.numEnvs = numEnvs;
     }
 
     /**
@@ -247,7 +346,7 @@ export class IpcBridge {
      * Used by BonkEnv for programmatic control.
      */
     async resetEnv(seeds?: number[]): Promise<any[]> {
-        return this.pool.reset(seeds);
+        return this.localSession.pool.reset(seeds);
     }
 
     /**
@@ -255,7 +354,7 @@ export class IpcBridge {
      * Used by BonkEnv for programmatic control.
      */
     async stepEnv(actions: any[]): Promise<any[]> {
-        return this.pool.step(actions);
+        return this.localSession.pool.step(actions);
     }
 
     /**
@@ -277,15 +376,26 @@ export class IpcBridge {
             return;
         }
         this._closed = true;
-        this._initialized = false;
-        
+        // Reset the local/bypass session so a later start() + restart leaves
+        // unregistered identities failing with "Worker pool not initialized"
+        // instead of leaking the closed pool's internal error.
+        this.localSession.initialized = false;
+        this.localSession.numEnvs = 0;
+
+        // Close every per-client session pool and the local/bypass pool. A
+        // client's own session `close` only ever removed that session, so the
+        // rest of the pools are cleaned up here on full server shutdown.
+        const pools = [this.localSession.pool, ...[...this.sessions.values()].map(session => session.pool)];
+        this.sessions.clear();
+        this.registeredIdentities.clear();
+
         // Close the socket to break out of the for await loop
         try {
             this.sock.close();
         } catch (e) {
             // Ignore close errors
         }
-        
-        await this.pool.close();
+
+        await Promise.all(pools.map(pool => pool.close()));
     }
 }
