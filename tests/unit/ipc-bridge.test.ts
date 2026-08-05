@@ -96,6 +96,44 @@ describe('IpcBridge handleRequest', () => {
       expect(response.error).toContain('Invalid numEnvs');
     });
 
+    it('rejects init with a fractional numEnvs as error (#195)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 1.5 }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Invalid numEnvs: must be a positive integer');
+    });
+
+    it('rejects init with a sub-one fractional numEnvs as error (#195)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 0.5 }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toBe('Invalid numEnvs: must be a positive integer');
+    });
+
+    it('coerces a numeric-string numEnvs to a positive integer (#195)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: '2' }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'reset', seeds: [1, 2] }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0, 0] }));
+      expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+      sentMessages.length = 0;
+
+      await callHandleRequest(bridge, JSON.stringify({ command: 'step', actions: [0, 0, 0] }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('expected 2 actions');
+    });
+
     it('handles init with missing numEnvs as error', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'init' }));
@@ -330,5 +368,32 @@ describe('IpcBridge close internals (lines 159-173)', () => {
     const spy = vi.spyOn(pool, 'close');
     await bridge.close();
     expect(spy).toHaveBeenCalled();
+  });
+});
+
+describe('IpcBridge initEnv validation (#195, #227)', () => {
+  it('rejects a non-positive or non-integer numEnvs before touching the pool', async () => {
+    const bridge = new IpcBridge({ server: { port: 15571 } } as any);
+    try {
+      const pool = (bridge as any).pool;
+      const initSpy = vi.spyOn(pool, 'init');
+
+      await expect((bridge as any).initEnv(0)).rejects.toThrow('Invalid numEnvs: must be a positive integer');
+      await expect((bridge as any).initEnv(-1)).rejects.toThrow('Invalid numEnvs: must be a positive integer');
+      await expect((bridge as any).initEnv(1.5)).rejects.toThrow('Invalid numEnvs: must be a positive integer');
+      expect(initSpy).not.toHaveBeenCalled();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('applies a valid integer initEnv', async () => {
+    const bridge = new IpcBridge({ server: { port: 15572 } } as any);
+    try {
+      await (bridge as any).initEnv(1, {}, false);
+      expect((bridge as any)._numEnvs).toBe(1);
+    } finally {
+      await bridge.close();
+    }
   });
 });
