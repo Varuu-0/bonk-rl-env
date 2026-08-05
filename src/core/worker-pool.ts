@@ -327,6 +327,24 @@ export class WorkerPool {
     async reset(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('reset');
 
+        // Validate the seed batch before touching any worker state. An
+        // over-long seed array would otherwise be silently truncated by the
+        // per-worker slices below, dropping the surplus seeds with no error in
+        // either transport (the over-long mirror of the short-batch defects
+        // #191/#207). Short seed lists remain legal: they reset the tail
+        // environments unseeded, the documented #183 semantics pinned by
+        // worker-pool-stale-seeds.test.ts.
+        const totalEnvs = this.totalEnvs();
+        if (seeds !== undefined && !Array.isArray(seeds)) {
+            throw new Error(`Invalid seed batch: expected an array of seeds, got ${typeof seeds}`);
+        }
+        if (seeds !== undefined && seeds.length > totalEnvs) {
+            const received = seeds.length;
+            throw new Error(
+                `Invalid seed batch: expected at most ${totalEnvs} seed${totalEnvs === 1 ? '' : 's'} for ${totalEnvs} environment${totalEnvs === 1 ? '' : 's'}, got ${received}`,
+            );
+        }
+
         if (this.useSharedMemory && seeds) {
             for (const seed of seeds) {
                 if (!Number.isInteger(seed) || seed < 0 || seed > 0xFFFFFFFE) {
