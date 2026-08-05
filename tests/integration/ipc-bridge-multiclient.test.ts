@@ -132,7 +132,10 @@ describe('IpcBridge per-client worker-pool isolation (issue #193)', () => {
     expect(bStep2.tick).toBe(bStep1.tick! + 1);
 
     // The closed client's own pool is gone: its next request fails loudly
-    // instead of breaking the other client.
+    // instead of breaking the other client. This must hold even when the
+    // bridge's local/bypass pool (initEnv) is initialized — a registered
+    // identity must never silently redirect to another pool.
+    await bridge.initEnv(1, {}, false);
     const aAfterClose = await stepTick(clientA, 1);
     expect(aAfterClose.status).toBe('error');
     expect(aAfterClose.error).toBe('Worker pool not initialized');

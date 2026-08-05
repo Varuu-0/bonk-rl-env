@@ -26,10 +26,16 @@ export class IpcBridge {
     private stepCount: number = 0;
     private _closed: boolean = false;
     private _shouldClose: boolean = false;
+    private readonly maxClientSessions: number;
 
     // Worker pools are owned per client: keyed by the ZMQ routing identity of
     // the client that called `init` (issue #193).
     private sessions: Map<string, PoolSession> = new Map();
+    // Identities that have called `init` (and whose session may have since
+    // been closed). A registered identity must never silently fall back to
+    // another client's pool after closing its own session — only identities
+    // that never called `init` fall back to the local/bypass session.
+    private registeredIdentities: Set<string> = new Set();
     // Bypass/local session for initEnv/resetEnv/stepEnv. IPC requests from an
     // identity that never called `init` fall back to this session, so
     // programmatic init followed by IPC reset/step keeps working.
@@ -37,6 +43,7 @@ export class IpcBridge {
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
+        this.maxClientSessions = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
         this.sock = new zmq.Router();
         this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
 
@@ -78,6 +85,26 @@ export class IpcBridge {
         }
     }
 
+    /**
+     * Resolve the pool a request should be routed to:
+     * - an identity with an active session uses its own pool;
+     * - an identity that called `init` before but closed its session gets no
+     *   pool (its reset/step fail loudly — the "Worker pool not initialized"
+     *   contract) and must NOT silently fall back to another client's pool;
+     * - a brand-new identity that never called `init` falls back to the
+     *   local/bypass session (preserving programmatic init + IPC reset/step).
+     */
+    private resolveSession(sessionKey: string): PoolSession | undefined {
+        const session = this.sessions.get(sessionKey);
+        if (session) {
+            return session;
+        }
+        if (this.registeredIdentities.has(sessionKey)) {
+            return undefined;
+        }
+        return this.localSession;
+    }
+
     async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         // Step responses are serialized eagerly so the borrowed pool graph is
@@ -110,17 +137,30 @@ export class IpcBridge {
                     // same session's previous pool and nothing else.
                     let session = this.sessions.get(sessionKey);
                     if (!session) {
-                        session = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
-                        this.sessions.set(sessionKey, session);
+                        if (this.sessions.size >= this.maxClientSessions) {
+                            // Bounds worker accumulation from clients that
+                            // disconnect without a session `close`. Rejecting
+                            // loudly beats silently evicting a live session.
+                            response = {
+                                status: "error",
+                                error: `Too many active client sessions (max ${this.maxClientSessions}): close an existing session before initializing a new one`,
+                            };
+                        } else {
+                            session = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
+                            this.sessions.set(sessionKey, session);
+                            this.registeredIdentities.add(sessionKey);
+                        }
                     }
-                    await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
-                    session.initialized = true;
-                    session.numEnvs = numEnvs;
-                    response = { status: "ok" };
+                    if (session) {
+                        await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                        session.initialized = true;
+                        session.numEnvs = numEnvs;
+                        response = { status: "ok" };
+                    }
                 }
             } else if (command === "reset") {
-                const session = this.sessions.get(sessionKey) ?? this.localSession;
-                if (!session.initialized) {
+                const session = this.resolveSession(sessionKey);
+                if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else if (payload.seeds !== undefined && !Array.isArray(payload.seeds)) {
                     response = { status: "error", error: "Invalid seeds: must be an array" };
@@ -148,13 +188,13 @@ export class IpcBridge {
                     };
                 }
             } else if (command === "step") {
-                const session = this.sessions.get(sessionKey) ?? this.localSession;
+                const session = this.resolveSession(sessionKey);
                 const actions = payload.actions;
                 if (!Array.isArray(actions)) {
                     response = { status: "error", error: "Invalid actions: must be an array" };
                 } else if (actions.length === 0) {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
-                } else if (!session.initialized) {
+                } else if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else if (actions.length !== session.numEnvs) {
                     // Reject a wrong-sized batch before any pool state is
@@ -320,12 +360,18 @@ export class IpcBridge {
             return;
         }
         this._closed = true;
+        // Reset the local/bypass session so a later start() + restart leaves
+        // unregistered identities failing with "Worker pool not initialized"
+        // instead of leaking the closed pool's internal error.
+        this.localSession.initialized = false;
+        this.localSession.numEnvs = 0;
 
         // Close every per-client session pool and the local/bypass pool. A
         // client's own session `close` only ever removed that session, so the
         // rest of the pools are cleaned up here on full server shutdown.
         const pools = [this.localSession.pool, ...[...this.sessions.values()].map(session => session.pool)];
         this.sessions.clear();
+        this.registeredIdentities.clear();
 
         // Close the socket to break out of the for await loop
         try {

@@ -31,7 +31,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('zeromq', () => mocks);
-vi.mock('../telemetry/profiler', () => {
+vi.mock('../../src/telemetry/profiler', () => {
   const gp = {
     tick: mocks.gpTick,
     recordMemory: mocks.gpRecordMemory,
@@ -44,14 +44,15 @@ vi.mock('../telemetry/profiler', () => {
     setLatestWorkerTelemetry: mocks.setLatestWorkerTelemetry,
   };
 });
-vi.mock('../telemetry/telemetry-controller', () => ({
+vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
 }));
-vi.mock('../core/worker-pool', () => ({
+vi.mock('../../src/core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
 }));
-vi.mock('../config/config-loader', () => ({
+vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
@@ -67,13 +68,16 @@ beforeEach(() => {
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
-  mocks.WorkerPool.mockImplementation(() => ({
-    init: vi.fn().mockResolvedValue(undefined),
-    reset: vi.fn().mockResolvedValue([]),
-    step: vi.fn().mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]),
-    close: vi.fn(),
-    getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
-  }));
+  mocks.WorkerPool.mockImplementation(function () {
+    return {
+      init: vi.fn().mockResolvedValue(undefined),
+      reset: vi.fn().mockResolvedValue([]),
+      step: vi.fn().mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]),
+      close: vi.fn(),
+      getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
+      isUsingSharedMemory: vi.fn(() => false),
+    };
+  });
   mocks.gpTick.mockClear();
   mocks.gpRecordMemory.mockClear();
   mocks.gpReport.mockClear();
@@ -197,7 +201,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
     await bridge.close();
     expect(bridge.isClosed()).toBe(true);
 
-    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close');
+    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close').mockClear();
     await bridge.close();
     expect(poolCloseSpy).not.toHaveBeenCalled();
   });
@@ -230,20 +234,26 @@ describe('IpcBridge close() (lines 159-173)', () => {
 });
 
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
-  async function simulateSteps(bridge: IpcBridge, count: number) {
+  async function simulateSteps(bridge: IpcBridge, count: number): Promise<any> {
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     // B9 fix: step/reset before init now correctly return an error, so the
     // bridge must be initialized before any steps can be counted.
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // handleRequest routes steps to the per-identity session pool created by
+    // that init (issue #193), not (bridge as any).pool (the local/bypass
+    // pool). Spy on the session pool so the step mock actually intercepts
+    // the requests that drive the telemetry branch under test.
+    const results = mocks.WorkerPool.mock.results;
+    const sessionPool = results[results.length - 1].value;
+    vi.spyOn(sessionPool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     for (let i = 0; i < count; i++) {
       await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
     }
+    return sessionPool;
   }
 
   it('does NOT record memory before 5000 steps (line 90)', async () => {
     const bridge = new IpcBridge({ server: { port: 12356 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 100);
     expect((bridge as any).stepCount).toBe(100);
     expect((bridge as any).stepCount % 5000).not.toBe(0);
@@ -251,50 +261,42 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
 
   it('records memory at exactly 5000 steps (line 91)', async () => {
     const bridge = new IpcBridge({ server: { port: 12357 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
     expect((bridge as any).stepCount % 5000).toBe(0);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('checks telemetry enabled at 5000 steps (line 93)', async () => {
     const bridge = new IpcBridge({ server: { port: 12358 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('fetches telemetry snapshots when enabled (lines 94-96)', async () => {
     const bridge = new IpcBridge({ server: { port: 12359 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('reports at 5000 steps when telemetry enabled (line 97)', async () => {
     const bridge = new IpcBridge({ server: { port: 12360 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('does NOT run telemetry branch when disabled', async () => {
     mocks.isTelemetryEnabled.mockReturnValueOnce(false);
     const bridge = new IpcBridge({ server: { port: 12361 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('records memory again at 10000 steps', async () => {
     const bridge = new IpcBridge({ server: { port: 12362 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 10000);
     expect((bridge as any).stepCount).toBe(10000);
     expect((bridge as any).stepCount % 5000).toBe(0);

@@ -22,6 +22,13 @@ export interface ServerConfig {
     zmqBacklog: number;
     maxRuntimeSeconds: number;
     shutdownTimeoutMs: number;
+    /**
+     * Maximum number of concurrent per-client worker-pool sessions. Bounds
+     * worker accumulation from clients that disconnect without sending a
+     * session `close` (issue #193); a new client `init` beyond the cap is
+     * rejected loudly instead of silently evicting an existing session.
+     */
+    maxClientSessions: number;
 }
 
 export interface PhysicsConfig {
@@ -163,6 +170,7 @@ const DEFAULTS: AppConfig = {
         zmqBacklog: 100,
         maxRuntimeSeconds: 0,
         shutdownTimeoutMs: 10000,
+        maxClientSessions: 32,
     },
     physics: {
         ticksPerSecond: 30,
