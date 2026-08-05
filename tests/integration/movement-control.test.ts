@@ -4,14 +4,17 @@
  * The verified mass-1 disc fixture (#212) plus the native §35.5 movement-force
  * base left a pure "up" input unable to overcome gravity (net Δv = +8·dt
  * downward), so the RL "up" bit only slowed the fall. The movement force is
- * now applied at `MOVE_FORCE × (ppm / DEFAULT_PPM)^2 (×0.7 heavy)`, with the
- * default base doubled to the value that restores upward acceleration at the
- * verified mass-1 fixture.
+ * now applied at a constant per-tick base `MOVE_FORCE` (×0.7 for heavy); the
+ * §35.5 radius^2 scale is the disc mass ratio, which the mass-1 fixture pins
+ * to 1 for every disc radius, so the applied force is radius/ppm-invariant and
+ * no per-map `ppm` factor is applied.
  *
  * These tests pin, at the default configuration:
  * 1. a pure "up" input produces upward acceleration (playerY decreases);
  * 2. a pure "down" input accelerates the fall beyond idle gravity;
- * 3. the same holds through the full environment `step(4)` / `step(8)` path.
+ * 3. up+heavy still ascends (0.7 × MOVE_FORCE > gravity);
+ * 4. up ascends at non-default map `ppm` values (radius-invariance);
+ * 5. the same holds through the full environment `step(4)` / `step(8)` path.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -23,8 +26,11 @@ const TICKS = 25;
 
 /** Empty arena: only the player disc, no platforms (default gravity 20,
  * default ppm 12, verified mass-1 fixture). */
-function makeBoxEngine(): PhysicsEngine {
+function makeBoxEngine(ppm?: number): PhysicsEngine {
   const engine = new PhysicsEngine();
+  if (ppm !== undefined) {
+    engine.setScale(ppm);
+  }
   engine.addPlayer(0, 0, 0);
   return engine;
 }
@@ -69,6 +75,30 @@ describe('Movement control (issue #234)', () => {
     safeDestroy(upEngine);
     safeDestroy(downEngine);
     safeDestroy(idleEngine);
+  });
+
+  it('up with heavy still ascends (0.7 x MOVE_FORCE beats gravity)', () => {
+    const engine = makeBoxEngine();
+    const heavyUp: typeof UP_INPUT = { ...UP_INPUT, heavy: true };
+    const state = runInput(engine, heavyUp, 60);
+    // Net up-acceleration with heavy is (−30·0.7 + 20) = −1 m/s²: the disc
+    // must still rise, just more slowly than pure up.
+    expect(state.y).toBeLessThan(0);
+    expect(state.velY).toBeLessThan(0);
+    expect(state.alive).toBe(true);
+    safeDestroy(engine);
+  });
+
+  it('up ascends at non-default map ppm values (radius-invariance)', () => {
+    // The native radius^2 scale is the disc mass ratio; the mass-1 fixture
+    // pins it to 1 for any disc radius, so up must lift at any ppm.
+    for (const ppm of [9, 15]) {
+      const engine = makeBoxEngine(ppm);
+      const state = runInput(engine, UP_INPUT, TICKS);
+      expect(state.y, `ppm ${ppm}`).toBeLessThan(0);
+      expect(state.velY, `ppm ${ppm}`).toBeLessThan(0);
+      safeDestroy(engine);
+    }
   });
 
   it('environment step(4)/step(8): up ascends and down falls faster (reproduction of #234)', () => {

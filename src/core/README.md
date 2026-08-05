@@ -22,7 +22,7 @@ VELOCITY_ITERATIONS = 2         // Verified native low-quality velocity solver c
 POSITION_ITERATIONS = 6         // Verified native position solver count
 SCALE               = 30        // Exported map coordinate conversion for this JS port
 DEFAULT_PPM         = 12        // Native default player ppm
-MOVE_FORCE          = 24.0      // Movement-force base: native §35.5 base (12) doubled so up (24 N) out-thrusts gravity (20) at the verified mass-1 disc (#234); applied ×radius² (canonical-relative) and ×0.7 for heavy
+MOVE_FORCE          = 30.0      // Movement-force base applied per tick (×0.7 heavy): smallest round value above the heavy-lift threshold 20/0.7 ≈ 28.57, so pure "up" ascends (net −10 m/s²) and up+heavy ascends (net −1 m/s²) at the verified mass-1 disc (#234); the native radius^2 scale is the disc mass ratio, pinned to 1 by the mass-1 fixture
 HEAVY_FORCE_MULTIPLIER = 0.7    // Heavy reduces force; it does not change mass
 GRAVITY_Y           = 20        // Native gravity in m/s²
 OUT_OF_BOUNDS_DISTANCE = 850    // Circular boundary: 850 map units (world radius = 850 / SCALE)

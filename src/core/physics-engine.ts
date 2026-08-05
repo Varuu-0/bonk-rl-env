@@ -95,21 +95,25 @@ export const ARENA_HALF_WIDTH = 25;
 export const ARENA_HALF_HEIGHT = 20;
 
 /**
- * Movement-force base for the player disc before the radius^2 scale and any
- * heavy damp (DEOBFUSCATION §35.5 movement branch, lines 7979-7997:
- * `state.ms.fl ? 20 : 12`, scaled by radius^2 and then by 0.7 for heavy).
+ * Movement-force base for the player disc after the native radius^2 scale
+ * and before the heavy damp (DEOBFUSCATION §35.5 movement branch, lines
+ * 7979-7997: `state.ms.fl ? 20 : 12`, scaled by radius^2 and then by 0.7
+ * for heavy). The §35.5 radius^2 scale is the disc mass ratio
+ * `π·r²/(π·1²)`; the verified mass-1 disc fixture (#212) pins that ratio to
+ * exactly 1 for every disc radius, so the applied net acceleration is
+ * radius-invariant (as in the native game) and no further per-ppm factor is
+ * applied.
  *
- * The verified mass-1 disc fixture (#212) plus gravity 20 leave the native
- * 12 N base unable to lift the disc (net `Δv = (−12 + 20)·dt` downward), so
- * the RL "up" bit could never produce ascent (#234). This port doubles the
- * base to 24 N: with the mass-1 fixture the net upward acceleration is
- * `(−24 + 20)` = −4 m/s², restoring the pre-#212 up-acceleration magnitude
- * (≈ −3.9 m/s² at the old mass 0.5027 fixture) at the verified mass-1
- * fixture. The radius^2 scale is applied relative to the canonical disc
- * (DEFAULT_PPM/SCALE), so the default ppm = 12 cancels the ratio to 1.0 and
- * only non-default map `ppm` values change the applied force.
+ * The native 12 N base leaves the mass-1 disc unable to beat gravity 20
+ * (net `Δv = (−12 + 20)·dt` downward), so the RL "up" bit could never
+ * produce ascent (#234). This port raises the base to the smallest round
+ * value that still ascends under the 0.7 heavy damp — `20 / 0.7 ≈ 28.57`,
+ * rounded up to `30` — giving:
+ *   - pure up: `(−30 + 20)` = −10 m/s² (upward);
+ *   - up + heavy: `(−30·0.7 + 20)` = −1 m/s² (still upward);
+ *   - down: `(+30 + 20)` = +50 m/s² (accelerated fall).
  */
-export const MOVE_FORCE = 24.0;
+export const MOVE_FORCE = 30.0;
 
 /** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
 export const OUT_OF_BOUNDS_DISTANCE = 850;
@@ -812,15 +816,15 @@ export class PhysicsEngine {
     force.x = 0;
     force.y = 0;
 
-    // Native movement-force scale (DEOBFUSCATION §35.5): base force ×
-    // radius^2, with the radius measured relative to the canonical disc
-    // (ratio = 1.0 at the default ppm = DEFAULT_PPM); heavy then damps ×0.7.
-    const magnitude = MOVE_FORCE * (this.ppm / DEFAULT_PPM) ** 2;
-
-    if (input.left) force.x -= magnitude;
-    if (input.right) force.x += magnitude;
-    if (input.up) force.y -= magnitude;
-    if (input.down) force.y += magnitude;
+    // Native movement-force model (DEOBFUSCATION §35.5): the radius^2 scale
+    // is the disc mass ratio `π·r²/(π·1²)`, which the verified mass-1 disc
+    // fixture (#212) pins to exactly 1 for every disc radius — so the applied
+    // force is constant and the net acceleration is radius/ppm-invariant, and
+    // no per-map `ppm` factor is needed. Heavy then damps the vector ×0.7.
+    if (input.left) force.x -= MOVE_FORCE;
+    if (input.right) force.x += MOVE_FORCE;
+    if (input.up) force.y -= MOVE_FORCE;
+    if (input.down) force.y += MOVE_FORCE;
 
     if (input.heavy) force.Multiply(HEAVY_FORCE_MULTIPLIER);
     body.ApplyForce(force, body.GetWorldCenter());

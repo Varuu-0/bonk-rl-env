@@ -25,8 +25,8 @@ describe('config.example.json verified physics values', () => {
     expect(config.player.restitution).toBe(0.95);
   });
 
-  it('player moveForce is 24 (native 12 doubled so up out-thrusts gravity at mass 1, issue #234)', () => {
-    expect(config.player.moveForce).toBe(24.0);
+  it('player moveForce is 30 (heavy-lift threshold 20/0.7 rounded up, issue #234)', () => {
+    expect(config.player.moveForce).toBe(30.0);
   });
 
   it('no stale player density key (density is derived as 1/(pi*r^2))', () => {
