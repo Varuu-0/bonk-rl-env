@@ -875,9 +875,8 @@ export class PhysicsEngine {
    */
   private closestSurfacePoint(shape: any, body: any, playerPos: any): { d: number; point: { x: number; y: number } } {
     // Circle shapes are discriminated by the port's GetLocalPosition API,
-    // which exists only on b2CircleShape in this build; polygon shapes lack
-    // it (their m_radius is never assigned — only the circle constructor
-    // sets `this.m_radius`), so no m_radius fallback is needed.
+    // which is exposed only on b2CircleShape in this build; polygons have no
+    // such method and fall through to the per-edge projection scoring below.
     if (typeof shape.GetLocalPosition === 'function') {
       const center = body.GetWorldPoint(shape.GetLocalPosition());
       const dx = center.x - playerPos.x;
