@@ -9,6 +9,12 @@
       "y": 370
     }
   },
+  "physics": {
+    "deathCenter": {
+      "x": 730,
+      "y": 500
+    }
+  },
   "capZones": [],
   "bodies": [
     {

@@ -341,6 +341,38 @@ describe('PhysicsEngine', () => {
       engine.tick();
       expect(engine.getPlayerState(0).alive).toBe(false);
     });
+
+    it('death circle follows the configured map center, not the world origin', () => {
+      engine = new PhysicsEngine();
+      // Map centered at (800, 800) map units (an arena offset from the world
+      // origin, like the bundled exports): the disc at spawn is ~50 units
+      // from the map center and must survive the first tick.
+      engine.setDeathCircleCenter(800, 800);
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+
+      // A disc more than 850 map units from the map center still dies with
+      // deathType 4 (native rule, measured from the map center).
+      engine.addPlayer(1, 800, 1700); // 900 map units from (800, 800)
+      engine.tick();
+      const outside = engine.getPlayerState(1);
+      expect(outside.alive).toBe(false);
+      expect(outside.deathType).toBe(4);
+    });
+
+    it('setDeathCircleCenter survives reset() (map-level configuration)', () => {
+      engine = new PhysicsEngine();
+      engine.setDeathCircleCenter(800, 800);
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+
+      engine.reset();
+      engine.addPlayer(0, 800, 850);
+      engine.tick();
+      expect(engine.getPlayerState(0).alive).toBe(true);
+    });
   });
 
   describe('getAlivePlayerIds', () => {

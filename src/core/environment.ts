@@ -145,6 +145,8 @@ export class BonkEnvironment {
     private ppm: number = 12;
     private capZones: Array<{ index: number; owner: string; type: number }> = [];
     private mapBounds: { width: number; height: number } | null = null;
+    /** Map-relative OOB death-circle center (physics.deathCenter), if declared. */
+    private mapDeathCenter: { x: number; y: number } | null = null;
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case
@@ -239,6 +241,17 @@ export class BonkEnvironment {
         // Cache explicit map bounds — reset() re-adds bodies, which recomputes
         // dynamic bounds, so the override must be re-applied after every reset.
         this.mapBounds = (mapDef as any).physics?.bounds ?? null;
+
+        // Cache the map's OOB death-circle center (physics.deathCenter). The
+        // native death circle is centered on the map's authored origin (850 map
+        // units, DEOBFUSCATION "Death Type 4"); exported maps whose coordinates
+        // are offset from the world origin carry that center here. Maps without
+        // one use the engine default (world origin), preserving origin-centered
+        // behavior for hand-built maps.
+        this.mapDeathCenter = (mapDef as any).physics?.deathCenter ?? null;
+        if (this.mapDeathCenter && typeof (this.physics as any).setDeathCircleCenter === 'function') {
+            this.physics.setDeathCircleCenter(this.mapDeathCenter.x, this.mapDeathCenter.y);
+        }
 
         this.reset();
     }
@@ -339,6 +352,12 @@ export class BonkEnvironment {
         // dynamic bounds and would otherwise clobber the override every reset.
         if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
             this.physics.setMapBounds(this.mapBounds.width, this.mapBounds.height);
+        }
+
+        // Re-apply the map's OOB death-circle center — like mapBounds it is a
+        // map-level override that must survive the fresh world of every reset.
+        if (this.mapDeathCenter && typeof (this.physics as any).setDeathCircleCenter === 'function') {
+            this.physics.setDeathCircleCenter(this.mapDeathCenter.x, this.mapDeathCenter.y);
         }
 
         // Reset frame skip state
