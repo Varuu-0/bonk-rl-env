@@ -493,16 +493,25 @@ describe('WorkerPool failure state', () => {
     expect(results).toHaveLength(1);
   });
 
-  it('propagates telemetry snapshot errors without failing the pool', async () => {
+  it('returns non-blocking telemetry snapshots in shared mode without timing out (issue #240)', async () => {
     fakes.control.messageTimeoutMs = 20;
     pool = new WorkerPool(1);
     await pool.init(1, {}, true);
 
-    await expect(pool.getTelemetrySnapshots()).rejects.toThrow('timed out');
+    // Shared-mode workers block in Atomics.wait inside the wait-for-action
+    // loop and can never answer GET_TELEMETRY, so the snapshot must return
+    // immediately (empty) instead of waiting out messageTimeoutMs, and it
+    // must not fail the pool.
+    const started = Date.now();
+    const snapshots = await pool.getTelemetrySnapshots();
+    expect(Date.now() - started).toBeLessThan(200);
+    expect(snapshots).toHaveLength(0);
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(false);
     const results = await pool.step([0]);
     expect(results).toHaveLength(1);
+    expect((pool as any).state).toBe('ready');
   });
 
   it('propagates shared-memory read errors and disposes the pool', async () => {

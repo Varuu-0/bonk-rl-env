@@ -995,6 +995,19 @@ export class WorkerPool {
      */
     async getTelemetrySnapshots(): Promise<BigUint64Array[]> {
         this.assertReady('get telemetry');
+
+        // In shared-memory mode every worker is blocked inside the
+        // wait-for-action loop (Atomics.wait) and can never service
+        // GET_TELEMETRY on its event loop, so no reply can ever arrive.
+        // Return an empty snapshot set immediately instead of burning
+        // messageTimeoutMs (30s default) on unreachable workers: the call is
+        // non-blocking, never fails the pool, and leaves the pool untouched
+        // (issue #240). Worker telemetry is otherwise collected through the
+        // shared-memory channel, which carries no telemetry region today.
+        if (this.useSharedMemory) {
+            return [];
+        }
+
         const promises = [];
         for (let i = 0; i < this.workers.length; i++) {
             promises.push(this.sendMessage(this.workers[i], { type: 'GET_TELEMETRY' }));
@@ -1003,14 +1016,10 @@ export class WorkerPool {
         const hungWorker = settled.find(r => r.status === 'rejected' && this.isWorkerTimeout(r.reason));
         if (hungWorker) {
             const failure = this.createFailure('telemetry', (hungWorker as { reason: Error }).reason);
-            // In shared mode workers block in Atomics.wait and never service
-            // GET_TELEMETRY, so that timeout is expected and recoverable. In
-            // message mode a timeout means the worker is hung/unreachable:
+            // In message mode a timeout means the worker is hung/unreachable:
             // fail so callers re-init instead of burning the full timeout on
             // every snapshot.
-            if (!this.useSharedMemory) {
-                await this.failPool(failure);
-            }
+            await this.failPool(failure);
             throw failure;
         }
         const firstRejection = settled.find(r => r.status === 'rejected');
