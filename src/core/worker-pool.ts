@@ -45,6 +45,12 @@ type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
 
 const SYNC_COMPLETED_INDEX = 0;
 const SYNC_STATUS_OFFSET = 1;
+
+// The shared-memory reset path encodes real seeds as seed + 1 (0 is the
+// "no seed" sentinel), so a seed must fit in [0, 0xFFFFFFFE] for seed + 1 to
+// remain a representable uint32. The range is enforced for BOTH transports so
+// the two cannot drift (#226).
+const MAX_SUPPORTED_RESET_SEED = 0xFFFFFFFE;
 const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
@@ -384,10 +390,17 @@ export class WorkerPool {
             );
         }
 
-        if (this.useSharedMemory && seeds) {
+        // Validate the seed values in BOTH transports, not just shared memory:
+        // message passing forwards raw seeds to `env.reset()`, whose PRNG
+        // silently normalizes any number with `seed >>> 0` (truncating floats,
+        // bit-casting negatives, wrapping values >= 2^32). The same call must
+        // not throw in shared mode and silently reseed with a different value
+        // in message mode. A seed valid in one transport must mean the same
+        // thing in the other.
+        if (seeds) {
             for (const seed of seeds) {
-                if (!Number.isInteger(seed) || seed < 0 || seed > 0xFFFFFFFE) {
-                    throw new Error(`Seed ${seed} out of supported range [0, 4294967294] for shared-memory reset`);
+                if (!Number.isInteger(seed) || seed < 0 || seed > MAX_SUPPORTED_RESET_SEED) {
+                    throw new Error(`Seed ${seed} out of supported range [0, ${MAX_SUPPORTED_RESET_SEED}] for reset`);
                 }
             }
         }
