@@ -370,7 +370,7 @@ describe('PhysicsEngine', () => {
       expect(engine.getPlayerState(0).alive).toBe(true);
 
       // Reused for a map WITHOUT a deathCenter: the stale (800, 800) center must
-      // not persist, so the same disc (~1145 from the origin) is now OOB.
+      // not persist, so the same disc (~1167 from the origin) is now OOB.
       engine.reset();
       engine.addPlayer(0, 800, 850);
       engine.tick();
