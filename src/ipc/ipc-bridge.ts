@@ -16,6 +16,7 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    private _hostPool: boolean = false;
     private _boundResolve: (() => void) | null = null;
     private _boundReject: ((reason?: any) => void) | null = null;
 
@@ -111,6 +112,21 @@ export class IpcBridge {
                 }
                 if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };
+                } else if (this._hostPool) {
+                    // The pool was adopted from an enclosing BonkEnv and is
+                    // already initialized with that env's numEnvs and config.
+                    // Never re-initialize it with client-default config (that
+                    // would discard the env-configured workers); accept an
+                    // init only when the requested env count matches.
+                    if (numEnvs === this._numEnvs) {
+                        this._initialized = true;
+                        response = { status: "ok" };
+                    } else {
+                        response = {
+                            status: "error",
+                            error: `Invalid init: this IPC server hosts ${this._numEnvs} environment(s), got ${numEnvs}`,
+                        };
+                    }
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     const envDefaults = getConfig().environment;
@@ -210,6 +226,12 @@ export class IpcBridge {
                     // Full server shutdown: close the Router after replying.
                     response = { status: "ok" };
                     this._shouldClose = true;
+                } else if (this._hostPool) {
+                    // Session close on an adopted pool: the host BonkEnv owns
+                    // the pool's lifecycle, so detach the client session
+                    // without tearing the env's workers down.
+                    this._initialized = false;
+                    response = { status: "ok" };
                 } else {
                     // Session close (default): free the client's env state but
                     // keep the server listening so other envs/tests on the same
@@ -279,6 +301,23 @@ export class IpcBridge {
             throw new Error('Invalid numEnvs: must be a positive integer');
         }
         await this.pool.init(numEnvs, config, useSharedMemory);
+        this._initialized = true;
+        this._numEnvs = numEnvs;
+    }
+
+    /**
+     * Adopt an already-initialized WorkerPool owned by an enclosing host
+     * (e.g. a BonkEnv). The IPC server then serves those env-configured
+     * workers instead of spawning its own, so external clients share the
+     * env's numEnvs/config/useSharedMemory rather than getting default
+     * workers. The host keeps owning the pool's lifecycle.
+     */
+    adoptPool(pool: WorkerPool, numEnvs: number): void {
+        if (this._hostPool || this._initialized) {
+            throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
+        }
+        this.pool = pool;
+        this._hostPool = true;
         this._initialized = true;
         this._numEnvs = numEnvs;
     }

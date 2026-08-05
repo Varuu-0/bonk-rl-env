@@ -110,12 +110,23 @@ export class BonkEnv {
             if (this.config.enableIpcServer === true) {
                 const bridge = new IpcBridge({ server: { port: this.port } });
                 this.bridge = bridge;
+                // Serve the env's own worker pool so external clients share
+                // its numEnvs/config/useSharedMemory instead of spawning a
+                // second set of default-config workers (no double workers,
+                // env config forwarded).
+                bridge.adoptPool(this.pool!, this.config.numEnvs ?? 1);
                 // start() keeps the serve loop alive until close(); bind
-                // failures surface through bridge.ready (which rejects on a
-                // bind error), so await ready rather than the serve promise.
+                // failures surface through bridge.ready, so await ready
+                // rather than the serve promise.
                 const serve = bridge.start();
                 serve.catch(() => { /* bind failures surface via bridge.ready */ });
                 await bridge.ready;
+                // The server is the only consumer of the shared pool while IPC
+                // mode is on, so when it shuts down (e.g. a client sends
+                // `close` with shutdown:true) tear the environment down too:
+                // isActive() must not report success for a dead service and
+                // the reserved port must not outlive the listener.
+                void serve.then(() => { void this.stop(); });
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
         } catch (error) {

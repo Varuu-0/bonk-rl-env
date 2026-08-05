@@ -35,6 +35,24 @@ function canConnectTcp(port: number, timeoutMs: number = 2000): Promise<boolean>
   });
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs: number = 5000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!predicate()) {
+    if (Date.now() > deadline) {
+      throw new Error(`Timed out waiting for condition (waited ${timeoutMs}ms)`);
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+}
+
+async function occupyPort(port: number): Promise<net.Server> {
+  return new Promise((resolve, reject) => {
+    const server = net.createServer();
+    server.once('error', reject);
+    server.listen(port, '127.0.0.1', () => resolve(server));
+  });
+}
+
 describe('BonkEnv IPC server mode (issue #223)', () => {
   it('binds env.port and serves an external ZMQ DEALER client', { timeout: 60000 }, async () => {
     const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START, endPort: IPC_SERVER_TEST_START + 49 });
@@ -155,5 +173,59 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
     }
 
     expect(portManager.isAllocated(env.port)).toBe(false);
+  });
+
+  it('client full-shutdown tears the environment down (isActive/port follow reality)', { timeout: 60000 }, async () => {
+    const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START + 200, endPort: IPC_SERVER_TEST_START + 249 });
+    const env = new BonkEnv({
+      numEnvs: 1,
+      useSharedMemory: false,
+      portManager,
+      enableIpcServer: true,
+    });
+
+    await env.start();
+
+    const client = new zmq.Dealer();
+    try {
+      await client.connect(`tcp://127.0.0.1:${env.port}`);
+      await client.send(JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false }));
+      const initReply = JSON.parse((await client.receive())[0].toString());
+      expect(initReply.status).toBe('ok');
+
+      await client.send(JSON.stringify({ command: 'close', shutdown: true }));
+      const closeReply = JSON.parse((await client.receive())[0].toString());
+      expect(closeReply.status).toBe('ok');
+
+      await waitFor(() => !env.isActive());
+    } finally {
+      client.close();
+    }
+
+    expect(env.isActive()).toBe(false);
+    expect(portManager.isAllocated(env.port)).toBe(false);
+    expect(await canConnectTcp(env.port)).toBe(false);
+  });
+
+  it('rejects start() when the port cannot be bound (EADDRINUSE)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 250;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const blocker = await occupyPort(port);
+
+    try {
+      const env = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+
+      await expect(env.start()).rejects.toThrow();
+      expect(env.isActive()).toBe(false);
+      expect(portManager.isAllocated(port)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
   });
 });
