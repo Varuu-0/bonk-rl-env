@@ -158,7 +158,14 @@ parentPort.on('message', (msg) => {
             _obsBuffer = new Float32Array(16 + 6 * Math.max(0, _obsNumOpponents - 1));
             envs = [];
             for (let i = 0; i < numEnvsParam; i++) {
-                envs.push(new BonkEnvironment(config));
+                // Each global environment gets its own deterministic
+                // construction seed: the configured seed (the loader default 0
+                // is now honored, #200) plus the global env index. Pooled
+                // environments therefore never all share an identical PRNG
+                // stream, while every environment's construction stream stays
+                // reproducible for the same config. The worker's later reset()
+                // with per-env seeds overrides this stream exactly as before.
+                envs.push(new BonkEnvironment({ ...config, seed: (config.seed ?? 0) + globalOffset + i }));
             }
             numEnvs = numEnvsParam;
             globalOffset = msg.startId || 0;
