@@ -10,23 +10,29 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+import { PortManager } from '../../src/utils/port-manager';
 
 describe('IpcBridge black-box E2E', () => {
   let bridge: IpcBridge;
   let client: zmq.Dealer;
-  const testPort = 15556;
+  let portManager: PortManager;
+  let port: number;
 
   beforeAll(async () => {
-    bridge = new IpcBridge({ server: { port: testPort } } as any);
-    await bridge.start();
+    portManager = new PortManager({ startPort: 15700, endPort: 15799 });
+    port = portManager.allocate();
+    bridge = new IpcBridge({ server: { port } } as any);
+    // start() runs the serve loop until close(), so do not await it.
+    void bridge.start();
     client = new zmq.Dealer();
-    await client.connect(`tcp://127.0.0.1:${testPort}`);
-    await new Promise(r => setTimeout(r, 500));
+    await client.connect(`tcp://127.0.0.1:${port}`);
+    await new Promise(r => setTimeout(r, 300));
   }, 30000);
 
   afterAll(async () => {
     try { client.close(); } catch { /* ignore */ }
     try { await bridge.close(); } catch { /* ignore */ }
+    portManager.release(port);
   }, 10000);
 
   async function sendCommand(cmd: object): Promise<any> {
@@ -84,10 +90,15 @@ describe('IpcBridge black-box E2E', () => {
       expect(result.data.observation).toHaveLength(3);
     });
 
-    it('each observation has 14 values', async () => {
+    it('each observation has the expected fields', async () => {
       const result = await sendCommand({ command: 'reset', seeds: [1, 2, 3] });
       for (const obs of result.data.observation) {
-        expect(obs).toHaveLength(14);
+        expect(typeof obs.playerX).toBe('number');
+        expect(typeof obs.playerY).toBe('number');
+        expect(typeof obs.playerVelX).toBe('number');
+        expect(typeof obs.playerVelY).toBe('number');
+        expect(typeof obs.tick).toBe('number');
+        expect(Array.isArray(obs.opponents)).toBe(true);
       }
     });
 
@@ -97,10 +108,23 @@ describe('IpcBridge black-box E2E', () => {
       expect(r1.data.observation).toEqual(r2.data.observation);
     });
 
-    it('different seeds produce different observations', async () => {
-      const r1 = await sendCommand({ command: 'reset', seeds: [1, 1, 1] });
-      const r2 = await sendCommand({ command: 'reset', seeds: [999, 999, 999] });
-      expect(r1.data.observation).not.toEqual(r2.data.observation);
+    it('different seeds produce different step trajectories', async () => {
+      // Reset observations are spawn-state only and identical across seeds;
+      // the seed drives the opponent RNG stream, so divergence only shows
+      // up after the environment has been stepped.
+      await sendCommand({ command: 'reset', seeds: [1, 1, 1] });
+      for (let i = 0; i < 30; i++) {
+        await sendCommand({ command: 'step', actions: [0, 0, 0] });
+      }
+      const r1 = await sendCommand({ command: 'step', actions: [0, 0, 0] });
+
+      await sendCommand({ command: 'reset', seeds: [999, 999, 999] });
+      for (let i = 0; i < 30; i++) {
+        await sendCommand({ command: 'step', actions: [0, 0, 0] });
+      }
+      const r2 = await sendCommand({ command: 'step', actions: [0, 0, 0] });
+
+      expect(r1.data).not.toEqual(r2.data);
     });
   });
 
