@@ -1,5 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import * as path from 'path';
+import * as os from 'os';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
 
@@ -31,6 +32,29 @@ describe('Environment map-path wiring (#199)', () => {
 
   it('loads the file referenced by mapPath (programmatic per-env override)', () => {
     env = new BonkEnvironment({ mapPath: SIMPLE_1V1, numOpponents: 0 });
+
+    expect((env as any).physics.getBodyMap().size).toBe(1);
+    expect((env as any).config.mapData.name).toBe('Simple 1v1');
+  });
+
+  it('loads a repo-relative map path independently of the process cwd', () => {
+    const original = process.cwd();
+    try {
+      process.chdir(os.tmpdir());
+      env = new BonkEnvironment({ mapPath: 'maps/bonk_Simple_1v1_123.json', numOpponents: 0 });
+    } finally {
+      process.chdir(original);
+    }
+
+    expect((env as any).config.mapPath).toBe(
+      path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json'),
+    );
+    expect((env as any).physics.getBodyMap().size).toBe(1);
+    expect((env as any).config.mapData.name).toBe('Simple 1v1');
+  });
+
+  it('loads a repo-relative defaultMapPath (--map / DEFAULT_MAP_PATH surface)', () => {
+    env = new BonkEnvironment({ defaultMapPath: 'maps/bonk_Simple_1v1_123.json', numOpponents: 0 });
 
     expect((env as any).physics.getBodyMap().size).toBe(1);
     expect((env as any).config.mapData.name).toBe('Simple 1v1');

@@ -130,6 +130,19 @@ export interface EnvironmentConfig {
 // ─── Default Arena ───────────────────────────────────────────────────
 
 /**
+ * Resolve a possibly repo-relative map path against the project root so a
+ * relative path (such as the loader default `maps/...`) works regardless of
+ * the process cwd. The worker inherits the parent's cwd, so a cwd-relative
+ * default map path would otherwise silently box-fall-back when the server is
+ * launched from a different directory (#199).
+ */
+function resolveMapPath(mapFile: string): string {
+    return path.isAbsolute(mapFile)
+        ? mapFile
+        : path.resolve(__dirname, '..', '..', mapFile);
+}
+
+/**
  * Creates a simple default map config if none is provided.
  */
 function getDefaultMap(): MapDef {
@@ -194,7 +207,13 @@ export class BonkEnvironment {
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = config.mapPath || config.defaultMapPath || path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+            // Resolve relative paths against the project root (see
+            // resolveMapPath) so the loader's cwd-relative default cannot
+            // shadow the cwd-independent fallback in worker mode.
+            const configuredPath = config.mapPath || config.defaultMapPath || '';
+            const mapPath = configuredPath
+                ? resolveMapPath(configuredPath)
+                : path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
                 mapFile = mapPath;
