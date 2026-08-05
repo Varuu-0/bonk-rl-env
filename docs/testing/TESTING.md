@@ -28,11 +28,16 @@ cd python && pytest --cov=.
 | `npm run test:coverage` | Run with coverage report |
 | `npm run test:unit` | Unit tests only |
 | `npm run test:integration` | Integration tests only |
-| `npm run test:e2e` | E2E tests (longer timeout) |
+| `npm run test:e2e` | E2E tests (longer timeout; dedicated `vitest.e2e.config.ts`) |
 | `npm run test:security` | Security tests |
 | `npm run test:perf` | Performance tests |
 | `npm run test:all` | All tests including E2E and security |
 | `npm run typecheck` | TypeScript type checking |
+
+The E2E suite (`tests/e2e/`) runs under its own `vitest.e2e.config.ts`, which
+only includes `tests/e2e/**/*.test.ts` and uses 60 s test/hook timeouts. It
+stays out of the default `npm test` run; execute it with `npm run test:e2e` or
+as the E2E stage of `npm run test:all`.
 
 ## Test File Organization
 
