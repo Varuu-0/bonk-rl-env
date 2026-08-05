@@ -214,7 +214,15 @@ export class BonkEnvironment {
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
-            seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
+            // Seed 0 is a valid deterministic seed and must reach the PRNG: a
+            // truthiness check would map `--seed 0` / `SEED=0` /
+            // `environment.seed: 0` onto a random seed while reset(0) and
+            // pool.reset([0]) stay deterministic, silently breaking
+            // constructed-env replay (#200). Only an absent seed (undefined/
+            // null) falls back to a random one.
+            seed: config.seed !== undefined && config.seed !== null
+                ? config.seed
+                : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
             mapPath: mapFile,
