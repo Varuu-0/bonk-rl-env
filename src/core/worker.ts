@@ -87,9 +87,14 @@ function observationFastToArray(env: BonkEnvironment): Float32Array {
  * message-passing replies quantize here with Math.fround (identical
  * round-to-nearest-even) to make both transports bit-identical for the same
  * (seed, actions). This is the transport contract we ship to all consumers:
- * the shared-memory transport is the default and the Python client already
- * consumes float32 observations, so message-mode previously returning raw
- * Float64 values was the observable inconsistency.
+ * the shared-memory transport is the default and its Float32 values are what
+ * the pool has always returned; message-mode previously returning raw Float64
+ * values was the observable inconsistency being fixed, not a downgrade of a
+ * consumed precision. Downstream clients already operate at Float32: the
+ * Python client declares a `Box(..., dtype=np.float32)` observation space and
+ * converts every observation into float32 numpy arrays
+ * (python/envs/bonk_env.py), and its reward-dtype tests accept float32.
+ * No first-party consumer does exact-Float64 comparisons on rewards.
  *
  * A fresh observation object is returned and the input is never mutated, so
  * physics-visible state can never be affected even if a future environment
