@@ -807,16 +807,29 @@ export class PhysicsEngine {
     // center, scored by center-to-surface distance `d < 10`. The native
     // QueryAABB is a broadphase pre-filter over that same window; iterating
     // the port's platform bodies (the only grappable "phys" bodies) with the
-    // identical d < 10 scoring yields exactly the same candidate set with no
-    // fixed-size result buffer.
+    // identical d < 10 scoring yields exactly the same candidate set. The
+    // per-shape AABB overlap test below reproduces the broadphase filter
+    // without a fixed-size result buffer: a shape whose surface is within 10
+    // units of the disc center always overlaps the ±10 box.
+    const queryAabb = new b2AABB();
+    queryAabb.lowerBound.Set(playerPos.x - GRAPPLE_TARGET_WINDOW, playerPos.y - GRAPPLE_TARGET_WINDOW);
+    queryAabb.upperBound.Set(playerPos.x + GRAPPLE_TARGET_WINDOW, playerPos.y + GRAPPLE_TARGET_WINDOW);
+
     const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
+    const shapeAabb = new b2AABB();
     for (const pBody of this.platformBodies) {
       const ud = pBody.GetUserData() || {};
       // Native query filter (lines 8148-8161): noGrapple surfaces excluded;
       // players and capzones are never in platformBodies so never grappleable.
       if (ud.noGrapple) continue;
 
+      const xf = pBody.GetXForm();
       for (let shape = pBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        shape.ComputeAABB(shapeAabb, xf);
+        if (shapeAabb.lowerBound.x > queryAabb.upperBound.x || shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
+            shapeAabb.lowerBound.y > queryAabb.upperBound.y || shapeAabb.upperBound.y < queryAabb.lowerBound.y) {
+          continue; // broadphase window miss — cannot satisfy d < 10
+        }
         const surface = this.closestSurfacePoint(shape, pBody, playerPos);
         if (surface.d < GRAPPLE_TARGET_WINDOW) {
           candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
@@ -861,8 +874,10 @@ export class PhysicsEngine {
    * the native edge/chain scoring.
    */
   private closestSurfacePoint(shape: any, body: any, playerPos: any): { d: number; point: { x: number; y: number } } {
-    // This Box2D port exposes GetLocalPosition only on b2CircleShape; polygon
-    // shapes have no such method and their m_radius is undefined.
+    // Circle shapes are discriminated by the port's GetLocalPosition API,
+    // which exists only on b2CircleShape in this build; polygon shapes lack
+    // it (their m_radius is never assigned — only the circle constructor
+    // sets `this.m_radius`), so no m_radius fallback is needed.
     if (typeof shape.GetLocalPosition === 'function') {
       const center = body.GetWorldPoint(shape.GetLocalPosition());
       const dx = center.x - playerPos.x;
