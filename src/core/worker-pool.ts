@@ -636,17 +636,20 @@ export class WorkerPool {
      * on allocation or retention semantics here.
      */
     private async stepMessagePassing(actions: any[], options: ResultOwnershipOptions): Promise<any[]> {
-        // Reject malformed entries before any worker is signalled, mirroring
+        // Encode the whole batch before any worker is signalled, mirroring
         // the shared-memory path's phase-1 encoding. A full-length batch that
         // contains e.g. `undefined` would otherwise throw inside a worker
         // mid-slice: that worker's earlier environments would already have
         // advanced while the pool stays ready, leaving the batch partially
         // executed and every later step desynced (#207). The ACTION_ENCODE
         // label marks this as a per-request input error with the pool
-        // untouched, exactly like the shared-memory transport.
+        // untouched, exactly like the shared-memory transport. The encoded
+        // numbers are dispatched directly, so the worker decodes them instead
+        // of re-validating the raw entries.
+        const encodedActions = new Array<number>(actions.length);
         try {
-            for (const action of actions) {
-                this.encodeAction(action);
+            for (let i = 0; i < actions.length; i++) {
+                encodedActions[i] = this.encodeAction(actions[i]);
             }
         } catch (error) {
             const tagged = error instanceof Error ? error : new Error(String(error));
@@ -661,7 +664,7 @@ export class WorkerPool {
         let actionIdx = 0;
         for (let i = 0; i < this.workers.length; i++) {
             const wEnvs = this.workerEnvs[i];
-            const wActions = actions.slice(actionIdx, actionIdx + wEnvs);
+            const wActions = encodedActions.slice(actionIdx, actionIdx + wEnvs);
 
             const p = this.sendMessage(this.workers[i], { type: 'step', actions: wActions })
                 .then(data => {
@@ -698,14 +701,16 @@ export class WorkerPool {
         // same tick maxTicks is reached reports terminated=true AND
         // truncated=true, and reconstructing terminated as done && !truncated
         // would destroy the death signal (#208). The reconstruction is only a
-        // fill-in for worker results that omitted the flag.
+        // fill-in for worker results that omitted the flag. Both fields are
+        // assigned from the same value so they cannot diverge, matching the
+        // SAB path.
         const flat = results.flat();
         for (const result of flat) {
             const envTerminated = result.info ? result.info.terminated : undefined;
             const terminated = envTerminated !== undefined
                 ? Boolean(envTerminated)
                 : Boolean(result.done && !result.truncated);
-            result.terminated = result.terminated ?? terminated;
+            result.terminated = terminated;
             if (result.info) {
                 result.info.terminated = terminated;
             }

@@ -62,3 +62,60 @@ describe('death exactly at maxTicks keeps both termination flags (issue #208)', 
     await runThroughPool(true);
   });
 });
+
+describe('pure truncation at maxTicks stays terminated=false (issue #208)', () => {
+  /**
+   * Counterpart of the death-on-maxTicks case: the AI survives to the time
+   * limit, so the same step must report terminated=false and truncated=true
+   * — locking in the flag asymmetry the pool previously destroyed. Both
+   * spawns sit inside the 850-unit death circle and far apart; the opponent
+   * policy is disabled so no contact can happen on tick 1.
+   */
+  const truncationAtMaxTicksMap: MapDef = {
+    name: 'truncation_at_tick1',
+    spawnPoints: { team_blue: { x: -100, y: 0 }, team_red: { x: 100, y: 0 } },
+    bodies: [{ name: 'floor', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true }],
+  };
+
+  const truncationConfig: EnvironmentConfig = {
+    mapData: truncationAtMaxTicksMap,
+    numOpponents: 1,
+    maxTicks: 1,
+    seed: 42,
+    randomOpponent: false,
+  };
+
+  it('direct environment reports truncated without termination', () => {
+    const env = new BonkEnvironment(truncationConfig);
+    env.reset(42);
+    const res = env.step(0);
+    expect(res.done).toBe(true);
+    expect(res.truncated).toBe(true);
+    expect(res.info.terminated).toBe(false);
+    env.close();
+  });
+
+  const runThroughPool = async (useSharedMemory: boolean) => {
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(1, truncationConfig, useSharedMemory);
+      await pool.reset([42]);
+      const [res] = await pool.step([0]);
+      expect(res.done).toBe(true);
+      expect(res.truncated).toBe(true);
+      expect(res.terminated).toBe(false);
+      expect(res.info.terminated).toBe(false);
+    } finally {
+      await pool.close();
+    }
+  };
+
+  it('message-passing mode reports a pure truncation', async () => {
+    await runThroughPool(false);
+  });
+
+  it('shared-memory mode reports a pure truncation', async () => {
+    if (!WorkerPool.isSupported()) return;
+    await runThroughPool(true);
+  });
+});
