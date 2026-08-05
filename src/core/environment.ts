@@ -21,16 +21,12 @@ import {
     PlayerState,
     MapDef,
     MapBodyDef,
-    SCALE,
     TPS,
 } from './physics-engine';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // ─── Constants ───────────────────────────────────────────────────────
-
-/** Maximum number of ticks before a round is forcefully ended (truncation). */
-const MAX_TICKS = 30 * TPS; // 30 seconds at 30 TPS = 900 ticks
 
 // SPAWN_POSITIONS removed, now read dynamically from map
 
@@ -125,6 +121,38 @@ export interface EnvironmentConfig {
     teamsEnabled?: boolean;
     /** Native no-collision physics mode (`nc`): discs never collide (default false) */
     noCollide?: boolean;
+    /** Documented physics.* tuning forwarded to the PhysicsEngine (issue #217).
+     *  Absent keys keep the engine's sanity defaults, so an env built without a
+     *  physics section runs with the exact verified native values. */
+    physics?: PhysicsTuningConfig;
+    /** Documented arena.* tuning (fallback half-bounds and bounds margin). */
+    arena?: ArenaTuningConfig;
+    /** Documented player.* movement tuning (moveForce, heavyMassMultiplier). */
+    player?: PlayerTuningConfig;
+}
+
+/** Config-loader `physics.*` section: documented, tunable engine settings. */
+export interface PhysicsTuningConfig {
+    ticksPerSecond?: number;
+    solverIterations?: number;
+    scale?: number;
+    gravityX?: number;
+    gravityY?: number;
+    enableSleeping?: boolean;
+    worldAabbExtent?: number;
+}
+
+/** Config-loader `arena.*` section. */
+export interface ArenaTuningConfig {
+    defaultHalfWidth?: number;
+    defaultHalfHeight?: number;
+    boundsMargin?: number;
+}
+
+/** Config-loader `player.*` movement section. */
+export interface PlayerTuningConfig {
+    moveForce?: number;
+    heavyMassMultiplier?: number;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -243,7 +271,10 @@ export class BonkEnvironment {
 
         this.config = {
             numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
-            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
+            // The maxTicks default is 30 seconds at the effective tick rate, so
+            // a configured ticksPerSecond keeps the same real-time episode
+            // length instead of silently truncating at 900 ticks (#217).
+            maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? 30 * (config.physics?.ticksPerSecond ?? TPS),
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
             // Seed 0 is a valid deterministic seed and must reach the PRNG: a
@@ -272,6 +303,9 @@ export class BonkEnvironment {
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
+            physics: config.physics ?? {},
+            arena: config.arena ?? {},
+            player: config.player ?? {},
         };
 
         // The AI slot is config-driven, never hardcoded to 0 (#221). An
@@ -291,7 +325,20 @@ export class BonkEnvironment {
         }
 
         this.rng = new PRNG(this.config.seed);
-        this.physics = new PhysicsEngine();
+        this.physics = new PhysicsEngine({
+            ticksPerSecond: config.physics?.ticksPerSecond,
+            velocityIterations: config.physics?.solverIterations,
+            scale: config.physics?.scale,
+            gravityX: config.physics?.gravityX,
+            gravityY: config.physics?.gravityY,
+            enableSleeping: config.physics?.enableSleeping,
+            worldAabbExtent: config.physics?.worldAabbExtent,
+            arenaHalfWidth: config.arena?.defaultHalfWidth,
+            arenaHalfHeight: config.arena?.defaultHalfHeight,
+            arenaBoundsMargin: config.arena?.boundsMargin,
+            moveForce: config.player?.moveForce,
+            heavyForceMultiplier: config.player?.heavyMassMultiplier,
+        });
 
         // Size the fast-observation buffer for the configured opponent count
         // (7 player floats + 6 per opponent + 2 arena + 1 tick). The first
