@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   PhysicsEngine,
   PlayerInput,
@@ -361,17 +361,44 @@ describe('PhysicsEngine', () => {
       expect(outside.deathType).toBe(4);
     });
 
-    it('setDeathCircleCenter survives reset() (map-level configuration)', () => {
+    it('reset() clears a stale death-circle center back to the origin default', () => {
       engine = new PhysicsEngine();
+      // Map centered at (800, 800): the disc ~50 units from that center survives.
       engine.setDeathCircleCenter(800, 800);
       engine.addPlayer(0, 800, 850);
       engine.tick();
       expect(engine.getPlayerState(0).alive).toBe(true);
 
+      // Reused for a map WITHOUT a deathCenter: the stale (800, 800) center must
+      // not persist, so the same disc (~1145 from the origin) is now OOB.
       engine.reset();
       engine.addPlayer(0, 800, 850);
       engine.tick();
-      expect(engine.getPlayerState(0).alive).toBe(true);
+      expect(engine.getPlayerState(0).alive).toBe(false);
+      expect(engine.getPlayerState(0).deathType).toBe(4);
+    });
+
+    it('non-finite death-circle center is ignored and never disables OOB', () => {
+      engine = new PhysicsEngine();
+      engine.setDeathCircleCenter(NaN, NaN);
+
+      // A disc just beyond the origin-based OOB radius must still die: the
+      // rejected NaN center must not have disabled the OOB check map-wide.
+      engine.addPlayer(0, 900, 0);
+      engine.tick();
+      const killed = engine.getPlayerState(0);
+      expect(killed.alive).toBe(false);
+      expect(killed.deathType).toBe(4);
+
+      // And a non-finite center must not clobber a previously valid one.
+      engine.reset();
+      const warned = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      engine.setDeathCircleCenter(800, 800);
+      engine.setDeathCircleCenter(Infinity, 0);
+      warned.mockRestore();
+      engine.addPlayer(1, 800, 850); // safe if center stayed (800, 800)
+      engine.tick();
+      expect(engine.getPlayerState(1).alive).toBe(true);
     });
   });
 

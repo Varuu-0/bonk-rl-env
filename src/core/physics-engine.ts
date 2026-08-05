@@ -677,6 +677,17 @@ export class PhysicsEngine {
    * disc radius never widens or shrinks the boundary).
    */
   setDeathCircleCenter(centerXMapUnits: number, centerYMapUnits: number): void {
+    // A non-finite center would make every OOB distance check NaN, and NaN >
+    // threshold is false, silently disabling OOB elimination map-wide. Guard
+    // so the death circle is always defined: ignore the bad input and keep the
+    // previous (default-origin or last-valid) center.
+    if (!Number.isFinite(centerXMapUnits) || !Number.isFinite(centerYMapUnits)) {
+      console.warn(
+        `setDeathCircleCenter ignoring non-finite center (${centerXMapUnits}, ${centerYMapUnits}); ` +
+          `keeping the previous death-circle center so OOB elimination stays enabled`,
+      );
+      return;
+    }
     this.oobCenterX = centerXMapUnits / SCALE;
     this.oobCenterY = centerYMapUnits / SCALE;
   }
@@ -1282,9 +1293,14 @@ export class PhysicsEngine {
     this.platformBodies = [];
     this.platformBodyMap = new Map();
     this.tickCount = 0;
-    // oobCenterX/oobCenterY are deliberately preserved: like teamsEnabled and
-    // noCollide they are map-level configuration, not per-episode state. The
-    // environment re-applies physics.deathCenter after every reset anyway.
+    // Reset the OOB death-circle center to the origin default. Although it is
+    // map-level configuration, it must not survive across maps: reusing this
+    // engine for a map without a physics.deathCenter would otherwise keep a
+    // stale center from the previous map and shift (never disable) the death
+    // circle. The environment re-applies deathCenter after every reset for maps
+    // that define it; maps without one fall back to the origin default.
+    this.oobCenterX = 0;
+    this.oobCenterY = 0;
   }
 
   /**
