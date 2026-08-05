@@ -319,6 +319,25 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.server.port).toBe(3000);
         });
 
+        it('--bind-address sets server bind address', () => {
+            process.argv = ['node', 'script.js', '--bind-address', '0.0.0.0'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.server.bindAddress).toBe('0.0.0.0');
+        });
+
+        it('missing value for --bind-address is ignored', () => {
+            process.argv = ['node', 'script.js', '--bind-address'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.server.bindAddress).toBe('127.0.0.1');
+        });
+
+        it('CLI --bind-address overrides env BIND_ADDRESS', () => {
+            process.env.BIND_ADDRESS = '10.0.0.1';
+            process.argv = ['node', 'script.js', '--bind-address', '0.0.0.0'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.server.bindAddress).toBe('0.0.0.0');
+        });
+
         it('--max-runtime sets max runtime', () => {
             process.argv = ['node', 'script.js', '--max-runtime', '60'];
             const cfg = loadConfig(testDir);

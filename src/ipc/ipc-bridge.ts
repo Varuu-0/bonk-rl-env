@@ -11,6 +11,7 @@ export class IpcBridge {
     private sock: zmq.Router;
     private pool: WorkerPool;
     private port: number;
+    private bindAddress: string;
     private stepCount: number = 0;
     private _closed: boolean = false;
     private _initialized: boolean = false;
@@ -19,6 +20,7 @@ export class IpcBridge {
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
+        this.bindAddress = config?.server?.bindAddress ?? getConfig().server.bindAddress;
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 
@@ -30,7 +32,7 @@ export class IpcBridge {
     private _wrappedSend: Function;
 
     async start() {
-        const addr = `tcp://127.0.0.1:${this.port}`;
+        const addr = `tcp://${this.bindAddress}:${this.port}`;
         await this.sock.bind(addr);
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
@@ -263,6 +265,13 @@ export class IpcBridge {
      */
     getPort(): number {
         return this.port;
+    }
+
+    /**
+     * Get the configured bind address (network interface to bind the ZMQ socket to).
+     */
+    getBindAddress(): string {
+        return this.bindAddress;
     }
 
     /**

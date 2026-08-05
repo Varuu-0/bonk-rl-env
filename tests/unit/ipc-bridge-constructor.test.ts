@@ -63,7 +63,7 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.getConfig.mockClear();
-  mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+  mocks.getConfig.mockReturnValue({ server: { port: 5555, bindAddress: '127.0.0.1' }, environment: { seed: 0 } });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
@@ -106,6 +106,21 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getPort()).toBe(5555);
   });
 
+  it('uses bindAddress from config when provided', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '0.0.0.0' } });
+    expect(bridge.getBindAddress()).toBe('0.0.0.0');
+  });
+
+  it('falls back to getConfig().server.bindAddress when no config', () => {
+    const bridge = new IpcBridge();
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
+  it('falls back to getConfig().server.bindAddress when config has no server', () => {
+    const bridge = new IpcBridge({});
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
   it('creates a ZMQ Router socket (line 18)', () => {
     new IpcBridge();
     expect(bindSpy).not.toHaveBeenCalled();
@@ -136,6 +151,15 @@ describe('IpcBridge start()', () => {
     const startPromise = bridge.start();
     await new Promise(r => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://127.0.0.1:12345');
+    await bridge.close();
+    await startPromise;
+  });
+
+  it('binds socket to the configured bind address when provided (issue #235)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '0.0.0.0' } });
+    const startPromise = bridge.start();
+    await new Promise(r => setTimeout(r, 10));
+    expect(bindSpy).toHaveBeenCalledWith('tcp://0.0.0.0:12348');
     await bridge.close();
     await startPromise;
   });
