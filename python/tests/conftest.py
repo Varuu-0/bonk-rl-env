@@ -239,10 +239,14 @@ def bonk_server():
     if proc is not None:
         _kill_process_tree(proc)
 
-        # Belt and suspenders: any listener still on the port belongs to our
-        # spawn (stale servers were removed at startup), so remove it too.
-        for pid in _listening_pids(port):
-            _taskkill(pid)
+        # Belt and suspenders: any listener still on the port while our
+        # server process is still alive belongs to our spawn (stale servers
+        # were removed at startup), so remove it too. If our process already
+        # exited, a listener could be a foreign server that took over the
+        # port — leave it alone.
+        if proc.poll() is None:
+            for pid in _listening_pids(port):
+                _taskkill(pid)
 
 
 @pytest.fixture

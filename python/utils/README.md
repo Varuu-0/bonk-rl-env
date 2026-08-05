@@ -16,6 +16,8 @@ Helper utilities for training, logging, and visualization. These modules support
 ### Usage
 
 ```python
+import numpy as np
+from envs.bonk_env import BonkVecEnv
 from utils.training_logger import TrainingLogger
 
 logger = TrainingLogger(log_dir="logs", filename="trajectory.csv")
