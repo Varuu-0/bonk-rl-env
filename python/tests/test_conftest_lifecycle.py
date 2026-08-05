@@ -178,3 +178,30 @@ def test_windows_process_table_parses_cim_json(monkeypatch):
     )
 
     assert conftest._windows_process_table() == {10: 5, 11: 10}
+
+
+def test_process_creation_times_filters_pids(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = (
+            '[{"ProcessId": 10, "ParentProcessId": 5,'
+            ' "CreationDate": "20260804120000.123456-300"},'
+            ' {"ProcessId": 11, "ParentProcessId": 10,'
+            ' "CreationDate": "20260804120001.000000-300"}]'
+        )
+
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(
+        conftest.subprocess, "run", lambda *a, **k: _Result()
+    )
+
+    assert conftest._process_creation_times({10}) == {
+        10: "20260804120000.123456-300"
+    }
+    assert conftest._process_creation_times({11}) == {
+        11: "20260804120001.000000-300"
+    }
+    # Unknown / missing PIDs are never reported.
+    assert conftest._process_creation_times({10, 99}) == {
+        10: "20260804120000.123456-300"
+    }

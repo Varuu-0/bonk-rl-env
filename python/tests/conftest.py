@@ -91,6 +91,46 @@ def _windows_process_table():
     return table
 
 
+def _process_creation_times(pids):
+    """Map pid -> creation time string for the given live Windows PIDs.
+
+    Creation times are matched alongside PIDs so a recycled PID (reused by
+    an unrelated process after ours exited) can never be mistaken for our
+    own process.
+    """
+    if os.name != "nt" or not pids:
+        return {}
+    script = (
+        "Get-CimInstance Win32_Process | "
+        "Select-Object ProcessId,CreationDate | ConvertTo-Json"
+    )
+    try:
+        result = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    try:
+        rows = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(rows, dict):
+        rows = [rows]
+    creation_times = {}
+    for row in rows:
+        try:
+            pid = int(row["ProcessId"])
+            creation_times[pid] = row["CreationDate"]
+        except (KeyError, TypeError, ValueError):
+            continue
+    return {pid: creation_times[pid] for pid in pids if pid in creation_times}
+
+
 def _taskkill(pid, tree=True):
     """Force-kill ``pid`` on Windows, optionally its whole child tree."""
     if os.name != "nt":
@@ -238,25 +278,32 @@ def bonk_server():
         else:
             pytest.skip("bonk server did not start within 10s")
 
-    # Snapshot our spawn's process tree while the parent is provably alive,
-    # so the PIDs cannot have been recycled by the time teardown runs. This
-    # lets teardown reclaim the port from a straggler child even if the
-    # parent died later, without ever touching a foreign process.
-    spawned_pids = set()
+    # Record the identity of the process serving the port at probe time:
+    # it is our spawn (stale listeners were removed at startup). Teardown
+    # reclaims the port only from that exact process, matched by pid AND
+    # creation time, so a foreign server or a recycled pid is never touched.
+    probe_listener_pids = set()
+    probe_creation_times = {}
     if proc is not None and os.name == "nt":
-        spawned_pids = _process_tree_pids(_windows_process_table(), proc.pid)
+        probe_listener_pids = _listening_pids(port)
+        probe_creation_times = _process_creation_times(probe_listener_pids)
 
     yield proc
 
     if proc is not None:
         _kill_process_tree(proc)
 
-        # Belt and suspenders: reclaim the port from any straggler child of
-        # our spawn that survived the tree-kill. Only PIDs that were verified
-        # descendants at snapshot time are killed, and only as leaves
-        # (no /T), so a foreign server that took over the port is untouched.
-        for pid in _listening_pids(port) & spawned_pids:
-            _taskkill(pid, tree=False)
+        # Belt and suspenders: reclaim the port from our own server process
+        # if the tree-kill missed it (e.g. the parent died and the child
+        # kept serving). Only the exact process that answered the startup
+        # probe is killed, and only while its creation time still matches.
+        if probe_creation_times:
+            current = _listening_pids(port) & probe_listener_pids
+            current_times = _process_creation_times(current)
+            for pid in current:
+                probe_time = probe_creation_times.get(pid)
+                if probe_time is not None and current_times.get(pid) == probe_time:
+                    _taskkill(pid, tree=False)
 
 
 @pytest.fixture
