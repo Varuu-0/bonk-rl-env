@@ -342,6 +342,27 @@ export function mergeEnvironmentConfig(
     return merged;
 }
 
+/**
+ * Build the complete per-worker environment config: the loader's environment
+ * section merged with the caller's per-env/client overrides, plus the reward
+ * section attached under `reward` (killReward, deathPenalty, timePenalty).
+ * The reward section is the single source for the documented reward-shaping
+ * surfaces (config.json, KILL_REWARD/DEATH_PENALTY/TIME_PENALTY env vars,
+ * --kill-reward/--death-penalty/--time-penalty CLI flags); attaching it here
+ * lets BonkEnvironment apply the configured weights on every worker-init path
+ * (IpcBridge init, BonkEnv.start) instead of leaving calculateReward's
+ * hardcoded literals in place (#220). A caller-supplied `reward` object wins
+ * per key over the loader defaults.
+ */
+export function resolveEnvironmentConfig(override: Record<string, any> = {}): Record<string, any> {
+    const merged = mergeEnvironmentConfig(getConfig().environment as any, override);
+    const overrideReward = isPlainObject(override.reward)
+        ? (override.reward as Record<string, any>)
+        : {};
+    merged.reward = { ...getConfig().reward, ...overrideReward };
+    return merged;
+}
+
 // ─── Config File Loader ────────────────────────────────────────────────────
 
 function findConfigFile(): string | null {
@@ -437,6 +458,20 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (env.SEED !== undefined) {
         const v = parseInt(env.SEED, 10);
         if (!isNaN(v) && v >= 0) config.environment.seed = v;
+    }
+    // Reward shaping (documented env vars: KILL_REWARD / DEATH_PENALTY / TIME_PENALTY).
+    // No range validation: kill/death weights may be signed floats (#220).
+    const rewardEnvVars: Array<[string, keyof RewardConfig]> = [
+        ['KILL_REWARD', 'killReward'],
+        ['DEATH_PENALTY', 'deathPenalty'],
+        ['TIME_PENALTY', 'timePenalty'],
+    ];
+    for (const [envVar, key] of rewardEnvVars) {
+        const rawValue = env[envVar];
+        if (rawValue !== undefined) {
+            const v = parseFloat(rawValue);
+            if (!isNaN(v)) (config.reward as any)[key] = v;
+        }
     }
     // Opponent random-policy probabilities (documented env vars)
     const oppProbEnvVars: Array<[string, keyof EnvironmentConfig]> = [
@@ -583,6 +618,24 @@ function parseCliFlags(config: AppConfig): AppConfig {
                             case '--random-opp-down-prob': config.environment.randomOppDownProb = v; break;
                             case '--random-opp-heavy-prob': config.environment.randomOppHeavyProb = v; break;
                             case '--random-opp-grapple-prob': config.environment.randomOppGrappleProb = v; break;
+                        }
+                        i++;
+                    }
+                }
+                break;
+
+            case '--kill-reward':
+            case '--death-penalty':
+            case '--time-penalty':
+                if (next) {
+                    // Reward weights are signed floats (negative penalties are
+                    // the documented defaults), so only parseFloat is applied.
+                    const v = parseFloat(next);
+                    if (!isNaN(v)) {
+                        switch (arg) {
+                            case '--kill-reward': config.reward.killReward = v; break;
+                            case '--death-penalty': config.reward.deathPenalty = v; break;
+                            case '--time-penalty': config.reward.timePenalty = v; break;
                         }
                         i++;
                     }
