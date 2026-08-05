@@ -9,6 +9,7 @@
 import { WorkerPool, type ResultOwnershipOptions } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
 import { getConfig, mergeEnvironmentConfig } from '../config/config-loader';
+import { IpcBridge } from '../ipc/ipc-bridge';
 
 export interface BonkEnvConfig {
     /** Number of environments to create internally (default: 1) */
@@ -41,6 +42,7 @@ export class BonkEnv {
     public readonly port: number;
     
     private pool: WorkerPool | null = null;
+    private bridge: IpcBridge | null = null;
     private portManager: PortManager;
     private isRunning: boolean = false;
     private config: BonkEnvConfig;
@@ -97,6 +99,33 @@ export class BonkEnv {
             await this.stop();
             throw error;
         }
+
+        // When IPC server mode is requested (enableIpcServer, or an explicit
+        // port for IPC server mode), bind an IpcBridge to this.port so
+        // external clients can connect. start() does not resolve until the
+        // Router socket is actually bound, so isActive() can never report
+        // success before the advertised port is reachable (issue #223).
+        try {
+            if (this.config.enableIpcServer === true || this.config.port !== undefined) {
+                const bridge = new IpcBridge({ server: { port: this.port } });
+                this.bridge = bridge;
+                const serve = bridge.start();
+                await Promise.race([
+                    bridge.ready,
+                    // bridge.start() stays pending until close(), so race its
+                    // settle only to surface a bind failure (e.g. EADDRINUSE)
+                    // as a start() rejection instead of a silent hang.
+                    serve.then(
+                        () => { throw new Error(`IPC server for ${this.id} stopped before becoming ready on port ${this.port}`); },
+                        (err: unknown) => { throw err; }
+                    ),
+                ]);
+                console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
+            }
+        } catch (error) {
+            await this.stop();
+            throw error;
+        }
         
         this.isRunning = true;
         console.log(`[BonkEnv:${this.id}] Started successfully`);
@@ -107,7 +136,7 @@ export class BonkEnv {
      * @returns Promise that resolves when the environment is stopped
      */
     async stop(): Promise<void> {
-        if (!this.pool) {
+        if (!this.pool && !this.bridge) {
             // Releasing is idempotent and covers a start failure before a
             // worker pool was fully initialized.
             this.portManager.release(this.port);
@@ -118,7 +147,17 @@ export class BonkEnv {
         console.log(`[BonkEnv:${this.id}] Stopping...`);
         
         try {
-            await this.pool.close();
+            if (this.bridge) {
+                await this.bridge.close();
+            }
+        } catch (error) {
+            console.error(`[BonkEnv:${this.id}] Error closing IPC bridge:`, error);
+        } finally {
+            this.bridge = null;
+        }
+
+        try {
+            await this.pool?.close();
         } catch (error) {
             console.error(`[BonkEnv:${this.id}] Error during shutdown:`, error);
         } finally {

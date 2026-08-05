@@ -16,6 +16,19 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    private _boundResolve: (() => void) | null = null;
+    private _boundReject: ((reason?: any) => void) | null = null;
+
+    /**
+     * Resolves once the ZMQ Router socket is bound and accepting connections,
+     * and rejects if the bind fails. Embedders that drive the serve loop
+     * without awaiting start() (which only exits on close()) can await this
+     * to know when the advertised port is actually reachable.
+     */
+    readonly ready: Promise<void> = new Promise<void>((resolve, reject) => {
+        this._boundResolve = resolve;
+        this._boundReject = reject;
+    });
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
@@ -26,14 +39,36 @@ export class IpcBridge {
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
 
+    private markBound(): void {
+        if (this._boundResolve) {
+            this._boundResolve();
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
+    }
+
+    private markBindFailed(err: unknown): void {
+        if (this._boundReject) {
+            this._boundReject(err);
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
+    }
+
     // Wrapped send function for telemetry
     private _wrappedSend: Function;
 
     async start() {
         const addr = `tcp://127.0.0.1:${this.port}`;
-        await this.sock.bind(addr);
+        try {
+            await this.sock.bind(addr);
+        } catch (err) {
+            this.markBindFailed(err);
+            throw err;
+        }
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
+        this.markBound();
 
         // Wait for incoming requests from Python
         try {
