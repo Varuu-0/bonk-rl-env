@@ -358,32 +358,31 @@ describe('GrappleMechanics', () => {
   });
 
   describe('grapple target window', () => {
-    // Verified native (§32.1): QueryAABB ±10 world units around the disc
-    // center, scored by center-to-surface distance < 10. There is no
-    // 500/SCALE reach — the 500 literal is the a1a energy threshold.
-    it('attaches when the surface is within the 10-unit window (8.0 world units)', () => {
-      // 200x20 platform at y=250 map units: surface at (250-10)/30 = 8.0
-      // world units below the player at (0,0) — inside the window.
+    // Verified native (§32.1): QueryAABB ±10 NATIVE world units around the
+    // disc center (`map px / ppm`, default ppm = 12), scored by
+    // center-to-surface distance < 10 → a 120 map px window. This port's world
+    // is `map px / SCALE` (SCALE = 30), so the equivalent window is
+    // 10 * 12 / 30 = 4.0 port units = 120 map px (10 disc radii). The 500
+    // literal is the a1a energy threshold, NOT a reach.
+    it('attaches when the surface is within the native window (~110 map px)', () => {
       engine = new PhysicsEngine();
-      engine.addBody(makePlatformDef({ name: 'in-window', x: 0, y: 250 }));
+      engine.addBody(makePlatformDef({ name: 'in-window', x: 0, y: 120 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
       expect(engine.hasGrappleJoint(0)).toBe(true);
     });
 
-    it('fails to attach when the surface is beyond the 10-unit window (10.33 world units)', () => {
-      // 200x20 platform at y=320 map units: surface at (320-10)/30 = 10.33
-      // world units away — outside the window.
+    it('fails to attach when the surface is beyond the native window (130 map px)', () => {
       engine = new PhysicsEngine();
-      engine.addBody(makePlatformDef({ name: 'out-window', x: 0, y: 320 }));
+      engine.addBody(makePlatformDef({ name: 'out-window', x: 0, y: 140 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);
       expect(engine.hasGrappleJoint(0)).toBe(false);
     });
 
-    it('fails to grapple when platform is beyond the window (surface 16.33 world units away)', () => {
+    it('fails to grapple a far platform (surface 16.33 world units away)', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({ name: 'far-platform', x: 0, y: 0 }));
       engine.addPlayer(0, 0, 500);
@@ -402,7 +401,7 @@ describe('GrappleMechanics', () => {
     it('grapples the closer of two in-window surfaces', () => {
       engine = new PhysicsEngine();
       engine.addBody(makePlatformDef({ name: 'near', x: 0, y: 100 }));
-      engine.addBody(makePlatformDef({ name: 'far-but-in-window', x: 0, y: 200 }));
+      engine.addBody(makePlatformDef({ name: 'far-but-in-window', x: 0, y: 120 }));
       engine.addPlayer(0, 0, 0);
 
       engine.applyInput(0, GRAPPLE_INPUT);

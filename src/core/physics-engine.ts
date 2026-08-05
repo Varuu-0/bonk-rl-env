@@ -71,7 +71,11 @@ export const HEAVY_FORCE_MULTIPLIER = 0.7;
 /**
  * Verified native grapple constants:
  * - Targeting: QueryAABB ±10 world units around the disc center, candidates
- *   scored by center-to-surface distance `d < 10` (§32.1).
+ *   scored by center-to-surface distance `d < 10` (§32.1). The 10 is in
+ *   NATIVE world units (`map px / ppm`); this port's world is `map px / SCALE`,
+ *   so the window is consumed as `GRAPPLE_TARGET_WINDOW * ppm / SCALE` port
+ *   units — 4.0 at the default ppm = 12 (120 map px = 10 disc radii, not the
+ *   300 map px a bare 10.0 port-unit window would reach).
  * - Joint: `frequencyHz = (sep < swing.l) ? 0.01 : swingF`,
  *   `dampingRatio = swingD`, with the only table-proven writers being
  *   `swingF = 2` (Hz) and `swingD = 0` (§32.4). `fh`/`dr` are map `d`-joint
@@ -80,6 +84,7 @@ export const HEAVY_FORCE_MULTIPLIER = 0.7;
  *   4/step while swinging, recharge 3/step otherwise, forced release and
  *   zeroing below 500. The literal 500 is this energy threshold, NOT a reach.
  */
+/** Native QueryAABB half-extent (native world units). Consumed as `* ppm / SCALE`. */
 export const GRAPPLE_TARGET_WINDOW = 10.0;
 export const GRAPPLE_FREQUENCY_HZ = 2.0;   // native swingF
 export const GRAPPLE_DAMPING_RATIO = 0.0;  // native swingD
@@ -846,17 +851,22 @@ export class PhysicsEngine {
 
     const playerPos = body.GetPosition();
 
-    // §32.1: candidates must lie within a ±10 world-unit window of the disc
-    // center, scored by center-to-surface distance `d < 10`. The native
-    // QueryAABB is a broadphase pre-filter over that same window; iterating
-    // the port's platform bodies (the only grappable "phys" bodies) with the
-    // identical d < 10 scoring yields exactly the same candidate set. The
-    // per-shape AABB overlap test below reproduces the broadphase filter
-    // without a fixed-size result buffer: a shape whose surface is within 10
-    // units of the disc center always overlaps the ±10 box.
+    // §32.1: candidates must lie within the native ±10 world-unit window of
+    // the disc center, scored by center-to-surface distance `d < 10`. The 10
+    // is a NATIVE world unit (= map px / ppm); this port's world is
+    // map px / SCALE, so the window is converted once here to
+    // `10 * ppm / SCALE` port units (4.0 at the default ppm = 12 → 120 map px
+    // = 10 disc radii, not the 300 map px a bare 10.0 value would reach). The
+    // native QueryAABB is a broadphase pre-filter over that same window;
+    // iterating the port's platform bodies (the only grappable "phys" bodies)
+    // with the identical `d < window` scoring yields exactly the same candidate
+    // set. The per-shape AABB overlap test below reproduces the broadphase
+    // filter without a fixed-size result buffer: a shape whose surface is
+    // within `window` units of the disc center always overlaps the ±window box.
+    const windowUnits = (GRAPPLE_TARGET_WINDOW * this.ppm) / SCALE;
     const queryAabb = new b2AABB();
-    queryAabb.lowerBound.Set(playerPos.x - GRAPPLE_TARGET_WINDOW, playerPos.y - GRAPPLE_TARGET_WINDOW);
-    queryAabb.upperBound.Set(playerPos.x + GRAPPLE_TARGET_WINDOW, playerPos.y + GRAPPLE_TARGET_WINDOW);
+    queryAabb.lowerBound.Set(playerPos.x - windowUnits, playerPos.y - windowUnits);
+    queryAabb.upperBound.Set(playerPos.x + windowUnits, playerPos.y + windowUnits);
 
     const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
     const shapeAabb = new b2AABB();
@@ -871,10 +881,10 @@ export class PhysicsEngine {
         shape.ComputeAABB(shapeAabb, xf);
         if (shapeAabb.lowerBound.x > queryAabb.upperBound.x || shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
             shapeAabb.lowerBound.y > queryAabb.upperBound.y || shapeAabb.upperBound.y < queryAabb.lowerBound.y) {
-          continue; // broadphase window miss — cannot satisfy d < 10
+          continue; // broadphase window miss — cannot satisfy d < window
         }
         const surface = this.closestSurfacePoint(shape, pBody, playerPos);
-        if (surface.d < GRAPPLE_TARGET_WINDOW) {
+        if (surface.d < windowUnits) {
           candidates.push({ d: surface.d, shape, body: pBody, point: surface.point });
         }
       }
