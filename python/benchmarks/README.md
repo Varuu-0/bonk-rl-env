@@ -80,7 +80,7 @@ python benchmarks/throughput_benchmark.py --steps 1000000
 All benchmarks require the Node.js physics engine to be running:
 
 ```bash
-npx tsx src/main.ts
+node node_modules/tsx/dist/cli.mjs src/main.ts
 ```
 
 Then run the benchmark script in a separate terminal.

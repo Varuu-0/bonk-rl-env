@@ -10,7 +10,7 @@ Usage workflow:
 Terminal 1 (Engine & Profiler)
 ------------------------------
 - Start the physics engine and profiler:
-    npx tsx src/main.ts
+    node node_modules/tsx/dist/cli.mjs src/main.ts
 
   Watch this terminal for:
   - Periodic profiler heatmaps (every ~5,000 physics ticks).
@@ -23,7 +23,7 @@ Terminal 1 (Engine & Profiler)
 Terminal 2 (Load Test)
 ----------------------
 - From the project root, run:
-    python python/test_profiler_load.py
+    python python/tests/test_profiler_load.py
 
 What this script does:
 - Connects to the running Bonk engine via ZMQ using BonkVecEnv.
@@ -77,6 +77,8 @@ def main() -> None:
             actions = np.random.randint(0, 64, size=num_envs)
 
             # VecEnv provides a synchronous step built on step_async/step_wait.
+            # SB3 contract: (obs, rewards, dones, infos) - dones folds
+            # termination and truncation together.
             _obs, _rewards, _dones, _infos = env.step(actions)
 
             ticks_done += num_envs

@@ -7,21 +7,20 @@ class TestBonkVecEnvConnectionLifecycle:
     def test_create_and_close(self, bonk_vec_env_single):
         assert bonk_vec_env_single is not None
 
-    def test_reset_returns_obs_and_info(self, bonk_vec_env_single):
-        obs, info = bonk_vec_env_single.reset()
+    def test_reset_returns_observation_array(self, bonk_vec_env_single):
+        obs = bonk_vec_env_single.reset()
         assert isinstance(obs, np.ndarray)
-        assert isinstance(info, dict)
 
     def test_step_returns_correct_shapes(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         action = np.array([0])
         bonk_vec_env_single.step_async(action)
-        obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
+        obs, rewards, dones, infos = bonk_vec_env_single.step_wait()
 
         assert obs.shape == (1, 14)
         assert rewards.shape == (1,)
-        assert terminated.shape == (1,)
-        assert truncated.shape == (1,)
+        assert dones.shape == (1,)
+        assert dones.dtype == bool
         assert isinstance(infos, list)
         assert len(infos) == 1
 
@@ -36,30 +35,29 @@ class TestBonkVecEnvConnectionLifecycle:
         first_env.close()
 
         second_env = bonk_vec_env_factory(num_envs=1)
-        obs, info = second_env.reset(seeds=[2])
+        obs = second_env.reset(seeds=[2])
         assert obs.shape == (1, 14)
-        assert isinstance(info, dict)
 
 
 @pytest.mark.slow
 class TestBonkVecEnvObservationShape:
     def test_observation_shape_single_env(self, bonk_vec_env_single):
-        obs, _ = bonk_vec_env_single.reset()
+        obs = bonk_vec_env_single.reset()
         assert obs.shape == (1, 14)
 
     def test_observation_shape_multi_env(self, bonk_vec_env):
-        obs, _ = bonk_vec_env.reset()
+        obs = bonk_vec_env.reset()
         assert obs.shape == (2, 14)
 
     def test_observation_shape_after_step(self, bonk_vec_env):
         bonk_vec_env.reset()
         actions = np.array([0, 0])
         bonk_vec_env.step_async(actions)
-        obs, _, _, _, _ = bonk_vec_env.step_wait()
+        obs, _, _, _ = bonk_vec_env.step_wait()
         assert obs.shape == (2, 14)
 
     def test_observation_dtype(self, bonk_vec_env_single):
-        obs, _ = bonk_vec_env_single.reset()
+        obs = bonk_vec_env_single.reset()
         assert obs.dtype == np.float32
 
 
@@ -68,38 +66,44 @@ class TestBonkVecEnvRewardShape:
     def test_reward_shape_single_env(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([0]))
-        _, rewards, _, _, _ = bonk_vec_env_single.step_wait()
+        _, rewards, _, _ = bonk_vec_env_single.step_wait()
         assert rewards.shape == (1,)
 
     def test_reward_shape_multi_env(self, bonk_vec_env):
         bonk_vec_env.reset()
         actions = np.array([0, 0])
         bonk_vec_env.step_async(actions)
-        _, rewards, _, _, _ = bonk_vec_env.step_wait()
+        _, rewards, _, _ = bonk_vec_env.step_wait()
         assert rewards.shape == (2,)
 
     def test_reward_dtype(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([0]))
-        _, rewards, _, _, _ = bonk_vec_env_single.step_wait()
+        _, rewards, _, _ = bonk_vec_env_single.step_wait()
         assert rewards.dtype == np.float64 or rewards.dtype == np.float32
 
 
 @pytest.mark.slow
 class TestBonkVecEnvDoneShapes:
-    def test_terminated_shape(self, bonk_vec_env):
+    def test_dones_shape_and_dtype(self, bonk_vec_env):
         bonk_vec_env.reset()
         bonk_vec_env.step_async(np.array([0, 0]))
-        _, _, terminated, _, _ = bonk_vec_env.step_wait()
-        assert terminated.shape == (2,)
-        assert terminated.dtype == bool
+        _, _, dones, _ = bonk_vec_env.step_wait()
+        assert dones.shape == (2,)
+        assert dones.dtype == bool
 
-    def test_truncated_shape(self, bonk_vec_env):
+    def test_infos_report_done_reasoning(self, bonk_vec_env):
         bonk_vec_env.reset()
         bonk_vec_env.step_async(np.array([0, 0]))
-        _, _, _, truncated, _ = bonk_vec_env.step_wait()
-        assert truncated.shape == (2,)
-        assert truncated.dtype == bool
+        _, _, dones, infos = bonk_vec_env.step_wait()
+        assert len(infos) == 2
+        assert all(isinstance(info, dict) for info in infos)
+        for info, done in zip(infos, dones):
+            if done:
+                assert "episode" in info
+            assert "_episode" in info
+            assert "terminated" in info["_episode"]
+            assert "truncated" in info["_episode"]
 
 
 @pytest.mark.slow
@@ -110,19 +114,19 @@ class TestBonkVecEnvActionSpace:
     def test_valid_action_zero(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([0]))
-        obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
+        obs, rewards, dones, infos = bonk_vec_env_single.step_wait()
         assert obs.shape == (1, 14)
 
     def test_valid_action_max(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([63]))
-        obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
+        obs, rewards, dones, infos = bonk_vec_env_single.step_wait()
         assert obs.shape == (1, 14)
 
     def test_valid_action_mid_range(self, bonk_vec_env_single):
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([32]))
-        obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
+        obs, rewards, dones, infos = bonk_vec_env_single.step_wait()
         assert obs.shape == (1, 14)
 
     def test_invalid_actions_do_not_poison_the_live_session(self, bonk_vec_env_single):
@@ -134,15 +138,15 @@ class TestBonkVecEnvActionSpace:
             bonk_vec_env_single.step_async(np.array([64]))
 
         bonk_vec_env_single.step_async(np.array([0]))
-        obs, _, _, _, _ = bonk_vec_env_single.step_wait()
+        obs, _, _, _ = bonk_vec_env_single.step_wait()
         assert obs.shape == (1, 14)
 
 
 @pytest.mark.slow
 class TestBonkVecEnvMultipleReset:
     def test_multiple_reset_calls(self, bonk_vec_env_single):
-        obs1, _ = bonk_vec_env_single.reset()
-        obs2, _ = bonk_vec_env_single.reset()
+        obs1 = bonk_vec_env_single.reset()
+        obs2 = bonk_vec_env_single.reset()
         assert obs1.shape == (1, 14)
         assert obs2.shape == (1, 14)
 
@@ -150,18 +154,18 @@ class TestBonkVecEnvMultipleReset:
         bonk_vec_env_single.reset()
         bonk_vec_env_single.step_async(np.array([0]))
         bonk_vec_env_single.step_wait()
-        obs, _ = bonk_vec_env_single.reset()
+        obs = bonk_vec_env_single.reset()
         assert obs.shape == (1, 14)
 
     def test_numpy_seed_transport_boundaries(self, bonk_vec_env_single):
-        obs, _ = bonk_vec_env_single.reset(seeds=np.array([np.uint64(0xFFFFFFFE)]))
+        obs = bonk_vec_env_single.reset(seeds=np.array([np.uint64(0xFFFFFFFE)]))
         assert obs.shape == (1, 14)
 
     def test_invalid_seed_does_not_poison_the_live_session(self, bonk_vec_env_single):
         with pytest.raises(ValueError, match="must be in \\[0, 4294967294\\]"):
             bonk_vec_env_single.reset(seeds=[0xFFFFFFFF])
 
-        obs, _ = bonk_vec_env_single.reset(seeds=[0])
+        obs = bonk_vec_env_single.reset(seeds=[0])
         assert obs.shape == (1, 14)
 
 
@@ -169,13 +173,13 @@ class TestBonkVecEnvMultipleReset:
 class TestBonkVecEnvConfigurableNumEnvs:
     def test_num_envs_4(self, bonk_vec_env_factory):
         env = bonk_vec_env_factory(num_envs=4)
-        obs, _ = env.reset()
+        obs = env.reset()
         assert obs.shape == (4, 14)
         env.close()
 
     def test_num_envs_8(self, bonk_vec_env_factory):
         env = bonk_vec_env_factory(num_envs=8)
-        obs, _ = env.reset()
+        obs = env.reset()
         assert obs.shape == (8, 14)
         env.close()
 
@@ -186,7 +190,7 @@ class TestBonkVecEnvStepSequence:
         bonk_vec_env_single.reset()
         for _ in range(5):
             bonk_vec_env_single.step_async(np.array([0]))
-            obs, rewards, terminated, truncated, infos = bonk_vec_env_single.step_wait()
+            obs, rewards, dones, infos = bonk_vec_env_single.step_wait()
             assert obs.shape == (1, 14)
             assert rewards.shape == (1,)
 
@@ -194,6 +198,61 @@ class TestBonkVecEnvStepSequence:
         bonk_vec_env.reset()
         actions = np.array([0, 63])
         bonk_vec_env.step_async(actions)
-        obs, rewards, terminated, truncated, infos = bonk_vec_env.step_wait()
+        obs, rewards, dones, infos = bonk_vec_env.step_wait()
         assert obs.shape == (2, 14)
         assert rewards.shape == (2,)
+
+
+@pytest.mark.slow
+class TestBonkVecEnvSb3Contract:
+    """Regression tests for #177.
+
+    BonkVecEnv must satisfy the stable-baselines3 ``VecEnv`` contract
+    (``reset()`` -> observation array, ``step()`` -> 4-tuple) so that
+    ``PPO.learn()`` and friends can drive it directly. These tests exercise
+    the exact call pattern used by ``PPO.collect_rollouts``.
+    """
+
+    def test_reset_returns_plain_observation_array(self, bonk_vec_env):
+        # SB3 stores env.reset() into self._last_obs and feeds it straight to
+        # obs_as_tensor, which rejects tuples ("Unrecognized type of observation").
+        obs = bonk_vec_env.reset()
+        assert isinstance(obs, np.ndarray)
+        assert not isinstance(obs, tuple)
+        assert obs.shape == (2, 14)
+
+    def test_step_returns_sb3_4_tuple(self, bonk_vec_env):
+        obs = bonk_vec_env.reset()
+        assert isinstance(obs, np.ndarray)
+        new_obs, rewards, dones, infos = bonk_vec_env.step(np.array([0, 0]))
+        assert isinstance(new_obs, np.ndarray)
+        assert new_obs.shape == (2, 14)
+        assert rewards.shape == (2,)
+        assert dones.shape == (2,)
+        assert dones.dtype == bool
+        assert isinstance(infos, list)
+        assert len(infos) == 2
+
+    def test_ppo_learn_style_rollout_loop(self, bonk_vec_env):
+        # Mirror of PPO.collect_rollouts: reset once, then repeatedly
+        # env.step(clipped_actions) -> (new_obs, rewards, dones, infos).
+        obs = bonk_vec_env.reset()
+        assert isinstance(obs, np.ndarray)
+        for _ in range(8):
+            new_obs, rewards, dones, infos = bonk_vec_env.step(np.array([0, 0]))
+            assert isinstance(new_obs, np.ndarray)
+            assert new_obs.shape == (2, 14)
+            assert rewards.shape == (2,)
+            assert dones.shape == (2,)
+            assert dones.dtype == bool
+            assert len(infos) == 2
+            obs = new_obs
+
+    def test_ppo_learn_smoke(self, bonk_vec_env):
+        # The exact repro from issue #177: PPO.learn() used to crash on the
+        # (obs, info) reset tuple and the 5-tuple step.
+        from stable_baselines3 import PPO
+
+        model = PPO("MlpPolicy", bonk_vec_env, n_steps=16, batch_size=8, seed=0)
+        model.learn(total_timesteps=32)
+        assert model.num_timesteps == 32

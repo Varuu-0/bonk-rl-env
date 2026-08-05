@@ -28,7 +28,7 @@ Saturates the IPC bridge and worker pool to stress-test the Node.js profiler and
 
 ```bash
 # Terminal 1: Start engine and profiler
-npx tsx src/main.ts
+node node_modules/tsx/dist/cli.mjs src/main.ts
 
 # Terminal 2: Run load test
 python tests/test_profiler_load.py
@@ -68,5 +68,5 @@ pytest tests/test_rewards.py -v
 Environment tests require the Node.js physics engine running:
 
 ```bash
-npx tsx src/main.ts
+node node_modules/tsx/dist/cli.mjs src/main.ts
 ```
