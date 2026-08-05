@@ -1101,9 +1101,16 @@ export class PhysicsEngine {
     }
   }
 
+  /**
+   * Timed cap-zone (type 1) completion countdown, gated on the native
+   * `while (p >= l)` rule (DEOBFUSCATION §34.6, lines 3698-3703): the f
+   * countdown only advances while the zone progress is at the limit, so a
+   * contested zone (p < l) pauses the timer and a takeover team must hold
+   * the zone to the limit before the capture fires.
+   */
   private processCapZoneCountdowns(): void {
     for (const [, state] of this.capZoneState) {
-      if (state.f > 0) {
+      if (state.f > 0 && state.p >= state.l) {
         state.f--;
         if (state.f === 0) {
           const ownerTeam = state.ot;

@@ -387,6 +387,114 @@ describe('CapZoneScoring', () => {
             expect(engine.getPlayerState(1).deathType).toBe(3);
             expect(engine.getPlayerState(0).alive).toBe(true);
         });
+
+        // Native completion semantics (DEOBFUSCATION §34.6, lines 3698-3703):
+        // the whole completion block runs `while (p >= l)` — the f countdown
+        // only advances while the zone progress is at the limit, so a contested
+        // zone (p < l) pauses the timer and the capture only fires at f == 0
+        // while the holder keeps p at the limit.
+        it('capture countdown pauses while the zone is contested and only resumes after the holder regains p >= l', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 600, width: 2000, height: 30,
+                static: true,
+            });
+
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 1, fixture: 'zone', shapeType: 'bx', l: 0.1 },
+                0, 540, 400, 300,
+            );
+
+            engine.addPlayer(0, 0, 400);    // red holder, rests inside the zone
+            engine.setPlayerTeam(0, 'red');
+            engine.addPlayer(1, 500, 400); // blue, outside the zone
+            engine.setPlayerTeam(1, 'blue');
+
+            // Red holds the zone alone: real contact events fill p to l and
+            // start the f = 20 countdown.
+            for (let i = 0; i < 8; i++) engine.tick();
+            let s: any = (engine as any).capZoneState.get(0);
+            expect(s.p).toBe(s.l);
+            expect(s.f).toBeGreaterThan(0);
+            expect(engine.getTeamScored()).toBe(null);
+
+            // Blue enters and contests: progress drops below the limit and the
+            // running countdown must pause instead of completing the capture.
+            s.p = 0;
+            s.f = 5;
+            for (let i = 0; i < 6; i++) {
+                (engine as any).capZoneTouches.push({ zoneIndex: 0, playerId: 1, team: 'blue' });
+                engine.tick();
+            }
+            s = (engine as any).capZoneState.get(0);
+            expect(s.p).toBe(0);
+            expect(s.f).toBe(5);
+            expect(engine.getTeamScored()).toBe(null);
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(1).alive).toBe(true);
+
+            // Blue leaves the zone: red alone re-fills p to the limit and the
+            // paused countdown resumes from 5 — the capture fires only after
+            // the re-hold, not for the contested interval.
+            for (let i = 0; i < 10; i++) engine.tick();
+            expect(engine.getTeamScored()).toBe('red');
+            expect(engine.getPlayerState(1).alive).toBe(false);
+            expect(engine.getPlayerState(1).deathType).toBe(3);
+            expect(engine.getPlayerState(0).alive).toBe(true);
+        });
+
+        it('a takeover team that never completed the hold cannot win; the capture fires only after it holds p >= l', () => {
+            engine = new PhysicsEngine();
+
+            engine.addBody({
+                name: 'floor', type: 'rect',
+                x: 0, y: 600, width: 2000, height: 30,
+                static: true,
+            });
+
+            engine.addCapZone(
+                { index: 0, owner: 'neutral', type: 1, fixture: 'zone', shapeType: 'bx', l: 0.1 },
+                0, 540, 400, 300,
+            );
+
+            engine.addPlayer(0, 0, 400);    // red holder, rests inside the zone
+            engine.setPlayerTeam(0, 'red');
+            engine.addPlayer(1, 500, 400); // blue, outside the zone
+            engine.setPlayerTeam(1, 'blue');
+
+            // Red holds the zone alone: p fills to l and the countdown starts.
+            for (let i = 0; i < 8; i++) engine.tick();
+            let s: any = (engine as any).capZoneState.get(0);
+            expect(s.p).toBe(s.l);
+            expect(s.f).toBeGreaterThan(0);
+
+            // Blue takes over mid-countdown while the holder dies: ownership
+            // transfers with progress reset to 0 and f still running.
+            s.p = 0;
+            s.o = 1;
+            s.ot = 'blue';
+            s.f = 5;
+            (engine as any).detachPlayer(0, (engine as any).playerBodies.get(0));
+
+            // Blue alone must complete the hold: p refills to l before the
+            // paused countdown resumes from 5. While p < l nothing fires.
+            for (let i = 0; i < 5; i++) {
+                (engine as any).capZoneTouches.push({ zoneIndex: 0, playerId: 1, team: 'blue' });
+                engine.tick();
+            }
+            expect(engine.getTeamScored()).toBe(null);
+
+            for (let i = 0; i < 7; i++) {
+                (engine as any).capZoneTouches.push({ zoneIndex: 0, playerId: 1, team: 'blue' });
+                engine.tick();
+            }
+            expect(engine.getTeamScored()).toBe('blue');
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(3);
+            expect(engine.getPlayerState(1).alive).toBe(true);
+        });
     });
 
     describe('environment integration', () => {
