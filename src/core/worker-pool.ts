@@ -627,7 +627,14 @@ export class WorkerPool {
                         terminalObs, j, resultIdx, this._terminalObsPool,
                     );
                 } else {
-                    resultObj.info.terminal_observation = undefined;
+                    // Remove the key instead of assigning undefined: the info
+                    // object is pooled per environment and reused for every
+                    // step, so assigning `undefined` would keep the key on the
+                    // object forever (`'terminal_observation' in info` stays
+                    // true on non-terminal steps). Message-passing results
+                    // build a fresh info per step and never carry the key
+                    // when the episode did not end.
+                    delete resultObj.info.terminal_observation;
                 }
                 this._convertedResults.push(resultObj);
             }
