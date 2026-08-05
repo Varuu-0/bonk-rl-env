@@ -79,6 +79,51 @@ function observationFastToArray(env: BonkEnvironment): Float32Array {
     return env.getObservationFast();
 }
 
+/**
+ * Canonical transport precision (issue #236): observations and rewards are
+ * published as IEEE-754 Float32 in every transport. The shared-memory path
+ * quantizes by construction (the SAB observation/reward records are
+ * Float32Array views filled from the Float32 _obsBuffer and storage), so
+ * message-passing replies quantize here with Math.fround (identical
+ * round-to-nearest-even) to make both transports bit-identical for the same
+ * (seed, actions). This is the transport contract we ship to all consumers:
+ * the shared-memory transport is the default and its Float32 values are what
+ * the pool has always returned; message-mode previously returning raw Float64
+ * values was the observable inconsistency being fixed, not a downgrade of a
+ * consumed precision. Downstream clients already operate at Float32: the
+ * Python client declares a `Box(..., dtype=np.float32)` observation space and
+ * converts every observation into float32 numpy arrays
+ * (python/envs/bonk_env.py), and its reward-dtype tests accept float32.
+ * No first-party consumer does exact-Float64 comparisons on rewards.
+ *
+ * A fresh observation object is returned and the input is never mutated, so
+ * physics-visible state can never be affected even if a future environment
+ * caches or reuses observation objects. Boolean/flag fields and the integer
+ * tick are exact in Float32 and are copied through untouched.
+ */
+function quantizeObservation(obs: Observation): Observation {
+    return {
+        playerX: Math.fround(obs.playerX),
+        playerY: Math.fround(obs.playerY),
+        playerVelX: Math.fround(obs.playerVelX),
+        playerVelY: Math.fround(obs.playerVelY),
+        playerAngle: Math.fround(obs.playerAngle),
+        playerAngularVel: Math.fround(obs.playerAngularVel),
+        playerIsHeavy: obs.playerIsHeavy,
+        opponents: obs.opponents.map(opp => ({
+            x: Math.fround(opp.x),
+            y: Math.fround(opp.y),
+            velX: Math.fround(opp.velX),
+            velY: Math.fround(opp.velY),
+            isHeavy: opp.isHeavy,
+            alive: opp.alive,
+        })),
+        arenaHalfWidth: Math.fround(obs.arenaHalfWidth),
+        arenaHalfHeight: Math.fround(obs.arenaHalfHeight),
+        tick: obs.tick,
+    };
+}
+
 parentPort.on('message', (msg) => {
     try {
         if (msg.type === 'init') {
@@ -145,6 +190,7 @@ parentPort.on('message', (msg) => {
                 signalSyncCompleted();
             }
             // Always include observation data in the response (shared memory is for step(), not reset())
+            obs.forEach((o, i) => { obs[i] = quantizeObservation(o); });
             parentPort!.postMessage({
                 id: msg.id,
                 status: 'ok',
@@ -166,6 +212,20 @@ parentPort.on('message', (msg) => {
             stepCounter++;
             if (stepCounter % 1000 === 0) {
                 globalProfiler.recordMemory();
+            }
+
+            // Canonical transport precision (issue #236): the shared-memory
+            // path stores observations and rewards as Float32, so message
+            // replies quantize to the same precision for bit-identical
+            // (seed, actions) replay across transports. On terminal steps the
+            // terminal observation is a distinct object from the post-reset
+            // observation, so both are quantized.
+            for (const res of results) {
+                res.observation = quantizeObservation(res.observation);
+                if (res.info.terminal_observation) {
+                    res.info.terminal_observation = quantizeObservation(res.info.terminal_observation);
+                }
+                res.reward = Math.fround(res.reward);
             }
 
             parentPort!.postMessage({
