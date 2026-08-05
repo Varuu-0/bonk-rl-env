@@ -94,8 +94,26 @@ export const A1A_RECHARGE = 3;
 export const ARENA_HALF_WIDTH = 25;
 export const ARENA_HALF_HEIGHT = 20;
 
-/** Bonk's default movement force before scale-ratio and balance modifiers. */
-export const MOVE_FORCE = 12.0;
+/**
+ * Movement-force base for the player disc after the native radius^2 scale
+ * and before the heavy damp (DEOBFUSCATION §35.5 movement branch, lines
+ * 7979-7997: `state.ms.fl ? 20 : 12`, scaled by radius^2 and then by 0.7
+ * for heavy). The §35.5 radius^2 scale is the disc mass ratio
+ * `π·r²/(π·1²)`; the verified mass-1 disc fixture (#212) pins that ratio to
+ * exactly 1 for every disc radius, so the applied net acceleration is
+ * radius-invariant (as in the native game) and no further per-ppm factor is
+ * applied.
+ *
+ * The native 12 N base leaves the mass-1 disc unable to beat gravity 20
+ * (net `Δv = (−12 + 20)·dt` downward), so the RL "up" bit could never
+ * produce ascent (#234). This port raises the base to the smallest round
+ * value that still ascends under the 0.7 heavy damp — `20 / 0.7 ≈ 28.57`,
+ * rounded up to `30` — giving:
+ *   - pure up: `(−30 + 20)` = −10 m/s² (upward);
+ *   - up + heavy: `(−30·0.7 + 20)` = −1 m/s² (still upward);
+ *   - down: `(+30 + 20)` = +50 m/s² (accelerated fall).
+ */
+export const MOVE_FORCE = 30.0;
 
 /** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
 export const OUT_OF_BOUNDS_DISTANCE = 850;
@@ -798,6 +816,11 @@ export class PhysicsEngine {
     force.x = 0;
     force.y = 0;
 
+    // Native movement-force model (DEOBFUSCATION §35.5): the radius^2 scale
+    // is the disc mass ratio `π·r²/(π·1²)`, which the verified mass-1 disc
+    // fixture (#212) pins to exactly 1 for every disc radius — so the applied
+    // force is constant and the net acceleration is radius/ppm-invariant, and
+    // no per-map `ppm` factor is needed. Heavy then damps the vector ×0.7.
     if (input.left) force.x -= MOVE_FORCE;
     if (input.right) force.x += MOVE_FORCE;
     if (input.up) force.y -= MOVE_FORCE;

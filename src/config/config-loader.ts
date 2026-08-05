@@ -181,7 +181,15 @@ const DEFAULTS: AppConfig = {
         // standalone density default.
         friction: 0.001337,
         restitution: 0.95,
-        moveForce: 12.0,
+        moveForce: 30.0,
+        // The engine applies `moveForce` as a constant per-tick force, then
+        // ×0.7 for heavy (DEOBFUSCATION §35.5; the native radius^2 scale is
+        // the disc mass ratio, pinned to 1 by the verified mass-1 fixture, so
+        // no per-ppm factor is applied). At the mass-1 fixture the native base
+        // (12) cannot lift the disc against gravity 20 (#234); this default
+        // base (30) is the smallest round value above the heavy-lift
+        // threshold `20 / 0.7 ≈ 28.57`, so pure "up" ascends (net −10 m/s²)
+        // and even up+heavy ascends (net −1 m/s²).
         heavyMassMultiplier: 0.7,
     },
     grapple: {
