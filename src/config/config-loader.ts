@@ -438,6 +438,13 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         const v = parseInt(env.SEED, 10);
         if (!isNaN(v) && v >= 0) config.environment.seed = v;
     }
+    // AI player slot (documented surface, config.example.json: range 0-7).
+    // The slot must also be within [0, numOpponents]; that interplay is
+    // validated by BonkEnvironment at construction.
+    if (env.AI_PLAYER_ID !== undefined) {
+        const v = parseInt(env.AI_PLAYER_ID, 10);
+        if (!isNaN(v) && v >= 0 && v <= 7) config.environment.aiPlayerId = v;
+    }
     // Opponent random-policy probabilities (documented env vars)
     const oppProbEnvVars: Array<[string, keyof EnvironmentConfig]> = [
         ['RANDOM_OPP_MOVE_PROB', 'randomOppMoveProb'],
@@ -573,6 +580,16 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 if (next) {
                     config.environment.defaultMapPath = next;
                     i++;
+                }
+                break;
+
+            case '--ai-player-id':
+                if (next) {
+                    const v = parseInt(next, 10);
+                    if (!isNaN(v) && v >= 0 && v <= 7) {
+                        config.environment.aiPlayerId = v;
+                        i++;
+                    }
                 }
                 break;
 
