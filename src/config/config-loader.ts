@@ -479,6 +479,13 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 }
                 break;
 
+            case '--bind-address':
+                if (next) {
+                    config.server.bindAddress = next;
+                    i++;
+                }
+                break;
+
             case '--max-runtime':
                 if (next) {
                     const v = parseInt(next, 10);
