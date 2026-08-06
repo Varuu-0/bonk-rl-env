@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { join } from 'node:path';
 
 // The heap measurement runs in a dedicated subprocess (tests/perf/
@@ -13,9 +14,13 @@ import { join } from 'node:path';
 // The probe is launched through the tsx CLI (which forwards node flags and
 // supports the project's node engines range without the `--import` flag,
 // which requires node >= 20.6). vitest resolves from the project root as
-// cwd, so paths are anchored relative to it.
+// cwd, so paths are anchored relative to it. The CLI entry is resolved via
+// tsx's package exports map (`tsx/cli`) instead of a hardcoded
+// `node_modules/tsx/dist/cli.mjs` path, which would couple this test to tsx's
+// internal package layout.
 const probePath = join(process.cwd(), 'tests', 'perf', 'memory-probe.ts');
-const tsxCliPath = join(process.cwd(), 'node_modules', 'tsx', 'dist', 'cli.mjs');
+const projectRequire = createRequire(probePath);
+const tsxCliPath = projectRequire.resolve('tsx/cli');
 
 describe('Memory stability', () => {
   it('no significant heap growth after many resets', () => {
