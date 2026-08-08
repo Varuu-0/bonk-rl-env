@@ -397,17 +397,25 @@ function loadConfigFile(filePath: string): Partial<AppConfig> | null {
 
 // ─── Config Value Parsing ──────────────────────────────────────────────────
 
+// Accepts only full decimal / scientific-notation numerics: an optional sign,
+// an integer and/or fraction part, and an optional digit-bearing exponent.
+// Deliberately excludes JS non-decimal numeric literals ("0x10", "0b101",
+// "0o17") so a config value can never be parsed from a base-N literal.
+const DECIMAL_NUMERIC_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
 /**
  * Strictly parse a finite float from a CLI/env string.
  *
- * Unlike `parseFloat`, this requires the entire string to be numeric and the
- * result to be finite: `"10abc"`→null (parseFloat would yield 10), `"1e999"`
- * / `"Infinity"`→null (parseFloat/Number yield Infinity), `""`→null. Only
- * whole, finite numbers pass, so garbage can never become a config value.
+ * Unlike `parseFloat`, this requires the entire string to be a full decimal or
+ * scientific-notation numeric and the result to be finite: `"10abc"`→null
+ * (parseFloat would yield 10), `"1e999"` / `"Infinity"`→null
+ * (parseFloat/Number yield Infinity), `""`→null. Non-decimal JS literals such
+ * as `"0x10"` and `"0b101"` are also rejected. Only whole, finite decimal
+ * numbers pass, so garbage can never become a config value.
  */
 function parseFiniteFloat(rawValue: string): number | null {
     const trimmed = rawValue.trim();
-    if (trimmed === '') return null;
+    if (trimmed === '' || !DECIMAL_NUMERIC_RE.test(trimmed)) return null;
     const v = Number(trimmed);
     return Number.isFinite(v) ? v : null;
 }

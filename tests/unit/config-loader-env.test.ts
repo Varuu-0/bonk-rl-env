@@ -200,6 +200,32 @@ describe('config-loader env vars and CLI', () => {
             expect(loadConfig(testDir).reward.deathPenalty).toBe(-1.0);
         });
 
+        it('reward env vars reject non-decimal JS numeric literals', () => {
+            for (const bad of ['0x10', '0b101', '0o17', '0x1F']) {
+                resetConfig();
+                process.env.KILL_REWARD = bad;
+                expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+            }
+
+            resetConfig();
+            process.env.TIME_PENALTY = '0x10';
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('reward env vars accept full decimal and scientific notation', () => {
+            resetConfig();
+            process.env.KILL_REWARD = '2';
+            expect(loadConfig(testDir).reward.killReward).toBe(2.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = '.5';
+            expect(loadConfig(testDir).reward.killReward).toBe(0.5);
+
+            resetConfig();
+            process.env.KILL_REWARD = '1e2';
+            expect(loadConfig(testDir).reward.killReward).toBe(100.0);
+        });
+
         it('reward penalty env vars reject positive (reward-inverting) values', () => {
             process.env.DEATH_PENALTY = '5';
             const cfg = loadConfig(testDir);
@@ -693,6 +719,22 @@ describe('config-loader env vars and CLI', () => {
             resetConfig();
             process.argv = ['node', 'script.js', '--time-penalty', 'Infinity'];
             expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI reward flags reject non-decimal JS numeric literals', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '0x10'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '0b101'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI reward flags accept full decimal and scientific notation', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '1e2', '--time-penalty', '-0.5'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(100.0);
+            expect(cfg.reward.timePenalty).toBe(-0.5);
         });
 
         it('CLI penalty flags reject positive (reward-inverting) values', () => {
