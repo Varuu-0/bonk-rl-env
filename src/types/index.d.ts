@@ -554,8 +554,8 @@ export interface TelemetryConfig {
   dashboardPort: number;
 
   /**
-   * Number of ticks between telemetry reports.
+   * Interval between telemetry reports in milliseconds.
    * @default 5000
    */
-  reportInterval: number;
+  reportIntervalMs: number;
 }

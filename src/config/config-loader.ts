@@ -413,6 +413,17 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         const v = env.MANIFOLD_DEBUG;
         if (v === 'none' || v === 'error' || v === 'verbose') config.telemetry.debugLevel = v;
     }
+    // Documented telemetry env vars (config.example.json): DASHBOARD_PORT and
+    // REPORT_INTERVAL_MS were parsed by neither config-loader nor flags.ts, so
+    // the dashboard port and report interval were silently ignored (issue #237).
+    if (env.DASHBOARD_PORT !== undefined) {
+        const v = parseInt(env.DASHBOARD_PORT, 10);
+        if (!isNaN(v) && v > 0 && v < 65536) config.telemetry.dashboardPort = v;
+    }
+    if (env.REPORT_INTERVAL_MS !== undefined) {
+        const v = parseInt(env.REPORT_INTERVAL_MS, 10);
+        if (!isNaN(v) && v > 0) config.telemetry.reportIntervalMs = v;
+    }
 
     // Test mode
     if (env.TEST_MODE === '1') {
@@ -545,6 +556,16 @@ function parseCliFlags(config: AppConfig): AppConfig {
                     const v = parseInt(next, 10);
                     if (!isNaN(v) && v > 0 && v < 65536) {
                         config.telemetry.dashboardPort = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--report-interval-ms':
+                if (next) {
+                    const v = parseInt(next, 10);
+                    if (!isNaN(v) && v > 0) {
+                        config.telemetry.reportIntervalMs = v;
                         i++;
                     }
                 }
