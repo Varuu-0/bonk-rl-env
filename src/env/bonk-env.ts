@@ -133,13 +133,36 @@ export class BonkEnv {
 
     /**
      * Reset the environment to initial state.
-     * @param seeds Optional seeds for environment reset
+     * @param seeds Optional seeds, one per internal environment of this env's
+     *   pool. A seed list must cover every internal environment: a short list
+     *   would otherwise silently leave the tail environments on an arbitrary
+     *   RNG stream (issue #230).
      * @param options Result ownership mode; caller-owned by default
-     * @returns Initial observation(s)
+     * @returns Initial observation(s), one per internal environment
      */
     async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any> {
         if (!this.isRunning || !this.pool) {
             throw new Error(`Environment ${this.id} is not running`);
+        }
+
+        // The low-level pool intentionally tolerates a short seed list (#183,
+        // tail environments reset unseeded) — a documented escape hatch for
+        // direct pool/getPool() users, pinned by worker-pool-stale-seeds. The
+        // BonkEnv wrapper enforces its own exact-count contract instead (#230)
+        // so callers of the public wrapper API can never silently lose seeds;
+        // the IPC/Python client is unaffected because it always sends exactly
+        // num_envs seeds.
+        const numEnvs = this.getNumEnvs();
+        if (seeds !== undefined) {
+            if (!Array.isArray(seeds)) {
+                throw new Error(`Invalid seed batch: expected an array of seeds, got ${typeof seeds}`);
+            }
+            if (seeds.length !== numEnvs) {
+                const received = seeds.length;
+                throw new Error(
+                    `Invalid seed batch: expected ${numEnvs} seed${numEnvs === 1 ? '' : 's'} for ${numEnvs} environment${numEnvs === 1 ? '' : 's'} in ${this.id}, got ${received}`,
+                );
+            }
         }
         
         return this.pool.reset(seeds, options);
@@ -147,11 +170,11 @@ export class BonkEnv {
 
     /**
      * Take a step in the environment with the given action(s).
-     * @param actions Action(s) to apply
+     * @param actions Action(s) to apply, one per internal environment
      * @param options Result ownership mode; caller-owned by default
-     * @returns Step result(s) containing observation, reward, done, truncated, info
+     * @returns Step results, one per internal environment, containing observation, reward, done, truncated, info
      */
-    async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult | StepResult[]> {
+    async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]> {
         if (!this.isRunning || !this.pool) {
             throw new Error(`Environment ${this.id} is not running`);
         }
@@ -173,6 +196,17 @@ export class BonkEnv {
      */
     getPool(): WorkerPool | null {
         return this.pool;
+    }
+
+    /**
+     * Get the number of internal environments managed by this env's worker
+     * pool. Matches the configured numEnvs (default: 1), which is exactly the
+     * count the pool is initialized with, so callers can size batch
+     * action/seed lists for this BonkEnv.
+     * @returns Number of internal environments in the worker pool
+     */
+    getNumEnvs(): number {
+        return this.config.numEnvs ?? 1;
     }
 
     /**

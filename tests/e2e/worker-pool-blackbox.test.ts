@@ -69,10 +69,25 @@ describe('WorkerPool black-box', () => {
       expect(obs1).toEqual(obs2);
     });
 
-    it('different seeds produce different observations', async () => {
-      const obs1 = await pool.reset([1, 1, 1]);
-      const obs2 = await pool.reset([999, 999, 999]);
-      expect(obs1).not.toEqual(obs2);
+    it('different seeds produce different step trajectories', async () => {
+      // Reset observations are spawn-state only and identical across seeds;
+      // the seed drives the opponent RNG stream, so divergence only shows
+      // up after the environment has been stepped.
+      await pool.reset([1, 1, 1]);
+      for (let i = 0; i < 30; i++) {
+        await pool.step([0, 0, 0]);
+      }
+      const results1 = await pool.step([0, 0, 0]);
+
+      await pool.reset([999, 999, 999]);
+      for (let i = 0; i < 30; i++) {
+        await pool.step([0, 0, 0]);
+      }
+      const results2 = await pool.step([0, 0, 0]);
+
+      expect(results1.map(r => r.observation)).not.toEqual(
+        results2.map(r => r.observation),
+      );
     });
   });
 

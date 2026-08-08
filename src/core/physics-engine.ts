@@ -242,6 +242,13 @@ export class PhysicsEngine {
    */
   private swingJustStarted: Set<number> = new Set();
   private playerTeams: Map<number, string> = new Map();
+  /**
+   * Slot id treated as the "AI" disc for the default collision categories
+   * (g1 for the AI disc, g2 for every other disc, matching the legacy
+   * `id === 0` mapping). The environment configures this via setAiPlayerId()
+   * so a nonzero aiPlayerId (issue #221) does not invert the categories.
+   */
+  private aiSlot: number = 0;
   private capZoneSensors: any[] = [];
   private lastScoredTeam: string | null = null;
   /** An instant goal ends the round; later sensor jitter must not re-score it. */
@@ -377,7 +384,7 @@ export class PhysicsEngine {
 
     const filter = new b2FilterData();
     if (this.noCollide) {
-      filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+      filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
       filter.maskBits = 0xFFFF & ~PhysicsEngine.ALL_PLAYER_BITS;
     } else if (this.teamsEnabled) {
       const team = this.playerTeams.get(playerId);
@@ -386,15 +393,29 @@ export class PhysicsEngine {
         filter.categoryBits = teamBit;
         filter.maskBits = 0xFFFF & ~teamBit;
       } else {
-        filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+        filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
         filter.maskBits = 0xFFFF;
       }
     } else {
-      filter.categoryBits = playerId === 0 ? 0x0002 : 0x0004;
+      filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
       filter.maskBits = 0xFFFF;
     }
     shape.SetFilterData(filter);
     this.world.Refilter(shape);
+  }
+
+  /**
+   * Sets the slot treated as the AI disc for default (non-team) collision
+   * categories (g1 for the AI, g2 for every other disc). The environment calls
+   * this with its configured aiPlayerId so nonzero slots keep the AI on g1
+   * instead of inverting the legacy `id === 0` mapping (issue #221). The
+   * default 0 keeps engine-only callers on the legacy mapping. Existing discs
+   * are re-filtered immediately, so callers may set the slot after adding
+   * players.
+   */
+  setAiPlayerId(playerId: number): void {
+    this.aiSlot = playerId;
+    this.updateAllPlayerFilters();
   }
 
   private updateAllPlayerFilters(): void {
@@ -816,10 +837,12 @@ export class PhysicsEngine {
     circleDef.friction = PLAYER_FRICTION;
     circleDef.restitution = PLAYER_RESTITUTION;
 
-    // Assign collision category based on player ID
-    // Player 0 = team g1 (category 0x0002), Player 1+ = team g2 (category 0x0004)
+    // Assign collision category based on the AI slot: AI disc = team g1
+    // (category 0x0002), every other disc = team g2 (category 0x0004). The
+    // category follows the configured AI slot (setAiPlayerId), not a hardcoded
+    // id 0, so a nonzero aiPlayerId keeps the g1 mapping on the AI (#221).
     const filter = new b2FilterData();
-    filter.categoryBits = id === 0 ? 0x0002 : 0x0004;
+    filter.categoryBits = id === this.aiSlot ? 0x0002 : 0x0004;
     filter.maskBits = 0xFFFF; // Collide with everything by default
     circleDef.filter = filter;
 
@@ -1376,6 +1399,10 @@ export class PhysicsEngine {
     this.grappleEnergy.clear();
     this.swingJustStarted.clear();
     this.playerTeams.clear();
+    // The AI-slot category mapping belongs to the episode: a fresh world
+    // starts with the legacy default (slot 0 = AI), and the environment
+    // re-applies setAiPlayerId() before spawning players each episode.
+    this.aiSlot = 0;
     this.capZoneSensors = [];
     this.capZoneState.clear();
     this.capZoneTouches = [];
