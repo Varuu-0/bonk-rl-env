@@ -395,6 +395,23 @@ function loadConfigFile(filePath: string): Partial<AppConfig> | null {
     }
 }
 
+// ─── Config Value Parsing ──────────────────────────────────────────────────
+
+/**
+ * Strictly parse a finite float from a CLI/env string.
+ *
+ * Unlike `parseFloat`, this requires the entire string to be numeric and the
+ * result to be finite: `"10abc"`→null (parseFloat would yield 10), `"1e999"`
+ * / `"Infinity"`→null (parseFloat/Number yield Infinity), `""`→null. Only
+ * whole, finite numbers pass, so garbage can never become a config value.
+ */
+function parseFiniteFloat(rawValue: string): number | null {
+    const trimmed = rawValue.trim();
+    if (trimmed === '') return null;
+    const v = Number(trimmed);
+    return Number.isFinite(v) ? v : null;
+}
+
 // ─── Environment Variable Overrides ────────────────────────────────────────
 
 function applyEnvOverrides(config: AppConfig): AppConfig {
@@ -467,7 +484,12 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         if (!isNaN(v) && v >= 0 && v <= 7) config.environment.aiPlayerId = v;
     }
     // Reward shaping (documented env vars: KILL_REWARD / DEATH_PENALTY / TIME_PENALTY).
-    // No range validation: kill/death weights may be signed floats (#220).
+    // Weight semantics (#220): killReward is a signed delta added on a kill
+    // (positive rewards killing, negative discourages it). DEATH_PENALTY and
+    // TIME_PENALTY are non-positive deltas — a "penalty" reduces reward, so a
+    // positive value would reward the very event it names and is rejected
+    // (falls back to the default). All values must be fully parsed and finite;
+    // Infinity/NaN/partial garbage are ignored.
     const rewardEnvVars: Array<[string, keyof RewardConfig]> = [
         ['KILL_REWARD', 'killReward'],
         ['DEATH_PENALTY', 'deathPenalty'],
@@ -476,8 +498,9 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     for (const [envVar, key] of rewardEnvVars) {
         const rawValue = env[envVar];
         if (rawValue !== undefined) {
-            const v = parseFloat(rawValue);
-            if (!isNaN(v)) (config.reward as any)[key] = v;
+            const v = parseFiniteFloat(rawValue);
+            const isPenalty = key !== 'killReward';
+            if (v !== null && (!isPenalty || v <= 0)) (config.reward as any)[key] = v;
         }
     }
     // Opponent random-policy probabilities (documented env vars)
@@ -653,9 +676,13 @@ function parseCliFlags(config: AppConfig): AppConfig {
             case '--time-penalty':
                 if (next) {
                     // Reward weights are signed floats (negative penalties are
-                    // the documented defaults), so only parseFloat is applied.
-                    const v = parseFloat(next);
-                    if (!isNaN(v)) {
+                    // the documented defaults). Only fully-parsed finite values
+                    // are applied; --death-penalty/--time-penalty must be
+                    // non-positive (a positive penalty would reward the very
+                    // event it names) and are otherwise ignored (#220).
+                    const v = parseFiniteFloat(next);
+                    const isPenalty = arg !== '--kill-reward';
+                    if (v !== null && (!isPenalty || v <= 0)) {
                         switch (arg) {
                             case '--kill-reward': config.reward.killReward = v; break;
                             case '--death-penalty': config.reward.deathPenalty = v; break;

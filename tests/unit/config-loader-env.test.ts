@@ -182,6 +182,38 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.reward.timePenalty).toBe(-0.001);
         });
 
+        it('reward env vars reject non-finite and partially-parsed values', () => {
+            process.env.KILL_REWARD = '1e999';
+            loadConfig(testDir);
+            expect(getConfig().reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = 'Infinity';
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = '10abc';
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.DEATH_PENALTY = '   ';
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(-1.0);
+        });
+
+        it('reward penalty env vars reject positive (reward-inverting) values', () => {
+            process.env.DEATH_PENALTY = '5';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.deathPenalty).toBe(-1.0);
+
+            resetConfig();
+            process.env.TIME_PENALTY = '0.5';
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+
+            resetConfig();
+            process.env.DEATH_PENALTY = '0';
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(0);
+        });
+
         it('USE_SHARED_MEMORY=true sets useSharedMemory to true', () => {
             process.env.USE_SHARED_MEMORY = 'true';
             const cfg = loadConfig(testDir);
@@ -606,6 +638,32 @@ describe('config-loader env vars and CLI', () => {
             const cfg = loadConfig(testDir);
             expect(cfg.reward.killReward).toBe(10);
             expect(cfg.reward.timePenalty).toBe(-0.5);
+        });
+
+        it('CLI reward flags reject non-finite and partially-parsed values', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '1e999'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--kill-reward', '10abc'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', 'Infinity'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI penalty flags reject positive (reward-inverting) values', () => {
+            process.argv = ['node', 'script.js', '--death-penalty', '5'];
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(-1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '0.5'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '-0.5'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.5);
         });
 
         it('--verbose enables telemetry, sets debug verbose, and logging debug', () => {

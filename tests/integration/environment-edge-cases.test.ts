@@ -770,9 +770,9 @@ describe('BonkEnvironment edge cases', () => {
     it('falls back to the documented +1/-1/-0.001 weights when unset', async () => {
       env = new BonkEnvironment({ maxTicks: 10, numOpponents: 0 });
       const cfg = (env as any).config;
-      expect(cfg.killReward).toBe(1.0);
-      expect(cfg.deathPenalty).toBe(-1.0);
-      expect(cfg.timePenalty).toBe(-0.001);
+      expect(cfg.reward.killReward).toBe(1.0);
+      expect(cfg.reward.deathPenalty).toBe(-1.0);
+      expect(cfg.reward.timePenalty).toBe(-0.001);
     });
 
     it('resolves the nested reward section alias carried by the worker config', async () => {
@@ -782,9 +782,9 @@ describe('BonkEnvironment edge cases', () => {
         reward: { killReward: 2, timePenalty: -0.01 },
       });
       const cfg = (env as any).config;
-      expect(cfg.killReward).toBe(2);
-      expect(cfg.deathPenalty).toBe(-1.0);
-      expect(cfg.timePenalty).toBe(-0.01);
+      expect(cfg.reward.killReward).toBe(2);
+      expect(cfg.reward.deathPenalty).toBe(-1.0);
+      expect(cfg.reward.timePenalty).toBe(-0.01);
     });
 
     it('flat reward keys win over the nested reward section alias', async () => {
@@ -794,7 +794,30 @@ describe('BonkEnvironment edge cases', () => {
         killReward: 5,
         reward: { killReward: 2 },
       });
-      expect((env as any).config.killReward).toBe(5);
+      expect((env as any).config.reward.killReward).toBe(5);
+    });
+
+    it('stores the reward weights under a single nested source of truth', async () => {
+      env = new BonkEnvironment({ maxTicks: 10, numOpponents: 0, timePenalty: -2 });
+      const cfg = (env as any).config;
+      expect(cfg.reward.timePenalty).toBe(-2);
+      expect(Object.prototype.hasOwnProperty.call(cfg, 'killReward')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(cfg, 'deathPenalty')).toBe(false);
+      expect(Object.prototype.hasOwnProperty.call(cfg, 'timePenalty')).toBe(false);
+    });
+
+    it('rejects a positive deathPenalty/timePenalty and non-finite weights', async () => {
+      env = new BonkEnvironment({
+        maxTicks: 10,
+        numOpponents: 0,
+        deathPenalty: 5,
+        timePenalty: 0.5,
+        reward: { killReward: Number.POSITIVE_INFINITY },
+      });
+      const cfg = (env as any).config;
+      expect(cfg.reward.killReward).toBe(1.0);
+      expect(cfg.reward.deathPenalty).toBe(-1.0);
+      expect(cfg.reward.timePenalty).toBe(-0.001);
     });
   });
 
