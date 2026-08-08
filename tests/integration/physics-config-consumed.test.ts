@@ -188,6 +188,30 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         }
     });
 
+    it('physics world-construction settings survive the fresh world on reset', () => {
+        const env = new BonkEnvironment({
+            numOpponents: 0,
+            seed: 1,
+            physics: { gravityX: 3, gravityY: 7, enableSleeping: false, worldAabbExtent: 250 },
+        });
+        const eng: any = (env as any).physics;
+        try {
+            const previousWorld = eng.world;
+            env.reset(2);
+
+            // reset() must rebuild from the #217-resolved tuning, rather than
+            // silently returning the replacement world to native defaults.
+            expect(eng.world).not.toBe(previousWorld);
+            expect(eng.world.m_gravity.x).toBe(3);
+            expect(eng.world.m_gravity.y).toBe(7);
+            expect(eng.world.m_allowSleep).toBe(false);
+            expect(eng.world.m_broadPhase.m_worldAABB.upperBound.y).toBe(250);
+            expect(eng.world.m_broadPhase.m_worldAABB.lowerBound.y).toBe(-250);
+        } finally {
+            env.close();
+        }
+    });
+
     it('a bare engine accepts the tuning options and applies them', () => {
         const engine = new PhysicsEngine({
             ticksPerSecond: 60,
