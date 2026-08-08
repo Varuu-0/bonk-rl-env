@@ -238,7 +238,10 @@ export interface PhysicsEngineOptions {
     scale?: number;
     /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
     gravityX?: number;
-    /** Vertical world gravity (m/s², positive down). Default: GRAVITY_Y (20). */
+    /** Vertical world gravity (m/s², positive down). Default: GRAVITY_Y (20).
+     *  NOTE: cross-referenced with `moveForce` / `heavyForceMultiplier` for the
+     *  #234 ascent invariant — outweighing moveForce (or moveForce × heavy)
+     *  silently makes pure-up or up+heavy descend; see warnAscentInvariantBreak. */
     gravityY?: number;
     /** Allow inactive bodies to sleep. Default: true (native). */
     enableSleeping?: boolean;
@@ -250,9 +253,11 @@ export interface PhysicsEngineOptions {
     arenaHalfHeight?: number;
     /** Extra margin (metres) added to arena extents derived from map bodies. Default: ARENA_BOUNDS_MARGIN (5). */
     arenaBoundsMargin?: number;
-    /** Movement-force base applied to all directions (× heavy for heavy). Default: MOVE_FORCE (30). */
+    /** Movement-force base applied to all directions (× heavy for heavy). Default: MOVE_FORCE (30).
+     *  Must exceed `gravityY` (pure up lifts) — see #234 and warnAscentInvariantBreak. */
     moveForce?: number;
-    /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7). */
+    /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7).
+     *  `moveForce × heavyForceMultiplier` must exceed `gravityY` for up+heavy to lift. */
     heavyForceMultiplier?: number;
 }
 
@@ -371,7 +376,34 @@ export class PhysicsEngine {
     this.moveForce = PhysicsEngine.sanitizePositive(options.moveForce, MOVE_FORCE);
     this.heavyForceMultiplier = PhysicsEngine.sanitizeNonNegative(options.heavyForceMultiplier, HEAVY_FORCE_MULTIPLIER);
     this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
+    this.warnAscentInvariantBreak();
     this.createWorld();
+  }
+
+  /**
+   * Surfacing the #234 ascent invariant regression (SUGGESTION #7): `MOVE_FORCE
+   * = 30` was chosen so the mass-1 disc ascends against `GRAVITY_Y = 20` (pure
+   * up: −30 + 20 = −10 m/s²; up + heavy: −30·0.7 + 20 = −1 m/s²). gravityY and
+   * moveForce are now independently tunable, so a config that raises gravity
+   * above `moveForce` (pure-up can no longer lift) or above
+   * `moveForce · heavyForceMultiplier` (not even up+heavy can lift, silently
+   * undoing the #234 fix) is a degenerate, load-bearing configuration. This is
+   * a warning, not a throw: tuning to a non-lifting regime is legal, and the
+   * engine must keep working, but the user should be told the pairing is
+   * inverted so the silent regression is surfaced.
+   */
+  private warnAscentInvariantBreak(): void {
+    const gravity = Math.abs(this.gravityY);
+    const heavyLift = this.moveForce * this.heavyForceMultiplier;
+    if (gravity >= this.moveForce) {
+      console.warn(
+        `[PhysicsEngine] gravityY magnitude ${gravity.toFixed(1)} >= moveForce ${this.moveForce.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
+      );
+    } else if (gravity >= heavyLift) {
+      console.warn(
+        `[PhysicsEngine] gravityY magnitude ${gravity.toFixed(1)} > moveForce*heavy ${heavyLift.toFixed(1)}: 'up'+heavy cannot beat gravity (#234 ascent invariant broken).`,
+      );
+    }
   }
 
   /** Returns `v` when it is a finite number, otherwise the default. */
