@@ -112,6 +112,9 @@ err-verify.txt
 drift-tmp/
 python/repro-hang.py
 
+# Telemetry JSONL report output (written to cwd/telemetry by the controller)
+telemetry/
+
 # Bun lockfile (project uses npm; package-lock.json is the source of truth)
 bun.lock
 

@@ -11,7 +11,7 @@ describe('config-loader env vars and CLI', () => {
         'PORT', 'BIND_ADDRESS', 'MAX_RUNTIME', 'NUM_WORKERS', 'SEED',
         'DEFAULT_MAP_PATH', 'USE_SHARED_MEMORY', 'MANIFOLD_TELEMETRY',
         'MANIFOLD_TELEMETRY_OUTPUT', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG',
-        'TEST_MODE', 'AI_PLAYER_ID',
+        'DASHBOARD_PORT', 'REPORT_INTERVAL_MS', 'TEST_MODE', 'AI_PLAYER_ID',
         'RANDOM_OPP_MOVE_PROB', 'RANDOM_OPP_UP_PROB', 'RANDOM_OPP_DOWN_PROB',
         'RANDOM_OPP_HEAVY_PROB', 'RANDOM_OPP_GRAPPLE_PROB',
     ];
@@ -252,6 +252,34 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.debugLevel).toBe('none');
         });
 
+        it('DASHBOARD_PORT overrides the dashboard port', () => {
+            process.env.DASHBOARD_PORT = '8081';
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.dashboardPort).toBe(8081);
+        });
+
+        it('DASHBOARD_PORT rejects invalid values', () => {
+            process.env.DASHBOARD_PORT = '70000';
+            expect(loadConfig(testDir).telemetry.dashboardPort).toBe(3001);
+            resetConfig();
+            process.env.DASHBOARD_PORT = 'abc';
+            expect(loadConfig(testDir).telemetry.dashboardPort).toBe(3001);
+        });
+
+        it('REPORT_INTERVAL_MS overrides the report interval', () => {
+            process.env.REPORT_INTERVAL_MS = '750';
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.reportIntervalMs).toBe(750);
+        });
+
+        it('REPORT_INTERVAL_MS rejects invalid values', () => {
+            process.env.REPORT_INTERVAL_MS = '0';
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+            resetConfig();
+            process.env.REPORT_INTERVAL_MS = 'abc';
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+        });
+
         it('TEST_MODE=1 caps maxRuntimeSeconds to 2', () => {
             process.env.TEST_MODE = '1';
             const cfg = loadConfig(testDir);
@@ -460,6 +488,20 @@ describe('config-loader env vars and CLI', () => {
             process.argv = ['node', 'script.js', '--dashboard-port', '-1'];
             const cfg = loadConfig(testDir);
             expect(cfg.telemetry.dashboardPort).toBe(3001);
+        });
+
+        it('--report-interval-ms sets the report interval', () => {
+            process.argv = ['node', 'script.js', '--report-interval-ms', '250'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.reportIntervalMs).toBe(250);
+        });
+
+        it('--report-interval-ms rejects zero and missing values', () => {
+            process.argv = ['node', 'script.js', '--report-interval-ms', '0'];
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+            resetConfig();
+            process.argv = ['node', 'script.js', '--report-interval-ms'];
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
         });
 
         it('--workers sets num workers', () => {

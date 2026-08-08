@@ -2,7 +2,7 @@ import * as zmq from "zeromq";
 import * as net from "net";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
-import { isTelemetryEnabled as isTelemetryControllerEnabled } from '../telemetry/telemetry-controller';
+import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
 import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig, mergeEngineSections } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
@@ -18,6 +18,12 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    // Single-flight guard covering the entire post-step telemetry unit
+    // (snapshot fetch through report). Prevents overlapping snapshot fetches
+    // or duplicate reports when a second boundary step arrives during the
+    // async fetch (issue #237). Re-armed in `finally` so a failed/slow fetch
+    // can never leak the guard and silently disable future reports.
+    private telemetryInFlight: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
@@ -201,7 +207,11 @@ export class IpcBridge {
                     this.stepCount++;
                     globalProfiler.tick();
 
-                    if (this.stepCount % 5000 === 0) {
+                    // Issue #237: the TelemetryController drives the report
+                    // cadence from the configured reportIntervalMs instead of
+                    // the old hardcoded 5000-step boundary.
+                    const reportDue = getTelemetryController().tick();
+                    if (reportDue && isTelemetryControllerEnabled()) {
                         // Issue #229: the completed step's reply must be
                         // transmitted before any best-effort telemetry work and
                         // must never await it. A slow or failing snapshot fetch
@@ -262,8 +272,8 @@ export class IpcBridge {
     }
 
     /**
-     * Best-effort post-step telemetry: memory gauges, worker snapshot fetch,
-     * and the heatmap report. Detached from the request path — it never
+     * Best-effort post-step telemetry: memory gauge, worker snapshot fetch,
+     * and the interval report. Detached from the request path — it never
      * affects the step reply and cannot stall the ZMQ loop (issue #229).
      * Errors are caught and logged so a telemetry failure is never reported
      * as a step failure or discards an already-serialized reply (issue
@@ -271,6 +281,13 @@ export class IpcBridge {
      * worker-pool semantics, surfacing on the next request.
      */
     private async runPostStepTelemetry(): Promise<void> {
+        // A boundary step can arrive while an earlier fetch→report is still
+        // awaiting getTelemetrySnapshots. Guard the whole unit so the second
+        // step is a no-op: otherwise two overlapping fetches would run and the
+        // controller's reportInFlight guard (which only wraps the synchronous
+        // emit) would not stop the duplicate snapshot fetch (issue #237).
+        if (this.telemetryInFlight) return;
+        this.telemetryInFlight = true;
         try {
             globalProfiler.recordMemory();
 
@@ -282,10 +299,12 @@ export class IpcBridge {
                 // message mode.
                 const snapshots = await this.pool.getTelemetrySnapshots();
                 setLatestWorkerTelemetry(snapshots);
-                globalProfiler.report(5000);
+                getTelemetryController().reportNow();
             }
         } catch (telemetryError) {
             console.error('[IPC] Telemetry error after step:', telemetryError);
+        } finally {
+            this.telemetryInFlight = false;
         }
     }
 
