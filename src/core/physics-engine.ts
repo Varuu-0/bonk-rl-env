@@ -384,24 +384,30 @@ export class PhysicsEngine {
    * Surfacing the #234 ascent invariant regression (SUGGESTION #7): `MOVE_FORCE
    * = 30` was chosen so the mass-1 disc ascends against `GRAVITY_Y = 20` (pure
    * up: −30 + 20 = −10 m/s²; up + heavy: −30·0.7 + 20 = −1 m/s²). gravityY and
-   * moveForce are now independently tunable, so a config that raises gravity
-   * above `moveForce` (pure-up can no longer lift) or above
-   * `moveForce · heavyForceMultiplier` (not even up+heavy can lift, silently
-   * undoing the #234 fix) is a degenerate, load-bearing configuration. This is
-   * a warning, not a throw: tuning to a non-lifting regime is legal, and the
-   * engine must keep working, but the user should be told the pairing is
-   * inverted so the silent regression is surfaced.
+   * moveForce are now independently tunable, so a config that raises downward
+   * gravity (`gravityY > 0`) above `moveForce` (pure-up can no longer lift) or
+   * above `moveForce · heavyForceMultiplier` (not even up+heavy can lift,
+   * silently undoing the #234 fix) is a degenerate, load-bearing configuration.
+   * Negative (upward) gravity always aids ascent, so it never breaks the
+   * invariant and must not warn. This is a warning, not a throw: tuning to a
+   * non-lifting regime is legal, and the engine must keep working, but the user
+   * should be told the pairing is inverted so the silent regression is
+   * surfaced.
    */
   private warnAscentInvariantBreak(): void {
-    const gravity = Math.abs(this.gravityY);
+    // The invariant only applies to downward gravity: `up` produces an upward
+    // force (−moveForce) that must out-pull gravityY. Negative (upward) gravity
+    // only ever helps a disc rise, so it is always in a lifting regime.
+    if (this.gravityY <= 0) return;
+    const gravity = this.gravityY;
     const heavyLift = this.moveForce * this.heavyForceMultiplier;
     if (gravity >= this.moveForce) {
       console.warn(
-        `[PhysicsEngine] gravityY magnitude ${gravity.toFixed(1)} >= moveForce ${this.moveForce.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
+        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} >= moveForce ${this.moveForce.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
       );
     } else if (gravity >= heavyLift) {
       console.warn(
-        `[PhysicsEngine] gravityY magnitude ${gravity.toFixed(1)} > moveForce*heavy ${heavyLift.toFixed(1)}: 'up'+heavy cannot beat gravity (#234 ascent invariant broken).`,
+        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} > moveForce*heavy ${heavyLift.toFixed(1)}: 'up'+heavy cannot beat gravity (#234 ascent invariant broken).`,
       );
     }
   }

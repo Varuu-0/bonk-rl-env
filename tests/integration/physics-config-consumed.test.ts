@@ -258,25 +258,35 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         engine.destroy();
     });
 
-    it('a tuning pass that breaks the #234 ascent invariant warns (gravityY >= moveForce * heavy)', () => {
+    it('a tuning pass that breaks the #234 ascent invariant warns (positive gravity only)', () => {
         const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-        // Default pairing (30 / 0.7 / 20): pure-up lifts (30 > 20), so no warn.
-        const okEngine = new PhysicsEngine({});
-        expect(warnSpy).not.toHaveBeenCalled();
-        warnSpy.mockClear();
-        // gravityY 25 < moveForce 30, but > 30 * 0.7 = 21: up+heavy can no longer lift.
-        const heavyWeight = new PhysicsEngine({ gravityY: 25 });
-        expect(warnSpy).toHaveBeenCalledTimes(1);
-        expect(String(warnSpy.mock.calls[0][0])).toMatch(/ascent invariant/);
-        // gravityY 35 >= moveForce 30: pure-up cannot lift either.
-        warnSpy.mockClear();
-        const pureWeight = new PhysicsEngine({ gravityY: 35 });
-        expect(warnSpy).toHaveBeenCalledTimes(1);
-        expect(String(warnSpy.mock.calls[0][0])).toMatch(/pure 'up'/);
-        okEngine.destroy();
-        heavyWeight.destroy();
-        pureWeight.destroy();
-        warnSpy.mockRestore();
+        const engines: PhysicsEngine[] = [];
+        try {
+            // Default pairing (30 / 0.7 / 20): pure-up and up+heavy both lift, so no warn.
+            engines.push(new PhysicsEngine({}));
+            expect(warnSpy).not.toHaveBeenCalled();
+            warnSpy.mockClear();
+
+            // gravityY 25 < moveForce 30, but > 30 * 0.7 = 21: up+heavy can no longer lift.
+            engines.push(new PhysicsEngine({ gravityY: 25 }));
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(String(warnSpy.mock.calls[0][0])).toMatch(/ascent invariant/);
+
+            // gravityY 35 >= moveForce 30: pure-up cannot lift either.
+            warnSpy.mockClear();
+            engines.push(new PhysicsEngine({ gravityY: 35 }));
+            expect(warnSpy).toHaveBeenCalledTimes(1);
+            expect(String(warnSpy.mock.calls[0][0])).toMatch(/pure 'up'/);
+
+            // gravityY 25 does NOT warn when gravity is negative (upward): the
+            // invariant only applies to downward gravity, which always aids ascent.
+            warnSpy.mockClear();
+            engines.push(new PhysicsEngine({ gravityY: -25 }));
+            expect(warnSpy).not.toHaveBeenCalled();
+        } finally {
+            warnSpy.mockRestore();
+            for (const engine of engines) engine.destroy();
+        }
     });
 
     it('maxTicks is tick-counted, not rescaled by ticksPerSecond (contract locked)', () => {
