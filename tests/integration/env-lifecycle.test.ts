@@ -181,6 +181,10 @@ describe('EnvManager lifecycle', () => {
       const results = await manager.stepAll([0, 0]);
       expect(results).toBeDefined();
       expect(results).toHaveLength(2);
+      // stepAll returns flat StepResult objects, not per-env arrays (#198).
+      expect(Array.isArray(results[0])).toBe(false);
+      expect(typeof results[0].reward).toBe('number');
+      expect(results[0].observation).toBeDefined();
     });
   });
 
