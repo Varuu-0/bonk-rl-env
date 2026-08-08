@@ -221,6 +221,16 @@ def test_factorial(input, expected):
     assert factorial(input) == expected
 ```
 
+## Performance Tests (`tests/perf`)
+
+Run the perf suite alone:
+
+```sh
+npm run test:perf
+```
+
+`tests/perf/memory-stability.test.ts` asserts there is no significant heap growth after many `env.reset()` and `env.step()` iterations. The measurement runs in a dedicated subprocess (`tests/perf/memory-probe.ts`) launched through the tsx CLI with `--expose-gc`, which guarantees `global.gc` works, keeps the flag scoped away from every vitest fork, and supports the project's declared `node >= 20.0.0` engine range. The probe forces a full GC before and after a warm-up pass and a measured pass, then reports retained growth per memory category (V8 `heapUsed`, `external`, `arrayBuffers`, `rss`) and exits via `process.exitCode` so the JSON report fully flushes. The test fails if the probe exits non-zero, so the GC precondition can never silently regress into a no-op assertion.
+
 ## Coverage Goals
 
 | Module | Target | Current |
