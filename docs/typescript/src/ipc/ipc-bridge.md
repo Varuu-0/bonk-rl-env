@@ -105,15 +105,22 @@ worker pool is **owned per client session**:
   client's** pool and removes that client's session; every other client keeps
   working.
 - `"shutdown": true` or `IpcBridge.close()` is a full server shutdown: every
-  session pool and the router socket are closed.
-- Requests from an identity that never called `init` fall back to the
+  session pool, the local/bypass pool, and the router socket are closed, and
+  the local session is reset so a later `start()` restarts clean.
+- Requests from an identity that **never called `init`** fall back to the
   bridge's local/bypass pool (`initEnv`/`resetEnv`/`stepEnv`); if that pool is
   also uninitialized, `reset`/`step` are rejected loudly with
   `Worker pool not initialized`.
+- An identity that **did call `init`** and then closed its session never
+  silently falls back to another pool: its subsequent `reset`/`step` fail
+  loudly with `Worker pool not initialized` until it calls `init` again.
 
-Caveat: a client that disconnects without sending `close` leaves its session
-pool running until the next full server shutdown; sessions are only torn down
-by an explicit `close` from that identity.
+Resource bounds: a client that disconnects without sending `close` leaves its
+session pool running until the next full server shutdown (sessions are only
+torn down by an explicit `close` from that identity). To keep this bounded,
+`server.maxClientSessions` (default 32) caps the number of concurrent sessions;
+a new client `init` beyond the cap is rejected loudly with a clear error
+instead of silently evicting an existing session.
 
 ---
 
