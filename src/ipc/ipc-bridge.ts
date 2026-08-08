@@ -305,9 +305,9 @@ export class IpcBridge {
                             this.allowLocalSessionFallback = false;
                         }
                     }
-                    if (session) {
-                        activeSession = session;
-                        this.beginSessionRequest(session);
+                        if (session) {
+                            activeSession = session;
+                            this.beginSessionRequest(session);
                         await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
                         session.initialized = true;
                         session.numEnvs = numEnvs;
