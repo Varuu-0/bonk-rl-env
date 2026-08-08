@@ -60,13 +60,7 @@ async function main() {
             console.log(`  Step ${step + 1}:`);
             for (let i = 0; i < results.length; i++) {
                 const result = results[i];
-                if (Array.isArray(result) && result[0]) {
-                    const r = result[0];
-                    console.log(`    Env ${i}: reward=${r.reward?.toFixed(3)}, done=${r.done}, tick=${r.info?.tick}`);
-                } else if (result && result[0]) {
-                    const r = result[0];
-                    console.log(`    Env ${i}: reward=${r.reward?.toFixed(3)}, done=${r.done}, tick=${r.info?.tick}`);
-                }
+                console.log(`    Env ${i}: reward=${result.reward?.toFixed(3)}, done=${result.done}, tick=${result.info?.tick}`);
             }
         }
 

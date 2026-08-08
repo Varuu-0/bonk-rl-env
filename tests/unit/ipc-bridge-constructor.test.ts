@@ -73,7 +73,7 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.getConfig.mockClear();
-  mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+  mocks.getConfig.mockReturnValue({ server: { port: 5555, bindAddress: '127.0.0.1' }, environment: { seed: 0 } });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
   mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
@@ -119,6 +119,83 @@ describe('IpcBridge constructor', () => {
     expect(bridge.getPort()).toBe(5555);
   });
 
+  it('uses bindAddress from config when provided', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '0.0.0.0' } });
+    expect(bridge.getBindAddress()).toBe('0.0.0.0');
+  });
+
+  it('wraps a bare IPv6 bind address in brackets for the tcp endpoint', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '::1' } });
+    expect(bridge.getBindAddress()).toBe('[::1]');
+  });
+
+  it('keeps an already-bracketed IPv6 bind address as-is', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '[::1]' } });
+    expect(bridge.getBindAddress()).toBe('[::1]');
+  });
+
+  it('passes a hostname bind address through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: 'localhost' } });
+    expect(bridge.getBindAddress()).toBe('localhost');
+  });
+
+  it('passes interface names containing underscores through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: 'my_if0' } });
+    expect(bridge.getBindAddress()).toBe('my_if0');
+
+    const bridge2 = new IpcBridge({ server: { port: 12345, bindAddress: 'veth_1' } });
+    expect(bridge2.getBindAddress()).toBe('veth_1');
+  });
+
+  it('passes the libzmq all-interfaces wildcard through unmodified', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '*' } });
+    expect(bridge.getBindAddress()).toBe('*');
+  });
+
+  it('rejects a host:port-style bind address with a clear error (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '127.0.0.1:5555' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a malformed bind address with a clear error (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: 'not a host' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a dotted-numeric bind address that is not a valid IPv4 (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999.999.999.999' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '1.2.3.4.5' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a bare underscore bind address (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '_' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('rejects a purely numeric bind address that is not a valid IPv4 (issue #235)', () => {
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '12345' } }))
+      .toThrowError(/Invalid server\.bindAddress/);
+  });
+
+  it('falls back to the loopback default for an empty bind address', () => {
+    const bridge = new IpcBridge({ server: { port: 12345, bindAddress: '  ' } });
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
+  it('falls back to getConfig().server.bindAddress when no config', () => {
+    const bridge = new IpcBridge();
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
+  it('falls back to getConfig().server.bindAddress when config has no server', () => {
+    const bridge = new IpcBridge({});
+    expect(bridge.getBindAddress()).toBe('127.0.0.1');
+  });
+
   it('creates a ZMQ Router socket (line 18)', () => {
     new IpcBridge();
     expect(bindSpy).not.toHaveBeenCalled();
@@ -149,6 +226,24 @@ describe('IpcBridge start()', () => {
     const startPromise = bridge.start();
     await new Promise(r => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://127.0.0.1:12345');
+    await bridge.close();
+    await startPromise;
+  });
+
+  it('binds socket to the configured bind address when provided (issue #235)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '0.0.0.0' } });
+    const startPromise = bridge.start();
+    await new Promise(r => setTimeout(r, 10));
+    expect(bindSpy).toHaveBeenCalledWith('tcp://0.0.0.0:12348');
+    await bridge.close();
+    await startPromise;
+  });
+
+  it('binds an IPv6 bind address with brackets in the endpoint (issue #235)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '::1' } });
+    const startPromise = bridge.start();
+    await new Promise(r => setTimeout(r, 10));
+    expect(bindSpy).toHaveBeenCalledWith('tcp://[::1]:12348');
     await bridge.close();
     await startPromise;
   });

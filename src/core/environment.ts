@@ -95,6 +95,20 @@ export interface EnvironmentConfig {
     ppm?: number;
     /** Optional path to a map JSON file, used when mapData is absent */
     mapPath?: string;
+    /**
+     * Config-loader map path (`--map` | `DEFAULT_MAP_PATH` | `environment.defaultMapPath`),
+     * used when both mapData and mapPath are absent. The worker forwards the merged
+     * environment config verbatim, so this is the end-to-end documented surface (#199).
+     */
+    defaultMapPath?: string;
+    /**
+     * Player slot index controlled by the RL agent (0-7, default 0). The agent
+     * observes, controls, and is rewarded for this slot; every other spawned
+     * slot is an opponent (`AI_PLAYER_ID` | `--ai-player-id` |
+     * `environment.aiPlayerId`). Must be within [0, numOpponents], the AI slot
+     * plus one slot per opponent (#221).
+     */
+    aiPlayerId?: number;
     /** Opponent random-policy probabilities */
     oppMoveProb?: number;
     oppUpProb?: number;
@@ -114,6 +128,24 @@ export interface EnvironmentConfig {
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
+
+/**
+ * Resolve a possibly relative map path for loading. Absolute paths are used
+ * as-is. Relative paths keep their legacy process-cwd meaning when the file
+ * exists there (programmatic `mapPath` compatibility); otherwise they are
+ * re-anchored against the project root so a repo-relative path such as the
+ * loader default `maps/...` cannot silently box-fall-back when the worker's
+ * inherited cwd differs from the repository root (#199).
+ */
+function resolveMapPath(mapFile: string): string {
+    if (path.isAbsolute(mapFile)) {
+        return mapFile;
+    }
+    if (fs.existsSync(mapFile)) {
+        return mapFile;
+    }
+    return path.resolve(__dirname, '..', '..', mapFile);
+}
 
 /**
  * Creates a simple default map config if none is provided.
@@ -169,16 +201,29 @@ export class BonkEnvironment {
         const rawConfig = config as any;
         const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
-        // Load map from file or use provided config
+        // Load map from file or use provided config. `mapData` (programmatic)
+        // wins; otherwise the documented map-path surface is honored end to
+        // end: the config-loader resolves `--map` / `DEFAULT_MAP_PATH` /
+        // `environment.defaultMapPath` into `defaultMapPath`, which the worker
+        // forwards verbatim. `mapPath` is the per-env programmatic override;
+        // the hardcoded WDB path is only the last-resort fallback.
         let mapDef: MapDef;
+        let mapFile = '';
         if (config.mapData) {
             mapDef = config.mapData;
         } else {
-            const mapPath = config.mapPath || path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+            // Resolve relative paths against the project root (see
+            // resolveMapPath) so the loader's cwd-relative default cannot
+            // shadow the cwd-independent fallback in worker mode.
+            const configuredPath = config.mapPath || config.defaultMapPath || '';
+            const mapPath = configuredPath
+                ? resolveMapPath(configuredPath)
+                : path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
                 mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+                mapFile = mapPath;
             } catch (e) {
-                console.warn("Could not load default map, using fallback box");
+                console.warn(`Could not load map "${mapPath}", using fallback box`);
                 mapDef = getDefaultMap();
             }
         }
@@ -201,10 +246,20 @@ export class BonkEnvironment {
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS,
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,
-            seed: (config.seed && config.seed !== 0) ? config.seed : Math.floor(Math.random() * 1000000),
+            // Seed 0 is a valid deterministic seed and must reach the PRNG: a
+            // truthiness check would map `--seed 0` / `SEED=0` /
+            // `environment.seed: 0` onto a random seed while reset(0) and
+            // pool.reset([0]) stay deterministic, silently breaking
+            // constructed-env replay (#200). Only an absent seed (undefined/
+            // null) falls back to a random one.
+            seed: config.seed !== undefined && config.seed !== null
+                ? config.seed
+                : Math.floor(Math.random() * 1000000),
             frameSkip: frameSkip ?? 1,
             ppm: this.ppm,
-            mapPath: config.mapPath ?? '',
+            mapPath: mapFile,
+            defaultMapPath: config.defaultMapPath ?? '',
+            aiPlayerId: config.aiPlayerId ?? 0,
             oppMoveProb,
             oppUpProb,
             oppDownProb,
@@ -218,6 +273,22 @@ export class BonkEnvironment {
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
             noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
         };
+
+        // The AI slot is config-driven, never hardcoded to 0 (#221). An
+        // out-of-range slot fails loudly here instead of being silently
+        // ignored: with numOpponents opponents the spawned players occupy
+        // slots [0, numOpponents] (the AI plus one slot per opponent).
+        this.aiPlayerId = this.config.aiPlayerId;
+        if (!Number.isInteger(this.aiPlayerId) || this.aiPlayerId < 0) {
+            throw new Error(
+                `Invalid aiPlayerId ${this.aiPlayerId}: expected a non-negative integer player slot`,
+            );
+        }
+        if (this.aiPlayerId > this.config.numOpponents) {
+            throw new Error(
+                `Invalid aiPlayerId ${this.aiPlayerId}: with ${this.config.numOpponents} opponent(s) the player slots are 0..${this.config.numOpponents}`,
+            );
+        }
 
         this.rng = new PRNG(this.config.seed);
         this.physics = new PhysicsEngine();
@@ -351,8 +422,15 @@ export class BonkEnvironment {
         const teamB = spawnPoints.team_blue || (spawnKeys.length > 0 ? spawnPoints[spawnKeys[0]] : null) || { x: -200, y: -100 };
         const teamR = spawnPoints.team_red || { x: 200, y: -100 };
 
-        // Add AI player
-        this.aiPlayerId = 0;
+        // Add the AI player on its configured slot (never reassigned to 0
+        // here), then one opponent per remaining slot of [0, numOpponents]
+        // (#221). The AI spawns on the blue team spawn and opponents on the
+        // red team spawn regardless of slot numbering, as before.
+        //
+        // Re-apply the AI slot to the engine every reset (setPlayerTeam below
+        // is re-applied per episode too): the default collision categories
+        // keep the AI disc on g1 and opponents on g2 whatever their slots.
+        this.physics.setAiPlayerId(this.aiPlayerId);
         this.physics.addPlayer(
             this.aiPlayerId,
             teamB.x,
@@ -361,14 +439,14 @@ export class BonkEnvironment {
 
         // Add opponent(s)
         this.opponentIds = [];
-        for (let i = 0; i < this.config.numOpponents; i++) {
-            const id = i + 1;
+        for (let slot = 0; slot <= this.config.numOpponents; slot++) {
+            if (slot === this.aiPlayerId) continue;
             this.physics.addPlayer(
-                id,
+                slot,
                 teamR.x,
                 teamR.y,
             );
-            this.opponentIds.push(id);
+            this.opponentIds.push(slot);
         }
 
         // Set team assignments

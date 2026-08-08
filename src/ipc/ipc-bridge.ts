@@ -1,4 +1,5 @@
 import * as zmq from "zeromq";
+import * as net from "net";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
@@ -11,6 +12,7 @@ export class IpcBridge {
     private sock: zmq.Router;
     private pool: WorkerPool;
     private port: number;
+    private bindAddress: string;
     private stepCount: number = 0;
     private _closed: boolean = false;
     private _initialized: boolean = false;
@@ -19,6 +21,7 @@ export class IpcBridge {
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
+        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
         this.sock = new zmq.Router();
         this.pool = new WorkerPool();
 
@@ -26,11 +29,63 @@ export class IpcBridge {
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
 
+    /**
+     * Normalize a configured bind address into a ZMQ endpoint-ready host.
+     * Empty/whitespace values fall back to the loopback default; `*` (the
+     * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
+     * wrapped in the brackets the tcp:// endpoint syntax requires. Everything
+     * else must be a valid IPv4 address, a valid IPv6 literal, or a DNS /
+     * interface name (underscores tolerated, at least one alphanumeric
+     * character) — malformed values (e.g. a host:port mistake, out-of-range
+     * dotted-numeric octets, purely numeric or underscore-only labels) fail
+     * loudly at construction instead of surfacing as an opaque bind() error
+     * (issue #235).
+     */
+    private static normalizeBindAddress(raw: string | undefined): string {
+        const addr = (raw ?? '').trim();
+        if (addr.length === 0) {
+            return '127.0.0.1';
+        }
+        if (addr === '*') {
+            // libzmq wildcard: bind to all available interfaces.
+            return addr;
+        }
+        let bare = addr;
+        if (addr.startsWith('[') && addr.endsWith(']')) {
+            bare = addr.slice(1, -1);
+        }
+        const ipKind = net.isIP(bare);
+        if (ipKind === 6) {
+            return `[${bare}]`;
+        }
+        if (ipKind === 4) {
+            return bare;
+        }
+        // All-dotted-numeric values that net.isIP rejected (1.2.3.4.5,
+        // 999.999.999.999) are malformed IPv4s, not hostnames.
+        if (/^\d+(\.\d+)+$/.test(bare)) {
+            throw new Error(`Invalid server.bindAddress "${raw}": not a valid IPv4 address.`);
+        }
+        // A purely numeric label (999, 12345) is neither an IP nor a usable
+        // hostname for binding.
+        if (/^\d+$/.test(bare)) {
+            throw new Error(`Invalid server.bindAddress "${raw}": not a valid IPv4 address.`);
+        }
+        // DNS / interface name: `[a-zA-Z0-9_-]` labels joined by dots, with
+        // at least one alphanumeric character so a bare `_`/`-` is rejected.
+        // Anything else — semicolons, whitespace, a trailing :port — is also
+        // rejected rather than silently producing an invalid bind endpoint.
+        if (/^[a-zA-Z0-9_-]+(\.[a-zA-Z0-9_-]+)*$/.test(bare) && /[a-zA-Z0-9]/.test(bare)) {
+            return bare;
+        }
+        throw new Error(`Invalid server.bindAddress "${raw}": expected an IPv4/IPv6 address, hostname, or '*' (no port).`);
+    }
+
     // Wrapped send function for telemetry
     private _wrappedSend: Function;
 
     async start() {
-        const addr = `tcp://127.0.0.1:${this.port}`;
+        const addr = `tcp://${this.bindAddress}:${this.port}`;
         await this.sock.bind(addr);
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
@@ -267,6 +322,13 @@ export class IpcBridge {
      */
     getPort(): number {
         return this.port;
+    }
+
+    /**
+     * Get the configured bind address (network interface to bind the ZMQ socket to).
+     */
+    getBindAddress(): string {
+        return this.bindAddress;
     }
 
     /**

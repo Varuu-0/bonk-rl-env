@@ -28,11 +28,16 @@ cd python && pytest --cov=.
 | `npm run test:coverage` | Run with coverage report |
 | `npm run test:unit` | Unit tests only |
 | `npm run test:integration` | Integration tests only |
-| `npm run test:e2e` | E2E tests (longer timeout) |
+| `npm run test:e2e` | E2E tests (longer timeout; dedicated `vitest.e2e.config.ts`) |
 | `npm run test:security` | Security tests |
 | `npm run test:perf` | Performance tests |
 | `npm run test:all` | All tests including E2E and security |
 | `npm run typecheck` | TypeScript type checking |
+
+The E2E suite (`tests/e2e/`) runs under its own `vitest.e2e.config.ts`, which
+only includes `tests/e2e/**/*.test.ts` and uses 60 s test/hook timeouts. It
+stays out of the default `npm test` run; execute it with `npm run test:e2e` or
+as the E2E stage of `npm run test:all`.
 
 ## Test File Organization
 
@@ -215,6 +220,16 @@ def test_reward_positive_for_progress():
 def test_factorial(input, expected):
     assert factorial(input) == expected
 ```
+
+## Performance Tests (`tests/perf`)
+
+Run the perf suite alone:
+
+```sh
+npm run test:perf
+```
+
+`tests/perf/memory-stability.test.ts` asserts there is no significant heap growth after many `env.reset()` and `env.step()` iterations. The measurement runs in a dedicated subprocess (`tests/perf/memory-probe.ts`) launched through the tsx CLI with `--expose-gc`, which guarantees `global.gc` works, keeps the flag scoped away from every vitest fork, and supports the project's declared `node >= 20.0.0` engine range. The probe forces a full GC before and after a warm-up pass and a measured pass, then reports retained growth per memory category (V8 `heapUsed`, `external`, `arrayBuffers`, `rss`) and exits via `process.exitCode` so the JSON report fully flushes. The test fails if the probe exits non-zero, so the GC precondition can never silently regress into a no-op assertion.
 
 ## Coverage Goals
 
