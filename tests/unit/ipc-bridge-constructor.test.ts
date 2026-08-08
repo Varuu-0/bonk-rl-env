@@ -16,8 +16,13 @@ const mocks = vi.hoisted(() => {
     close: () => {},
     send: async () => {},
   };
+  const controller = {
+    tick: vi.fn(() => false),
+    reportNow: vi.fn(() => true),
+  };
   return {
     sock,
+    controller,
     Router: function Router() { return sock; },
     WorkerPool: vi.fn(),
     getConfig: vi.fn(),
@@ -46,6 +51,7 @@ vi.mock('../telemetry/profiler', () => {
 });
 vi.mock('../telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
+  getTelemetryController: () => mocks.controller,
 }));
 vi.mock('../core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
@@ -55,6 +61,10 @@ vi.mock('../config/config-loader', () => ({
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+
+// The bridge decides report boundaries via the controller's tick(), so the
+// mock keeps the historical 5000-step boundary by consulting the live bridge.
+let currentBridge: any = null;
 
 const mockSock = mocks.sock;
 let bindSpy: ReturnType<typeof vi.spyOn>;
@@ -66,6 +76,8 @@ beforeEach(() => {
   mocks.getConfig.mockReturnValue({ server: { port: 5555, bindAddress: '127.0.0.1' }, environment: { seed: 0 } });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
+  mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
+  mocks.controller.reportNow.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
   mocks.WorkerPool.mockImplementation(() => ({
     init: vi.fn().mockResolvedValue(undefined),
@@ -88,6 +100,7 @@ afterEach(() => {
   bindSpy.mockRestore();
   closeSpy.mockRestore();
   sendSpy.mockRestore();
+  currentBridge = null;
 });
 
 describe('IpcBridge constructor', () => {
@@ -326,6 +339,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
 
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
   async function simulateSteps(bridge: IpcBridge, count: number) {
+    currentBridge = bridge;
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     // B9 fix: step/reset before init now correctly return an error, so the
     // bridge must be initialized before any steps can be counted.

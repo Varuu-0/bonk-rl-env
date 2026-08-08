@@ -242,6 +242,95 @@ export class Profiler {
             });
         }
 
+        // Include the latest worker telemetry snapshots (issue #237). File
+        // output routes this formatReport() text, so worker stats must be
+        // captured here rather than only in the console report().
+        const workerSection = this.formatLatestWorkerTelemetry();
+        if (workerSection) {
+            lines.push('');
+            lines.push(workerSection);
+        }
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Format the latest worker telemetry snapshots as a human-readable
+     * section (per-metric lifetime stats plus a straggler notice). Pure: it
+     * does NOT clear the snapshots — the caller clears them via reset() after
+     * consumption, so file and console formats share a single latest snapshot
+     * per reporting window.
+     */
+    private formatLatestWorkerTelemetry(): string {
+        if (!latestWorkerTelemetry || latestWorkerTelemetry.length === 0) {
+            return '';
+        }
+
+        const workerCount = latestWorkerTelemetry.length;
+        const lines: string[] = [];
+        lines.push('=== Global Worker Telemetry (per-metric lifetime stats) ===');
+        lines.push('Label                | Mean (ms) | Min (ms) | Max (ms)');
+        lines.push('---------------------+----------+----------+----------');
+
+        let stragglerWorker = -1;
+        let stragglerPhysicsNs = BigInt(0);
+
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            let sumNs = BigInt(0);
+            let minNs: bigint | null = null;
+            let maxNs: bigint | null = null;
+            // Worker telemetry buffers can be heterogeneous (a worker may be
+            // missing a metric index), so the mean must divide by the number
+            // of workers that actually contributed, not the total worker count.
+            let contributing = 0;
+
+            for (let w = 0; w < workerCount; w++) {
+                const buf = latestWorkerTelemetry[w];
+                if (!buf || buf.length <= i) continue;
+                const v = buf[i];
+                contributing++;
+
+                if (minNs === null || v < minNs) {
+                    minNs = v;
+                }
+                if (maxNs === null || v > maxNs) {
+                    maxNs = v;
+                }
+                sumNs += v;
+
+                if (i === TelemetryIndices.PHYSICS_TICK && v > stragglerPhysicsNs) {
+                    stragglerPhysicsNs = v;
+                    stragglerWorker = w;
+                }
+            }
+
+            if (minNs === null || maxNs === null) {
+                continue;
+            }
+
+            const meanNs = sumNs / BigInt(contributing);
+            const meanMs = Number(meanNs) / 1_000_000;
+            const minMs = Number(minNs) / 1_000_000;
+            const maxMs = Number(maxNs) / 1_000_000;
+
+            const label = TelemetryLabels[i];
+            if (!label) continue;
+
+            const paddedLabel = (label + '                    ').slice(0, 21);
+            const meanStr = meanMs.toFixed(3).padStart(8);
+            const minStr = minMs.toFixed(3).padStart(8);
+            const maxStr = maxMs.toFixed(3).padStart(8);
+
+            lines.push(`${paddedLabel} | ${meanStr} | ${minStr} | ${maxStr}`);
+        }
+
+        if (stragglerWorker >= 0) {
+            const physicsMs = Number(stragglerPhysicsNs) / 1_000_000;
+            lines.push(
+                `Straggler Report: [Worker ID: ${stragglerWorker}] | Physics Time: ${physicsMs.toFixed(3)} ms | Status: Lagging.`,
+            );
+        }
+
         return lines.join('\n');
     }
 
@@ -257,114 +346,70 @@ export class Profiler {
         for (let i = 0; i < TelemetryBuffer.length; i++) {
             TelemetryBuffer[i] = BigInt(0);
         }
+
+        // Clear worker snapshots so they are never reused on a later report
+        // (issue #237): file-only reporting advances the window via reset(),
+        // and the console report() closes with reset() after printing them.
+        latestWorkerTelemetry = null;
     }
 
     /**
      * Output a heatmap-style report of telemetry usage.
      * @param windowSize Number of ticks in this reporting window.
+     * @param force Report even when the window is incomplete (used for the
+     *   shutdown final report so it is not a silent no-op over a short last
+     *   window, issue #237).
      */
-    report(windowSize: number = 5000) {
-        if (this.currentTick - this.startTick < windowSize) return;
-
+    report(windowSize: number = 5000, force: boolean = false) {
         const windowTicks = this.currentTick - this.startTick;
+        if (!force && windowTicks < windowSize) return;
 
-        console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
-        console.log('Label                | Avg ms/frame | % of 33.3ms frame');
-        console.log('---------------------+-------------+-------------------');
+        // Guard the counter/judge math against an empty forced window.
+        const divTicks = windowTicks > 0 ? windowTicks : 1;
 
-        for (let i = 0; i < TelemetryBuffer.length; i++) {
-            const totalNs = TelemetryBuffer[i];
-            if (totalNs === BigInt(0)) continue;
-
-            const label = TelemetryLabels[i];
-            if (!label) continue;
-
-            const avgNsPerFrame = totalNs / BigInt(windowTicks);
-            const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
-
-            // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
-            const hundred = BigInt(100);
-            const bp = (avgNsPerFrame * hundred * hundred) / FRAME_BUDGET_NS; // 100 * 100 = 10_000 (basis points)
-            const percent = Number(bp) / 100; // back to percentage with 2 decimal places
-
-            const paddedLabel = (label + '                    ').slice(0, 21);
-            const avgMsStr = avgMsPerFrame.toFixed(3).padStart(11);
-            const pctStr = percent.toFixed(2).padStart(9);
-
-            console.log(`${paddedLabel} | ${avgMsStr} | ${pctStr}%`);
-
-            // Critical path highlight: scream when a bucket dominates the frame budget.
-            if (percent > 25.0) {
-                console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
-            }
-        }
-
-        // RimWorld-style global worker telemetry and straggler report.
-        if (latestWorkerTelemetry && latestWorkerTelemetry.length > 0) {
-            const workerCount = latestWorkerTelemetry.length;
-
-            console.log('\n=== Global Worker Telemetry (per-metric lifetime stats) ===');
-            console.log('Label                | Mean (ms) | Min (ms) | Max (ms)');
-            console.log('---------------------+----------+----------+----------');
-
-            let stragglerWorker = -1;
-            let stragglerPhysicsNs = BigInt(0);
+        if (windowTicks === 0) {
+            // Nothing to average over: printing a 'Avg over last 0 ticks'
+            // heatmap with no rows would be misleading, so emit a short
+            // notice instead and let the worker/counter/gauge sections follow.
+            console.log('\n=== Telemetry Report (no ticks in window) ===');
+        } else {
+            console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
+            console.log('Label                | Avg ms/frame | % of 33.3ms frame');
+            console.log('---------------------+-------------+-------------------');
 
             for (let i = 0; i < TelemetryBuffer.length; i++) {
-                let sumNs = BigInt(0);
-                let minNs: bigint | null = null;
-                let maxNs: bigint | null = null;
-
-                for (let w = 0; w < workerCount; w++) {
-                    const buf = latestWorkerTelemetry[w];
-                    if (!buf || buf.length <= i) continue;
-                    const v = buf[i];
-
-                    if (minNs === null || v < minNs) {
-                        minNs = v;
-                    }
-                    if (maxNs === null || v > maxNs) {
-                        maxNs = v;
-                    }
-                    sumNs += v;
-
-                    if (i === TelemetryIndices.PHYSICS_TICK && v > stragglerPhysicsNs) {
-                        stragglerPhysicsNs = v;
-                        stragglerWorker = w;
-                    }
-                }
-
-                if (minNs === null || maxNs === null) {
-                    continue;
-                }
-
-                const meanNs = sumNs / BigInt(workerCount);
-                const meanMs = Number(meanNs) / 1_000_000;
-                const minMs = Number(minNs) / 1_000_000;
-                const maxMs = Number(maxNs) / 1_000_000;
+                const totalNs = TelemetryBuffer[i];
+                if (totalNs === BigInt(0)) continue;
 
                 const label = TelemetryLabels[i];
                 if (!label) continue;
 
+                const avgNsPerFrame = totalNs / BigInt(windowTicks);
+                const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
+
+                // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
+                const hundred = BigInt(100);
+                const bp = (avgNsPerFrame * hundred * hundred) / FRAME_BUDGET_NS; // 100 * 100 = 10_000 (basis points)
+                const percent = Number(bp) / 100; // back to percentage with 2 decimal places
+
                 const paddedLabel = (label + '                    ').slice(0, 21);
-                const meanStr = meanMs.toFixed(3).padStart(8);
-                const minStr = minMs.toFixed(3).padStart(8);
-                const maxStr = maxMs.toFixed(3).padStart(8);
+                const avgMsStr = avgMsPerFrame.toFixed(3).padStart(11);
+                const pctStr = percent.toFixed(2).padStart(9);
 
-                console.log(`${paddedLabel} | ${meanStr} | ${minStr} | ${maxStr}`);
+                console.log(`${paddedLabel} | ${avgMsStr} | ${pctStr}%`);
+
+                // Critical path highlight: scream when a bucket dominates the frame budget.
+                if (percent > 25.0) {
+                    console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
+                }
             }
+        }
 
-            if (stragglerWorker >= 0) {
-                const physicsMs = Number(stragglerPhysicsNs) / 1_000_000;
-                console.log(
-                    `Straggler Report: [Worker ID: ${stragglerWorker}] | Physics Time: ${physicsMs.toFixed(
-                        3,
-                    )} ms | Status: Lagging.`,
-                );
-            }
-
-            // Clear snapshots so they are not reused accidentally on the next report.
-            latestWorkerTelemetry = null;
+        // RimWorld-style global worker telemetry and straggler report.
+        const workerSection = this.formatLatestWorkerTelemetry();
+        if (workerSection) {
+            console.log('');
+            console.log(workerSection);
         }
 
         // Optionally keep the legacy tables for counters/gauges.
@@ -375,7 +420,7 @@ export class Profiler {
                 countData.push({
                     Metric: label,
                     Total: val,
-                    'Avg/Tick': (val / windowTicks).toFixed(4),
+                    'Avg/Tick': (val / divTicks).toFixed(4),
                 });
             });
             console.table(countData);
