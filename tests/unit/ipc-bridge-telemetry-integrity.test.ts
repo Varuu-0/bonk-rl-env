@@ -196,4 +196,58 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     resolveSnapshots([]);
     await new Promise(r => setImmediate(r));
   });
+
+  it('coalesces overlapping boundary steps into a single fetch and report (single-flight)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Every step is a report-due step so two consecutive steps both enter the
+    // telemetry branch while the first snapshot fetch is still pending.
+    mocks.controller.tick.mockReturnValue(true);
+    const bridge = new IpcBridge({ server: { port: 5555 } } as any);
+    currentBridge = bridge;
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    let resolveSnapshots!: (value: BigUint64Array[]) => void;
+    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
+      resolveSnapshots = res;
+    }));
+
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // First boundary step: the snapshot fetch starts and hangs unresolved.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    // Second boundary step arrives while the first fetch is still in flight.
+    // It must be a no-op — no overlapping fetch, no duplicate report.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+
+    expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(1);
+
+    resolveSnapshots([]);
+    await new Promise(r => setImmediate(r));
+
+    expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);
+    expect(mocks.controller.reportNow).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('re-arms the single-flight guard after a snapshot failure', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.controller.tick.mockReturnValue(true);
+    mocks.pool.getTelemetrySnapshots.mockRejectedValueOnce(new Error('snapshot timeout'));
+
+    const bridge = new IpcBridge({ server: { port: 5555 } } as any);
+    currentBridge = bridge;
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // First boundary step: the fetch rejects, and the `finally` clears the
+    // guard so later reports are not permanently disabled.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    // Second boundary step: now the default fetch resolves.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    await new Promise(r => setImmediate(r));
+
+    expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(2);
+    expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);
+    expect(mocks.controller.reportNow).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
 });

@@ -18,6 +18,12 @@ export class IpcBridge {
     private _initialized: boolean = false;
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
+    // Single-flight guard covering the entire post-step telemetry unit
+    // (snapshot fetch through report). Prevents overlapping snapshot fetches
+    // or duplicate reports when a second boundary step arrives during the
+    // async fetch (issue #237). Re-armed in `finally` so a failed/slow fetch
+    // can never leak the guard and silently disable future reports.
+    private telemetryInFlight: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
@@ -270,6 +276,13 @@ export class IpcBridge {
      * worker-pool semantics, surfacing on the next request.
      */
     private async runPostStepTelemetry(): Promise<void> {
+        // A boundary step can arrive while an earlier fetch→report is still
+        // awaiting getTelemetrySnapshots. Guard the whole unit so the second
+        // step is a no-op: otherwise two overlapping fetches would run and the
+        // controller's reportInFlight guard (which only wraps the synchronous
+        // emit) would not stop the duplicate snapshot fetch (issue #237).
+        if (this.telemetryInFlight) return;
+        this.telemetryInFlight = true;
         try {
             globalProfiler.recordMemory();
 
@@ -285,6 +298,8 @@ export class IpcBridge {
             }
         } catch (telemetryError) {
             console.error('[IPC] Telemetry error after step:', telemetryError);
+        } finally {
+            this.telemetryInFlight = false;
         }
     }
 

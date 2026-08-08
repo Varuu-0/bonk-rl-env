@@ -1,10 +1,11 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import * as http from 'http';
 import {
   TelemetryController,
   isTelemetryEnabled,
   getTelemetryController,
 } from '../../src/telemetry/telemetry-controller';
-import { globalProfiler, TelemetryBuffer } from '../../src/telemetry/profiler';
+import { globalProfiler, TelemetryBuffer, setLatestWorkerTelemetry } from '../../src/telemetry/profiler';
 import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from '../../src/telemetry/flags';
 
 describe('TelemetryController', () => {
@@ -332,6 +333,113 @@ describe('TelemetryController', () => {
       controller.shutdown();
       expect(reportSpy).not.toHaveBeenCalled();
       reportSpy.mockRestore();
+    });
+
+    it('emits a final report on shutdown over an incomplete profiler window (not a silent no-op)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '100'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      // A single tick is far short of the 100-tick report window, so without
+      // a forced final report the console output would be nothing.
+      globalProfiler.tick();
+      controller.shutdown();
+      const heatmapCalls = logSpy.mock.calls.filter((c) => String(c[0]).includes('Telemetry Heatmap'));
+      expect(heatmapCalls.length).toBeGreaterThan(0);
+      logSpy.mockRestore();
+    });
+
+    it('clears worker telemetry after the shutdown final report', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      setLatestWorkerTelemetry([
+        new BigUint64Array([BigInt(10), BigInt(20), BigInt(0), BigInt(0), BigInt(0)]) as unknown as BigUint64Array,
+      ]);
+      controller.shutdown();
+      // The snapshots are consumed by the final report and cleared via reset().
+      expect(globalProfiler.formatReport()).not.toContain('Global Worker Telemetry');
+      logSpy.mockRestore();
+    });
+  });
+
+  describe('dashboard close race', () => {
+    it('closes the HTTP server even when shutdown races the listening event', () => {
+      process.argv = ['node', 'script.js', '--telemetry'];
+      const controller = TelemetryController.getInstance();
+      const server = http.createServer(() => {});
+      const closeSpy = vi
+        .spyOn(server, 'close')
+        .mockImplementation((function (this: http.Server, callback?: (err?: Error) => void) {
+          if (typeof callback === 'function') callback();
+          return this as unknown as http.Server;
+        }) as unknown as typeof server.close);
+
+      // Simulate a shutdown that fires before the async 'listening' event:
+      // dashboardListened is still false, yet the server must be closed so
+      // the port is released rather than leaked.
+      (controller as any).dashboardServer = server;
+      (controller as any).dashboardListened = false;
+      (controller as any).closeDashboard();
+
+      expect(closeSpy).toHaveBeenCalledTimes(1);
+      expect((controller as any).dashboardServer).toBeNull();
+      expect((controller as any).dashboardListened).toBe(false);
+      closeSpy.mockRestore();
+    });
+  });
+
+  describe('worker telemetry in file reports', () => {
+    const workerBuf = (vals: bigint[]): BigUint64Array => {
+      const buf = new BigUint64Array(5);
+      vals.forEach((v, i) => { buf[i] = v; });
+      return buf;
+    };
+
+    afterEach(() => {
+      globalProfiler.reset();
+      setLatestWorkerTelemetry(null);
+    });
+
+    it('formatReport includes latest worker telemetry (file output)', () => {
+      setLatestWorkerTelemetry([
+        workerBuf([BigInt(40_000_000), BigInt(10_000_000), BigInt(0), BigInt(0), BigInt(0)]),
+        workerBuf([BigInt(30_000_000), BigInt(10_000_000), BigInt(0), BigInt(0), BigInt(0)]),
+      ]);
+      const text = globalProfiler.formatReport();
+      expect(text).toContain('Global Worker Telemetry');
+      // Worker 0 dominates physics time, so it is the reported straggler.
+      expect(text).toContain('[Worker ID: 0]');
+    });
+
+    it('formatReport is empty of worker telemetry once none are set', () => {
+      setLatestWorkerTelemetry(null);
+      expect(globalProfiler.formatReport()).not.toContain('Global Worker Telemetry');
+    });
+
+    it('file-only reportNow writes worker telemetry and clears it (file-only mode)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--output', 'file', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+      const writeSpy = vi.spyOn(controller as any, 'writeToFile').mockImplementation(() => {});
+      setLatestWorkerTelemetry([
+        workerBuf([BigInt(40_000_000), BigInt(10_000_000), BigInt(0), BigInt(0), BigInt(0)]),
+        workerBuf([BigInt(30_000_000), BigInt(10_000_000), BigInt(0), BigInt(0), BigInt(0)]),
+      ]);
+
+      expect(controller.reportNow()).toBe(true);
+
+      // The file entry carries the worker telemetry section, and because
+      // file-only mode advances the window via reset(), the snapshots are
+      // cleared rather than reused by a later report.
+      const entry = writeSpy.mock.calls[0][0] as { report: string };
+      expect(entry.report).toContain('Global Worker Telemetry');
+      expect(globalProfiler.formatReport()).not.toContain('Global Worker Telemetry');
+
+      reportSpy.mockRestore();
+      writeSpy.mockRestore();
     });
   });
 

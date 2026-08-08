@@ -253,14 +253,14 @@ export class TelemetryController {
    *
    * @returns true when a report was emitted
    */
-  reportNow(): boolean {
+  reportNow(force: boolean = false): boolean {
     if (!TelemetryController.isEnabled() || this.reportInFlight) {
       return false;
     }
 
     this.reportInFlight = true;
     try {
-      this.emitReport(this.getFlags());
+      this.emitReport(this.getFlags(), force);
       this.lastReportTick = this.tickCount;
       return true;
     } catch (error) {
@@ -275,8 +275,12 @@ export class TelemetryController {
 
   /**
    * Emit the profiler report and optional file output.
+   *
+   * When `force` is true (the shutdown final report) the console report is
+   * emitted even if the current profiler window is incomplete, so shutdown
+   * is never a silent no-op in console mode (issue #237).
    */
-  private emitReport(flags: TelemetryFlags): void {
+  private emitReport(flags: TelemetryFlags, force: boolean): void {
     const consoleOutput = flags.outputFormat === 'console' || flags.outputFormat === 'both';
     const fileOutput = flags.outputFormat === 'file' || flags.outputFormat === 'both';
 
@@ -284,7 +288,7 @@ export class TelemetryController {
     const reportText = globalProfiler.formatReport();
 
     if (consoleOutput) {
-      globalProfiler.report(flags.reportInterval);
+      globalProfiler.report(flags.reportInterval, force);
     } else {
       // File-only mode: advance the reporting window without console output.
       globalProfiler.reset();
@@ -348,20 +352,26 @@ export class TelemetryController {
   }
 
   /**
-   * Close the dashboard HTTP server if one is listening.
+   * Close the dashboard HTTP server. Shutdown can race the async `listening`
+   * event, so the server must be closed and the pending listener detached
+   * regardless of whether it has finished binding — otherwise the port stays
+   * held open and the server instance leaks (issue #237).
    */
   private closeDashboard(): void {
     const server = this.dashboardServer;
     this.dashboardServer = null;
-    if (!server) return;
-    if (this.dashboardListened) {
-      try {
-        server.close();
-      } catch {
-        // Already closed
-      }
-    }
     this.dashboardListened = false;
+    if (!server) return;
+    try {
+      // Detach the pending 'listening' handler so a late event cannot
+      // re-mark this (now shutdown) server as live, then force-close active
+      // connections and the server itself.
+      server.removeAllListeners('listening');
+      server.closeAllConnections?.();
+      server.close();
+    } catch {
+      // Server already closed or never fully bound.
+    }
   }
 
   /**
@@ -402,9 +412,11 @@ export class TelemetryController {
    * Called when the server shuts down.
    */
   shutdown(): void {
-    // Generate final report
+    // Generate final report. Force the emission so a shutdown over a short
+    // and otherwise-incomplete profiler window is not a silent no-op in
+    // console mode (issue #237).
     if (TelemetryController.isEnabled()) {
-      this.reportNow();
+      this.reportNow(true);
     }
 
     // Cleanup

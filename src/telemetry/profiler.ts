@@ -242,6 +242,90 @@ export class Profiler {
             });
         }
 
+        // Include the latest worker telemetry snapshots (issue #237). File
+        // output routes this formatReport() text, so worker stats must be
+        // captured here rather than only in the console report().
+        const workerSection = this.formatLatestWorkerTelemetry();
+        if (workerSection) {
+            lines.push('');
+            lines.push(workerSection);
+        }
+
+        return lines.join('\n');
+    }
+
+    /**
+     * Format the latest worker telemetry snapshots as a human-readable
+     * section (per-metric lifetime stats plus a straggler notice). Pure: it
+     * does NOT clear the snapshots — the caller clears them via reset() after
+     * consumption, so file and console formats share a single latest snapshot
+     * per reporting window.
+     */
+    private formatLatestWorkerTelemetry(): string {
+        if (!latestWorkerTelemetry || latestWorkerTelemetry.length === 0) {
+            return '';
+        }
+
+        const workerCount = latestWorkerTelemetry.length;
+        const lines: string[] = [];
+        lines.push('=== Global Worker Telemetry (per-metric lifetime stats) ===');
+        lines.push('Label                | Mean (ms) | Min (ms) | Max (ms)');
+        lines.push('---------------------+----------+----------+----------');
+
+        let stragglerWorker = -1;
+        let stragglerPhysicsNs = BigInt(0);
+
+        for (let i = 0; i < TelemetryBuffer.length; i++) {
+            let sumNs = BigInt(0);
+            let minNs: bigint | null = null;
+            let maxNs: bigint | null = null;
+
+            for (let w = 0; w < workerCount; w++) {
+                const buf = latestWorkerTelemetry[w];
+                if (!buf || buf.length <= i) continue;
+                const v = buf[i];
+
+                if (minNs === null || v < minNs) {
+                    minNs = v;
+                }
+                if (maxNs === null || v > maxNs) {
+                    maxNs = v;
+                }
+                sumNs += v;
+
+                if (i === TelemetryIndices.PHYSICS_TICK && v > stragglerPhysicsNs) {
+                    stragglerPhysicsNs = v;
+                    stragglerWorker = w;
+                }
+            }
+
+            if (minNs === null || maxNs === null) {
+                continue;
+            }
+
+            const meanNs = sumNs / BigInt(workerCount);
+            const meanMs = Number(meanNs) / 1_000_000;
+            const minMs = Number(minNs) / 1_000_000;
+            const maxMs = Number(maxNs) / 1_000_000;
+
+            const label = TelemetryLabels[i];
+            if (!label) continue;
+
+            const paddedLabel = (label + '                    ').slice(0, 21);
+            const meanStr = meanMs.toFixed(3).padStart(8);
+            const minStr = minMs.toFixed(3).padStart(8);
+            const maxStr = maxMs.toFixed(3).padStart(8);
+
+            lines.push(`${paddedLabel} | ${meanStr} | ${minStr} | ${maxStr}`);
+        }
+
+        if (stragglerWorker >= 0) {
+            const physicsMs = Number(stragglerPhysicsNs) / 1_000_000;
+            lines.push(
+                `Straggler Report: [Worker ID: ${stragglerWorker}] | Physics Time: ${physicsMs.toFixed(3)} ms | Status: Lagging.`,
+            );
+        }
+
         return lines.join('\n');
     }
 
@@ -257,16 +341,26 @@ export class Profiler {
         for (let i = 0; i < TelemetryBuffer.length; i++) {
             TelemetryBuffer[i] = BigInt(0);
         }
+
+        // Clear worker snapshots so they are never reused on a later report
+        // (issue #237): file-only reporting advances the window via reset(),
+        // and the console report() closes with reset() after printing them.
+        latestWorkerTelemetry = null;
     }
 
     /**
      * Output a heatmap-style report of telemetry usage.
      * @param windowSize Number of ticks in this reporting window.
+     * @param force Report even when the window is incomplete (used for the
+     *   shutdown final report so it is not a silent no-op over a short last
+     *   window, issue #237).
      */
-    report(windowSize: number = 5000) {
-        if (this.currentTick - this.startTick < windowSize) return;
-
+    report(windowSize: number = 5000, force: boolean = false) {
         const windowTicks = this.currentTick - this.startTick;
+        if (!force && windowTicks < windowSize) return;
+
+        // Avoid a divide-by-zero when forcing a report over an empty window.
+        const ticks = windowTicks > 0 ? windowTicks : 1;
 
         console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
         console.log('Label                | Avg ms/frame | % of 33.3ms frame');
@@ -279,7 +373,7 @@ export class Profiler {
             const label = TelemetryLabels[i];
             if (!label) continue;
 
-            const avgNsPerFrame = totalNs / BigInt(windowTicks);
+            const avgNsPerFrame = totalNs / BigInt(ticks);
             const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
 
             // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
@@ -300,71 +394,10 @@ export class Profiler {
         }
 
         // RimWorld-style global worker telemetry and straggler report.
-        if (latestWorkerTelemetry && latestWorkerTelemetry.length > 0) {
-            const workerCount = latestWorkerTelemetry.length;
-
-            console.log('\n=== Global Worker Telemetry (per-metric lifetime stats) ===');
-            console.log('Label                | Mean (ms) | Min (ms) | Max (ms)');
-            console.log('---------------------+----------+----------+----------');
-
-            let stragglerWorker = -1;
-            let stragglerPhysicsNs = BigInt(0);
-
-            for (let i = 0; i < TelemetryBuffer.length; i++) {
-                let sumNs = BigInt(0);
-                let minNs: bigint | null = null;
-                let maxNs: bigint | null = null;
-
-                for (let w = 0; w < workerCount; w++) {
-                    const buf = latestWorkerTelemetry[w];
-                    if (!buf || buf.length <= i) continue;
-                    const v = buf[i];
-
-                    if (minNs === null || v < minNs) {
-                        minNs = v;
-                    }
-                    if (maxNs === null || v > maxNs) {
-                        maxNs = v;
-                    }
-                    sumNs += v;
-
-                    if (i === TelemetryIndices.PHYSICS_TICK && v > stragglerPhysicsNs) {
-                        stragglerPhysicsNs = v;
-                        stragglerWorker = w;
-                    }
-                }
-
-                if (minNs === null || maxNs === null) {
-                    continue;
-                }
-
-                const meanNs = sumNs / BigInt(workerCount);
-                const meanMs = Number(meanNs) / 1_000_000;
-                const minMs = Number(minNs) / 1_000_000;
-                const maxMs = Number(maxNs) / 1_000_000;
-
-                const label = TelemetryLabels[i];
-                if (!label) continue;
-
-                const paddedLabel = (label + '                    ').slice(0, 21);
-                const meanStr = meanMs.toFixed(3).padStart(8);
-                const minStr = minMs.toFixed(3).padStart(8);
-                const maxStr = maxMs.toFixed(3).padStart(8);
-
-                console.log(`${paddedLabel} | ${meanStr} | ${minStr} | ${maxStr}`);
-            }
-
-            if (stragglerWorker >= 0) {
-                const physicsMs = Number(stragglerPhysicsNs) / 1_000_000;
-                console.log(
-                    `Straggler Report: [Worker ID: ${stragglerWorker}] | Physics Time: ${physicsMs.toFixed(
-                        3,
-                    )} ms | Status: Lagging.`,
-                );
-            }
-
-            // Clear snapshots so they are not reused accidentally on the next report.
-            latestWorkerTelemetry = null;
+        const workerSection = this.formatLatestWorkerTelemetry();
+        if (workerSection) {
+            console.log('');
+            console.log(workerSection);
         }
 
         // Optionally keep the legacy tables for counters/gauges.
@@ -375,7 +408,7 @@ export class Profiler {
                 countData.push({
                     Metric: label,
                     Total: val,
-                    'Avg/Tick': (val / windowTicks).toFixed(4),
+                    'Avg/Tick': (val / ticks).toFixed(4),
                 });
             });
             console.table(countData);
