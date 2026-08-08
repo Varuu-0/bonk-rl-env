@@ -276,6 +276,7 @@ export class IpcBridge {
                     // client reinitializes, WorkerPool.init() tears down that
                     // same session's previous pool and nothing else.
                     let session = this.sessions.get(sessionKey);
+                    let createdSession = false;
                     if (!session) {
                         await this.reapExpiredSessions();
                         session = this.sessions.get(sessionKey);
@@ -295,6 +296,7 @@ export class IpcBridge {
                                 activeRequests: 0,
                             };
                             this.sessions.set(sessionKey, session);
+                            createdSession = true;
                             // IPC clients are permanently isolated from the
                             // local bypass pool once a session is owned. A
                             // boolean mode flag avoids an unbounded tombstone
@@ -308,10 +310,24 @@ export class IpcBridge {
                         if (session) {
                             activeSession = session;
                             this.beginSessionRequest(session);
-                        await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
-                        session.initialized = true;
-                        session.numEnvs = numEnvs;
-                        response = { status: "ok" };
+                            try {
+                                await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                                session.initialized = true;
+                                session.numEnvs = numEnvs;
+                                response = { status: "ok" };
+                            } catch (error) {
+                                // A new pool that fails initialization must not occupy a
+                                // client-cap slot until the idle reaper runs.
+                                if (createdSession && this.sessions.get(sessionKey) === session) {
+                                    this.sessions.delete(sessionKey);
+                                    try {
+                                        await session.pool.close();
+                                    } catch (closeError) {
+                                        console.error('[IPC] Error closing failed client session:', closeError);
+                                    }
+                                }
+                                throw error;
+                            }
                     }
                 }
             } else if (command === "reset") {

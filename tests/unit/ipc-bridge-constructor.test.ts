@@ -428,6 +428,35 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     expect(lastResponse().status).toBe('ok');
   });
 
+  it('releases a newly-created session when its init fails so another client can use the cap slot', async () => {
+    const initError = new Error('worker startup failed');
+    const failedSessionPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bridge = new IpcBridge({ server: { port: 12376, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const failedClient = Buffer.from('failed-client');
+
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedSessionPool;
+    });
+    try {
+      await handleRequest(failedClient, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect(failedSessionPool.close).toHaveBeenCalledTimes(1);
+      expect((bridge as any).sessions.has(failedClient.toString('hex'))).toBe(false);
+
+      await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse().status).toBe('ok');
+      expect((bridge as any).sessions.size).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it('reaps an idle session, frees its slot, and keeps its identity loud', async () => {
     const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 1 } } as any);
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
