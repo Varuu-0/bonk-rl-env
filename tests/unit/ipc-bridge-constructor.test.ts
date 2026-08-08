@@ -428,8 +428,81 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     expect(lastResponse().status).toBe('ok');
   });
 
+  it('reaps an idle session, frees its slot, and keeps its identity loud', async () => {
+    const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const clientA = Buffer.from('clientA');
+
+    await handleRequest(clientA, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const session = (bridge as any).sessions.get(clientA.toString('hex'));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+
+    await (bridge as any).reapExpiredSessions();
+
+    expect(session.pool.close).toHaveBeenCalledTimes(1);
+    expect((bridge as any).sessions.size).toBe(0);
+
+    // A reaped identity must re-init; it cannot silently borrow the local
+    // pool even when that pool was initialized programmatically.
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(clientA, JSON.stringify({ command: 'reset' }));
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
+  it('does not reap a session while a request is still using its pool', async () => {
+    const bridge = new IpcBridge({ server: { port: 12372, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const clientA = Buffer.from('clientA');
+
+    await handleRequest(clientA, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const session = (bridge as any).sessions.get(clientA.toString('hex'));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+    session.activeRequests = 1;
+
+    await (bridge as any).reapExpiredSessions();
+
+    expect(session.pool.close).not.toHaveBeenCalled();
+    expect((bridge as any).sessions.get(clientA.toString('hex'))).toBe(session);
+  });
+
+  it('keeps rejected identities loud after their cap slot opens without an identity registry', async () => {
+    const bridge = new IpcBridge({ server: { port: 12373, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    for (let i = 0; i < 40; i++) {
+      await handleRequest(Buffer.from(`rejected-${i}`), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse().status).toBe('error');
+    }
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'close' }));
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(Buffer.from('rejected-39'), JSON.stringify({ command: 'step', actions: [0] }));
+
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+  });
+
+  it('keeps an established bypass identity after another client starts session mode', async () => {
+    const bridge = new IpcBridge({ server: { port: 12374, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const bypass = Buffer.from('bypass-client');
+
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(bypass, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(bypass, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
   it('clamps an invalid (zero/negative) session cap to 1 instead of rejecting every init', () => {
-    const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 0 } } as any);
+    const bridge = new IpcBridge({ server: { port: 12375, maxClientSessions: 0 } } as any);
     expect((bridge as any).maxClientSessions).toBe(1);
   });
 

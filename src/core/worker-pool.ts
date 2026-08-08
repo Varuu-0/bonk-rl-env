@@ -1009,7 +1009,7 @@ export class WorkerPool {
      * Request telemetry snapshots from all workers.
      * Each worker returns a copy of its local TelemetryBuffer.
      */
-    async getTelemetrySnapshots(): Promise<BigUint64Array[]> {
+    async getTelemetrySnapshots(options: { failOnTimeout?: boolean } = {}): Promise<BigUint64Array[]> {
         this.assertReady('get telemetry');
 
         // In shared-memory mode every worker is blocked inside the
@@ -1032,10 +1032,12 @@ export class WorkerPool {
         const hungWorker = settled.find(r => r.status === 'rejected' && this.isWorkerTimeout(r.reason));
         if (hungWorker) {
             const failure = this.createFailure('telemetry', (hungWorker as { reason: Error }).reason);
-            // In message mode a timeout means the worker is hung/unreachable:
-            // fail so callers re-init instead of burning the full timeout on
-            // every snapshot.
-            await this.failPool(failure);
+            // Awaited telemetry callers retain fail-fast behavior. Detached
+            // callers can surface the timeout without poisoning a pool that
+            // may already be serving the next request.
+            if (options.failOnTimeout !== false) {
+                await this.failPool(failure);
+            }
             throw failure;
         }
         const firstRejection = settled.find(r => r.status === 'rejected');

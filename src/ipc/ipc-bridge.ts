@@ -7,6 +7,8 @@ import { getConfig, type AppConfig, type DeepPartial, mergeEnvironmentConfig, DE
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
+const CLIENT_SESSION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+const CLIENT_SESSION_REAP_INTERVAL_MS = 60 * 1000;
 
 /**
  * Per-client session state. Each ZMQ routing identity that calls `init` owns
@@ -19,6 +21,8 @@ interface PoolSession {
     pool: WorkerPool;
     initialized: boolean;
     numEnvs: number;
+    lastActivityAt: number;
+    activeRequests: number;
 }
 
 export class IpcBridge {
@@ -29,18 +33,25 @@ export class IpcBridge {
     private _closed: boolean = false;
     private _shouldClose: boolean = false;
     private readonly maxClientSessions: number;
+    private sessionReapTimer?: ReturnType<typeof setInterval>;
+    private sessionReapInProgress?: Promise<void>;
 
     // Worker pools are owned per client: keyed by the ZMQ routing identity of
     // the client that called `init` (issue #193).
     private sessions: Map<string, PoolSession> = new Map();
-    // Identities that have called `init` (and whose session may have since
-    // been closed). A registered identity must never silently fall back to
-    // another client's pool after closing its own session — only identities
-    // that never called `init` fall back to the local/bypass session.
-    private registeredIdentities: Set<string> = new Set();
-    // Bypass/local session for initEnv/resetEnv/stepEnv. IPC requests from an
-    // identity that never called `init` fall back to this session, so
-    // programmatic init followed by IPC reset/step keeps working.
+    // Before the first IPC `init`, a caller can use the local/bypass pool that
+    // was initialized programmatically. Once client-session mode starts,
+    // unknown identities must initialize their own session instead of silently
+    // inheriting that local pool. This retains loud failures for closed,
+    // rejected, and reaped sessions without retaining every identity forever.
+    private allowLocalSessionFallback: boolean = true;
+    // A programmatic caller that successfully used the local pool before IPC
+    // session mode began keeps that pool. There is only one local pool, so one
+    // routing identity is sufficient and remains bounded.
+    private localSessionIdentity?: string;
+    // Bypass/local session for initEnv/resetEnv/stepEnv. Before IPC
+    // client-session mode begins, requests can use it so programmatic init
+    // followed by IPC reset/step keeps working.
     private localSession: PoolSession;
 
     constructor(config?: DeepPartial<AppConfig>) {
@@ -60,7 +71,13 @@ export class IpcBridge {
             ? Math.max(1, parsedCap as number)
             : DEFAULT_MAX_CLIENT_SESSIONS;
         this.sock = new zmq.Router();
-        this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
+        this.localSession = {
+            pool: new WorkerPool(),
+            initialized: false,
+            numEnvs: 0,
+            lastActivityAt: Date.now(),
+            activeRequests: 0,
+        };
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
@@ -135,6 +152,7 @@ export class IpcBridge {
         await this.sock.bind(addr);
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
+        this.startSessionReaper();
 
         // Wait for incoming requests from Python
         try {
@@ -155,21 +173,75 @@ export class IpcBridge {
     /**
      * Resolve the pool a request should be routed to:
      * - an identity with an active session uses its own pool;
-     * - an identity that called `init` before but closed its session gets no
-     *   pool (its reset/step fail loudly — the "Worker pool not initialized"
-     *   contract) and must NOT silently fall back to another client's pool;
-     * - a brand-new identity that never called `init` falls back to the
-     *   local/bypass session (preserving programmatic init + IPC reset/step).
+     * - after an IPC `init`, any identity without an active session gets no
+     *   pool (reset/step fail loudly rather than borrowing another pool);
+     * - before any IPC `init`, an identity can use the local/bypass session;
+     *   an identity that used it while initialized retains that access after
+     *   session mode begins, preserving an established programmatic caller.
      */
     private resolveSession(sessionKey: string): PoolSession | undefined {
         const session = this.sessions.get(sessionKey);
         if (session) {
             return session;
         }
-        if (this.registeredIdentities.has(sessionKey)) {
-            return undefined;
+        if (this.localSessionIdentity === sessionKey) {
+            return this.localSession;
         }
-        return this.localSession;
+        if (this.allowLocalSessionFallback && this.localSession.initialized) {
+            this.localSessionIdentity = sessionKey;
+            return this.localSession;
+        }
+        return this.allowLocalSessionFallback ? this.localSession : undefined;
+    }
+
+    private startSessionReaper(): void {
+        if (this.sessionReapTimer) {
+            return;
+        }
+        this.sessionReapTimer = setInterval(() => {
+            void this.reapExpiredSessions();
+        }, CLIENT_SESSION_REAP_INTERVAL_MS);
+        this.sessionReapTimer.unref?.();
+    }
+
+    private async reapExpiredSessions(now = Date.now()): Promise<void> {
+        if (this.sessionReapInProgress) {
+            return this.sessionReapInProgress;
+        }
+
+        const expiredSessions: PoolSession[] = [];
+        for (const [sessionKey, session] of this.sessions) {
+            if (session.activeRequests === 0 && now - session.lastActivityAt >= CLIENT_SESSION_IDLE_TIMEOUT_MS) {
+                // Remove before awaiting close so a returning client must
+                // explicitly re-init rather than racing a closing pool.
+                this.sessions.delete(sessionKey);
+                expiredSessions.push(session);
+            }
+        }
+
+        const reaping = Promise.all(expiredSessions.map(async session => {
+            try {
+                await session.pool.close();
+            } catch (error) {
+                console.error('[IPC] Error closing idle client session:', error);
+            }
+        })).then(() => undefined);
+        this.sessionReapInProgress = reaping;
+        try {
+            await reaping;
+        } finally {
+            this.sessionReapInProgress = undefined;
+        }
+    }
+
+    private beginSessionRequest(session: PoolSession): void {
+        session.activeRequests++;
+        session.lastActivityAt = Date.now();
+    }
+
+    private endSessionRequest(session: PoolSession): void {
+        session.activeRequests--;
+        session.lastActivityAt = Date.now();
     }
 
     async handleRequest(identity: Buffer, rawMsg: string) {
@@ -183,6 +255,7 @@ export class IpcBridge {
         // Sessions are keyed by the client's ZMQ routing identity so every
         // request is applied to that client's own pool only (issue #193).
         const sessionKey = identity.toString('hex');
+        let activeSession: PoolSession | undefined;
         try {
             const payload = parseJson(rawMsg);
             const command = payload.command;
@@ -204,25 +277,37 @@ export class IpcBridge {
                     // same session's previous pool and nothing else.
                     let session = this.sessions.get(sessionKey);
                     if (!session) {
+                        await this.reapExpiredSessions();
+                        session = this.sessions.get(sessionKey);
+                    }
+                    if (!session) {
                         if (this.sessions.size >= this.maxClientSessions) {
-                            // Bounds worker accumulation from clients that
-                            // disconnect without a session `close`. Rejecting
-                            // loudly beats silently evicting a live session.
-                            // The identity is marked registered so its
-                            // subsequent reset/step fail loudly instead of
-                            // silently falling back to another pool.
-                            this.registeredIdentities.add(sessionKey);
                             response = {
                                 status: "error",
                                 error: `Too many active client sessions (max ${this.maxClientSessions}): close an existing session before initializing a new one`,
                             };
                         } else {
-                            session = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
+                            session = {
+                                pool: new WorkerPool(),
+                                initialized: false,
+                                numEnvs: 0,
+                                lastActivityAt: Date.now(),
+                                activeRequests: 0,
+                            };
                             this.sessions.set(sessionKey, session);
-                            this.registeredIdentities.add(sessionKey);
+                            // IPC clients are permanently isolated from the
+                            // local bypass pool once a session is owned. A
+                            // boolean mode flag avoids an unbounded tombstone
+                            // set for invalid clients.
+                            if (this.localSessionIdentity === sessionKey) {
+                                this.localSessionIdentity = undefined;
+                            }
+                            this.allowLocalSessionFallback = false;
                         }
                     }
                     if (session) {
+                        activeSession = session;
+                        this.beginSessionRequest(session);
                         await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
                         session.initialized = true;
                         session.numEnvs = numEnvs;
@@ -231,6 +316,10 @@ export class IpcBridge {
                 }
             } else if (command === "reset") {
                 const session = this.resolveSession(sessionKey);
+                if (session) {
+                    activeSession = session;
+                    this.beginSessionRequest(session);
+                }
                 if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else if (payload.seeds !== undefined && !Array.isArray(payload.seeds)) {
@@ -260,6 +349,10 @@ export class IpcBridge {
                 }
             } else if (command === "step") {
                 const session = this.resolveSession(sessionKey);
+                if (session) {
+                    activeSession = session;
+                    this.beginSessionRequest(session);
+                }
                 const actions = payload.actions;
                 if (!Array.isArray(actions)) {
                     response = { status: "error", error: "Invalid actions: must be an array" };
@@ -312,7 +405,12 @@ export class IpcBridge {
                         }
                         serialized = null;
                         replied = true;
-                        void this.runPostStepTelemetry(session.pool);
+                        // Keep the session off the idle-reap list until its
+                        // detached snapshot task has settled.
+                        this.beginSessionRequest(session);
+                        void this.runPostStepTelemetry(session.pool).finally(() => {
+                            this.endSessionRequest(session);
+                        });
                     }
                 }
             } else if (command === "close") {
@@ -327,8 +425,10 @@ export class IpcBridge {
                     // every other session is untouched (issue #193).
                     const session = this.sessions.get(sessionKey);
                     if (session) {
-                        await session.pool.close();
+                        activeSession = session;
+                        this.beginSessionRequest(session);
                         this.sessions.delete(sessionKey);
+                        await session.pool.close();
                     }
                     response = { status: "ok" };
                 }
@@ -341,17 +441,23 @@ export class IpcBridge {
             serialized = null;
         }
 
-        if (!replied) {
-            try {
-                await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
-            } catch (sendError) {
-                console.error("[IPC] Error sending response:", sendError);
+        try {
+            if (!replied) {
+                try {
+                    await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
+                } catch (sendError) {
+                    console.error("[IPC] Error sending response:", sendError);
+                }
             }
-        }
 
-        if (this._shouldClose) {
-            this._shouldClose = false;
-            await this.close();
+            if (this._shouldClose) {
+                this._shouldClose = false;
+                await this.close();
+            }
+        } finally {
+            if (activeSession) {
+                this.endSessionRequest(activeSession);
+            }
         }
     }
 
@@ -360,9 +466,9 @@ export class IpcBridge {
      * and the heatmap report. Detached from the request path — it never
      * affects the step reply and cannot stall the ZMQ loop (issue #229).
      * Errors are caught and logged so a telemetry failure is never reported
-     * as a step failure or discards an already-serialized reply (issue
-     * #185); a message-mode snapshot timeout still fails the pool per
-     * worker-pool semantics, surfacing on the next request.
+     * as a step failure or discards an already-serialized reply (issue #185).
+     * Its message-mode snapshot timeout is non-fatal, so detached telemetry
+     * cannot fail a pool while another request is using it.
      */
     private async runPostStepTelemetry(pool: WorkerPool): Promise<void> {
         try {
@@ -374,7 +480,7 @@ export class IpcBridge {
                 // GET_TELEMETRY, so the pool returns an empty set
                 // immediately) and performs a bounded worker round-trip in
                 // message mode.
-                const snapshots = await pool.getTelemetrySnapshots();
+                const snapshots = await pool.getTelemetrySnapshots({ failOnTimeout: false });
                 setLatestWorkerTelemetry(snapshots);
                 globalProfiler.report(5000);
             }
@@ -438,18 +544,23 @@ export class IpcBridge {
             return;
         }
         this._closed = true;
+        if (this.sessionReapTimer) {
+            clearInterval(this.sessionReapTimer);
+            this.sessionReapTimer = undefined;
+        }
         // Reset the local/bypass session so a later start() + restart leaves
-        // unregistered identities failing with "Worker pool not initialized"
-        // instead of leaking the closed pool's internal error.
+        // fallback requests failing with "Worker pool not initialized" instead
+        // of leaking the closed pool's internal error.
         this.localSession.initialized = false;
         this.localSession.numEnvs = 0;
+        this.allowLocalSessionFallback = true;
+        this.localSessionIdentity = undefined;
 
         // Close every per-client session pool and the local/bypass pool. A
         // client's own session `close` only ever removed that session, so the
         // rest of the pools are cleaned up here on full server shutdown.
         const pools = [this.localSession.pool, ...[...this.sessions.values()].map(session => session.pool)];
         this.sessions.clear();
-        this.registeredIdentities.clear();
 
         // Close the socket to break out of the for await loop
         try {
