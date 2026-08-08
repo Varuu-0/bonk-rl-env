@@ -279,11 +279,16 @@ export class Profiler {
             let sumNs = BigInt(0);
             let minNs: bigint | null = null;
             let maxNs: bigint | null = null;
+            // Worker telemetry buffers can be heterogeneous (a worker may be
+            // missing a metric index), so the mean must divide by the number
+            // of workers that actually contributed, not the total worker count.
+            let contributing = 0;
 
             for (let w = 0; w < workerCount; w++) {
                 const buf = latestWorkerTelemetry[w];
                 if (!buf || buf.length <= i) continue;
                 const v = buf[i];
+                contributing++;
 
                 if (minNs === null || v < minNs) {
                     minNs = v;
@@ -303,7 +308,7 @@ export class Profiler {
                 continue;
             }
 
-            const meanNs = sumNs / BigInt(workerCount);
+            const meanNs = sumNs / BigInt(contributing);
             const meanMs = Number(meanNs) / 1_000_000;
             const minMs = Number(minNs) / 1_000_000;
             const maxMs = Number(maxNs) / 1_000_000;
@@ -359,37 +364,44 @@ export class Profiler {
         const windowTicks = this.currentTick - this.startTick;
         if (!force && windowTicks < windowSize) return;
 
-        // Avoid a divide-by-zero when forcing a report over an empty window.
-        const ticks = windowTicks > 0 ? windowTicks : 1;
+        // Guard the counter/judge math against an empty forced window.
+        const divTicks = windowTicks > 0 ? windowTicks : 1;
 
-        console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
-        console.log('Label                | Avg ms/frame | % of 33.3ms frame');
-        console.log('---------------------+-------------+-------------------');
+        if (windowTicks === 0) {
+            // Nothing to average over: printing a 'Avg over last 0 ticks'
+            // heatmap with no rows would be misleading, so emit a short
+            // notice instead and let the worker/counter/gauge sections follow.
+            console.log('\n=== Telemetry Report (no ticks in window) ===');
+        } else {
+            console.log(`\n=== Telemetry Heatmap (Avg over last ${windowTicks} ticks) ===`);
+            console.log('Label                | Avg ms/frame | % of 33.3ms frame');
+            console.log('---------------------+-------------+-------------------');
 
-        for (let i = 0; i < TelemetryBuffer.length; i++) {
-            const totalNs = TelemetryBuffer[i];
-            if (totalNs === BigInt(0)) continue;
+            for (let i = 0; i < TelemetryBuffer.length; i++) {
+                const totalNs = TelemetryBuffer[i];
+                if (totalNs === BigInt(0)) continue;
 
-            const label = TelemetryLabels[i];
-            if (!label) continue;
+                const label = TelemetryLabels[i];
+                if (!label) continue;
 
-            const avgNsPerFrame = totalNs / BigInt(ticks);
-            const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
+                const avgNsPerFrame = totalNs / BigInt(windowTicks);
+                const avgMsPerFrame = Number(avgNsPerFrame) / 1_000_000;
 
-            // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
-            const hundred = BigInt(100);
-            const bp = (avgNsPerFrame * hundred * hundred) / FRAME_BUDGET_NS; // 100 * 100 = 10_000 (basis points)
-            const percent = Number(bp) / 100; // back to percentage with 2 decimal places
+                // Fixed-point arithmetic in basis points to avoid BigInt/float mixing.
+                const hundred = BigInt(100);
+                const bp = (avgNsPerFrame * hundred * hundred) / FRAME_BUDGET_NS; // 100 * 100 = 10_000 (basis points)
+                const percent = Number(bp) / 100; // back to percentage with 2 decimal places
 
-            const paddedLabel = (label + '                    ').slice(0, 21);
-            const avgMsStr = avgMsPerFrame.toFixed(3).padStart(11);
-            const pctStr = percent.toFixed(2).padStart(9);
+                const paddedLabel = (label + '                    ').slice(0, 21);
+                const avgMsStr = avgMsPerFrame.toFixed(3).padStart(11);
+                const pctStr = percent.toFixed(2).padStart(9);
 
-            console.log(`${paddedLabel} | ${avgMsStr} | ${pctStr}%`);
+                console.log(`${paddedLabel} | ${avgMsStr} | ${pctStr}%`);
 
-            // Critical path highlight: scream when a bucket dominates the frame budget.
-            if (percent > 25.0) {
-                console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
+                // Critical path highlight: scream when a bucket dominates the frame budget.
+                if (percent > 25.0) {
+                    console.log(`⚠️ CRITICAL: ${label} is consuming ${percent.toFixed(2)}% of frame budget!`);
+                }
             }
         }
 
@@ -408,7 +420,7 @@ export class Profiler {
                 countData.push({
                     Metric: label,
                     Total: val,
-                    'Avg/Tick': (val / ticks).toFixed(4),
+                    'Avg/Tick': (val / divTicks).toFixed(4),
                 });
             });
             console.table(countData);

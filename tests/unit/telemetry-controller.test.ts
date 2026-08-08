@@ -362,6 +362,20 @@ describe('TelemetryController', () => {
       expect(globalProfiler.formatReport()).not.toContain('Global Worker Telemetry');
       logSpy.mockRestore();
     });
+
+    it('forced shutdown report over an empty window avoids a misleading 0-tick header', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '100'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      // No ticks at all in this window: the forced final report must not
+      // print a 'Avg over last 0 ticks' heatmap header with no rows.
+      controller.shutdown();
+      const called = logSpy.mock.calls.map((c) => String(c[0]));
+      expect(called.some((t) => t.includes('no ticks in window'))).toBe(true);
+      expect(called.some((t) => t.includes('Avg over last 0 ticks'))).toBe(false);
+      logSpy.mockRestore();
+    });
   });
 
   describe('dashboard close race', () => {
@@ -416,6 +430,21 @@ describe('TelemetryController', () => {
     it('formatReport is empty of worker telemetry once none are set', () => {
       setLatestWorkerTelemetry(null);
       expect(globalProfiler.formatReport()).not.toContain('Global Worker Telemetry');
+    });
+
+    it('mean divides by contributing workers, not total worker count (heterogeneous buffers)', () => {
+      const buf0 = workerBuf([40_000_000n, 20_000_000n, 0n, 0n, 0n]);
+      // buf1 is shorter and only contributes to index 0 (PHYSICS_TICK), so
+      // the RAYCAST mean must be computed over a single contributing worker.
+      const buf1 = new BigUint64Array(1);
+      buf1[0] = 40_000_000n;
+      setLatestWorkerTelemetry([buf0, buf1]);
+
+      const text = globalProfiler.formatReport();
+      const row = text.split('\n').find((l) => l.startsWith('RAYCAST_CALL'));
+      expect(row).toBeDefined();
+      // 20ms from the sole contributing worker (not 10ms from /workerCount 2).
+      expect(row).toContain('20.000');
     });
 
     it('file-only reportNow writes worker telemetry and clears it (file-only mode)', () => {
