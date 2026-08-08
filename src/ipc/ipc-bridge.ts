@@ -228,9 +228,14 @@ export class IpcBridge {
                     this._shouldClose = true;
                 } else if (this._hostPool) {
                     // Session close on an adopted pool: the host BonkEnv owns
-                    // the pool's lifecycle, so detach the client session
-                    // without tearing the env's workers down.
-                    this._initialized = false;
+                    // the pool's lifecycle, and the pool (plus its global init
+                    // state) is shared by every connected DEALER client. A
+                    // single client ending its session must NOT clear that
+                    // global initialization, or every other active client's
+                    // next reset/step would fail with "Worker pool not
+                    // initialized" while the adopted pool stays alive. Treat a
+                    // session close here as a no-op: the shared, env-configured
+                    // pool keeps serving the remaining clients.
                     response = { status: "ok" };
                 } else {
                     // Session close (default): free the client's env state but

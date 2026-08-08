@@ -125,8 +125,12 @@ export class BonkEnv {
                 // mode is on, so when it shuts down (e.g. a client sends
                 // `close` with shutdown:true) tear the environment down too:
                 // isActive() must not report success for a dead service and
-                // the reserved port must not outlive the listener.
-                void serve.then(() => { void this.stop(); });
+                // the reserved port must not outlive the listener. The handler
+                // is guarded on this exact bridge instance so a stale serve
+                // loop from a previous stop()/start() cycle cannot tear down a
+                // freshly restarted env, and a normal env.stop() (which nulls
+                // this.bridge) doesn't trigger a redundant teardown.
+                void serve.then(() => { if (this.bridge === bridge) void this.stop(); });
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
         } catch (error) {
