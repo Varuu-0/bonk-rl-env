@@ -112,8 +112,10 @@ post-step telemetry runs, and telemetry never holds up the request path:
   single-threaded ZMQ loop (#229).
 - Snapshot fetching is non-blocking: in shared-memory mode workers blocked in
   `Atomics.wait` can never service `GET_TELEMETRY`, so the pool returns an
-  empty set immediately; in message mode a snapshot timeout still fails the
-  pool per worker-pool semantics, surfacing on the next request (#240). The
+  empty set immediately; in message mode a snapshot timeout is fetched with
+  `failOnTimeout: false`, so a hung worker times out the detached telemetry
+  task without failing the pool it is still using (`getTelemetrySnapshots`
+  only fails the pool on timeout for awaited callers that opt in). The
   telemetry call targets the **requesting session's** pool (issue #193).
 
 ---
@@ -145,15 +147,21 @@ worker pool is **owned per client session**:
   loudly with `Worker pool not initialized` until it calls `init` again.
 
 Resource bounds: a client that disconnects without sending `close` leaves its
-session pool running until the next full server shutdown (sessions are only
-torn down by an explicit `close` from that identity). To keep this bounded,
-`server.maxClientSessions` (default 32, clamped to a minimum of 1, falling
-back to the default when unset) caps the number of concurrent sessions; a new
-client `init` beyond the cap is rejected loudly with a clear error instead of
-silently evicting an existing session. The bridge additionally retains one
-small key per distinct identity that ever called `init` so closed/rejected
-clients keep failing loudly instead of silently redirecting to another pool;
-that retention is released at full server shutdown.
+session pool running, but the bridge does not let dead sessions accumulate
+unboundedly. A periodic idle-session reaper closes any session pool that has
+been idle (no active request, no `init`/`reset`/`step`/`close`) for
+`CLIENT_SESSION_IDLE_TIMEOUT_MS` (5 minutes), detaching the client's identity
+so it must call `init` again; a session is never reaped while a request or its
+detached telemetry is still using its pool. `server.maxClientSessions`
+(default 32, clamped to a minimum of 1, falling back to the default when unset)
+caps the number of concurrent sessions; a new client `init` beyond the cap is
+rejected loudly with a clear error instead of silently evicting an existing
+session. Closed, rejected, and reaped identities keep failing loudly without
+retaining an unbounded identity registry: once any client has taken ownership
+of an IPC session, session-mode fallback to the local/bypass pool is disabled
+(an established bypass caller keeps its single pinned identity), so any
+identity without an active session fails loudly instead of silently
+redirecting to another client's pool.
 
 ---
 
