@@ -406,3 +406,76 @@ describe('IpcBridge initEnv validation (#195, #227)', () => {
     }
   });
 });
+
+describe('IpcBridge adopted pool (enableIpcServer hosts the env pool, #223/#252)', () => {
+  function captureSend(bridge: IpcBridge): { sentMessages: any[] } {
+    const sentMessages: any[] = [];
+    (bridge as any)._wrappedSend = vi.fn(async (frames: any[]) => {
+      sentMessages.push(frames[1]?.toString() ?? frames[1]);
+    });
+    return { sentMessages };
+  }
+
+  function callHandleRequest(bridge: IpcBridge, rawMsg: string): Promise<void> {
+    return (bridge as any).handleRequest(Buffer.from('identity'), rawMsg);
+  }
+
+  it('accepts an init matching the hosted env count without re-initializing the adopted pool', async () => {
+    const bridge = new IpcBridge({ server: { port: 15600 } } as any);
+    try {
+      const adopted = (bridge as any).pool;
+      const initSpy = vi.spyOn(adopted, 'init');
+      bridge.adoptPool(adopted, 2);
+
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 2 }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('ok');
+      // The env-configured pool must not be discarded/rebuild: adoption already
+      // marks the pool initialized with the hosted count, so a client init is a
+      // no-op that must never re-initialize (which would drop the env workers).
+      expect(initSpy).not.toHaveBeenCalled();
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('rejects an init whose numEnvs mismatches the hosted env count (#223/#252)', async () => {
+    const bridge = new IpcBridge({ server: { port: 15601 } } as any);
+    try {
+      bridge.adoptPool((bridge as any).pool, 2);
+
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 1 }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('this IPC server hosts 2 environment(s)');
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('rejects adopting a pool after the bridge pool is already initialized', async () => {
+    const bridge = new IpcBridge({ server: { port: 15602 } } as any);
+    try {
+      await (bridge as any).initEnv(1, {}, false);
+      expect(() => bridge.adoptPool((bridge as any).pool, 1)).toThrow(
+        'Cannot adopt a pool after the bridge pool has been initialized'
+      );
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('rejects adopting a second pool onto an already-hosting bridge', async () => {
+    const bridge = new IpcBridge({ server: { port: 15603 } } as any);
+    try {
+      bridge.adoptPool((bridge as any).pool, 1);
+      expect(() => bridge.adoptPool((bridge as any).pool, 1)).toThrow(
+        'Cannot adopt a pool after the bridge pool has been initialized'
+      );
+    } finally {
+      await bridge.close();
+    }
+  });
+});
