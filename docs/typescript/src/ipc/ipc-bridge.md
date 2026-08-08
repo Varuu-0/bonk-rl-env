@@ -118,9 +118,9 @@ worker pool is **owned per client session**:
 Resource bounds: a client that disconnects without sending `close` leaves its
 session pool running until the next full server shutdown (sessions are only
 torn down by an explicit `close` from that identity). To keep this bounded,
-`server.maxClientSessions` (default 32) caps the number of concurrent sessions;
-a new client `init` beyond the cap is rejected loudly with a clear error
-instead of silently evicting an existing session.
+`server.maxClientSessions` (default 32, clamped to a minimum of 1) caps the
+number of concurrent sessions; a new client `init` beyond the cap is rejected
+loudly with a clear error instead of silently evicting an existing session.
 
 ---
 

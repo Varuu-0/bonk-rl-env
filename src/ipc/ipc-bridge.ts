@@ -46,7 +46,9 @@ export class IpcBridge {
     constructor(config?: DeepPartial<AppConfig>) {
         this.port = config?.server?.port ?? getConfig().server.port;
         this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
-        this.maxClientSessions = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
+        // A cap below 1 is meaningless: clamp so a bad config loudly enforces
+        // a single concurrent session instead of rejecting every init.
+        this.maxClientSessions = Math.max(1, config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions);
         this.sock = new zmq.Router();
         this.localSession = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
 
@@ -160,6 +162,29 @@ export class IpcBridge {
         return this.localSession;
     }
 
+    /**
+     * Bound the registered-identity set so a long-lived server does not
+     * accumulate keys forever (it is only needed to distinguish identities
+     * that called `init` from brand-new ones). Active sessions are never
+     * pruned — only identities with no live session, oldest first, down to
+     * 2x the session cap.
+     */
+    private pruneRegisteredIdentities(): void {
+        const max = this.maxClientSessions * 2;
+        if (this.registeredIdentities.size <= max) {
+            return;
+        }
+        for (const key of [...this.registeredIdentities]) {
+            if (this.sessions.has(key)) {
+                continue;
+            }
+            this.registeredIdentities.delete(key);
+            if (this.registeredIdentities.size <= max) {
+                break;
+            }
+        }
+    }
+
     async handleRequest(identity: Buffer, rawMsg: string) {
         let response: any;
         // Step responses are serialized eagerly so the borrowed pool graph is
@@ -196,6 +221,11 @@ export class IpcBridge {
                             // Bounds worker accumulation from clients that
                             // disconnect without a session `close`. Rejecting
                             // loudly beats silently evicting a live session.
+                            // The identity is marked registered so its
+                            // subsequent reset/step fail loudly instead of
+                            // silently falling back to another pool.
+                            this.registeredIdentities.add(sessionKey);
+                            this.pruneRegisteredIdentities();
                             response = {
                                 status: "error",
                                 error: `Too many active client sessions (max ${this.maxClientSessions}): close an existing session before initializing a new one`,
@@ -204,6 +234,7 @@ export class IpcBridge {
                             session = { pool: new WorkerPool(), initialized: false, numEnvs: 0 };
                             this.sessions.set(sessionKey, session);
                             this.registeredIdentities.add(sessionKey);
+                            this.pruneRegisteredIdentities();
                         }
                     }
                     if (session) {
