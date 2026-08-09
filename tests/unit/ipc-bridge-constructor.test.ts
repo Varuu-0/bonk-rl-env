@@ -457,9 +457,9 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     }
   });
 
-  it('invalidates an existing session whose re-init fails instead of leaving a stale live pool', async () => {
+  it('drops an existing session whose re-init fails so it never holds a cap slot', async () => {
     const initError = new Error('worker startup failed');
-    const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 2 } } as any);
+    const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 1 } } as any);
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     const client = Buffer.from('reinit-client');
 
@@ -473,14 +473,13 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
 
     expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
-    expect(session.initialized).toBe(false);
-    expect(session.numEnvs).toBe(0);
     expect(closeSpy).toHaveBeenCalledTimes(1);
-    // Still present in the map (not dropped as a brand-new session), but no
-    // longer a live initialized pool: subsequent reset fails loudly.
-    expect((bridge as any).sessions.get(client.toString('hex'))).toBe(session);
-    await handleRequest(client, JSON.stringify({ command: 'reset', seeds: [1] }));
-    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+    // The failed re-init drops the session outright, so its cap slot is freed
+    // immediately instead of being held by a stale/retrying session.
+    expect((bridge as any).sessions.size).toBe(0);
+    await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+    expect((bridge as any).sessions.size).toBe(1);
   });
 
   it('restores programmatic fallback when the only-session init fails and no session remains', async () => {

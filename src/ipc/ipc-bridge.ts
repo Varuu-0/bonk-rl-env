@@ -276,7 +276,6 @@ export class IpcBridge {
                     // client reinitializes, WorkerPool.init() tears down that
                     // same session's previous pool and nothing else.
                     let session = this.sessions.get(sessionKey);
-                    let createdSession = false;
                     if (!session) {
                         await this.reapExpiredSessions();
                         session = this.sessions.get(sessionKey);
@@ -296,7 +295,6 @@ export class IpcBridge {
                                 activeRequests: 0,
                             };
                             this.sessions.set(sessionKey, session);
-                            createdSession = true;
                             // IPC clients are permanently isolated from the
                             // local bypass pool once a session is owned. A
                             // boolean mode flag avoids an unbounded tombstone
@@ -316,33 +314,28 @@ export class IpcBridge {
                                 session.numEnvs = numEnvs;
                                 response = { status: "ok" };
                             } catch (error) {
-                                // A pool that fails initialization must never
-                                // stay as a stale `initialized` dead session:
-                                // invalidate it so it is not mistaken for a live
-                                // pool, and free its workers. Its slot is then
-                                // reclaimed by the idle reaper.
+                                // A pool that fails initialization is not
+                                // usable, so drop the session (whether it was
+                                // just created or is a re-init of an existing
+                                // one) and free its workers. Retaining an
+                                // invalidated existing session would let a
+                                // persistently failing init hold a client-cap
+                                // slot forever.
                                 if (this.sessions.get(sessionKey) === session) {
-                                    session.initialized = false;
-                                    session.numEnvs = 0;
+                                    this.sessions.delete(sessionKey);
                                     try {
                                         await session.pool.close();
                                     } catch (closeError) {
                                         console.error('[IPC] Error closing failed client session:', closeError);
                                     }
-                                    // A newly-created session that never had a
-                                    // working pool is dropped outright rather
-                                    // than held until the reaper runs.
-                                    if (createdSession) {
-                                        this.sessions.delete(sessionKey);
-                                        // If it was the only session there is
-                                        // nothing left to isolate; restore the
-                                        // programmatic-local fallback so the
-                                        // bridge is not left permanently in
-                                        // session mode with zero sessions.
-                                        if (this.sessions.size === 0) {
-                                            this.allowLocalSessionFallback = true;
-                                            this.localSessionIdentity = undefined;
-                                        }
+                                    // If the failed init was the only session
+                                    // there is nothing left to isolate; restore
+                                    // the programmatic-local fallback so the
+                                    // bridge is not left permanently in session
+                                    // mode with zero sessions.
+                                    if (this.sessions.size === 0) {
+                                        this.allowLocalSessionFallback = true;
+                                        this.localSessionIdentity = undefined;
                                     }
                                 }
                                 throw error;
