@@ -31,9 +31,14 @@ const mocks = vi.hoisted(() => {
     close: vi.fn(),
     getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
   };
+  const controller = {
+    tick: vi.fn(() => false),
+    reportNow: vi.fn(() => true),
+  };
   return {
     sock,
     pool,
+    controller,
     Router: function Router() { return sock; },
     WorkerPool: vi.fn(function WorkerPool() { return pool; }),
     getConfig: vi.fn(),
@@ -59,6 +64,7 @@ vi.mock('../../src/telemetry/profiler', () => ({
 }));
 vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
+  getTelemetryController: () => mocks.controller,
 }));
 vi.mock('../../src/core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
@@ -68,9 +74,21 @@ vi.mock('../../src/config/config-loader', () => ({
   DEFAULT_MAX_CLIENT_SESSIONS: 32,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  resolveEnvironmentConfig: (override: Record<string, any>) => {
+    const config = mocks.getConfig();
+    return {
+      ...config.environment,
+      ...override,
+      reward: { ...config.reward, ...override.reward },
+    };
+  },
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+
+// The bridge decides report boundaries via the controller's tick(), so the
+// mock keeps the historical 5000-step boundary by consulting the live bridge.
+let currentBridge: any = null;
 
 describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () => {
   let sendSpy: ReturnType<typeof vi.spyOn>;
@@ -78,20 +96,28 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
   const stepResult = { observation: [], reward: 0.5, done: false, truncated: false, info: { tick: 5 } };
 
   beforeEach(() => {
-    mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+    mocks.getConfig.mockReturnValue({
+      server: { port: 5555 },
+      environment: { seed: 0 },
+      reward: { killReward: 1, deathPenalty: -1, timePenalty: -0.001 },
+    });
     mocks.isTelemetryEnabled.mockReturnValue(true);
     mocks.pool.step.mockResolvedValue([stepResult]);
     mocks.pool.getTelemetrySnapshots.mockResolvedValue([]);
+    mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
+    mocks.controller.reportNow.mockReturnValue(true);
     sendSpy = vi.spyOn(mocks.sock, 'send').mockResolvedValue(undefined);
   });
 
   afterEach(() => {
     vi.clearAllMocks();
+    currentBridge = null;
     sendSpy.mockRestore();
   });
 
   async function initAndStepAtBoundary(port: number) {
     const bridge = new IpcBridge({ server: { port } } as any);
+    currentBridge = bridge;
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     (bridge as any).stepCount = 4999;
@@ -212,5 +238,59 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
 
     await (bridge as any).reapExpiredSessions();
     expect(mocks.pool.close).toHaveBeenCalledTimes(1);
+  });
+
+  it('coalesces overlapping boundary steps into a single fetch and report (single-flight)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Every step is a report-due step so two consecutive steps both enter the
+    // telemetry branch while the first snapshot fetch is still pending.
+    mocks.controller.tick.mockReturnValue(true);
+    const bridge = new IpcBridge({ server: { port: 5555 } } as any);
+    currentBridge = bridge;
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    let resolveSnapshots!: (value: BigUint64Array[]) => void;
+    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
+      resolveSnapshots = res;
+    }));
+
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // First boundary step: the snapshot fetch starts and hangs unresolved.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    // Second boundary step arrives while the first fetch is still in flight.
+    // It must be a no-op — no overlapping fetch, no duplicate report.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+
+    expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(1);
+
+    resolveSnapshots([]);
+    await new Promise(r => setImmediate(r));
+
+    expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);
+    expect(mocks.controller.reportNow).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
+  });
+
+  it('re-arms the single-flight guard after a snapshot failure', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.controller.tick.mockReturnValue(true);
+    mocks.pool.getTelemetrySnapshots.mockRejectedValueOnce(new Error('snapshot timeout'));
+
+    const bridge = new IpcBridge({ server: { port: 5555 } } as any);
+    currentBridge = bridge;
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // First boundary step: the fetch rejects, and the `finally` clears the
+    // guard so later reports are not permanently disabled.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    // Second boundary step: now the default fetch resolves.
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    await new Promise(r => setImmediate(r));
+
+    expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(2);
+    expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);
+    expect(mocks.controller.reportNow).toHaveBeenCalledTimes(1);
+    consoleErrorSpy.mockRestore();
   });
 });

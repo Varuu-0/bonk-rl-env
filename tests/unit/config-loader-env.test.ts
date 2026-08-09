@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { loadConfig, resetConfig, getConfig, getSection, getDefaults } from '../../src/config/config-loader';
+import { loadConfig, resetConfig, getConfig, getSection, getDefaults, resolveEnvironmentConfig } from '../../src/config/config-loader';
 
 describe('config-loader env vars and CLI', () => {
     const testDir = path.join(__dirname, '..', 'fixtures', 'config-env-test-' + process.pid);
@@ -11,9 +11,10 @@ describe('config-loader env vars and CLI', () => {
         'PORT', 'BIND_ADDRESS', 'MAX_RUNTIME', 'NUM_WORKERS', 'SEED',
         'DEFAULT_MAP_PATH', 'USE_SHARED_MEMORY', 'MANIFOLD_TELEMETRY',
         'MANIFOLD_TELEMETRY_OUTPUT', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG',
-        'TEST_MODE', 'AI_PLAYER_ID',
+        'DASHBOARD_PORT', 'REPORT_INTERVAL_MS', 'TEST_MODE', 'AI_PLAYER_ID',
         'RANDOM_OPP_MOVE_PROB', 'RANDOM_OPP_UP_PROB', 'RANDOM_OPP_DOWN_PROB',
         'RANDOM_OPP_HEAVY_PROB', 'RANDOM_OPP_GRAPPLE_PROB',
+        'KILL_REWARD', 'DEATH_PENALTY', 'TIME_PENALTY',
     ];
     let savedEnv: Record<string, string | undefined>;
     let savedArgv: string[];
@@ -155,6 +156,90 @@ describe('config-loader env vars and CLI', () => {
             expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
         });
 
+        it('KILL_REWARD/DEATH_PENALTY/TIME_PENALTY override the reward defaults', () => {
+            process.env.KILL_REWARD = '10';
+            process.env.DEATH_PENALTY = '-5';
+            process.env.TIME_PENALTY = '-0.5';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(10);
+            expect(cfg.reward.deathPenalty).toBe(-5);
+            expect(cfg.reward.timePenalty).toBe(-0.5);
+        });
+
+        it('reward env vars only override the keys that are provided', () => {
+            process.env.KILL_REWARD = '10';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(10);
+            expect(cfg.reward.deathPenalty).toBe(-1.0);
+            expect(cfg.reward.timePenalty).toBe(-0.001);
+        });
+
+        it('non-numeric reward env vars are ignored', () => {
+            process.env.KILL_REWARD = 'abc';
+            process.env.TIME_PENALTY = '';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(1.0);
+            expect(cfg.reward.timePenalty).toBe(-0.001);
+        });
+
+        it('reward env vars reject non-finite and partially-parsed values', () => {
+            process.env.KILL_REWARD = '1e999';
+            loadConfig(testDir);
+            expect(getConfig().reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = 'Infinity';
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = '10abc';
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.env.DEATH_PENALTY = '   ';
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(-1.0);
+        });
+
+        it('reward env vars reject non-decimal JS numeric literals', () => {
+            for (const bad of ['0x10', '0b101', '0o17', '0x1F']) {
+                resetConfig();
+                process.env.KILL_REWARD = bad;
+                expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+            }
+
+            resetConfig();
+            process.env.TIME_PENALTY = '0x10';
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('reward env vars accept full decimal and scientific notation', () => {
+            resetConfig();
+            process.env.KILL_REWARD = '2';
+            expect(loadConfig(testDir).reward.killReward).toBe(2.0);
+
+            resetConfig();
+            process.env.KILL_REWARD = '.5';
+            expect(loadConfig(testDir).reward.killReward).toBe(0.5);
+
+            resetConfig();
+            process.env.KILL_REWARD = '1e2';
+            expect(loadConfig(testDir).reward.killReward).toBe(100.0);
+        });
+
+        it('reward penalty env vars reject positive (reward-inverting) values', () => {
+            process.env.DEATH_PENALTY = '5';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.deathPenalty).toBe(-1.0);
+
+            resetConfig();
+            process.env.TIME_PENALTY = '0.5';
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+
+            resetConfig();
+            process.env.DEATH_PENALTY = '0';
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(0);
+        });
+
         it('USE_SHARED_MEMORY=true sets useSharedMemory to true', () => {
             process.env.USE_SHARED_MEMORY = 'true';
             const cfg = loadConfig(testDir);
@@ -250,6 +335,34 @@ describe('config-loader env vars and CLI', () => {
             process.env.MANIFOLD_DEBUG = 'trace';
             const cfg = loadConfig(testDir);
             expect(cfg.telemetry.debugLevel).toBe('none');
+        });
+
+        it('DASHBOARD_PORT overrides the dashboard port', () => {
+            process.env.DASHBOARD_PORT = '8081';
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.dashboardPort).toBe(8081);
+        });
+
+        it('DASHBOARD_PORT rejects invalid values', () => {
+            process.env.DASHBOARD_PORT = '70000';
+            expect(loadConfig(testDir).telemetry.dashboardPort).toBe(3001);
+            resetConfig();
+            process.env.DASHBOARD_PORT = 'abc';
+            expect(loadConfig(testDir).telemetry.dashboardPort).toBe(3001);
+        });
+
+        it('REPORT_INTERVAL_MS overrides the report interval', () => {
+            process.env.REPORT_INTERVAL_MS = '750';
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.reportIntervalMs).toBe(750);
+        });
+
+        it('REPORT_INTERVAL_MS rejects invalid values', () => {
+            process.env.REPORT_INTERVAL_MS = '0';
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+            resetConfig();
+            process.env.REPORT_INTERVAL_MS = 'abc';
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
         });
 
         it('TEST_MODE=1 caps maxRuntimeSeconds to 2', () => {
@@ -462,6 +575,20 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.telemetry.dashboardPort).toBe(3001);
         });
 
+        it('--report-interval-ms sets the report interval', () => {
+            process.argv = ['node', 'script.js', '--report-interval-ms', '250'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.telemetry.reportIntervalMs).toBe(250);
+        });
+
+        it('--report-interval-ms rejects zero and missing values', () => {
+            process.argv = ['node', 'script.js', '--report-interval-ms', '0'];
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+            resetConfig();
+            process.argv = ['node', 'script.js', '--report-interval-ms'];
+            expect(loadConfig(testDir).telemetry.reportIntervalMs).toBe(5000);
+        });
+
         it('--workers sets num workers', () => {
             process.argv = ['node', 'script.js', '--workers', '4'];
             const cfg = loadConfig(testDir);
@@ -544,6 +671,83 @@ describe('config-loader env vars and CLI', () => {
             resetConfig();
             process.argv = ['node', 'script.js', '--random-opp-move-prob'];
             expect(loadConfig(testDir).environment.randomOppMoveProb).toBe(0.2);
+        });
+
+        it('--kill-reward/--death-penalty/--time-penalty set the reward weights', () => {
+            process.argv = [
+                'node', 'script.js',
+                '--kill-reward', '10',
+                '--death-penalty', '-5',
+                '--time-penalty', '-0.5',
+            ];
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(10);
+            expect(cfg.reward.deathPenalty).toBe(-5);
+            expect(cfg.reward.timePenalty).toBe(-0.5);
+        });
+
+        it('invalid or missing --kill-reward values are ignored', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', 'abc'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--kill-reward'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI reward flags override reward env vars', () => {
+            process.env.KILL_REWARD = '5';
+            process.env.TIME_PENALTY = '-0.05';
+            process.argv = ['node', 'script.js', '--kill-reward', '10', '--time-penalty', '-0.5'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(10);
+            expect(cfg.reward.timePenalty).toBe(-0.5);
+        });
+
+        it('CLI reward flags reject non-finite and partially-parsed values', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '1e999'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--kill-reward', '10abc'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', 'Infinity'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI reward flags reject non-decimal JS numeric literals', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '0x10'];
+            expect(loadConfig(testDir).reward.killReward).toBe(1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '0b101'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+        });
+
+        it('CLI reward flags accept full decimal and scientific notation', () => {
+            process.argv = ['node', 'script.js', '--kill-reward', '1e2', '--time-penalty', '-0.5'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(100.0);
+            expect(cfg.reward.timePenalty).toBe(-0.5);
+        });
+
+        it('CLI penalty flags reject positive (reward-inverting) values', () => {
+            process.argv = ['node', 'script.js', '--death-penalty', '5'];
+            expect(loadConfig(testDir).reward.deathPenalty).toBe(-1.0);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '0.5'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.001);
+
+            resetConfig();
+            process.argv = ['node', 'script.js', '--time-penalty', '-0.5'];
+            expect(loadConfig(testDir).reward.timePenalty).toBe(-0.5);
         });
 
         it('--verbose enables telemetry, sets debug verbose, and logging debug', () => {
@@ -816,6 +1020,13 @@ describe('config-loader env vars and CLI', () => {
             expect(section.seed).toBe(0);
         });
 
+        it('getSection returns reward subsection', () => {
+            const section = getSection('reward');
+            expect(section.killReward).toBe(1.0);
+            expect(section.deathPenalty).toBe(-1.0);
+            expect(section.timePenalty).toBe(-0.001);
+        });
+
         it('getSection reflects env overrides', () => {
             process.env.PORT = '9999';
             const section = getSection('server');
@@ -900,6 +1111,25 @@ describe('config-loader env vars and CLI', () => {
             const cfg = loadConfig(testDir);
             expect(cfg.benchmark.scalingEnvCounts).toEqual([1, 2, 3]);
             expect(cfg.benchmark.steps).toBe(2000);
+        });
+
+        it('config.json reward section merges over the reward defaults', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                reward: { killReward: 3, timePenalty: -0.01 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(3);
+            expect(cfg.reward.deathPenalty).toBe(-1.0);
+            expect(cfg.reward.timePenalty).toBe(-0.01);
+        });
+
+        it('config.json reward values are overridden by reward env vars', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                reward: { killReward: 3 },
+            }));
+            process.env.KILL_REWARD = '8';
+            const cfg = loadConfig(testDir);
+            expect(cfg.reward.killReward).toBe(8);
         });
 
         it('null values in config.json are skipped', () => {
@@ -1037,6 +1267,45 @@ describe('config-loader env vars and CLI', () => {
             process.argv = ['node', 'script.js', '--seed', '200'];
             const cfg = loadConfig(testDir);
             expect(cfg.environment.seed).toBe(200);
+        });
+    });
+
+    // ─── resolveEnvironmentConfig ──────────────────────────────────────────
+
+    describe('resolveEnvironmentConfig', () => {
+        it('attaches the loader reward defaults to the worker env config', () => {
+            loadConfig(testDir);
+            const merged = resolveEnvironmentConfig({});
+            expect(merged.numOpponents).toBe(1);
+            expect(merged.seed).toBe(0);
+            expect(merged.reward.killReward).toBe(1.0);
+            expect(merged.reward.deathPenalty).toBe(-1.0);
+            expect(merged.reward.timePenalty).toBe(-0.001);
+        });
+
+        it('propagates loader reward env vars to the worker env config', () => {
+            process.env.KILL_REWARD = '7';
+            process.env.TIME_PENALTY = '-0.05';
+            loadConfig(testDir);
+            const merged = resolveEnvironmentConfig({});
+            expect(merged.reward.killReward).toBe(7);
+            expect(merged.reward.deathPenalty).toBe(-1.0);
+            expect(merged.reward.timePenalty).toBe(-0.05);
+        });
+
+        it('a caller-supplied reward object wins per key over loader defaults', () => {
+            process.env.KILL_REWARD = '7';
+            loadConfig(testDir);
+            const merged = resolveEnvironmentConfig({ reward: { timePenalty: -0.02 } });
+            expect(merged.reward.killReward).toBe(7);
+            expect(merged.reward.timePenalty).toBe(-0.02);
+        });
+
+        it('still resolves environment snake_case aliases alongside reward', () => {
+            loadConfig(testDir);
+            const merged = resolveEnvironmentConfig({ frame_skip: 4 });
+            expect(merged.frameSkip).toBe(4);
+            expect(merged.reward.killReward).toBe(1.0);
         });
     });
 

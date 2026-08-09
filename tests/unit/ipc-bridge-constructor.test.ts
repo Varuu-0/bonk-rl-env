@@ -16,8 +16,13 @@ const mocks = vi.hoisted(() => {
     close: () => {},
     send: async () => {},
   };
+  const controller = {
+    tick: vi.fn(() => false),
+    reportNow: vi.fn(() => true),
+  };
   return {
     sock,
+    controller,
     Router: function Router() { return sock; },
     WorkerPool: vi.fn(),
     getConfig: vi.fn(),
@@ -46,6 +51,7 @@ vi.mock('../../src/telemetry/profiler', () => {
 });
 vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
+  getTelemetryController: () => mocks.controller,
 }));
 vi.mock('../../src/core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
@@ -53,10 +59,21 @@ vi.mock('../../src/core/worker-pool', () => ({
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   DEFAULT_MAX_CLIENT_SESSIONS: 32,
-  mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  resolveEnvironmentConfig: (override: Record<string, any>) => {
+    const config = mocks.getConfig();
+    return {
+      ...config.environment,
+      ...override,
+      reward: { ...config.reward, ...override.reward },
+    };
+  },
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+
+// The bridge decides report boundaries via the controller's tick(), so the
+// mock keeps the historical 5000-step boundary by consulting the live bridge.
+let currentBridge: any = null;
 
 const mockSock = mocks.sock;
 let bindSpy: ReturnType<typeof vi.spyOn>;
@@ -65,9 +82,15 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.getConfig.mockClear();
-  mocks.getConfig.mockReturnValue({ server: { port: 5555, bindAddress: '127.0.0.1', maxClientSessions: 32 }, environment: { seed: 0 } });
+  mocks.getConfig.mockReturnValue({
+    server: { port: 5555, bindAddress: '127.0.0.1', maxClientSessions: 32 },
+    environment: { seed: 0 },
+    reward: { killReward: 1, deathPenalty: -1, timePenalty: -0.001 },
+  });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
+  mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
+  mocks.controller.reportNow.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
   mocks.WorkerPool.mockImplementation(function () {
     return {
@@ -93,6 +116,7 @@ afterEach(() => {
   bindSpy.mockRestore();
   closeSpy.mockRestore();
   sendSpy.mockRestore();
+  currentBridge = null;
 });
 
 describe('IpcBridge constructor', () => {
@@ -331,6 +355,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
 
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
   async function simulateSteps(bridge: IpcBridge, count: number): Promise<any> {
+    currentBridge = bridge;
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     // B9 fix: step/reset before init now correctly return an error, so the
     // bridge must be initialized before any steps can be counted.

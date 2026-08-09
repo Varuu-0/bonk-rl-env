@@ -7,6 +7,7 @@
 
 import { IpcBridge } from './ipc/ipc-bridge';
 import { AppConfig, getConfig } from './config/config-loader';
+import { getTelemetryController } from './telemetry/telemetry-controller';
 
 // Module-level server instance
 let bridge: IpcBridge | null = null;
@@ -26,6 +27,18 @@ export async function startServer(config?: AppConfig): Promise<void> {
     const appConfig = config || getConfig();
     console.log(`Starting server on port ${appConfig.server.port} (config: ${config ? 'provided' : 'cached'})`);
     bridge = new IpcBridge(appConfig);
+
+    // Issue #237: initialize the telemetry controller once at startup so the
+    // parsed flags are cached (no per-tick process.argv scan) and the
+    // documented config surfaces (reportIntervalMs, dashboardPort,
+    // outputFormat: 'file') take effect. This must happen before bridge.start()
+    // is awaited: start() only resolves when the server closes.
+    const controller = getTelemetryController();
+    controller.initialize(appConfig.telemetry, appConfig.physics.ticksPerSecond);
+    if (controller.getFlags().enableTelemetry) {
+        controller.startDashboard(appConfig.telemetry.dashboardPort);
+    }
+
     await bridge.start();
 }
 
@@ -47,6 +60,12 @@ export async function stopServer(): Promise<void> {
         console.error('Error during server shutdown:', error);
     } finally {
         bridge = null;
+        // Emit the shutdown final report and release telemetry resources.
+        try {
+            getTelemetryController().shutdown();
+        } catch (error) {
+            console.error('Error during telemetry shutdown:', error);
+        }
         console.log('Server stopped.');
     }
 }

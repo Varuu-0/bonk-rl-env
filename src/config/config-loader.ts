@@ -357,6 +357,27 @@ export function mergeEnvironmentConfig(
     return merged;
 }
 
+/**
+ * Build the complete per-worker environment config: the loader's environment
+ * section merged with the caller's per-env/client overrides, plus the reward
+ * section attached under `reward` (killReward, deathPenalty, timePenalty).
+ * The reward section is the single source for the documented reward-shaping
+ * surfaces (config.json, KILL_REWARD/DEATH_PENALTY/TIME_PENALTY env vars,
+ * --kill-reward/--death-penalty/--time-penalty CLI flags); attaching it here
+ * lets BonkEnvironment apply the configured weights on every worker-init path
+ * (IpcBridge init, BonkEnv.start) instead of leaving calculateReward's
+ * hardcoded literals in place (#220). A caller-supplied `reward` object wins
+ * per key over the loader defaults.
+ */
+export function resolveEnvironmentConfig(override: Record<string, any> = {}): Record<string, any> {
+    const merged = mergeEnvironmentConfig(getConfig().environment as any, override);
+    const overrideReward = isPlainObject(override.reward)
+        ? (override.reward as Record<string, any>)
+        : {};
+    merged.reward = { ...getConfig().reward, ...overrideReward };
+    return merged;
+}
+
 // ─── Config File Loader ────────────────────────────────────────────────────
 
 function findConfigFile(): string | null {
@@ -387,6 +408,31 @@ function loadConfigFile(filePath: string): Partial<AppConfig> | null {
         console.warn(`[Config] Failed to parse ${filePath}: ${err.message}`);
         return null;
     }
+}
+
+// ─── Config Value Parsing ──────────────────────────────────────────────────
+
+// Accepts only full decimal / scientific-notation numerics: an optional sign,
+// an integer and/or fraction part, and an optional digit-bearing exponent.
+// Deliberately excludes JS non-decimal numeric literals ("0x10", "0b101",
+// "0o17") so a config value can never be parsed from a base-N literal.
+const DECIMAL_NUMERIC_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+
+/**
+ * Strictly parse a finite float from a CLI/env string.
+ *
+ * Unlike `parseFloat`, this requires the entire string to be a full decimal or
+ * scientific-notation numeric and the result to be finite: `"10abc"`→null
+ * (parseFloat would yield 10), `"1e999"` / `"Infinity"`→null
+ * (parseFloat/Number yield Infinity), `""`→null. Non-decimal JS literals such
+ * as `"0x10"` and `"0b101"` are also rejected. Only whole, finite decimal
+ * numbers pass, so garbage can never become a config value.
+ */
+function parseFiniteFloat(rawValue: string): number | null {
+    const trimmed = rawValue.trim();
+    if (trimmed === '' || !DECIMAL_NUMERIC_RE.test(trimmed)) return null;
+    const v = Number(trimmed);
+    return Number.isFinite(v) ? v : null;
 }
 
 // ─── Environment Variable Overrides ────────────────────────────────────────
@@ -428,6 +474,17 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         const v = env.MANIFOLD_DEBUG;
         if (v === 'none' || v === 'error' || v === 'verbose') config.telemetry.debugLevel = v;
     }
+    // Documented telemetry env vars (config.example.json): DASHBOARD_PORT and
+    // REPORT_INTERVAL_MS were parsed by neither config-loader nor flags.ts, so
+    // the dashboard port and report interval were silently ignored (issue #237).
+    if (env.DASHBOARD_PORT !== undefined) {
+        const v = parseInt(env.DASHBOARD_PORT, 10);
+        if (!isNaN(v) && v > 0 && v < 65536) config.telemetry.dashboardPort = v;
+    }
+    if (env.REPORT_INTERVAL_MS !== undefined) {
+        const v = parseInt(env.REPORT_INTERVAL_MS, 10);
+        if (!isNaN(v) && v > 0) config.telemetry.reportIntervalMs = v;
+    }
 
     // Test mode
     if (env.TEST_MODE === '1') {
@@ -459,6 +516,26 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (env.AI_PLAYER_ID !== undefined) {
         const v = parseInt(env.AI_PLAYER_ID, 10);
         if (!isNaN(v) && v >= 0 && v <= 7) config.environment.aiPlayerId = v;
+    }
+    // Reward shaping (documented env vars: KILL_REWARD / DEATH_PENALTY / TIME_PENALTY).
+    // Weight semantics (#220): killReward is a signed delta added on a kill
+    // (positive rewards killing, negative discourages it). DEATH_PENALTY and
+    // TIME_PENALTY are non-positive deltas — a "penalty" reduces reward, so a
+    // positive value would reward the very event it names and is rejected
+    // (falls back to the default). All values must be fully parsed and finite;
+    // Infinity/NaN/partial garbage are ignored.
+    const rewardEnvVars: Array<[string, keyof RewardConfig]> = [
+        ['KILL_REWARD', 'killReward'],
+        ['DEATH_PENALTY', 'deathPenalty'],
+        ['TIME_PENALTY', 'timePenalty'],
+    ];
+    for (const [envVar, key] of rewardEnvVars) {
+        const rawValue = env[envVar];
+        if (rawValue !== undefined) {
+            const v = parseFiniteFloat(rawValue);
+            const isPenalty = key !== 'killReward';
+            if (v !== null && (!isPenalty || v <= 0)) (config.reward as any)[key] = v;
+        }
     }
     // Opponent random-policy probabilities (documented env vars)
     const oppProbEnvVars: Array<[string, keyof EnvironmentConfig]> = [
@@ -565,6 +642,16 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 }
                 break;
 
+            case '--report-interval-ms':
+                if (next) {
+                    const v = parseInt(next, 10);
+                    if (!isNaN(v) && v > 0) {
+                        config.telemetry.reportIntervalMs = v;
+                        i++;
+                    }
+                }
+                break;
+
             case '--workers':
             case '-w':
                 if (next) {
@@ -622,6 +709,28 @@ function parseCliFlags(config: AppConfig): AppConfig {
                             case '--random-opp-down-prob': config.environment.randomOppDownProb = v; break;
                             case '--random-opp-heavy-prob': config.environment.randomOppHeavyProb = v; break;
                             case '--random-opp-grapple-prob': config.environment.randomOppGrappleProb = v; break;
+                        }
+                        i++;
+                    }
+                }
+                break;
+
+            case '--kill-reward':
+            case '--death-penalty':
+            case '--time-penalty':
+                if (next) {
+                    // Reward weights are signed floats (negative penalties are
+                    // the documented defaults). Only fully-parsed finite values
+                    // are applied; --death-penalty/--time-penalty must be
+                    // non-positive (a positive penalty would reward the very
+                    // event it names) and are otherwise ignored (#220).
+                    const v = parseFiniteFloat(next);
+                    const isPenalty = arg !== '--kill-reward';
+                    if (v !== null && (!isPenalty || v <= 0)) {
+                        switch (arg) {
+                            case '--kill-reward': config.reward.killReward = v; break;
+                            case '--death-penalty': config.reward.deathPenalty = v; break;
+                            case '--time-penalty': config.reward.timePenalty = v; break;
                         }
                         i++;
                     }
