@@ -457,6 +457,61 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     }
   });
 
+  it('invalidates an existing session whose re-init fails instead of leaving a stale live pool', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 2 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const client = Buffer.from('reinit-client');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    const session = (bridge as any).sessions.get(client.toString('hex'));
+    session.pool.init.mockRejectedValueOnce(initError);
+    const closeSpy = vi.spyOn(session.pool, 'close');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+    expect(session.initialized).toBe(false);
+    expect(session.numEnvs).toBe(0);
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    // Still present in the map (not dropped as a brand-new session), but no
+    // longer a live initialized pool: subsequent reset fails loudly.
+    expect((bridge as any).sessions.get(client.toString('hex'))).toBe(session);
+    await handleRequest(client, JSON.stringify({ command: 'reset', seeds: [1] }));
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+  });
+
+  it('restores programmatic fallback when the only-session init fails and no session remains', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12378, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await bridge.initEnv(1, {}, false);
+    const failedPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedPool;
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await handleRequest(Buffer.from('failed-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect((bridge as any).sessions.size).toBe(0);
+      // The failed init dropped the only session, so the bridge is no longer
+      // permanently locked in session mode: the local bypass pool works again.
+      expect((bridge as any).allowLocalSessionFallback).toBe(true);
+      await handleRequest(Buffer.from('bypass-client'), JSON.stringify({ command: 'step', actions: [0] }));
+      expect(lastResponse().status).toBe('ok');
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   it('reaps an idle session, frees its slot, and keeps its identity loud', async () => {
     const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 1 } } as any);
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
