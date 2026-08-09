@@ -91,11 +91,11 @@
   "reward": {
     "_doc_reward": "RL reward shaping: kill, death, and per-tick time penalties",
     "killReward": 1.0,
-    "_doc_killReward": "Reward for eliminating an opponent. Type: float. Default: 1.0. Env: KILL_REWARD. CLI: --kill-reward",
+    "_doc_killReward": "Reward for eliminating an opponent (signed delta added on a kill; positive rewards killing, negative discourages it). Type: float (finite). Default: 1.0. Env: KILL_REWARD. CLI: --kill-reward",
     "deathPenalty": -1.0,
-    "_doc_deathPenalty": "Penalty for being eliminated. Type: float. Default: -1.0. Env: DEATH_PENALTY. CLI: --death-penalty",
+    "_doc_deathPenalty": "Penalty for being eliminated. Sign convention: non-positive delta (a penalty reduces reward; a positive value is rejected and the default kept). Type: float (finite, <= 0). Default: -1.0. Env: DEATH_PENALTY. CLI: --death-penalty",
     "timePenalty": -0.001,
-    "_doc_timePenalty": "Per-tick penalty to encourage efficiency. Type: float. Default: -0.001. Env: TIME_PENALTY. CLI: --time-penalty"
+    "_doc_timePenalty": "Per-tick penalty to encourage efficiency. Sign convention: non-positive delta (a penalty reduces reward; a positive value is rejected and the default kept). Type: float (finite, <= 0). Default: -0.001. Env: TIME_PENALTY. CLI: --time-penalty"
   },
   "workerPool": {
     "_doc_workerPool": "Multi-process worker pool for parallel environment stepping",

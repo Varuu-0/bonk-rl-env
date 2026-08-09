@@ -138,6 +138,18 @@ export interface EnvironmentConfig {
     arena?: ArenaTuningConfig;
     /** Documented player.* movement tuning (moveForce, heavyMassMultiplier). */
     player?: PlayerTuningConfig;
+    /** Reward for eliminating an opponent (input alias for reward.killReward; default 1.0) */
+    killReward?: number;
+    /** Penalty for being eliminated (input alias for reward.deathPenalty; default -1.0) */
+    deathPenalty?: number;
+    /** Per-tick penalty to encourage efficiency (input alias for reward.timePenalty; default -0.001) */
+    timePenalty?: number;
+    /** Reward weights — the single source of truth calculateReward reads (#220) */
+    reward?: {
+        killReward?: number;
+        deathPenalty?: number;
+        timePenalty?: number;
+    };
 }
 
 /** Config-loader `physics.*` section: documented, tunable engine settings. */
@@ -162,6 +174,19 @@ export interface ArenaTuningConfig {
 export interface PlayerTuningConfig {
     moveForce?: number;
     heavyMassMultiplier?: number;
+}
+
+/**
+ * Resolved reward weights normalized at construction. The flat
+ * killReward/deathPenalty/timePenalty input aliases and the nested `reward`
+ * section are collapsed into this one object, which is the only reward state
+ * stored on the environment and the only reward state calculateReward reads.
+ * Penalties are enforced non-positive and every weight finite (#220).
+ */
+export interface ResolvedRewardConfig {
+    killReward: number;
+    deathPenalty: number;
+    timePenalty: number;
 }
 
 // ─── Default Arena ───────────────────────────────────────────────────
@@ -204,9 +229,33 @@ function getDefaultMap(): MapDef {
 
 // ─── Environment ─────────────────────────────────────────────────────
 
+/**
+ * Resolve a reward weight from its input candidates (flat then nested, then
+ * the documented literal). A candidate is skipped when it is absent, not
+ * finite, or — for a penalty — positive; the first acceptable candidate wins.
+ * This keeps every weight finite and penalties non-positive, so a misconfigured
+ * value can never invert the reward signal (#220).
+ */
+function pickRewardWeight(
+    flat: number | undefined,
+    nested: number | undefined,
+    fallback: number,
+    nonPositivePenalty: boolean,
+): number {
+    for (const candidate of [flat, nested]) {
+        if (candidate === undefined) continue;
+        if (!Number.isFinite(candidate)) continue;
+        if (nonPositivePenalty && candidate > 0) continue;
+        return candidate;
+    }
+    return fallback;
+}
+
 export class BonkEnvironment {
     private physics: PhysicsEngine;
-    private config: Required<EnvironmentConfig>;
+    /** Stored resolved config: flat reward keys are not stored — only the nested
+     * `reward` object holds the resolved weights (single source of truth) (#220). */
+    private config: Required<Omit<EnvironmentConfig, 'killReward' | 'deathPenalty' | 'timePenalty' | 'reward'>> & { reward: Required<ResolvedRewardConfig> };
     private aiPlayerId: number = 0;
     private opponentIds: number[] = [];
     private aiTeam: string = 'blue';
@@ -278,6 +327,19 @@ export class BonkEnvironment {
         const oppHeavyProb = config.oppHeavyProb ?? config.randomOppHeavyProb ?? 0.05;
         const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
 
+        // Reward shaping weights. The flat killReward/deathPenalty/timePenalty
+        // input aliases win over the nested reward section; both are resolved
+        // into a single stored reward object (this.config.reward) that is the
+        // only state calculateReward reads — never two copies kept in sync.
+        // Penalties are non-positive and every weight finite; an invalid value
+        // falls through to the next candidate and then the documented literal
+        // so config-free environments keep the same rewards (#220).
+        const reward = {
+            killReward: pickRewardWeight(config.killReward, config.reward?.killReward, 1.0, false),
+            deathPenalty: pickRewardWeight(config.deathPenalty, config.reward?.deathPenalty, -1.0, true),
+            timePenalty: pickRewardWeight(config.timePenalty, config.reward?.timePenalty, -0.001, true),
+        };
+
         this.config = {
             numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
@@ -312,6 +374,7 @@ export class BonkEnvironment {
             physics: config.physics ?? {},
             arena: config.arena ?? {},
             player: config.player ?? {},
+            reward,
         };
 
         // The AI slot is config-driven, never hardcoded to 0 (#221). An
@@ -719,13 +782,19 @@ export class BonkEnvironment {
     /**
      * Calculate reward for the current tick.
      *
-     * Reward structure:
-     *   +1.0  — opponent knocked off the map (killed)
-     *   -1.0  — AI player knocked off the map (death)
+     * Reward structure (weights configurable via reward.killReward /
+     * reward.deathPenalty / reward.timePenalty; documented defaults are the
+     * legacy literals when unset, #220). Convention: all weights are signed
+     * deltas added to the tick reward. killReward may be signed (positive
+     * rewards elimination, negative discourages it); deathPenalty and
+     * timePenalty are enforced non-positive so a "penalty" always reduces
+     * reward and can never reward the event it names:
+     *   +killReward   — opponent knocked off the map (killed)
+     *   +deathPenalty — AI player knocked off the map (death; default -1.0)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
      *           count as kills)
-     *   -0.001 — time penalty (encourages action)
+     *   +timePenalty — per-tick penalty (encourages action; default -0.001)
      */
     private calculateReward(aiState: PlayerState, opponentStates: PlayerState[]): number {
         let reward = 0;
@@ -734,7 +803,7 @@ export class BonkEnvironment {
         // capture branch below instead of double-counting as a death)
         const aiWasAlive = this.previousAliveState.get(this.aiPlayerId) ?? true;
         if (aiWasAlive && !aiState.alive && aiState.deathType !== 3) {
-            reward -= 1.0;
+            reward += this.config.reward.deathPenalty;
         }
 
         // Check if any opponent just died this tick
@@ -742,7 +811,7 @@ export class BonkEnvironment {
             const opState = opponentStates[i];
             const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
             if (opWasAlive && !opState.alive && opState.deathType !== 3) {
-                reward += 1.0;
+                reward += this.config.reward.killReward;
             }
         }
 
@@ -762,8 +831,8 @@ export class BonkEnvironment {
             }
         }
 
-        // Small time penalty
-        reward -= 0.001;
+        // Per-tick time penalty
+        reward += this.config.reward.timePenalty;
 
         return reward;
     }

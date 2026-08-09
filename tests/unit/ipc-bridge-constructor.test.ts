@@ -58,6 +58,14 @@ vi.mock('../core/worker-pool', () => ({
 }));
 vi.mock('../config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  resolveEnvironmentConfig: (override: Record<string, any>) => {
+    const config = mocks.getConfig();
+    return {
+      ...config.environment,
+      ...override,
+      reward: { ...config.reward, ...override.reward },
+    };
+  },
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
@@ -73,7 +81,11 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 
 beforeEach(() => {
   mocks.getConfig.mockClear();
-  mocks.getConfig.mockReturnValue({ server: { port: 5555, bindAddress: '127.0.0.1' }, environment: { seed: 0 } });
+  mocks.getConfig.mockReturnValue({
+    server: { port: 5555, bindAddress: '127.0.0.1' },
+    environment: { seed: 0 },
+    reward: { killReward: 1, deathPenalty: -1, timePenalty: -0.001 },
+  });
   mocks.isTelemetryEnabled.mockClear();
   mocks.isTelemetryEnabled.mockReturnValue(true);
   mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);

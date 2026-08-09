@@ -8,7 +8,7 @@
 
 import { WorkerPool, type ResultOwnershipOptions } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
-import { getConfig, mergeEnvironmentConfig, mergeEngineSections } from '../config/config-loader';
+import { getConfig, mergeEngineSections, resolveEnvironmentConfig } from '../config/config-loader';
 
 export interface BonkEnvConfig {
     /** Number of environments to create internally (default: 1) */
@@ -80,14 +80,11 @@ export class BonkEnv {
         this.pool = new WorkerPool();
         
         // Initialize the worker pool with the configured number of envs,
-        // forwarding the per-env config over the global environment defaults
-        // so per-environment hyperparameters (maxTicks, numOpponents,
-        // frameSkip, seed, mapData, ...) actually reach the workers. The
-        // physics/arena/player tuning sections ride the same spawn config so
-        // the documented engine surfaces (issue #217) reach the workers too.
+        // forwarding the per-env config over the global defaults so configured
+        // environment, reward, and engine-tuning values all reach the workers.
         const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
         const override = this.config.config ?? {};
-        const envConfig = mergeEnvironmentConfig(getConfig().environment as any, override);
+        const envConfig = resolveEnvironmentConfig(override);
         const engineSections = mergeEngineSections(override);
         try {
             await this.pool.init(
