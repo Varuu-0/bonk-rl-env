@@ -8,7 +8,7 @@
 
 import { WorkerPool, type ResultOwnershipOptions } from '../core/worker-pool';
 import { PortManager, getGlobalPortManager } from '../utils/port-manager';
-import { getConfig, mergeEnvironmentConfig } from '../config/config-loader';
+import { getConfig, resolveEnvironmentConfig } from '../config/config-loader';
 import { IpcBridge } from '../ipc/ipc-bridge';
 
 export interface BonkEnvConfig {
@@ -84,9 +84,11 @@ export class BonkEnv {
         // Initialize the worker pool with the configured number of envs,
         // forwarding the per-env config over the global environment defaults
         // so per-environment hyperparameters (maxTicks, numOpponents,
-        // frameSkip, seed, mapData, ...) actually reach the workers.
+        // frameSkip, seed, mapData, ...) actually reach the workers. The
+        // reward section rides along so the worker environments apply the
+        // configured shaping weights instead of the hardcoded literals (#220).
         const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
-        const envConfig = mergeEnvironmentConfig(getConfig().environment as any, this.config.config ?? {});
+        const envConfig = resolveEnvironmentConfig(this.config.config ?? {});
         try {
             await this.pool.init(
                 this.config.numEnvs ?? 1,
