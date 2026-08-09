@@ -183,4 +183,39 @@ describe('WorkerPool operation serialization (#223)', () => {
     stepDeferreds[2].resolve([]);
     await expect(p3).resolves.toEqual([]);
   });
+
+  it('queues a call issued in the settled head continuation (same microtask drain) (#252)', async () => {
+    const pool = new WorkerPool(1);
+    const calls: string[] = [];
+    const stepDeferreds = [deferred<any[]>(), deferred<any[]>(), deferred<any[]>()];
+    let stepIdx = 0;
+    vi.spyOn(pool as any, 'stepInternal').mockImplementation(() => {
+      calls.push('step');
+      return stepDeferreds[stepIdx++].promise;
+    });
+
+    const p1 = (pool as any).step([0]); // head (locks)
+    const p2 = (pool as any).step([0]); // queued (sets _operationQueued)
+    await tick();
+    expect(calls).toEqual(['step']);
+
+    // Resolve the head and issue a THIRD call in the SAME microtask drain:
+    // when the head's clear handler runs it releases the lock, but the queued
+    // op's `start` has not yet been scheduled, so this drained call would see
+    // `_operationLocked === false` and fast-path alongside the still-pending
+    // queued op unless the `_operationQueued` gate holds it (#252).
+    stepDeferreds[0].resolve([]);
+    const p3 = Promise.resolve().then(() => (pool as any).step([0]));
+    await tick();
+    // p2 started; the drained p3 must still be queued behind it.
+    expect(calls).toEqual(['step', 'step']);
+
+    stepDeferreds[1].resolve([]);
+    await p2;
+    await tick();
+    expect(calls).toEqual(['step', 'step', 'step']);
+
+    stepDeferreds[2].resolve([]);
+    await expect(p3).resolves.toEqual([]);
+  });
 });

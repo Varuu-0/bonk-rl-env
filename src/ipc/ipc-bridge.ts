@@ -181,31 +181,23 @@ export class IpcBridge {
                     // already initialized with that env's numEnvs and config.
                     // Never re-initialize it with client-default config (that
                     // would discard the env-configured workers); accept an
-                    // init only when the requested env count matches. A
-                    // matching count must still not silently discard client
-                    // settings the env-owned pool cannot honor (#252): reject
-                    // a conflicting explicit useSharedMemory, and otherwise
-                    // echo the effective config/useSharedMemory so the client
-                    // can detect any divergence from what is actually serving.
+                    // init only when the requested env count matches.
+                    // A matching count must not silently discard settings the
+                    // env-owned pool cannot honor (#252): echo the effective
+                    // config/useSharedMemory so the client can detect any
+                    // divergence from what is actually serving. useSharedMemory
+                    // is transport-internal to this server's workers and never
+                    // changes the JSON contract, so a mismatched client value
+                    // (e.g. the Python BonkVecEnv's hardcoded `true` against a
+                    // `false` host) must NOT be a hard error — the client only
+                    // consumes the JSON replies and keeps working.
                     if (numEnvs === this._numEnvs) {
-                        const clientUseSharedMemory = payload.useSharedMemory;
-                        if (
-                            clientUseSharedMemory !== undefined &&
-                            this._hostUseSharedMemory !== undefined &&
-                            clientUseSharedMemory !== this._hostUseSharedMemory
-                        ) {
-                            response = {
-                                status: "error",
-                                error: `Invalid init: this IPC server hosts useSharedMemory=${this._hostUseSharedMemory}, got ${clientUseSharedMemory}`,
-                            };
-                        } else {
-                            this._initialized = true;
-                            response = {
-                                status: "ok",
-                                config: this._hostConfig ?? {},
-                                useSharedMemory: this._hostUseSharedMemory,
-                            };
-                        }
+                        this._initialized = true;
+                        response = {
+                            status: "ok",
+                            config: this._hostConfig ?? {},
+                            useSharedMemory: this._hostUseSharedMemory,
+                        };
                     } else {
                         response = {
                             status: "error",

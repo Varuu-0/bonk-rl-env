@@ -455,17 +455,24 @@ describe('IpcBridge adopted pool (enableIpcServer hosts the env pool, #223/#252)
     }
   });
 
-  it('rejects a matching-count init with a conflicting useSharedMemory on an adopted pool (#252)', async () => {
+  it('does not reject the Python BonkVecEnv useSharedMemory:true init against a false adopted pool; echoes effective values (#252)', async () => {
     const bridge = new IpcBridge({ server: { port: 15604 } } as any);
     try {
+      // Host env configured useSharedMemory:false + enableIpcServer:true — the
+      // configuration the PR's integration tests use. The Python BonkVecEnv
+      // hardcodes "useSharedMemory": true on every init and consumes only the
+      // JSON replies (python/envs/bonk_env.py:82). The value is transport-internal
+      // to the host's workers and never changes the JSON contract, so this must
+      // be accepted with an ok reply and the effective values echoed, not a hard
+      // error that would raise RuntimeError in BonkVecEnv.__init__.
       bridge.adoptPool((bridge as any).pool, 2, { config: { frameSkip: 3 }, useSharedMemory: false });
 
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 2, useSharedMemory: true }));
       const response = JSON.parse(sentMessages[0]);
-      expect(response.status).toBe('error');
-      expect(response.error).toContain('useSharedMemory=false');
-      expect(response.error).toContain('got true');
+      expect(response.status).toBe('ok');
+      expect(response.config).toEqual({ frameSkip: 3 });
+      expect(response.useSharedMemory).toBe(false);
     } finally {
       await bridge.close();
     }
