@@ -118,7 +118,7 @@ export class WorkerPool {
     // this lock so a shutdown can still interrupt an in-flight batch.
     private _operationTail: Promise<unknown> = Promise.resolve();
     private _operationLocked: boolean = false;
-    private _operationQueued: boolean = false;
+    private _operationQueuedCount: number = 0;
 
     constructor(private numWorkers: number = getConfig().workerPool.numWorkers) {
     }
@@ -141,7 +141,7 @@ export class WorkerPool {
         // concurrently (#252). Without the re-arm, the queued op would start with
         // `_operationLocked === false` and reopen the #223 shared-buffer hazard.
         const start = () => {
-            this._operationQueued = false;
+            this._operationQueuedCount = Math.max(0, this._operationQueuedCount - 1);
             this._operationLocked = true;
             return operation().then(
                 (value: T) => { this._operationLocked = false; return value; },
@@ -151,16 +151,14 @@ export class WorkerPool {
         // The fast path also keeps `_operationTail` in sync: without it, a
         // second call would chain on the initial already-resolved tail and its
         // `start` would run immediately, in parallel with the first operation.
-        // `_operationQueued` closes a same-drain gap: when the head settles, its
-        // clear handler runs before the queued op's `start` is scheduled, so a
-        // call issued in that same drain (e.g. a fallthrough in the head's
-        // continuation) would otherwise see `_operationLocked === false` and
-        // take the fast path alongside the still-pending queued op. Once
-        // anything has queued, new calls gate on the flag and queue too, until a
-        // queued `start` clears it.
+        // `_operationQueuedCount` stays armed while ANY operations remain queued.
+        // A boolean would be cleared by the first queued op's `start`, so a call
+        // issued in a settled *queued* op's continuation (with deeper ops still
+        // pending) would see the gate released and fast-path into concurrency;
+        // the counter only drains when every queued op has begun (#252).
         let next: Promise<T>;
-        if (this._operationLocked || this._operationQueued) {
-            this._operationQueued = true;
+        if (this._operationLocked || this._operationQueuedCount > 0) {
+            this._operationQueuedCount += 1;
             next = this._operationTail.then(start, start) as Promise<T>;
         } else {
             next = start();

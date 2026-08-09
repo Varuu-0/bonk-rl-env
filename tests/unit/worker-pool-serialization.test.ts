@@ -218,4 +218,48 @@ describe('WorkerPool operation serialization (#223)', () => {
     stepDeferreds[2].resolve([]);
     await expect(p3).resolves.toEqual([]);
   });
+
+  it('holds the gate for deeper queued ops: a call from a settled queued op continuation must queue (#252)', async () => {
+    const pool = new WorkerPool(1);
+    const calls: string[] = [];
+    const stepDeferreds = [deferred<any[]>(), deferred<any[]>(), deferred<any[]>(), deferred<any[]>()];
+    let stepIdx = 0;
+    vi.spyOn(pool as any, 'stepInternal').mockImplementation(() => {
+      calls.push('step');
+      return stepDeferreds[stepIdx++].promise;
+    });
+
+    // Head plus TWO queued ops issued up front, so the gate must stay armed
+    // past the FIRST queued op's start (a boolean, cleared there, would release
+    // it while the second queued op is still pending).
+    const p1 = (pool as any).step([0]); // head (locks)
+    const p2 = (pool as any).step([0]); // queued #1
+    const p3 = (pool as any).step([0]); // queued #2
+    await tick();
+    expect(calls).toEqual(['step']);
+
+    // Head settles -> queued #1 starts (gate stays armed for queued #2).
+    stepDeferreds[0].resolve([]);
+    await tick();
+    expect(calls).toEqual(['step', 'step']);
+
+    // Queued #1 settles. Issue a FOURTH call in that same microtask drain: when
+    // queued #1's clear handler releases the lock, queued #2's start has not yet
+    // been scheduled, and the pending-queue counter must still be >0 so this
+    // drained call queues behind queued #2 instead of fast-pathing into
+    // concurrency with the still-pending op (#252).
+    stepDeferreds[1].resolve([]);
+    const p4 = Promise.resolve().then(() => (pool as any).step([0]));
+    await tick();
+    // queued #2 started; the drained p4 must still be queued behind it.
+    expect(calls).toEqual(['step', 'step', 'step']);
+
+    stepDeferreds[2].resolve([]);
+    await p3;
+    await tick();
+    expect(calls).toEqual(['step', 'step', 'step', 'step']);
+
+    stepDeferreds[3].resolve([]);
+    await expect(p4).resolves.toEqual([]);
+  });
 });
