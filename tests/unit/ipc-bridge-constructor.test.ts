@@ -36,7 +36,7 @@ const mocks = vi.hoisted(() => {
 });
 
 vi.mock('zeromq', () => mocks);
-vi.mock('../telemetry/profiler', () => {
+vi.mock('../../src/telemetry/profiler', () => {
   const gp = {
     tick: mocks.gpTick,
     recordMemory: mocks.gpRecordMemory,
@@ -49,15 +49,17 @@ vi.mock('../telemetry/profiler', () => {
     setLatestWorkerTelemetry: mocks.setLatestWorkerTelemetry,
   };
 });
-vi.mock('../telemetry/telemetry-controller', () => ({
+vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
   getTelemetryController: () => mocks.controller,
 }));
-vi.mock('../core/worker-pool', () => ({
+vi.mock('../../src/core/worker-pool', () => ({
   WorkerPool: mocks.WorkerPool,
 }));
-vi.mock('../config/config-loader', () => ({
+vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  DEFAULT_MAX_CLIENT_SESSIONS: 32,
+  mergeEngineSections: () => ({ physics: {}, arena: {}, player: {} }),
   resolveEnvironmentConfig: (override: Record<string, any>) => {
     const config = mocks.getConfig();
     return {
@@ -82,7 +84,7 @@ let sendSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   mocks.getConfig.mockClear();
   mocks.getConfig.mockReturnValue({
-    server: { port: 5555, bindAddress: '127.0.0.1' },
+    server: { port: 5555, bindAddress: '127.0.0.1', maxClientSessions: 32 },
     environment: { seed: 0 },
     reward: { killReward: 1, deathPenalty: -1, timePenalty: -0.001 },
   });
@@ -91,13 +93,16 @@ beforeEach(() => {
   mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
   mocks.controller.reportNow.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
-  mocks.WorkerPool.mockImplementation(() => ({
-    init: vi.fn().mockResolvedValue(undefined),
-    reset: vi.fn().mockResolvedValue([]),
-    step: vi.fn().mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]),
-    close: vi.fn(),
-    getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
-  }));
+  mocks.WorkerPool.mockImplementation(function () {
+    return {
+      init: vi.fn().mockResolvedValue(undefined),
+      reset: vi.fn().mockResolvedValue([]),
+      step: vi.fn().mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]),
+      close: vi.fn(),
+      getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
+      isUsingSharedMemory: vi.fn(() => false),
+    };
+  });
   mocks.gpTick.mockClear();
   mocks.gpRecordMemory.mockClear();
   mocks.gpReport.mockClear();
@@ -317,7 +322,7 @@ describe('IpcBridge close() (lines 159-173)', () => {
     await bridge.close();
     expect(bridge.isClosed()).toBe(true);
 
-    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close');
+    const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close').mockClear();
     await bridge.close();
     expect(poolCloseSpy).not.toHaveBeenCalled();
   });
@@ -350,21 +355,27 @@ describe('IpcBridge close() (lines 159-173)', () => {
 });
 
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
-  async function simulateSteps(bridge: IpcBridge, count: number) {
+  async function simulateSteps(bridge: IpcBridge, count: number): Promise<any> {
     currentBridge = bridge;
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
     // B9 fix: step/reset before init now correctly return an error, so the
     // bridge must be initialized before any steps can be counted.
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    // handleRequest routes steps to the per-identity session pool created by
+    // that init (issue #193), not (bridge as any).pool (the local/bypass
+    // pool). Spy on the session pool so the step mock actually intercepts
+    // the requests that drive the telemetry branch under test.
+    const results = mocks.WorkerPool.mock.results;
+    const sessionPool = results[results.length - 1].value;
+    vi.spyOn(sessionPool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     for (let i = 0; i < count; i++) {
       await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
     }
+    return sessionPool;
   }
 
   it('does NOT record memory before 5000 steps (line 90)', async () => {
     const bridge = new IpcBridge({ server: { port: 12356 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 100);
     expect((bridge as any).stepCount).toBe(100);
     expect((bridge as any).stepCount % 5000).not.toBe(0);
@@ -372,52 +383,260 @@ describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
 
   it('records memory at exactly 5000 steps (line 91)', async () => {
     const bridge = new IpcBridge({ server: { port: 12357 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
     expect((bridge as any).stepCount % 5000).toBe(0);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('checks telemetry enabled at 5000 steps (line 93)', async () => {
     const bridge = new IpcBridge({ server: { port: 12358 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('fetches telemetry snapshots when enabled (lines 94-96)', async () => {
     const bridge = new IpcBridge({ server: { port: 12359 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('reports at 5000 steps when telemetry enabled (line 97)', async () => {
     const bridge = new IpcBridge({ server: { port: 12360 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
+    expect(mocks.gpRecordMemory).toHaveBeenCalled();
   });
 
   it('does NOT run telemetry branch when disabled', async () => {
     mocks.isTelemetryEnabled.mockReturnValueOnce(false);
     const bridge = new IpcBridge({ server: { port: 12361 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 5000);
     expect((bridge as any).stepCount).toBe(5000);
   });
 
   it('records memory again at 10000 steps', async () => {
     const bridge = new IpcBridge({ server: { port: 12362 } });
-    const pool = (bridge as any).pool;
-    vi.spyOn(pool, 'step').mockResolvedValue([{ observation: [], reward: 0, done: 0, truncated: 0, tick: 0 }]);
     await simulateSteps(bridge, 10000);
     expect((bridge as any).stepCount).toBe(10000);
     expect((bridge as any).stepCount % 5000).toBe(0);
+  });
+});
+
+describe('IpcBridge per-client session cap (issue #193)', () => {
+  function lastResponse(): any {
+    const call = sendSpy.mock.calls[sendSpy.mock.calls.length - 1];
+    const frames = call[0] as any[];
+    return JSON.parse(frames[1].toString());
+  }
+
+  it('rejects a new client init beyond the cap loudly and without touching the first session', async () => {
+    const bridge = new IpcBridge({ server: { port: 12370, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const rejected = lastResponse();
+    expect(rejected.status).toBe('error');
+    expect(rejected.error).toContain('Too many active client sessions (max 1)');
+
+    // The rejected identity must fail loudly on reset/step (no silent
+    // fallback to another pool), and the first session keeps working.
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'reset', seeds: [1] }));
+    expect(lastResponse().status).toBe('error');
+    expect(lastResponse().error).toBe('Worker pool not initialized');
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'reset', seeds: [1] }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
+  it('releases a newly-created session when its init fails so another client can use the cap slot', async () => {
+    const initError = new Error('worker startup failed');
+    const failedSessionPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const bridge = new IpcBridge({ server: { port: 12376, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const failedClient = Buffer.from('failed-client');
+
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedSessionPool;
+    });
+    try {
+      await handleRequest(failedClient, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect(failedSessionPool.close).toHaveBeenCalledTimes(1);
+      expect((bridge as any).sessions.has(failedClient.toString('hex'))).toBe(false);
+
+      await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse().status).toBe('ok');
+      expect((bridge as any).sessions.size).toBe(1);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('drops an existing session whose re-init fails so it never holds a cap slot', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const client = Buffer.from('reinit-client');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    const session = (bridge as any).sessions.get(client.toString('hex'));
+    session.pool.init.mockRejectedValueOnce(initError);
+    const closeSpy = vi.spyOn(session.pool, 'close');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+    // The failed re-init drops the session outright, so its cap slot is freed
+    // immediately instead of being held by a stale/retrying session.
+    expect((bridge as any).sessions.size).toBe(0);
+    await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+    expect((bridge as any).sessions.size).toBe(1);
+  });
+
+  it('keeps the local pool pinned to a programmatic caller across a failed init (no silent re-admission)', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12378, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const caller = Buffer.from('caller');
+
+    await bridge.initEnv(1, {}, false);
+    // Establish the programmatic caller through IPC so it is the single
+    // identity pinned to the local/bypass pool.
+    await handleRequest(caller, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+
+    const failedPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedPool;
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      // A separate identity's init fails and empties the session map.
+      await handleRequest(Buffer.from('failed-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect((bridge as any).sessions.size).toBe(0);
+      // The pinned programmatic caller still uses the local pool.
+      await handleRequest(caller, JSON.stringify({ command: 'step', actions: [0] }));
+      expect(lastResponse().status).toBe('ok');
+      // Neither the just-failed identity nor any other un-pinned identity may
+      // silently rejoin the local/bypass pool in hybrid mode: loud failure.
+      await handleRequest(Buffer.from('failed-client'), JSON.stringify({ command: 'reset', seeds: [1] }));
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+      await handleRequest(Buffer.from('stranger'), JSON.stringify({ command: 'reset', seeds: [1] }));
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    // Not deadlocked: with the map empty, a new identity can still init.
+    await handleRequest(Buffer.from('new-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+    expect((bridge as any).sessions.size).toBe(1);
+  });
+
+  it('reaps an idle session, frees its slot, and keeps its identity loud', async () => {
+    const bridge = new IpcBridge({ server: { port: 12371, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const clientA = Buffer.from('clientA');
+
+    await handleRequest(clientA, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const session = (bridge as any).sessions.get(clientA.toString('hex'));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+
+    await (bridge as any).reapExpiredSessions();
+
+    expect(session.pool.close).toHaveBeenCalledTimes(1);
+    expect((bridge as any).sessions.size).toBe(0);
+
+    // A reaped identity must re-init; it cannot silently borrow the local
+    // pool even when that pool was initialized programmatically.
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(clientA, JSON.stringify({ command: 'reset' }));
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
+  it('does not reap a session while a request is still using its pool', async () => {
+    const bridge = new IpcBridge({ server: { port: 12372, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const clientA = Buffer.from('clientA');
+
+    await handleRequest(clientA, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const session = (bridge as any).sessions.get(clientA.toString('hex'));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+    session.activeRequests = 1;
+
+    await (bridge as any).reapExpiredSessions();
+
+    expect(session.pool.close).not.toHaveBeenCalled();
+    expect((bridge as any).sessions.get(clientA.toString('hex'))).toBe(session);
+  });
+
+  it('keeps rejected identities loud after their cap slot opens without an identity registry', async () => {
+    const bridge = new IpcBridge({ server: { port: 12373, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    for (let i = 0; i < 40; i++) {
+      await handleRequest(Buffer.from(`rejected-${i}`), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse().status).toBe('error');
+    }
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'close' }));
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(Buffer.from('rejected-39'), JSON.stringify({ command: 'step', actions: [0] }));
+
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+  });
+
+  it('keeps an established bypass identity after another client starts session mode', async () => {
+    const bridge = new IpcBridge({ server: { port: 12374, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const bypass = Buffer.from('bypass-client');
+
+    await bridge.initEnv(1, {}, false);
+    await handleRequest(bypass, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(bypass, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+  });
+
+  it('clamps an invalid (zero/negative) session cap to 1 instead of rejecting every init', () => {
+    const bridge = new IpcBridge({ server: { port: 12375, maxClientSessions: 0 } } as any);
+    expect((bridge as any).maxClientSessions).toBe(1);
+  });
+
+  it('falls back to the default session cap when the cap is omitted', () => {
+    // The getConfig mock normally reports 32; override it for both constructor
+    // reads (port, then cap) with a cap-less config so the only path to a
+    // finite cap is the bridge's built-in default fallback.
+    mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+    const bridge = new IpcBridge({} as any);
+    expect((bridge as any).maxClientSessions).toBe(32);
   });
 });

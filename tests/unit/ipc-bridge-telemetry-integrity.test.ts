@@ -71,6 +71,7 @@ vi.mock('../../src/core/worker-pool', () => ({
 }));
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
+  DEFAULT_MAX_CLIENT_SESSIONS: 32,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEngineSections: (override: Record<string, any>) => ({ physics: {}, arena: {}, player: {} }),
@@ -149,13 +150,21 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     mocks.pool.getTelemetrySnapshots.mockRejectedValueOnce(new Error('snapshot timeout'));
 
-    await initAndStepAtBoundary(12364);
+    const bridge = await initAndStepAtBoundary(12364);
 
     const response = lastSentResponse();
     expect(response.status).toBe('ok');
     expect(response.data).toHaveLength(1);
     expect(response.data[0].reward).toBe(0.5);
     expect(mocks.pool.step).toHaveBeenCalledTimes(1);
+    expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledWith({ failOnTimeout: false });
+
+    // The detached snapshot failure must not poison the pool used by the next
+    // request. A real message-mode timeout is covered at WorkerPool level.
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastSentResponse().status).toBe('ok');
+    expect(mocks.pool.step).toHaveBeenCalledTimes(2);
     consoleErrorSpy.mockRestore();
   });
 
@@ -208,6 +217,28 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     // Unblock the detached telemetry task so it settles cleanly.
     resolveSnapshots([]);
     await new Promise(r => setImmediate(r));
+  });
+
+  it('does not reap a pool while detached telemetry is still reading it', async () => {
+    let resolveSnapshots!: (value: BigUint64Array[]) => void;
+    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
+      resolveSnapshots = res;
+    }));
+
+    const bridge = await initAndStepAtBoundary(12368);
+    const session = (bridge as any).sessions.get(Buffer.from('identity').toString('hex'));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+
+    await (bridge as any).reapExpiredSessions();
+    expect(mocks.pool.close).not.toHaveBeenCalled();
+    expect((bridge as any).sessions.get(Buffer.from('identity').toString('hex'))).toBe(session);
+
+    resolveSnapshots([]);
+    await new Promise(r => setImmediate(r));
+    session.lastActivityAt = Date.now() - 5 * 60 * 1000;
+
+    await (bridge as any).reapExpiredSessions();
+    expect(mocks.pool.close).toHaveBeenCalledTimes(1);
   });
 
   it('coalesces overlapping boundary steps into a single fetch and report (single-flight)', async () => {

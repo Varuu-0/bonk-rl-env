@@ -413,6 +413,18 @@ describe('WorkerPool failure state', () => {
     await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
   });
 
+  it('keeps the pool usable when detached telemetry snapshot times out', async () => {
+    fakes.control.messageTimeoutMs = 20;
+    pool = new WorkerPool(1);
+    await pool.init(1, {}, false);
+
+    await expect(pool.getTelemetrySnapshots({ failOnTimeout: false })).rejects.toThrow('timed out');
+
+    expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
+    const results = await pool.step([0]);
+    expect(results).toHaveLength(1);
+  });
+
   it('propagates message-mode reset errors without failing the pool', async () => {
     pool = new WorkerPool(1);
     await pool.init(1, {}, false);

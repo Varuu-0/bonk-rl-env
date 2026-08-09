@@ -491,7 +491,7 @@ describe('IpcBridge initEnv validation (#195, #227)', () => {
     const bridge = new IpcBridge({ server: { port: 15572 } } as any);
     try {
       await (bridge as any).initEnv(1, {}, false);
-      expect((bridge as any)._numEnvs).toBe(1);
+      expect((bridge as any).localSession.numEnvs).toBe(1);
     } finally {
       await bridge.close();
     }
