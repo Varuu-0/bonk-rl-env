@@ -142,4 +142,45 @@ describe('WorkerPool operation serialization (#223)', () => {
     initDeferred.resolve(undefined);
     await initP;
   });
+
+  it('re-arms the lock for a queued op so a call arriving after the head settles still queues (#252)', async () => {
+    const pool = new WorkerPool(1);
+    const calls: string[] = [];
+    const stepDeferreds = [deferred<any[]>(), deferred<any[]>(), deferred<any[]>()];
+    let stepIdx = 0;
+    vi.spyOn(pool as any, 'stepInternal').mockImplementation(() => {
+      calls.push('step');
+      return stepDeferreds[stepIdx++].promise;
+    });
+
+    // Head starts immediately (locks).
+    const p1 = (pool as any).step([0]);
+    // Queued behind p1.
+    const p2 = (pool as any).step([0]);
+    await tick();
+    expect(calls).toEqual(['step']);
+
+    // Head settles; the queued p2 starts and must re-arm the lock, so its
+    // worker await holds exclusivity. A third call arriving *after* p1 settled
+    // but *while p2 is still awaiting* must queue behind p2 — it must never take
+    // the fast path and run concurrently (#252). Without the re-arm this third
+    // call would see `_operationLocked === false` and interleave with p2.
+    stepDeferreds[0].resolve([]);
+    await p1;
+    await tick();
+    expect(calls).toEqual(['step', 'step']);
+
+    const p3 = (pool as any).step([0]);
+    await tick();
+    // p3 must NOT have started while p2 is still in flight.
+    expect(calls).toEqual(['step', 'step']);
+
+    stepDeferreds[1].resolve([]);
+    await p2;
+    await tick();
+    expect(calls).toEqual(['step', 'step', 'step']);
+
+    stepDeferreds[2].resolve([]);
+    await expect(p3).resolves.toEqual([]);
+  });
 });

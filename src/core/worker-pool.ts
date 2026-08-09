@@ -131,16 +131,27 @@ export class WorkerPool {
      * the queue: later operations still run.
      */
     private async withOperationLock<T>(operation: () => Promise<T>): Promise<T> {
-        if (!this._operationLocked) {
+        // `start` re-arms the lock at the moment the operation actually begins
+        // and clears it on that operation's settlement. This is what keeps a
+        // *queued* operation exclusive: its `start` runs in the same microtask
+        // drain that lets the previous head clear the flag, so any call arriving
+        // after the head settles (but while the queued op is still awaiting
+        // workers) sees the lock armed again and queues instead of running
+        // concurrently (#252). Without the re-arm, the queued op would start with
+        // `_operationLocked === false` and reopen the #223 shared-buffer hazard.
+        const start = () => {
             this._operationLocked = true;
-            const result = operation().then(
+            return operation().then(
                 (value: T) => { this._operationLocked = false; return value; },
                 (error: unknown) => { this._operationLocked = false; throw error; }
             );
-            this._operationTail = result;
-            return result;
-        }
-        const next = this._operationTail.then(operation, operation) as Promise<T>;
+        };
+        // The fast path also keeps `_operationTail` in sync: without it, a
+        // second call would chain on the initial already-resolved tail and its
+        // `start` would run immediately, in parallel with the first operation.
+        const next = this._operationLocked
+            ? this._operationTail.then(start, start) as Promise<T>
+            : start();
         this._operationTail = next.then(() => undefined, () => undefined);
         return next;
     }

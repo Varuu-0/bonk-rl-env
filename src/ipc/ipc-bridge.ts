@@ -19,6 +19,8 @@ export class IpcBridge {
     private _numEnvs: number = 0;
     private _shouldClose: boolean = false;
     private _hostPool: boolean = false;
+    private _hostConfig: any = null;
+    private _hostUseSharedMemory: boolean | undefined = undefined;
     private _boundResolve: (() => void) | null = null;
     private _boundReject: ((reason?: any) => void) | null = null;
 
@@ -179,10 +181,31 @@ export class IpcBridge {
                     // already initialized with that env's numEnvs and config.
                     // Never re-initialize it with client-default config (that
                     // would discard the env-configured workers); accept an
-                    // init only when the requested env count matches.
+                    // init only when the requested env count matches. A
+                    // matching count must still not silently discard client
+                    // settings the env-owned pool cannot honor (#252): reject
+                    // a conflicting explicit useSharedMemory, and otherwise
+                    // echo the effective config/useSharedMemory so the client
+                    // can detect any divergence from what is actually serving.
                     if (numEnvs === this._numEnvs) {
-                        this._initialized = true;
-                        response = { status: "ok" };
+                        const clientUseSharedMemory = payload.useSharedMemory;
+                        if (
+                            clientUseSharedMemory !== undefined &&
+                            this._hostUseSharedMemory !== undefined &&
+                            clientUseSharedMemory !== this._hostUseSharedMemory
+                        ) {
+                            response = {
+                                status: "error",
+                                error: `Invalid init: this IPC server hosts useSharedMemory=${this._hostUseSharedMemory}, got ${clientUseSharedMemory}`,
+                            };
+                        } else {
+                            this._initialized = true;
+                            response = {
+                                status: "ok",
+                                config: this._hostConfig ?? {},
+                                useSharedMemory: this._hostUseSharedMemory,
+                            };
+                        }
                     } else {
                         response = {
                             status: "error",
@@ -392,7 +415,7 @@ export class IpcBridge {
      * env's numEnvs/config/useSharedMemory rather than getting default
      * workers. The host keeps owning the pool's lifecycle.
      */
-    adoptPool(pool: WorkerPool, numEnvs: number): void {
+    adoptPool(pool: WorkerPool, numEnvs: number, options: { config?: any; useSharedMemory?: boolean } = {}): void {
         if (this._hostPool || this._initialized) {
             throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
         }
@@ -400,6 +423,11 @@ export class IpcBridge {
         this._hostPool = true;
         this._initialized = true;
         this._numEnvs = numEnvs;
+        // Remember the host env's effective config and useSharedMemory so a
+        // matching-count client init can be validated/echoed instead of
+        // silently discarding the client's settings on an env-owned pool (#252).
+        this._hostConfig = options.config ?? null;
+        this._hostUseSharedMemory = options.useSharedMemory;
     }
 
     /**

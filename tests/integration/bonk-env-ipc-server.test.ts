@@ -229,6 +229,39 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
     }
   });
 
+  it('bind failure rejects start() without leaking an unhandled rejection from the serve chain (#252)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 255;
+    const portManager = new PortManager({ startPort: port, endPort: port + 5 });
+    const blocker = await occupyPort(port);
+
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => { unhandled.push(reason); };
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const env = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+
+      await expect(env.start()).rejects.toThrow();
+      expect(env.isActive()).toBe(false);
+      expect(portManager.isAllocated(port)).toBe(false);
+
+      // Let any stray rejection propagation settle. The rejected side of the
+      // `serve.then(...)` teardown chain must be handled (bind failures surface
+      // via bridge.ready), so a failed bind must not emit an unhandled rejection
+      // that would terminate the process on Node >=20 (unhandled-rejections=throw).
+      await new Promise((resolve) => setTimeout(resolve, 150));
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  });
+
   it('survives a stop()/start() cycle without the stale serve teardown killing it (#223)', { timeout: 60000 }, async () => {
     const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START + 300, endPort: IPC_SERVER_TEST_START + 349 });
     const env = new BonkEnv({

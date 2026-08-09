@@ -455,6 +455,41 @@ describe('IpcBridge adopted pool (enableIpcServer hosts the env pool, #223/#252)
     }
   });
 
+  it('rejects a matching-count init with a conflicting useSharedMemory on an adopted pool (#252)', async () => {
+    const bridge = new IpcBridge({ server: { port: 15604 } } as any);
+    try {
+      bridge.adoptPool((bridge as any).pool, 2, { config: { frameSkip: 3 }, useSharedMemory: false });
+
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 2, useSharedMemory: true }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('useSharedMemory=false');
+      expect(response.error).toContain('got true');
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('echoes the effective config/useSharedMemory on a matching-count adopted-pool init (#252)', async () => {
+    const bridge = new IpcBridge({ server: { port: 15605 } } as any);
+    try {
+      bridge.adoptPool((bridge as any).pool, 2, { config: { frameSkip: 3, maxTicks: 200 }, useSharedMemory: false });
+
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 2, useSharedMemory: false }));
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('ok');
+      // The client's own settings are honored only to the extent they match the
+      // hosted env; the effective config that will actually serve is echoed so
+      // the client can detect any divergence instead of silently discarding it.
+      expect(response.config).toEqual({ frameSkip: 3, maxTicks: 200 });
+      expect(response.useSharedMemory).toBe(false);
+    } finally {
+      await bridge.close();
+    }
+  });
+
   it('rejects adopting a pool after the bridge pool is already initialized', async () => {
     const bridge = new IpcBridge({ server: { port: 15602 } } as any);
     try {

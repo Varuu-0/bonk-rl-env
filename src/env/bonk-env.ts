@@ -114,7 +114,7 @@ export class BonkEnv {
                 // its numEnvs/config/useSharedMemory instead of spawning a
                 // second set of default-config workers (no double workers,
                 // env config forwarded).
-                bridge.adoptPool(this.pool!, this.config.numEnvs ?? 1);
+                bridge.adoptPool(this.pool!, this.config.numEnvs ?? 1, { config: envConfig, useSharedMemory });
                 // start() keeps the serve loop alive until close(); bind
                 // failures surface through bridge.ready, so await ready
                 // rather than the serve promise.
@@ -130,7 +130,19 @@ export class BonkEnv {
                 // loop from a previous stop()/start() cycle cannot tear down a
                 // freshly restarted env, and a normal env.stop() (which nulls
                 // this.bridge) doesn't trigger a redundant teardown.
-                void serve.then(() => { if (this.bridge === bridge) void this.stop(); });
+                // A rejection handler is required on this chain: `serve.then`
+                // returns a separate promise, and on a bind failure (EADDRINUSE)
+                // `serve` rejects so this returned promise would reject with no
+                // consumer — an unhandled rejection that terminates the process
+                // on Node >=20 (`unhandled-rejections=throw`) even though
+                // `await bridge.ready` above makes start() reject cleanly for
+                // the caller (#252). Bind failures surface via bridge.ready, so
+                // the rejection handler is an intentional no-op that does not
+                // disturb the normal-shutdown lifecycle branch.
+                void serve.then(
+                    () => { if (this.bridge === bridge) void this.stop(); },
+                    () => { /* bind failures surface via bridge.ready */ }
+                );
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
         } catch (error) {
