@@ -285,28 +285,28 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
     it('enableSleeping rejects string coercion, accepting only real booleans', () => {
         // String `'false'` is truthy; a naive `Boolean(value)` would turn it into
         // true and silently invert the sleep flag. Real booleans still win.
-        const stringFalse = new PhysicsEngine({ enableSleeping: 'false' as any });
-        const stringTrue = new PhysicsEngine({ enableSleeping: 'true' as any });
-        const numZero = new PhysicsEngine({ enableSleeping: 0 as any });
-        const boolFalse = new PhysicsEngine({ enableSleeping: false });
-        const boolTrue = new PhysicsEngine({ enableSleeping: true });
-        const omitted = new PhysicsEngine({});
-        for (const eng of [stringFalse, stringTrue, numZero]) {
-            const anyEng: any = eng;
-            // Non-boolean runtime values must not be coerced: they fall back to
-            // the default `true`, never to `false` (nor flip via truthiness).
-            expect(anyEng.enableSleeping).toBe(true);
-            expect(anyEng.world.m_allowSleep).toBe(true);
-            eng.destroy();
+        const engines = [
+            new PhysicsEngine({ enableSleeping: 'false' as any }),
+            new PhysicsEngine({ enableSleeping: 'true' as any }),
+            new PhysicsEngine({ enableSleeping: 0 as any }),
+            new PhysicsEngine({ enableSleeping: false }),
+            new PhysicsEngine({ enableSleeping: true }),
+            new PhysicsEngine({}),
+        ];
+        try {
+            // Non-boolean runtime values (string 'false'/'true', 0) and the
+            // omitted default must all fall back to `true`, never to `false`:
+            for (const idx of [0, 1, 2, 4, 5]) {
+                const anyEng: any = engines[idx];
+                expect(anyEng.enableSleeping).toBe(true);
+                expect(anyEng.world.m_allowSleep).toBe(true);
+            }
+            // A real `false` boolean must still win over the default.
+            expect((engines[3] as any).enableSleeping).toBe(false);
+            expect((engines[3] as any).world.m_allowSleep).toBe(false);
+        } finally {
+            for (const eng of engines) eng.destroy();
         }
-        expect((boolFalse as any).enableSleeping).toBe(false);
-        expect((boolFalse as any).world.m_allowSleep).toBe(false);
-        expect((boolTrue as any).enableSleeping).toBe(true);
-        expect((boolTrue as any).world.m_allowSleep).toBe(true);
-        expect((omitted as any).enableSleeping).toBe(true);
-        boolFalse.destroy();
-        boolTrue.destroy();
-        omitted.destroy();
     });
 
     it('a tuning pass that breaks the #234 ascent invariant warns (positive gravity only)', () => {
