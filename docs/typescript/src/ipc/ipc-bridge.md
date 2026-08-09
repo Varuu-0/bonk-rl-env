@@ -104,12 +104,12 @@ post-step telemetry runs, and telemetry never holds up the request path:
   by an error when telemetry fails (`recordMemory()` throwing, a snapshot
   fetch rejecting) — the client would otherwise retry and double-step the
   environments (#185).
-- On the every-5000-steps telemetry boundary the reply is sent eagerly, then
-  the telemetry block (`recordMemory`, `getTelemetrySnapshots`, the heatmap
-  report) runs detached (`void this.runPostStepTelemetry(...)`) and catches
-  its own errors, so a slow or hung worker snapshot fetch (up to
-  `messageTimeoutMs` in message mode) can never delay this reply or stall the
-  single-threaded ZMQ loop (#229).
+- When the `TelemetryController` reports telemetry due according to the
+  configured `reportIntervalMs`, the reply is sent eagerly, then the telemetry
+  block (`recordMemory`, `getTelemetrySnapshots`, the heatmap report) runs
+  detached (`void this.runPostStepTelemetry(...)`) and catches its own errors,
+  so a slow or hung worker snapshot fetch (up to `messageTimeoutMs` in message
+  mode) can never delay this reply or stall the single-threaded ZMQ loop (#229).
 - Snapshot fetching is non-blocking: in shared-memory mode workers blocked in
   `Atomics.wait` can never service `GET_TELEMETRY`, so the pool returns an
   empty set immediately; in message mode a snapshot timeout is fetched with
