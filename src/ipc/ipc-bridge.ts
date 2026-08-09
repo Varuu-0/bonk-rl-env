@@ -3,7 +3,7 @@ import * as net from "net";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
-import { getConfig, type AppConfig, type DeepPartial, resolveEnvironmentConfig, DEFAULT_MAX_CLIENT_SESSIONS } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, resolveEnvironmentConfig, DEFAULT_MAX_CLIENT_SESSIONS, mergeEngineSections } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -362,11 +362,11 @@ export class IpcBridge {
                     }
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
-                    // Client config overrides the loader's environment
-                    // defaults; the reward section rides along so the
-                    // worker environments apply the configured shaping
-                    // weights instead of the hardcoded literals (#220).
-                    const mergedConfig = resolveEnvironmentConfig(payload.config || {});
+                    const payloadCfg = payload.config || {};
+                    // One spawn config carries environment defaults, reward
+                    // weights, and engine tuning from the IPC client (#217, #220).
+                    const mergedConfig = resolveEnvironmentConfig(payloadCfg);
+                    const engineSections = mergeEngineSections(payloadCfg);
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
                     // This init only (re)creates this client's own pool; if the
                     // client reinitializes, WorkerPool.init() tears down that
@@ -401,39 +401,39 @@ export class IpcBridge {
                             this.allowLocalSessionFallback = false;
                         }
                     }
-                        if (session) {
-                            activeSession = session;
-                            this.beginSessionRequest(session);
-                            try {
-                                await session.pool.init(numEnvs, mergedConfig, useSharedMemory);
-                                session.initialized = true;
-                                session.numEnvs = numEnvs;
-                                response = { status: "ok" };
-                            } catch (error) {
-                                // A pool that fails initialization is not
-                                // usable, so drop the session (whether it was
-                                // just created or is a re-init of an existing
-                                // one) and free its workers. Retaining an
-                                // invalidated existing session would let a
-                                // persistently failing init hold a client-cap
-                                // slot forever.
-                                if (this.sessions.get(sessionKey) === session) {
-                                    this.sessions.delete(sessionKey);
-                                    try {
-                                        await session.pool.close();
-                                    } catch (closeError) {
-                                        console.error('[IPC] Error closing failed client session:', closeError);
-                                    }
+                    if (session) {
+                        activeSession = session;
+                        this.beginSessionRequest(session);
+                        try {
+                            await session.pool.init(numEnvs, { ...mergedConfig, ...engineSections }, useSharedMemory);
+                            session.initialized = true;
+                            session.numEnvs = numEnvs;
+                            response = { status: "ok" };
+                        } catch (error) {
+                            // A pool that fails initialization is not
+                            // usable, so drop the session (whether it was
+                            // just created or is a re-init of an existing
+                            // one) and free its workers. Retaining an
+                            // invalidated existing session would let a
+                            // persistently failing init hold a client-cap
+                            // slot forever.
+                            if (this.sessions.get(sessionKey) === session) {
+                                this.sessions.delete(sessionKey);
+                                try {
+                                    await session.pool.close();
+                                } catch (closeError) {
+                                    console.error('[IPC] Error closing failed client session:', closeError);
                                 }
-                                // The session map is empty again, but session
-                                // mode stays engaged (fallback is not
-                                // blanket-restored): evicting a client must
-                                // never re-admit it to the local/bypass pool.
-                                // Only the single pinned programmatic caller is
-                                // allowed there, and the bridge is not
-                                // deadlocked — a new identity can still init.
-                                throw error;
                             }
+                            // The session map is empty again, but session
+                            // mode stays engaged (fallback is not
+                            // blanket-restored): evicting a client must
+                            // never re-admit it to the local/bypass pool.
+                            // Only the single pinned programmatic caller is
+                            // allowed there, and the bridge is not
+                            // deadlocked — a new identity can still init.
+                            throw error;
+                        }
                     }
                 }
             } else if (command === "reset") {

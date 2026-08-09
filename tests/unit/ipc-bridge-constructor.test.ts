@@ -59,6 +59,7 @@ vi.mock('../../src/core/worker-pool', () => ({
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   DEFAULT_MAX_CLIENT_SESSIONS: 32,
+  mergeEngineSections: () => ({ physics: {}, arena: {}, player: {} }),
   resolveEnvironmentConfig: (override: Record<string, any>) => {
     const config = mocks.getConfig();
     return {

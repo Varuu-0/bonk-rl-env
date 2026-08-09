@@ -74,6 +74,7 @@ vi.mock('../../src/config/config-loader', () => ({
   DEFAULT_MAX_CLIENT_SESSIONS: 32,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  mergeEngineSections: (override: Record<string, any>) => ({ physics: {}, arena: {}, player: {} }),
   resolveEnvironmentConfig: (override: Record<string, any>) => {
     const config = mocks.getConfig();
     return {

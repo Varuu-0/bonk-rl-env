@@ -35,6 +35,14 @@ class BonkVecEnv(VecEnv):
                 - max_ticks: Maximum ticks per episode (default 900)
                 - random_opponent: Use random opponent policy (default True)
                 - seed: Random seed
+                - physics: Engine tuning sub-dict (issue #217), e.g.
+                  {"gravityY": 5, "ticksPerSecond": 30, "solverIterations": 2,
+                   "scale": 30.0, "gravityX": 0.0, "enableSleeping": true,
+                   "worldAabbExtent": 1000.0} — every key reaches PhysicsEngine
+                - arena: Arena tuning sub-dict, e.g. {"defaultHalfWidth": 25.0,
+                  "defaultHalfHeight": 20.0, "boundsMargin": 5.0}
+                - player: Player movement tuning sub-dict, e.g.
+                  {"moveForce": 30.0, "heavyMassMultiplier": 0.7}
             timeout_ms: Send and receive timeout for normal requests
             close_timeout_ms: Send and receive timeout for session close
             linger_ms: Maximum time for queued messages to linger on close
