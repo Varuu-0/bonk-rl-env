@@ -262,4 +262,46 @@ describe('WorkerPool operation serialization (#223)', () => {
     stepDeferreds[3].resolve([]);
     await expect(p4).resolves.toEqual([]);
   });
+
+  it('resets the queue gate after the pending queue drains so a later call runs immediately', async () => {
+    const pool = new WorkerPool(1);
+    const calls: string[] = [];
+    const stepDeferreds = [deferred<any[]>(), deferred<any[]>(), deferred<any[]>(), deferred<any[]>()];
+    let stepIdx = 0;
+    vi.spyOn(pool as any, 'stepInternal').mockImplementation(() => {
+      calls.push('step');
+      return stepDeferreds[stepIdx++].promise;
+    });
+
+    // Head plus two deeper queued ops, then drain each in turn.
+    const p1 = (pool as any).step([0]);
+    const p2 = (pool as any).step([0]);
+    const p3 = (pool as any).step([0]);
+    await tick();
+    expect(calls).toEqual(['step']);
+
+    stepDeferreds[0].resolve([]);
+    await tick();
+    expect(calls).toEqual(['step', 'step']);
+
+    stepDeferreds[1].resolve([]);
+    await tick();
+    expect(calls).toEqual(['step', 'step', 'step']);
+
+    stepDeferreds[2].resolve([]);
+    await p1;
+    await p2;
+    await p3;
+    await tick();
+
+    // The pending-queue counter must have fully drained back to zero — a
+    // residual >0 would spuriously hold the gate and deadlock later calls.
+    // A fresh call therefore takes the fast path immediately.
+    const p4 = (pool as any).step([0]);
+    await tick();
+    expect(calls).toEqual(['step', 'step', 'step', 'step']);
+
+    stepDeferreds[3].resolve([]);
+    await expect(p4).resolves.toEqual([]);
+  });
 });
