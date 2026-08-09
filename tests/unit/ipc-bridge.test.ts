@@ -7,6 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+import { resetConfig } from '../../src/config/config-loader';
 
 describe('IpcBridge handleRequest', () => {
   let bridge: IpcBridge;
@@ -214,6 +215,96 @@ describe('IpcBridge handleRequest', () => {
       }
       expect(firstDone).toBe(5);
       expect(truncated).toBe(true);
+    });
+
+    it('forwards loader reward environment variables through IPC init to worker environments (#220)', { timeout: 30000 }, async () => {
+      const rewardEnvKeys = ['KILL_REWARD', 'DEATH_PENALTY', 'TIME_PENALTY'] as const;
+      const savedRewardEnv = Object.fromEntries(
+        rewardEnvKeys.map(key => [key, process.env[key]]),
+      ) as Record<typeof rewardEnvKeys[number], string | undefined>;
+
+      const runStep = async (port: number, config: Record<string, any>) => {
+        const workerBridge = new IpcBridge({ server: { port } } as any);
+        const { sentMessages } = captureSend(workerBridge);
+        try {
+          await callHandleRequest(workerBridge, JSON.stringify({
+            command: 'init',
+            numEnvs: 1,
+            useSharedMemory: false,
+            config,
+          }));
+          expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+
+          sentMessages.length = 0;
+          await callHandleRequest(workerBridge, JSON.stringify({ command: 'reset', seeds: [1] }));
+          expect(JSON.parse(sentMessages[0]).status).toBe('ok');
+
+          sentMessages.length = 0;
+          await callHandleRequest(workerBridge, JSON.stringify({ command: 'step', actions: [0] }));
+          return JSON.parse(sentMessages[0]).data[0];
+        } finally {
+          await workerBridge.close();
+        }
+      };
+
+      await bridge.close();
+      process.env.KILL_REWARD = '7';
+      process.env.DEATH_PENALTY = '-5';
+      process.env.TIME_PENALTY = '-0.5';
+      resetConfig();
+
+      try {
+        const killResult = await runStep(15573, {
+          numOpponents: 1,
+          randomOpponent: false,
+          maxTicks: 100,
+          mapData: {
+            name: 'ipc-reward-kill',
+            spawnPoints: {
+              team_blue: { x: -200, y: -100 },
+              team_red: { x: 200, y: -100 },
+            },
+            bodies: [
+              { name: 'lethal', type: 'rect', x: 200, y: -100, width: 100, height: 100, static: true, isLethal: true },
+            ],
+          },
+        });
+        expect(killResult.reward).toBe(6.5);
+
+        const deathResult = await runStep(15574, {
+          numOpponents: 0,
+          randomOpponent: false,
+          maxTicks: 100,
+          mapData: {
+            name: 'ipc-reward-death',
+            spawnPoints: {
+              team_blue: { x: 0, y: 0 },
+              team_red: { x: 200, y: -100 },
+            },
+            bodies: [
+              { name: 'lethal', type: 'rect', x: 0, y: 0, width: 100, height: 100, static: true, isLethal: true },
+            ],
+          },
+        });
+        expect(deathResult.reward).toBe(-5.5);
+
+        const timeResult = await runStep(15575, {
+          numOpponents: 0,
+          randomOpponent: false,
+          maxTicks: 100,
+        });
+        expect(timeResult.done).toBe(false);
+        expect(timeResult.reward).toBe(-0.5);
+      } finally {
+        for (const key of rewardEnvKeys) {
+          if (savedRewardEnv[key] === undefined) {
+            delete process.env[key];
+          } else {
+            process.env[key] = savedRewardEnv[key];
+          }
+        }
+        resetConfig();
+      }
     });
 
     it('handles reset command', async () => {
