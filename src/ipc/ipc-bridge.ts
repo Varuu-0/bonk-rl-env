@@ -47,13 +47,9 @@ export class IpcBridge {
     private allowLocalSessionFallback: boolean = true;
     // A programmatic caller that successfully used the local pool before IPC
     // session mode began keeps that pool. There is only one local pool, so one
-    // routing identity is sufficient and remains bounded.
+    // routing identity is sufficient and remains bounded. It is the only
+    // identity allowed to use the local pool once session mode has engaged.
     private localSessionIdentity?: string;
-    // A routing identity whose `init` failed and emptied the session map. When
-    // fallback is restored after that failure it must not silently re-admit the
-    // just-failed identity to the local/bypass pool; a single bounded slot
-    // suffices and is cleared once a session is (re)established.
-    private blockedLocalFallbackIdentity?: string;
     // Bypass/local session for initEnv/resetEnv/stepEnv. Before IPC
     // client-session mode begins, requests can use it so programmatic init
     // followed by IPC reset/step keeps working.
@@ -189,11 +185,9 @@ export class IpcBridge {
         if (session) {
             return session;
         }
-        // The identity whose `init` failed and emptied the session map must
-        // not silently rejoin the local/bypass pool; it fails loudly instead.
-        if (this.blockedLocalFallbackIdentity === sessionKey) {
-            return undefined;
-        }
+        // Only the single pinned programmatic caller may use the local pool
+        // once IPC session mode has engaged; every other without a session
+        // fails loudly rather than silently borrowing another pool.
         if (this.localSessionIdentity === sessionKey) {
             return this.localSession;
         }
@@ -308,15 +302,11 @@ export class IpcBridge {
                             // IPC clients are permanently isolated from the
                             // local bypass pool once a session is owned. A
                             // boolean mode flag avoids an unbounded tombstone
-                            // set for invalid clients. A session being
-                            // established also clears the failed-init block.
+                            // set for invalid clients.
                             if (this.localSessionIdentity === sessionKey) {
                                 this.localSessionIdentity = undefined;
                             }
                             this.allowLocalSessionFallback = false;
-                            if (this.blockedLocalFallbackIdentity === sessionKey) {
-                                this.blockedLocalFallbackIdentity = undefined;
-                            }
                         }
                     }
                         if (session) {
@@ -342,22 +332,14 @@ export class IpcBridge {
                                     } catch (closeError) {
                                         console.error('[IPC] Error closing failed client session:', closeError);
                                     }
-                                    // If the failed init was the only session
-                                    // there is nothing left to isolate; restore
-                                    // the programmatic-local fallback so the
-                                    // bridge is not left permanently in session
-                                    // mode with zero sessions.
-                                    if (this.sessions.size === 0) {
-                                        this.allowLocalSessionFallback = true;
-                                        this.localSessionIdentity = undefined;
-                                        // Single bounded slot: it always names
-                                        // the most recent identity whose failed
-                                        // init emptied the session map, so a
-                                        // newer such failure simply replaces an
-                                        // older, now-stale one.
-                                        this.blockedLocalFallbackIdentity = sessionKey;
-                                    }
                                 }
+                                // The session map is empty again, but session
+                                // mode stays engaged (fallback is not
+                                // blanket-restored): evicting a client must
+                                // never re-admit it to the local/bypass pool.
+                                // Only the single pinned programmatic caller is
+                                // allowed there, and the bridge is not
+                                // deadlocked — a new identity can still init.
                                 throw error;
                             }
                     }
@@ -603,7 +585,6 @@ export class IpcBridge {
         this.localSession.numEnvs = 0;
         this.allowLocalSessionFallback = true;
         this.localSessionIdentity = undefined;
-        this.blockedLocalFallbackIdentity = undefined;
 
         // Close every per-client session pool and the local/bypass pool. A
         // client's own session `close` only ever removed that session, so the
