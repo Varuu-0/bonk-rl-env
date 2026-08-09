@@ -504,11 +504,72 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
       // The failed init dropped the only session, so the bridge is no longer
       // permanently locked in session mode: the local bypass pool works again.
       expect((bridge as any).allowLocalSessionFallback).toBe(true);
+      // The just-failed identity must not silently rejoin the local/bypass
+      // pool in hybrid mode (initEnv + IPC): it fails loudly instead.
+      await handleRequest(Buffer.from('failed-client'), JSON.stringify({ command: 'reset', seeds: [1] }));
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+      // A different identity can still use the hybrid local pool.
       await handleRequest(Buffer.from('bypass-client'), JSON.stringify({ command: 'step', actions: [0] }));
       expect(lastResponse().status).toBe('ok');
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+
+  it('clears the failed-init block on successful re-init', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12380, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    await bridge.initEnv(1, {}, false);
+
+    const failedPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedPool;
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const clientHex = Buffer.from('retry-client').toString('hex');
+      await handleRequest(Buffer.from('retry-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect((bridge as any).blockedLocalFallbackIdentity).toBe(clientHex);
+
+      // A successful re-init establishes a real session and clears the block.
+      await handleRequest(Buffer.from('retry-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse().status).toBe('ok');
+      expect((bridge as any).blockedLocalFallbackIdentity).toBeUndefined();
+      expect((bridge as any).sessions.get(clientHex)).toBeDefined();
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('clears the failed-init block on full close', async () => {
+    const initError = new Error('worker startup failed');
+    const bridge = new IpcBridge({ server: { port: 12381, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    await bridge.initEnv(1, {}, false);
+
+    const failedPool = {
+      init: vi.fn().mockRejectedValue(initError),
+      close: vi.fn().mockResolvedValue(undefined),
+    };
+    mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
+      return failedPool;
+    });
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      await handleRequest(Buffer.from('failed-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+      expect(lastResponse()).toMatchObject({ status: 'error', error: 'worker startup failed' });
+      expect((bridge as any).blockedLocalFallbackIdentity).toBe(Buffer.from('failed-client').toString('hex'));
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+
+    await bridge.close();
+    expect((bridge as any).blockedLocalFallbackIdentity).toBeUndefined();
   });
 
   it('reaps an idle session, frees its slot, and keeps its identity loud', async () => {
