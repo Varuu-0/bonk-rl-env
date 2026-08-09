@@ -73,6 +73,14 @@ vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  resolveEnvironmentConfig: (override: Record<string, any>) => {
+    const config = mocks.getConfig();
+    return {
+      ...config.environment,
+      ...override,
+      reward: { ...config.reward, ...override.reward },
+    };
+  },
 }));
 
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
@@ -87,7 +95,11 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
   const stepResult = { observation: [], reward: 0.5, done: false, truncated: false, info: { tick: 5 } };
 
   beforeEach(() => {
-    mocks.getConfig.mockReturnValue({ server: { port: 5555 }, environment: { seed: 0 } });
+    mocks.getConfig.mockReturnValue({
+      server: { port: 5555 },
+      environment: { seed: 0 },
+      reward: { killReward: 1, deathPenalty: -1, timePenalty: -0.001 },
+    });
     mocks.isTelemetryEnabled.mockReturnValue(true);
     mocks.pool.step.mockResolvedValue([stepResult]);
     mocks.pool.getTelemetrySnapshots.mockResolvedValue([]);
