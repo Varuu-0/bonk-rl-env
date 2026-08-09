@@ -73,6 +73,7 @@ vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   deepMerge: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
   mergeEnvironmentConfig: (base: Record<string, any>, override: Record<string, any>) => ({ ...base, ...override }),
+  mergeEngineSections: (override: Record<string, any>) => ({ physics: {}, arena: {}, player: {} }),
   resolveEnvironmentConfig: (override: Record<string, any>) => {
     const config = mocks.getConfig();
     return {

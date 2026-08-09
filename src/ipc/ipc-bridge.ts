@@ -3,7 +3,7 @@ import * as net from "net";
 import { WorkerPool } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
-import { getConfig, type AppConfig, type DeepPartial, resolveEnvironmentConfig } from '../config/config-loader';
+import { getConfig, type AppConfig, type DeepPartial, mergeEngineSections, resolveEnvironmentConfig } from '../config/config-loader';
 
 // Pre-wrapped JSON.parse for telemetry on bridge deserialization.
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
@@ -206,13 +206,13 @@ export class IpcBridge {
                     }
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
-                    // Client config overrides the loader's environment
-                    // defaults; the reward section rides along so the
-                    // worker environments apply the configured shaping
-                    // weights instead of the hardcoded literals (#220).
-                    const mergedConfig = resolveEnvironmentConfig(payload.config || {});
+                    const payloadCfg = payload.config || {};
+                    // One spawn config carries environment defaults, reward
+                    // weights, and engine tuning from the IPC client (#217, #220).
+                    const mergedConfig = resolveEnvironmentConfig(payloadCfg);
+                    const engineSections = mergeEngineSections(payloadCfg);
                     console.log(`[IPC] Init request: numEnvs=${numEnvs}, config=${JSON.stringify(mergedConfig)}, useSharedMemory=${useSharedMemory}`);
-                    await this.pool.init(numEnvs, mergedConfig, useSharedMemory);
+                    await this.pool.init(numEnvs, { ...mergedConfig, ...engineSections }, useSharedMemory);
                     this._initialized = true;
                     this._numEnvs = numEnvs;
                     response = { status: "ok" };
