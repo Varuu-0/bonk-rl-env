@@ -141,7 +141,12 @@ worker pool is **owned per client session**:
 - Requests from an identity that **never called `init`** fall back to the
   bridge's local/bypass pool (`initEnv`/`resetEnv`/`stepEnv`); if that pool is
   also uninitialized, `reset`/`step` are rejected loudly with
-  `Worker pool not initialized`.
+  `Worker pool not initialized`. Session mode is sticky: once any IPC session
+  is created (or even a single `init` fails), only a caller pinned to the
+  local/bypass pool before session mode began can use it — every other
+  identity without a session fails loudly rather than silently borrowing it.
+  A full server shutdown (`close()`) resets this, re-enabling the pre-session
+  fallback for a fresh `start()`.
 - An identity that **did call `init`** and then closed its session never
   silently falls back to another pool: its subsequent `reset`/`step` fail
   loudly with `Worker pool not initialized` until it calls `init` again.
