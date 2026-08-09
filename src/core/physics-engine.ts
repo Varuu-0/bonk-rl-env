@@ -368,7 +368,7 @@ export class PhysicsEngine {
     this.scale = PhysicsEngine.sanitizePositive(options.scale, SCALE);
     this.gravityX = PhysicsEngine.sanitizeFinite(options.gravityX, GRAVITY_X);
     this.gravityY = PhysicsEngine.sanitizeFinite(options.gravityY, GRAVITY_Y);
-    this.enableSleeping = options.enableSleeping === undefined ? true : Boolean(options.enableSleeping);
+    this.enableSleeping = PhysicsEngine.sanitizeBoolean(options.enableSleeping, true);
     this.worldAabbExtent = PhysicsEngine.sanitizePositive(options.worldAabbExtent, WORLD_AABB_EXTENT);
     this.arenaHalfWidth = PhysicsEngine.sanitizePositive(options.arenaHalfWidth, ARENA_HALF_WIDTH);
     this.arenaHalfHeight = PhysicsEngine.sanitizePositive(options.arenaHalfHeight, ARENA_HALF_HEIGHT);
@@ -430,6 +430,13 @@ export class PhysicsEngine {
   /** Returns `v` when it is a finite integer >= min, else the default. */
   private static sanitizeIntegerAtLeast(v: number | undefined, def: number, min: number): number {
     return typeof v === 'number' && Number.isFinite(v) && Number.isInteger(v) && v >= min ? v : def;
+  }
+
+  /** Returns `v` only when it is an actual boolean, else the default. Rejects
+   *  loosely-truthy/falsy values (strings like `'false'`, 0, 1) so caller/Python
+   *  config can never silently invert the sleeping flag via coercion. */
+  private static sanitizeBoolean(v: boolean | undefined, def: boolean): boolean {
+    return typeof v === 'boolean' ? v : def;
   }
 
   /** Create a fresh world from the resolved instance tuning. Used by the
