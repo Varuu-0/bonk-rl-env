@@ -54,6 +54,25 @@ export class IpcBridge {
     // client-session mode begins, requests can use it so programmatic init
     // followed by IPC reset/step keeps working.
     private localSession: PoolSession;
+    // An adopted pool belongs to its enclosing BonkEnv. In this mode every
+    // client routes to the same initialized host session; standalone bridges
+    // continue to give each client its own pool (issues #193 and #223).
+    private _hostPool: boolean = false;
+    private _hostConfig: any = null;
+    private _hostUseSharedMemory: boolean | undefined = undefined;
+    private _boundResolve: (() => void) | null = null;
+    private _boundReject: ((reason?: any) => void) | null = null;
+
+    /**
+     * Resolves once the ZMQ Router socket is bound and accepting connections,
+     * and rejects if the bind fails. Embedders that drive the serve loop
+     * without awaiting start() (which only exits on close()) can await this
+     * to know when the advertised port is actually reachable.
+     */
+    readonly ready: Promise<void> = new Promise<void>((resolve, reject) => {
+        this._boundResolve = resolve;
+        this._boundReject = reject;
+    });
     // Single-flight guard covering the entire post-step telemetry unit
     // (snapshot fetch through report). Prevents overlapping snapshot fetches
     // or duplicate reports when a second boundary step arrives during the
@@ -88,6 +107,28 @@ export class IpcBridge {
 
         // Create a wrapped send function for telemetry (can't overwrite the built-in send property in newer ZeroMQ)
         this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+
+        // The standalone server path awaits only bridge.start(). When the
+        // bind fails, both start() and ready reject; mark ready's rejection
+        // as handled so it cannot surface as an unhandled-rejection crash for
+        // consumers (such as src/server.ts) that never await ready.
+        this.ready.catch(() => {});
+    }
+
+    private markBound(): void {
+        if (this._boundResolve) {
+            this._boundResolve();
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
+    }
+
+    private markBindFailed(err: unknown): void {
+        if (this._boundReject) {
+            this._boundReject(err);
+            this._boundResolve = null;
+            this._boundReject = null;
+        }
     }
 
     /**
@@ -143,9 +184,8 @@ export class IpcBridge {
     }
 
     /**
-     * The local/bypass worker pool (used by initEnv/resetEnv/stepEnv). Kept as
-     * a property so programmatic callers that bypass IPC get the pool the
-     * constructor always created.
+     * The local/bypass worker pool (used by initEnv/resetEnv/stepEnv). In
+     * host-pool mode this is the adopted BonkEnv pool.
      */
     get pool(): WorkerPool {
         return this.localSession.pool;
@@ -156,10 +196,18 @@ export class IpcBridge {
 
     async start() {
         const addr = `tcp://${this.bindAddress}:${this.port}`;
-        await this.sock.bind(addr);
+        try {
+            await this.sock.bind(addr);
+        } catch (err) {
+            this.markBindFailed(err);
+            throw err;
+        }
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
-        this.startSessionReaper();
+        if (!this._hostPool) {
+            this.startSessionReaper();
+        }
+        this.markBound();
 
         // Wait for incoming requests from Python
         try {
@@ -187,6 +235,12 @@ export class IpcBridge {
      *   session mode begins, preserving an established programmatic caller.
      */
     private resolveSession(sessionKey: string): PoolSession | undefined {
+        // An adopted host pool is intentionally shared by all IPC identities.
+        // It is already initialized by BonkEnv before the bridge starts, and
+        // clients cannot own or reap child pools in this mode.
+        if (this._hostPool) {
+            return this.localSession;
+        }
         const session = this.sessions.get(sessionKey);
         if (session) {
             return session;
@@ -277,6 +331,35 @@ export class IpcBridge {
                 }
                 if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };
+                } else if (this._hostPool) {
+                    // The pool was adopted from an enclosing BonkEnv and is
+                    // already initialized with that env's numEnvs and config.
+                    // Never re-initialize it with client-default config (that
+                    // would discard the env-configured workers); accept an
+                    // init only when the requested env count matches.
+                    // A matching count must not silently discard settings the
+                    // env-owned pool cannot honor (#252): echo the effective
+                    // config/useSharedMemory so the client can detect any
+                    // divergence from what is actually serving. useSharedMemory
+                    // is transport-internal to this server's workers and never
+                    // changes the JSON contract, so a mismatched client value
+                    // (e.g. the Python BonkVecEnv's hardcoded `true` against a
+                    // `false` host) must NOT be a hard error — the client only
+                    // consumes the JSON replies and keeps working.
+                    if (numEnvs === this.localSession.numEnvs) {
+                        activeSession = this.localSession;
+                        this.beginSessionRequest(this.localSession);
+                        response = {
+                            status: "ok",
+                            config: this._hostConfig ?? {},
+                            useSharedMemory: this._hostUseSharedMemory,
+                        };
+                    } else {
+                        response = {
+                            status: "error",
+                            error: `Invalid init: this IPC server hosts ${this.localSession.numEnvs} environment(s), got ${numEnvs}`,
+                        };
+                    }
                 } else {
                     const useSharedMemory = payload.useSharedMemory;
                     // Client config overrides the loader's environment
@@ -461,6 +544,17 @@ export class IpcBridge {
                     // Full server shutdown: close the Router after replying.
                     response = { status: "ok" };
                     this._shouldClose = true;
+                } else if (this._hostPool) {
+                    // Session close on an adopted pool: the host BonkEnv owns
+                    // the pool's lifecycle, and the pool (plus its global init
+                    // state) is shared by every connected DEALER client. A
+                    // single client ending its session must NOT clear that
+                    // global initialization, or every other active client's
+                    // next reset/step would fail with "Worker pool not
+                    // initialized" while the adopted pool stays alive. Treat a
+                    // session close here as a no-op: the shared, env-configured
+                    // pool keeps serving the remaining clients.
+                    response = { status: "ok" };
                 } else {
                     // Session close (default): free this client's env state but
                     // keep the server listening so other envs/tests on the same
@@ -555,6 +649,29 @@ export class IpcBridge {
     }
 
     /**
+     * Adopt an already-initialized WorkerPool owned by an enclosing host
+     * (e.g. a BonkEnv). The IPC server then serves those env-configured
+     * workers instead of spawning its own, so external clients share the
+     * env's numEnvs/config/useSharedMemory rather than getting default
+     * workers. The host keeps owning the pool's lifecycle.
+     */
+    adoptPool(pool: WorkerPool, numEnvs: number, options: { config?: any; useSharedMemory?: boolean } = {}): void {
+        if (this._hostPool || this.localSession.initialized || this.sessions.size > 0) {
+            throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
+        }
+        this.localSession.pool = pool;
+        this.localSession.initialized = true;
+        this.localSession.numEnvs = numEnvs;
+        this.localSession.lastActivityAt = Date.now();
+        this._hostPool = true;
+        // Remember the host env's effective config and useSharedMemory so a
+        // matching-count client init can be validated/echoed instead of
+        // silently discarding the client's settings on an env-owned pool (#252).
+        this._hostConfig = options.config ?? null;
+        this._hostUseSharedMemory = options.useSharedMemory;
+    }
+
+    /**
      * Reset the environment directly (bypassing IPC).
      * Used by BonkEnv for programmatic control.
      */
@@ -608,10 +725,13 @@ export class IpcBridge {
         this.allowLocalSessionFallback = true;
         this.localSessionIdentity = undefined;
 
-        // Close every per-client session pool and the local/bypass pool. A
-        // client's own session `close` only ever removed that session, so the
-        // rest of the pools are cleaned up here on full server shutdown.
-        const pools = [this.localSession.pool, ...[...this.sessions.values()].map(session => session.pool)];
+        // Close every standalone client session. An adopted host pool belongs
+        // to BonkEnv, which closes it after the bridge; closing it here would
+        // let a bridge shutdown steal the host's lifecycle.
+        const pools = [...this.sessions.values()].map(session => session.pool);
+        if (!this._hostPool) {
+            pools.unshift(this.localSession.pool);
+        }
         this.sessions.clear();
 
         // Close the socket to break out of the for await loop
