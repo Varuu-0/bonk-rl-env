@@ -109,7 +109,62 @@ export class WorkerPool {
     private failure: Error | null = null;
     private cleanupPromise: Promise<void> | null = null;
 
+    // Serializes the buffer-mutating operations (init/reset/step) so callers
+    // driving the same WorkerPool concurrently — e.g. a BonkEnv programmatic
+    // reset/step and a ZMQ IPC request on an adopted pool in enableIpcServer
+    // mode (#223) — cannot interleave worker signaling and mutate the reused
+    // shared-memory buffers (_obsPool/_resultPool/_convertedResults/_finished/
+    // _syncBuffer) while another call is consuming them. close() stays outside
+    // this lock so a shutdown can still interrupt an in-flight batch.
+    private _operationTail: Promise<unknown> = Promise.resolve();
+    private _operationLocked: boolean = false;
+    private _operationQueuedCount: number = 0;
+
     constructor(private numWorkers: number = getConfig().workerPool.numWorkers) {
+    }
+
+    /**
+     * Runs a pool operation with exclusive access. When the lock is free the
+     * operation is started synchronously, so worker signaling begins in the
+     * same tick and an immediately-following close() can still interrupt an
+     * in-flight batch (see worker-pool-failures.test.ts). Subsequent callers
+     * strictly queue behind the current tail (FIFO). Rejections never poison
+     * the queue: later operations still run.
+     */
+    private async withOperationLock<T>(operation: () => Promise<T>): Promise<T> {
+        // `start` re-arms the lock at the moment the operation actually begins
+        // and clears it on that operation's settlement. This is what keeps a
+        // *queued* operation exclusive: its `start` runs in the same microtask
+        // drain that lets the previous head clear the flag, so any call arriving
+        // after the head settles (but while the queued op is still awaiting
+        // workers) sees the lock armed again and queues instead of running
+        // concurrently (#252). Without the re-arm, the queued op would start with
+        // `_operationLocked === false` and reopen the #223 shared-buffer hazard.
+        const start = () => {
+            this._operationQueuedCount = Math.max(0, this._operationQueuedCount - 1);
+            this._operationLocked = true;
+            return operation().then(
+                (value: T) => { this._operationLocked = false; return value; },
+                (error: unknown) => { this._operationLocked = false; throw error; }
+            );
+        };
+        // The fast path also keeps `_operationTail` in sync: without it, a
+        // second call would chain on the initial already-resolved tail and its
+        // `start` would run immediately, in parallel with the first operation.
+        // `_operationQueuedCount` stays armed while ANY operations remain queued.
+        // A boolean would be cleared by the first queued op's `start`, so a call
+        // issued in a settled *queued* op's continuation (with deeper ops still
+        // pending) would see the gate released and fast-path into concurrency;
+        // the counter only drains when every queued op has begun (#252).
+        let next: Promise<T>;
+        if (this._operationLocked || this._operationQueuedCount > 0) {
+            this._operationQueuedCount += 1;
+            next = this._operationTail.then(start, start) as Promise<T>;
+        } else {
+            next = start();
+        }
+        this._operationTail = next.then(() => undefined, () => undefined);
+        return next;
     }
 
     private initObsPool(totalEnvs: number): void {
@@ -144,10 +199,14 @@ export class WorkerPool {
     }
 
     async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
+        return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory));
+    }
+
+    private async initInternal(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
         if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
             throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
         }
-        await this.close(); // Clean up existing if re-initialized
+        await this.closeInternal(); // Clean up existing if re-initialized
         this.state = 'initializing';
         this.failure = null;
 
@@ -373,6 +432,10 @@ export class WorkerPool {
      * only affects the shared-memory extraction path.
      */
     async reset(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
+        return this.withOperationLock(() => this.resetInternal(seeds, options));
+    }
+
+    private async resetInternal(seeds?: number[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('reset');
 
         // Validate the seed batch before touching any worker state. An
@@ -500,6 +563,10 @@ export class WorkerPool {
      * `ownership` is a no-op there (accepted for a symmetric API).
      */
     async step(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
+        return this.withOperationLock(() => this.stepInternal(actions, options));
+    }
+
+    private async stepInternal(actions: any[], options: ResultOwnershipOptions = {}): Promise<any[]> {
         this.assertReady('step');
         // Validate the batch before touching any worker state. A short or
         // over-long action array is a per-request input error in both
@@ -1045,7 +1112,17 @@ export class WorkerPool {
         return settled.map(r => (r as { value: any }).value) as BigUint64Array[];
     }
 
+    // Close is deliberately NOT serialized behind the operation lock: it is the
+    // cancellation path that lets a shutdown immediately wake an in-flight
+    // step/reset (see waitForSharedCompletion), tearing workers down rather than
+    // waiting for a hung batch. init/reset/step run FIFO with each other so
+    // programmatic and IPC callers sharing one adopted pool cannot interleave
+    // worker signaling and corrupt the reused buffers (#223).
     async close() {
+        return this.closeInternal();
+    }
+
+    private async closeInternal(): Promise<void> {
         this.state = 'closed';
         this.failure = null;
         this.wakeSharedWaiters();
