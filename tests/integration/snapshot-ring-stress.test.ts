@@ -19,7 +19,6 @@ describe('snapshot-ring seqlock concurrency', () => {
     const iterations = 50_000;
     const maxPlayers = 1;
     const worker = new Worker(path.join(__dirname, 'stress-writer.cjs'));
-    let terminated = false;
     try {
       await new Promise<void>((resolve, reject) => {
         worker.once('online', resolve);
@@ -55,10 +54,7 @@ describe('snapshot-ring seqlock concurrency', () => {
       expect(coherentReads).toBeGreaterThan(0);
       expect(mismatches).toBe(0);
     } finally {
-      if (!terminated) {
-        terminated = true;
-        await worker.terminate();
-      }
+      await worker.terminate();
     }
   }, 30_000);
 });

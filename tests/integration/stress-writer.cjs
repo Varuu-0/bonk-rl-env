@@ -10,9 +10,7 @@ let gen = 0;
 parentPort.on('message', (msg) => {
   if (msg.cmd !== 'run') return;
   const { buffer, iterations, maxPlayers, HEADER_INTS, headerBytes, DISC_FIELDS } = msg;
-  // Per-slot byte size = header (Int32[HEADER_INTS]) + maxPlayers*DISC_FIELDS*4
-  const perSlot = headerBytes + maxPlayers * DISC_FIELDS * 4;
-  const header = new Int32Array(buffer, 0, HEADER_INTS); // reuse a fixed-slot view
+  const header = new Int32Array(buffer, 0, HEADER_INTS); // slot-0 header view
   for (let i = 0; i < iterations; i++) {
     gen += 1;
     header[0] = gen * 2 + 1; // odd = in-progress
@@ -27,7 +25,6 @@ parentPort.on('message', (msg) => {
     }
     header[1] = i;             // tick
     header[0] = gen * 2;       // even = committed, written last
-    void perSlot;
   }
   parentPort.postMessage('done');
 });
