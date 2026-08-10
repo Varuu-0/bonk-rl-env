@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { PhysicsEngine, MapBodyDef } from '../../src/core/physics-engine';
+import { normalizeMap } from '../../src/core/map-adapter';
 
 export interface MapDef {
   name: string;
@@ -24,7 +25,11 @@ export interface MapDef {
 
 export function loadMap(filename: string): MapDef {
   const filePath = path.join(process.cwd(), 'maps', filename);
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  // Run the same adapter the engine uses so tests exercise the real exported
+  // bonk format end-to-end (spawns[] -> spawnPoints, collidesGroupN ->
+  // collides, fixtureIndex -> named platform, etc.).
+  return normalizeMap(raw) as MapDef;
 }
 
 export function addAllBodies(engine: PhysicsEngine, map: MapDef): void {

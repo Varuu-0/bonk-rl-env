@@ -24,12 +24,13 @@ Additional documents:
 | [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md) | Simulator discrepancies and implementation status derived from verified findings |
 | [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md) | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work |
 | [OPEN_ISSUE_REMEDIATION.md](OPEN_ISSUE_REMEDIATION.md) | Evidence-based disposition and PR progress for the full open-issue audit |
+| [RENDERER.md](RENDERER.md) | Simulation renderer rebuild (M1–M5): native-coordinate layers, zero-overhead detached transport, usage |
 
 ## Subdirectories
 
 | Directory | Description |
 |:----------|:------------|
-| [typescript/](typescript/) | TypeScript engine module docs — core physics, IPC, telemetry, tests |
+| [typescript/](typescript/) | TypeScript engine module docs — core physics, IPC, rendering, telemetry, tests |
 | [python/](python/) | Python client module docs — Gymnasium env, utilities, benchmarks, tests |
 
 ## Documentation Conventions

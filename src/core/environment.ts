@@ -23,6 +23,7 @@ import {
     MapBodyDef,
     TPS,
 } from './physics-engine';
+import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 
@@ -296,7 +297,9 @@ export class BonkEnvironment {
         let mapDef: MapDef;
         let mapFile = '';
         if (config.mapData) {
-            mapDef = config.mapData;
+            // Programmatic mapData is normalized too: callers may pass either
+            // the real exported bonk format or an already-normalized MapDef.
+            mapDef = normalizeMap(config.mapData);
         } else {
             // Resolve relative paths against the project root (see
             // resolveMapPath) so the loader's cwd-relative default cannot
@@ -306,7 +309,10 @@ export class BonkEnvironment {
                 ? resolveMapPath(configuredPath)
                 : path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
             try {
-                mapDef = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+                const parsed = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+                // Convert the real exported bonk format into the engine MapDef.
+                const normalized = normalizeMap(parsed);
+                mapDef = normalized;
                 mapFile = mapPath;
             } catch (e) {
                 console.warn(`Could not load map "${mapPath}", using fallback box`);
