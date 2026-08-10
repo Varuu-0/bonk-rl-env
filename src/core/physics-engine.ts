@@ -28,6 +28,7 @@ const {
   b2DistanceJointDef,
   b2RevoluteJointDef,
   b2PrismaticJointDef,
+  b2GearJointDef,
   b2ContactListener,
   b2FilterData,
 } = box2d;
@@ -215,7 +216,24 @@ export interface MapDef {
   spawnPoints: MapSpawnPoints;
   bodies: MapBodyDef[];
   capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
-  joints?: Array<{ type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number }; length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }>;
+  joints?: Array<{
+    type: string; bodyA: string; bodyB: string;
+    anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number };
+    localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number };
+    length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean;
+    // Native joint fields (§33.8) forwarded for exact construction:
+    enableLimit?: boolean; lowerAngle?: number; upperAngle?: number;
+    enableMotor?: boolean; motorSpeed?: number; maxMotorTorque?: number; maxMotorForce?: number;
+    lowerTranslation?: number; upperTranslation?: number;
+    axis?: { x: number; y: number };
+    // Native indices: bodyA/bodyB are already resolved to names by the adapter,
+    // bodyB === '' (or bodyB === GROUND_BODY_NAME) means the joint is ground-anchored.
+    ratio?: number;               // gear (g) joint ratio
+    jointA?: string; jointB?: string;  // gear referent joint names
+    referenceAngle?: number;      // prismatic reference angle
+    // ground: when bodyB is the synthetic ground body
+    isGround?: boolean;
+  }>;
   physics?: {
     ppm?: number;
     bounds?: { width: number; height: number };
@@ -966,42 +984,96 @@ export class PhysicsEngine {
    * Add a joint between two named bodies from the map definition.
    * Looks up bodies by name in the platformBodyMap.
    */
-  addJoint(def: { type: string; bodyA: string; bodyB: string; anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number }; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean }, bodyMap: Map<string, any>): void {
+  /** Synthetic static body used as the "ground" for ground-anchored joints. */
+  private groundBody: any = null;
+
+  /** Lazily create the shared static ground body (b2Body with no fixtures). */
+  private ensureGroundBody(): any {
+    if (!this.groundBody || this.groundBody.m_world === null) {
+      const bd = new b2BodyDef();
+      this.groundBody = this.world.CreateBody(bd);
+    }
+    return this.groundBody;
+  }
+
+  addJoint(def: Record<string, any>, bodyMap: Map<string, any>): void {
     const bodyA = bodyMap.get(def.bodyA);
-    const bodyB = bodyMap.get(def.bodyB);
+    const isGround = def.isGround === true || def.bodyB === '' || def.bodyB === null || def.bodyB === undefined;
+    const ground = isGround ? this.ensureGroundBody() : null;
+    const bodyB = ground ?? bodyMap.get(def.bodyB);
     if (!bodyA || !bodyB) {
       console.warn(`Joint references unknown body: ${def.bodyA} or ${def.bodyB}`);
       return;
     }
-    
-    const anchorA = def.anchorA
-      ? new b2Vec2(def.anchorA.x / this.scale, def.anchorA.y / this.scale)
-      : bodyA.GetPosition();
-    const anchorB = def.anchorB
-      ? new b2Vec2(def.anchorB.x / this.scale, def.anchorB.y / this.scale)
-      : bodyB.GetPosition();
-    
-    if (def.type === 'distance') {
+
+    const cd = def.collideConnected ?? false;
+    const makeAnchor = (a?: { x: number; y: number }) =>
+      a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (bodyA.GetPosition().Copy());
+
+    const type = def.type;
+    let created: any = null;
+    if (type === 'distance' || type === 'd') {
       const jd = new b2DistanceJointDef();
-      jd.Initialize(bodyA, bodyB, anchorA, anchorB);
-      jd.collideConnected = def.collideConnected ?? false;
+      // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
+      const a = makeAnchor(def.anchorA);
+      const b = ground
+        ? new b2Vec2((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale)
+        : makeAnchor(def.anchorB);
+      jd.Initialize(bodyA, bodyB, a, b);
+      jd.collideConnected = cd;
       jd.frequencyHz = def.frequencyHz ?? 0;
       jd.dampingRatio = def.dampingRatio ?? 0;
-      this.world.CreateJoint(jd);
-    } else if (def.type === 'rv') {
+      created = this.world.CreateJoint(jd);
+    } else if (type === 'rv' || type === 'revolute') {
       const jd = new b2RevoluteJointDef();
-      jd.Initialize(bodyA, bodyB, anchorA);
-      jd.collideConnected = def.collideConnected ?? false;
-      this.world.CreateJoint(jd);
-    } else if (def.type === 'lpj') {
+      jd.Initialize(bodyA, bodyB, makeAnchor(def.anchorA));
+      jd.collideConnected = cd;
+      jd.enableLimit = !!def.enableLimit;
+      jd.lowerAngle = def.lowerAngle ?? 0;
+      jd.upperAngle = def.upperAngle ?? 0;
+      jd.enableMotor = !!def.enableMotor;
+      jd.motorSpeed = def.motorSpeed ?? 0;
+      jd.maxMotorTorque = def.maxMotorTorque ?? 0;
+      created = this.world.CreateJoint(jd);
+    } else if (type === 'lpj' || type === 'lsj' || type === 'p' || type === 'prismatic') {
       const jd = new b2PrismaticJointDef();
-      const axisDef = (def as any).axis;
-      const axisVec = axisDef ? new b2Vec2(axisDef.x, axisDef.y) : new b2Vec2(1, 0);
-      jd.Initialize(bodyA, bodyB, anchorA, axisVec);
-      jd.collideConnected = def.collideConnected ?? false;
-      this.world.CreateJoint(jd);
+      const axis = def.axis ? new b2Vec2(def.axis.x, def.axis.y) : new b2Vec2(1, 0);
+      jd.Initialize(bodyA, bodyB, makeAnchor(def.anchorA), axis);
+      jd.collideConnected = cd;
+      if (def.referenceAngle !== undefined) jd.referenceAngle = def.referenceAngle;
+      jd.enableLimit = !!def.enableLimit;
+      jd.lowerTranslation = def.lowerTranslation ?? 0;
+      jd.upperTranslation = def.upperTranslation ?? 0;
+      jd.enableMotor = !!def.enableMotor;
+      jd.motorSpeed = def.motorSpeed ?? 0;
+      jd.maxMotorForce = def.maxMotorForce ?? 0;
+      created = this.world.CreateJoint(jd);
+    } else if (type === 'g' || type === 'gear') {
+      const j1 = def.jointA ? (this.createdJoints.get(def.jointA) ?? null) : null;
+      const j2 = def.jointB ? (this.createdJoints.get(def.jointB) ?? null) : null;
+      if (!j1 || !j2) {
+        console.warn(`Gear joint references missing referent joints: ${def.jointA}, ${def.jointB}`);
+        return;
+      }
+      const gd = new b2GearJointDef();
+      gd.joint1 = j1;
+      gd.joint2 = j2;
+      gd.ratio = def.ratio ?? 1;
+      gd.bodyA = bodyA;
+      gd.bodyB = bodyB;
+      created = this.world.CreateJoint(gd);
+    } else {
+      console.warn(`Unknown joint type: ${type}`);
+    }
+
+    // Register the created joint by name for gear (g) referent resolution.
+    if (created && def.name) {
+      this.createdJoints.set(def.name, created);
     }
   }
+
+  /** Map of created joints by name for gear (g) referent resolution. */
+  private createdJoints: Map<string, any> = new Map();
 
   /**
    * Add a dynamic circular player body.
