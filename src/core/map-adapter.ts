@@ -113,9 +113,11 @@ function isInternalMapDef(raw: any): raw is MapDef {
         && typeof raw.spawnPoints === 'object'
         && !Array.isArray(raw.spawnPoints)
         && Array.isArray(raw.bodies)
-        && raw.bodies.length > 0
-        && typeof raw.bodies[0] === 'object'
-        && !('collidesGroup1' in raw.bodies[0]);
+        // Don't require a non-empty bodies[] — a programmatic MapDef with no
+        // bodies (e.g. a pure-cap-zone or spawn-only map) must still pass
+        // through to preserve its spawnPoints/capZones/joints (#review).
+        && (raw.bodies.length === 0 || typeof raw.bodies[0] === 'object')
+        && (raw.bodies.length === 0 || !('collidesGroup1' in raw.bodies[0]));
 }
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
@@ -164,14 +166,42 @@ export function normalizeMap(raw: unknown): MapDef {
     if (isInternalMapDef(raw)) return raw;
 
     const map = (raw || {}) as ExportedMap;
-    const bodies = (map.bodies || map.physicsBodies || []).map(toBodyDef);
+
+    // Prefer the exporter's flat `bodies[]` (already flattened rect/circle/
+    // polygon with x/y/width in map px). Only fall back to physicsBodies when
+    // the flat list is absent, and guard against that placeholder format (which
+    // carries `position`/`fixtures`, not x/y/width) silently producing
+    // degenerate 0×0 bodies.
+    const flatBodies = map.bodies && map.bodies.length ? map.bodies : null;
+    const bodies = (flatBodies || map.physicsBodies || []).map(toBodyDef);
 
     // Build a fixture-index -> body-name map so cap zones can resolve their
-    // platform body by name (the engine links zones to named platforms).
+    // platform body. Export fixtures all share the name "Unnamed Shape", so a
+    // body looked up by name alone resolves to the first match. Give each
+    // cap-zone-referenced body a fixture-unique name (e.g. "Unnamed Shape#13")
+    // so the engine's `bodies.find(b => b.name === zone.fixture)` selects the
+    // actual platform rather than the first "Unnamed Shape."
+    const flatSource = flatBodies || map.physicsBodies || [];
     const nameByFixture = new Map<number, string>();
-    (map.bodies || map.physicsBodies || []).forEach((b, i) => {
+    const capFriendlyNames = new Map<number, string>();
+    flatSource.forEach((b, i) => {
         if (b && b.fixtureIndex !== undefined) {
             nameByFixture.set(b.fixtureIndex, b.name ?? `body_${i}`);
+        }
+    });
+    // Pre-rename every cap-zone-referenced fixture to a unique friendly name,
+    // mutating the exported bodies list we already derived `bodies` from so
+    // find-by-name is unambiguous. Flat bodies carry the fixtureIndex on the
+    // body, so we match by that.
+    const capFixtureIndexes = new Set<number>(
+        (map.capZones || []).map(z => z.fixtureIndex).filter((x): x is number => typeof x === 'number'),
+    );
+    bodies.forEach((b, i) => {
+        const fxIdx = flatSource[i]?.fixtureIndex;
+        if (fxIdx !== undefined && capFixtureIndexes.has(fxIdx)) {
+            const uniqueName = `${b.name ?? `body_${i}`}#${fxIdx}`;
+            b.name = uniqueName;
+            capFriendlyNames.set(fxIdx, uniqueName);
         }
     });
 
@@ -210,10 +240,10 @@ export function normalizeMap(raw: unknown): MapDef {
         }
     }
 
-    // Cap zones: resolve fixtureIndex -> named platform body.
+    // Cap zones: resolve fixtureIndex -> the unique named platform body.
     const capZones = (map.capZones || []).map((zone, i) => {
         const fixtureName = zone.fixtureIndex !== undefined
-            ? nameByFixture.get(zone.fixtureIndex)
+            ? capFriendlyNames.get(zone.fixtureIndex) ?? nameByFixture.get(zone.fixtureIndex)
             : undefined;
         return {
             index: zone.index ?? i,
@@ -227,17 +257,31 @@ export function normalizeMap(raw: unknown): MapDef {
 
     // Joints: the exporter stores body references as integer indices into
     // physicsBodies; the engine resolves them by NAME via the body map. Map
-    // index -> name using the ordered flat bodies list.
+    // index -> name using the derived bodies[] (which carries the unique
+    // cap-zone names), keyed by the flat body's bodyIndex or array position.
     const bodiesByName = new Map<number, string>();
-    (map.bodies || map.physicsBodies || []).forEach((b, i) => {
-        if (b) bodiesByName.set(b.bodyIndex ?? i, b.name ?? `body_${i}`);
+    flatSource.forEach((b, i) => {
+        if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
     const joints = (map.physicsJoints || []).map(j => {
-        const bodyA = j.bodyA !== undefined ? bodiesByName.get(j.bodyA) : undefined;
-        const bodyB = j.bodyB !== undefined
-            && j.bodyB >= 0
+        // bodyA must be a valid, non-negative body index; an out-of-range or
+        // negative bodyA is a malformed reference and cannot resolve.
+        const bodyA = j.bodyA !== undefined && j.bodyA >= 0
+            ? bodiesByName.get(j.bodyA)
+            : undefined;
+        // bodyB: -1 means the joint is anchored to the ground (world), which
+        // the engine's addJoint cannot represent (it requires two named bodies).
+        const isGround = j.bodyB !== undefined && j.bodyB < 0;
+        const bodyB = j.bodyB !== undefined && j.bodyB >= 0
             ? bodiesByName.get(j.bodyB)
             : undefined;
+        if (isGround) {
+            // Ground-anchored joints are unsupported by the engine's joint model;
+            // surface them loudly instead of silently dropping them (#review).
+            const bodyAName = bodyA ?? (j.bodyA !== undefined ? `body#${j.bodyA}` : '?');
+            console.warn(`[map-adapter] Skipping ground-anchored ${j.type ?? 'joint'} (bodyA=${bodyAName}, bodyB=ground): the engine has no ground-joint support`);
+            return null;
+        }
         const safeType = (t: string | undefined): 'rv' | 'distance' | 'lpj' | string =>
             t === undefined ? 'rv' : t;
         const out: Record<string, unknown> = {
@@ -251,7 +295,7 @@ export function normalizeMap(raw: unknown): MapDef {
         if (j.frequencyHz !== undefined) out.frequencyHz = j.frequencyHz;
         if (j.dampingRatio !== undefined) out.dampingRatio = j.dampingRatio;
         return out;
-    });
+    }).filter((j): j is NonNullable<typeof j> => j !== null);
 
     const ph = map.physics || {};
     const bounds = {

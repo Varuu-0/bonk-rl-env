@@ -29,7 +29,7 @@ describe('map-geometry (M2)', () => {
   });
 
   it('respects bodyRenderOrder z-ordering', () => {
-    const map = load('bonk_WDB__No_Mapshake__716916.json');
+    const map = load('bonk_WDB__no_nothing__1232248.json');
     const input = geometryFromExport(map);
     const noBro = buildGeometry(input, cam);
     const withBro = buildGeometry({ ...input, bodyRenderOrder: map.bodyRenderOrder }, cam);
@@ -40,16 +40,31 @@ describe('map-geometry (M2)', () => {
   });
 
   it('maps every fixture of the WDB map, including cap-zone outlines', () => {
-    const map = load('bonk_WDB__No_Mapshake__716916.json');
+    const map = load('bonk_WDB__no_nothing__1232248.json');
     const capZones = (map.capZones || []).map((c: any) => ({ index: c.index, fixtureIndex: c.fixtureIndex }));
     const input = geometryFromExport(map, capZones);
     const cmds = buildGeometry(input, cam);
     expect(cmds.length).toBeGreaterThan(0);
     const hasCap = cmds.some(c => c.isCapZone);
     expect(hasCap).toBe(true);
-    const hasPoly = cmds.some(c => c.primitive.kind === 'poly');
     const hasCircle = cmds.some(c => c.primitive.kind === 'circle');
-    expect(hasPoly && hasCircle).toBe(true);
+    expect(hasCircle).toBe(true);
+  });
+
+  it('renders exporter polygon vertices to finite points', () => {
+    const map = load('bonk_Gang_Grounds_2_0_37368.json');
+    const input = geometryFromExport(map);
+    const cmds = buildGeometry(input, cam);
+    const polys = cmds.filter(c => c.primitive.kind === 'poly');
+    expect(polys.length).toBeGreaterThan(0);
+    // Every rendered polygon point must be finite (regression: exporter
+    // {x,y} vertices were read as v[0]/v[1] => NaN points).
+    for (const c of polys) {
+      for (const [x, y] of (c.primitive as { points: number[][] }).points) {
+        expect(Number.isFinite(x)).toBe(true);
+        expect(Number.isFinite(y)).toBe(true);
+      }
+    }
   });
 
   it('marks noPhysics fixtures as sensors (faded fill)', () => {

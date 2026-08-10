@@ -24,13 +24,34 @@ function parseArgs(): Record<string, string> {
   return out;
 }
 
+/** Parse a non-negative integer CLI option; throws with a clear message on NaN. */
+function parseIntArg(value: string | undefined, fallback: number, name: string): number {
+  if (value === undefined || value === '') return fallback;
+  const n = Number(value);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`Invalid --${name}: expected a non-negative number, got "${value}"`);
+  }
+  return Math.floor(n);
+}
+
 async function main(): Promise<void> {
   const args = parseArgs();
-  const map = args.map || 'maps/bonk_WDB__No_Mapshake__716916.json';
-  const ticks = parseInt(args.ticks || '20', 10);
+  // Prefer a map that exists; error out rather than silently falling back to
+  // the Default_Box placeholder map.
+  const candidates = [
+    args.map,
+    'maps/bonk_WDB__No_Mapshake__716916.json',
+    'maps/bonk_WDB__no_nothing__1232248.json',
+  ].filter((m): m is string => !!m);
+  const resolved = candidates.find((m) => fs.existsSync(m));
+  if (!resolved) {
+    throw new Error('No map found. Pass --map <path> (a bundled maps/*.json file).');
+  }
+  const map = resolved;
+  const ticks = parseIntArg(args.ticks, 20, 'ticks');
   const outDir = args.out || 'render-preview';
-  const width = parseInt(args.width || '730', 10);
-  const height = parseInt(args.height || '500', 10);
+  const width = parseIntArg(args.width, 730, 'width');
+  const height = parseIntArg(args.height, 500, 'height');
 
   fs.mkdirSync(outDir, { recursive: true });
 

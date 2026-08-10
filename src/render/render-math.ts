@@ -33,7 +33,7 @@ export const BASE_ASPECT = BASE_WIDTH / BASE_HEIGHT;
 export const OUT_OF_BOUNDS_RADIUS = 850;
 
 export interface Camera {
-  /** Map px per screen px (>=1 or fractional) used to draw the map onto the canvas. */
+  /** Screen px per map px (>=1, fractional, or sub-1 zoom) used to draw the map onto the canvas. */
   scale: number;
   /** Screen-px offset that centers the map origin at the canvas center. */
   offsetX: number;
@@ -57,7 +57,10 @@ export function fromWorld(x: number, y: number): { x: number; y: number } {
  * otherwise fit by height against the 730×500 logical canvas.
  */
 export function computeScaleRatio(canvasWidth: number, canvasHeight: number): number {
-  if (canvasWidth <= 0 || canvasHeight <= 0) return 1;
+  // NaN fails `< = 0`, so guard with isFinite to keep NaN dimensions from
+  // producing a NaN ratio/camera.
+  if (!Number.isFinite(canvasWidth) || !Number.isFinite(canvasHeight)
+    || canvasWidth <= 0 || canvasHeight <= 0) return 1;
   const aspect = canvasWidth / canvasHeight;
   if (aspect <= BASE_ASPECT) {
     return canvasWidth / BASE_WIDTH;
@@ -87,7 +90,8 @@ export function computeCamera(
   ppm: number = DEFAULT_PPM,
 ): Camera {
   const scaleRatio = computeScaleRatio(canvasWidth, canvasHeight);
-  const scale = (ppm * scaleRatio) / SCALE;
+  const safePpm = Number.isFinite(ppm) && ppm > 0 ? ppm : DEFAULT_PPM;
+  const scale = (safePpm * scaleRatio) / SCALE;
   return {
     scale,
     offsetX: canvasWidth / 2,
@@ -109,13 +113,14 @@ export function mapToScreen(
   return { x: cam.offsetX + x * cam.scale, y: cam.offsetY + y * cam.scale };
 }
 
-/** Inverse of `mapToScreen`. */
+/** Inverse of `mapToScreen`. Safely clamps a degenerate (zero/NaN) scale. */
 export function screenToMap(
   sx: number,
   sy: number,
   cam: Camera,
 ): { x: number; y: number } {
-  return { x: (sx - cam.offsetX) / cam.scale, y: (sy - cam.offsetY) / cam.scale };
+  const s = Number.isFinite(cam.scale) && cam.scale !== 0 ? cam.scale : 1;
+  return { x: (sx - cam.offsetX) / s, y: (sy - cam.offsetY) / s };
 }
 
 /** Rotate a vector (in map px) by an angle in radians. */

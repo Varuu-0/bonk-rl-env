@@ -23,12 +23,13 @@ export { computeCamera, Camera };
  * for opponents) with zero simulation — it only pulls already-computed values.
  */
 export function createEnvReader(env: BonkEnvironment): RenderStateReader {
-  const playerSlots = env['opponentIds'].length + 1;
+  const e = env as any;
+  const playerSlots = e.opponentIds.length + 1;
   return {
-    getTick: () => env['physics'].getTickCount(),
+    getTick: () => e.physics.getTickCount(),
     getDisc: (id: number) => {
-      if (id < 0 || id > playerSlots) return null;
-      const s = env['physics'].getPlayerState(id);
+      if (id < 0 || id >= playerSlots) return null;
+      const s = e.physics.getPlayerState(id);
       if (!s) return null;
       return { x: s.x, y: s.y, angle: s.angle, isHeavy: s.isHeavy, alive: s.alive };
     },
@@ -47,7 +48,14 @@ export interface EnvMapRender {
 export function envMapRender(env: BonkEnvironment): EnvMapRender {
   const mapDef = (env as any).config.mapData;
   const deathCenter = mapDef?.physics?.deathCenter;
-  return { geometry: geometryFromExport(mapDef), deathCenter: deathCenter || { x: 0, y: 0 } };
+  const capZones = (mapDef?.capZones || []).map((c: any, i: number) => ({
+    index: c.index ?? i,
+    fixtureIndex: c.fixtureIndex ?? c.fixture ?? c.index ?? i,
+  }));
+  return {
+    geometry: geometryFromExport(mapDef, capZones),
+    deathCenter: deathCenter || { x: 0, y: 0 },
+  };
 }
 
 /** Build the disc render state from an env's live snapshot. */
@@ -74,12 +82,15 @@ export function renderEnvFrameSvg(
 ): string {
   const width = options.width ?? 730;
   const height = options.height ?? 500;
-  const cam = options.camera ?? computeCamera(width, height, options.ppm);
+  // Use the env's resolved per-map ppm when the caller did not override it
+  // (env resolves config.ppm ?? mapDef.physics.ppm ?? 12).
+  const ppm = options.ppm ?? (env as any).ppm ?? 12;
+  const cam = options.camera ?? computeCamera(width, height, ppm);
   const { geometry, deathCenter } = envMapRender(env);
   const mapCmds = buildGeometry(geometry, cam);
   const simSnap = envSimSnapshot(env);
   simSnap.deathCenter = deathCenter;
-  const simCmds = buildSim(simSnap, cam, options.ppm);
+  const simCmds = buildSim(simSnap, cam, ppm);
   const opts: SvgRasterizerOptions = { width, height, title: options.title ?? 'bonk-rl-env' };
   return renderFrameSvg(mapCmds, simCmds, opts);
 }

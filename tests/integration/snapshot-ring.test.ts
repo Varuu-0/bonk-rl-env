@@ -53,10 +53,28 @@ describe('snapshot-ring (M4)', () => {
     expect(raw.discs[1].x).toBe(0);
   });
 
-  it('per-slot size uses 1 header + 5 per disc', () => {
-    const perSlot = 1 + 2 * DISC_FIELDS;
+  it('per-slot layout is an Int32[2] header + Float32 discs', () => {
+    // 2 Int32 header words (seq, tick) + 2 discs * 5 fields of Float32(4B).
+    const perSlot = 2 * 4 + 2 * DISC_FIELDS * 4;
     const buf = allocRing(8, 2);
-    expect(buf.byteLength).toBe(8 * perSlot * Float32Array.BYTES_PER_ELEMENT);
+    expect(buf.byteLength).toBe(8 * perSlot);
+  });
+
+  it('stores the tick as a lossless Int32 (no float32 precision loss)', () => {
+    const bigTick = 1 << 25; // > 2^24 where Float32 loses integer precision
+    const buf = allocRing(4, 1);
+    const reader = makeReader([ALIVE0], bigTick);
+    writeSnapshot(buf, 1, 0, reader);
+    const raw = readSnapshot(buf, 1, 0);
+    expect(raw.tick).toBe(bigTick); // exact as Int32, not rounded
+  });
+
+  it('seq equals tick for coherence detection', () => {
+    const buf = allocRing(4, 1);
+    const reader = makeReader([ALIVE0], 77);
+    writeSnapshot(buf, 1, 0, reader);
+    const raw = readSnapshot(buf, 1, 0);
+    expect(raw.seq).toBe(77);
   });
 
   it('toSimSnapshot attaches ids for the sim layer', () => {
@@ -126,5 +144,40 @@ describe('DetachedRenderSampler', () => {
     // Nothing written yet -> slot reads all-zero, tick 0. Caller decides not to
     // render an empty first frame; the sampler itself has no sim side effects.
     expect(() => sampler.renderSlot(0, 4)).not.toThrow();
+  });
+
+  it('guards negative slot indices (no RangeError, positive modulo)', () => {
+    const ring = allocRing(4, 1);
+    const cam = computeCamera(730, 500, 12);
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 1, cam },
+      { begin: () => {}, geometry: () => {}, sim: () => {}, end: () => {} },
+    );
+    const reader = makeReader([ALIVE0], 5);
+    writeSnapshot(ring, 1, 0, reader);
+    // A negative slot index must not throw; it normalizes to a valid slot.
+    expect(() => sampler.renderSlot(-1, 4)).not.toThrow();
+  });
+
+  it('does not render a time-reversed (older) frame after a newer one', () => {
+    const ring = allocRing(4, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+    // Render a newer frame first.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 20));
+    const newer = sampler.renderSlot(0, 4);
+    expect(newer).not.toBeNull();
+    expect(newer!.tick).toBe(20);
+    calls.length = 0;
+    // An older/equal frame must be rejected (no time reversal).
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 20));
+    expect(sampler.renderSlot(1, 4)).toBeNull();
+    writeSnapshot(ring, 2, 2, makeReader([ALIVE0, DEAD1], 19));
+    expect(sampler.renderSlot(2, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
   });
 });

@@ -169,23 +169,30 @@ export function buildGeometry(input: MapGeometryInput, cam: Camera): DrawCommand
       // Common transform: map the body position to screen and rotate about it.
       const sp = mapToScreen(body.x, body.y, cam);
       const stroke = isCap ? '#000000' : (fx.death ? '#ff0000' : null);
-      const lineWidth = isCap ? 3 * (cam.scale && 1) : (fx.death ? cam.scale * 3 : cam.scale * 2);
-      const fill = isCap ? 'rgba(255,255,255,0)' : hex(fx.color);
-      const alpha = isSensor ? '0.35' : '1';
-      const effectiveFill = isSensor ? withAlpha(hex(fx.color), 0.35) : fill;
+      // Cap-zone and death strokes scale with the camera like geometry does.
+      const lineWidth = isCap ? cam.scale * 3 : (fx.death ? cam.scale * 3 : cam.scale * 2);
+      const sensorAlpha = isSensor ? 0.35 : 1;
+      const effectiveFill = isSensor ? withAlpha(hex(fx.color), sensorAlpha) : hex(fx.color);
 
       let primitive: Primitive | null = null;
       if (shape.type === 'bx') {
         // Represent a rotated box as a polygon of its four world corners.
         const world = boxWorldCorners(shape, body);
-        const pts = world.map(([x, y], i) => {
+        const pts = world.map(([x, y]) => {
           const s2 = mapToScreen(x, y, cam);
           return [s2.x, s2.y];
         });
         primitive = { kind: 'poly', sx: sp.x, sy: sp.y, points: pts, fill: effectiveFill, stroke, lineWidth };
       } else if (shape.type === 'ci') {
+        // Circles honor their shape center offset: translate by the shape
+        // center (rotated by the body angle) before drawing.
+        const cosB = Math.cos(body.angle);
+        const sinB = Math.sin(body.angle);
+        const cx = shape.cx * cosB - shape.cy * sinB + body.x;
+        const cy = shape.cx * sinB + shape.cy * cosB + body.y;
+        const cs = mapToScreen(cx, cy, cam);
         const r = mapToScreenRadius(shape.radius || 0, cam);
-        primitive = { kind: 'circle', sx: sp.x, sy: sp.y, r, fill: effectiveFill, stroke, lineWidth, angle: body.angle };
+        primitive = { kind: 'circle', sx: cs.x, sy: cs.y, r, fill: effectiveFill, stroke, lineWidth, angle: body.angle };
       } else if (shape.type === 'po') {
         const world = polyWorldPts(shape, body);
         const pts = world.map(([x, y]) => {
@@ -251,7 +258,11 @@ export function geometryFromExport(map: any, capZones?: CapZoneGeom[]): MapGeome
       width: s.width,
       height: s.height,
       radius: s.radius,
-      vertices: s.vertices,
+      // Exporter polygon vertices are {x,y} objects; store as [x,y] so the
+      // shared polyWorldPts (v[0]/v[1]) renders them (was NaN for polygons).
+      vertices: (s.vertices || []).map((v: any) =>
+        Array.isArray(v) ? [v[0], v[1]] : [v.x, v.y]
+      ),
       scale: s.scale,
     })),
     capZones: capZones || [],

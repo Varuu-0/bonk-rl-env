@@ -39,11 +39,12 @@ export class SvgRasterizer {
     const { width, height } = this.options;
     this.parts = [];
     this.parts.push(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}" viewBox="0 0 ${width} ${height}">`);
+    // <title> must be the first child of <svg> to act as the document title.
+    if (this.options.title) this.parts.push(`<title>${esc(this.options.title)}</title>`);
     this.parts.push(`<defs><radialGradient id="bg" cx="50%" cy="50%" r="74%">` +
       `<stop offset="0%" stop-color="${BG_INNER}"/><stop offset="100%" stop-color="${BG_OUTER}"/>` +
       `</radialGradient></defs>`);
     this.parts.push(`<rect width="${width}" height="${height}" fill="url(#bg)"/>`);
-    if (this.options.title) this.parts.push(`<title>${esc(this.options.title)}</title>`);
   }
 
   geometry(cmds: DrawCommand[]): void {

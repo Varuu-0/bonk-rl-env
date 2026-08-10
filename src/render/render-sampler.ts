@@ -47,10 +47,28 @@ export class DetachedRenderSampler {
     private readonly target: DetachedRenderTarget,
   ) { }
 
-  /** Sample the latest given slot and render if its tick advanced. */
+  /** Sample the latest slot and render if its tick advanced. */
   renderSlot(slotIndex: number, slotCount: number): SimSnapshot | null {
-    const raw = readSnapshot(this.frame.ring, this.frame.maxPlayers, slotIndex % slotCount);
-    if (raw.tick === this.lastTick) return null; // nothing new this cadence
+    const count = Math.max(1, Math.floor(slotCount));
+    const scan = normalizeSlot(slotIndex, count);
+
+    // Scan up to the whole ring (single pass) starting at the freshest slot and
+    // moving backward, to find the most recent coherent (non-torn) write.
+    let raw: ReturnType<typeof readSnapshot> | null = null;
+    for (let back = 0; back < count; back++) {
+      const idx = ((scan - back) % count + count) % count;
+      const candidate = readSnapshot(this.frame.ring, this.frame.maxPlayers, idx);
+      // A seq of 0 means the slot was never written; stop scanning that way.
+      if (candidate.seq === 0) continue;
+      const stable = readSnapshot(this.frame.ring, this.frame.maxPlayers, idx);
+      if (candidate.seq !== stable.seq) continue; // torn write — skip
+      raw = candidate;
+      break;
+    }
+    if (!raw) return null; // nothing coherent written yet
+
+    // Never re-render a frame older than the last one (time-reversed guard).
+    if (raw.tick <= this.lastTick) return null;
     this.lastTick = raw.tick;
 
     const simSnap: SimSnapshot = {
@@ -73,4 +91,10 @@ export class DetachedRenderSampler {
  */
 export function cadenceSlot(tick: number, everyTicks: number): number {
   return Math.floor(tick / everyTicks);
+}
+
+/** Normalize a slot index into [0, count) with positive modulo (guards negatives). */
+export function normalizeSlot(slotIndex: number, slotCount: number): number {
+  const count = Math.max(1, Math.floor(slotCount));
+  return ((Math.floor(slotIndex) % count) + count) % count;
 }
