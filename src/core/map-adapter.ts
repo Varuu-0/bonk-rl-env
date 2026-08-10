@@ -34,6 +34,7 @@ interface FlatBody {
     friction?: number;
     restitution?: number;
     density?: number;
+    fricp?: boolean;              // native compact key for f_p (friction polarity)
     fricPlayers?: boolean;
     collisionGroup?: number;
     collidesGroup1?: boolean;
@@ -141,6 +142,13 @@ function toBodyDef(body: FlatBody, index: number): any {
         noGrapple: body.noGrapple,
         innerGrapple: body.innerGrapple,
         friction: body.friction,
+        // Native `f_p` (fricp) selects velocity-independent negative friction.
+        fricPolarity: body.fricp ?? body.fricPlayers ?? false,
+        // Native `f_c` (collisionGroup) passthrough for map-data fidelity; the
+        // engine's filter is driven by the exported collidesGroupN booleans
+        // (see collides{} below), so f_c is retained as provenance, not read
+        // for behavior (P4 differential validation can calibrate exact bits).
+        collisionGroup: body.collisionGroup,
         // The exporter emits flat collidesGroupN booleans; the engine reads a
         // nested `collides: { g1, g2, g3, g4 }`. Convert here.
         collides: {
