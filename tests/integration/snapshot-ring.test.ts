@@ -3,6 +3,7 @@ import {
   allocRing,
   writeSnapshot,
   readSnapshot,
+  readSnapshotCoherent,
   toSimSnapshot,
   DISC_FIELDS,
   RenderStateReader,
@@ -69,12 +70,30 @@ describe('snapshot-ring (M4)', () => {
     expect(raw.tick).toBe(bigTick); // exact as Int32, not rounded
   });
 
-  it('seq equals tick for coherence detection', () => {
+  it('commits an even seq (ready) and reports the tick correctly', () => {
     const buf = allocRing(4, 1);
     const reader = makeReader([ALIVE0], 77);
     writeSnapshot(buf, 1, 0, reader);
     const raw = readSnapshot(buf, 1, 0);
-    expect(raw.seq).toBe(77);
+    // Seqlock: committed seq is even and non-zero; tick is the Int32 value.
+    expect(raw.seq).toBeGreaterThan(0);
+    expect(raw.seq % 2).toBe(0);
+    expect(raw.tick).toBe(77);
+  });
+
+  it('readSnapshotCoherent returns a frame for a fully written slot', () => {
+    const buf = allocRing(4, 2);
+    writeSnapshot(buf, 2, 1, makeReader([ALIVE0, DEAD1], 100));
+    const coherent = readSnapshotCoherent(buf, 2, 1);
+    expect(coherent).not.toBeNull();
+    expect(coherent!.tick).toBe(100);
+    expect(coherent!.discs[0].x).toBeCloseTo(ALIVE0.x);
+    expect(coherent!.discs[1].alive).toBe(false);
+  });
+
+  it('readSnapshotCoherent returns null for an unwritten slot', () => {
+    const buf = allocRing(4, 2);
+    expect(readSnapshotCoherent(buf, 2, 3)).toBeNull();
   });
 
   it('toSimSnapshot attaches ids for the sim layer', () => {

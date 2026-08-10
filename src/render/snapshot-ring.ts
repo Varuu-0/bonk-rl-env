@@ -65,10 +65,15 @@ export interface RenderStateReader {
   getDisc(id: number): { x: number; y: number; angle: number; isHeavy: boolean; alive: boolean } | null;
 }
 
+/** Module-level seqlock generation. Each committed write uses an even seq; an
+ * in-progress write uses an odd seq so readers can detect a write in flight. */
+let writeGen = 0;
+
 /**
- * Write the current state (via `reader`) into ring slot `slotIndex`. Returns
- * the slot index written. Pure write; no allocation when `slotIndex` is
- * precomputed. Cheap enough for a sub-cadence capture.
+ * Write the current state (via `reader`) into ring slot `slotIndex`. Uses a
+ * seqlock: mark the slot in-progress (odd seq), write the disc payload, then the
+ * tick, then commit (even seq). A reader that sees an odd seq (or a changed even
+ * seq across its read) discards the torn frame. Returns the slot index written.
  */
 export function writeSnapshot(
   buf: SharedArrayBuffer,
@@ -78,11 +83,13 @@ export function writeSnapshot(
 ): number {
   const header = slotHeader(buf, maxPlayers, slotIndex);
   const payload = slotPayload(buf, maxPlayers, slotIndex);
+  // Mark in progress (odd seq) before touching the payload.
+  writeGen += 1;
+  header[0] = writeGen * 2 + 1;
   const tick = reader.getTick();
-  const base = 0;
   for (let p = 0; p < maxPlayers; p++) {
     const d = reader.getDisc(p);
-    const o = base + p * DISC_FIELDS;
+    const o = p * DISC_FIELDS;
     if (!d) {
       payload[o] = 0; payload[o + 1] = 0; payload[o + 2] = 0;
       payload[o + 3] = 0; payload[o + 4] = 0;
@@ -94,10 +101,10 @@ export function writeSnapshot(
     payload[o + 3] = d.isHeavy ? 1 : 0;
     payload[o + 4] = d.alive ? 1 : 0;
   }
-  // Write the committed tick first, then seq last. A reader that re-reads seq
-  // and sees it changed mid-write discards the torn frame.
   header[1] = tick;
-  header[0] = tick;
+  // Commit: even seq written last. seq ordering guarantees a reader that sees
+  // the committed (even) seq on both sides of its payload read got a whole frame.
+  header[0] = writeGen * 2;
   return slotIndex;
 }
 
@@ -124,10 +131,13 @@ export function readSnapshot(
 }
 
 /**
- * Torn-write-safe read for a single slot: reads seq, then the payload, then
- * re-reads seq. If the two seq reads match (and are non-zero) no write happened
- * in between, so the payload is a coherent committed frame. Returns null when
- * the slot is unwritten (seq 0) or a torn write was detected.
+ * Torn-write-safe read for a single slot (seqlock). Writer marks in-progress
+ * (odd seq), writes the payload + tick, then commits (even seq) last. Reader:
+ *   read seq-before → read payload + tick → read seq-after
+ * The frame is coherent only when both seq reads are even and equal: an odd
+ * seq means a write is in flight; a changed even seq means a write committed
+ * mid-read. Either way the (possibly torn) payload is discarded. Returns null
+ * for unwritten (seq 0), in-progress (odd), or torn (changed) slots.
  */
 export function readSnapshotCoherent(
   buf: SharedArrayBuffer,
@@ -135,18 +145,21 @@ export function readSnapshotCoherent(
   slotIndex: number,
 ): { tick: number; seq: number; discs: Array<{ x: number; y: number; angle: number; isHeavy: boolean; alive: boolean }> } | null {
   const header = slotHeader(buf, maxPlayers, slotIndex);
-  const seq1 = header[0];
-  if (seq1 === 0) return null; // unwritten slot
+  const seqBefore = header[0];
+  // Unwritten slot, or a write currently in progress (odd seq): skip.
+  if (seqBefore === 0 || seqBefore % 2 === 1) return null;
   const payload = slotPayload(buf, maxPlayers, slotIndex);
-  const seq2 = header[0]; // write would have landed seq AFTER updating payload
-  if (seq1 !== seq2) return null; // torn write
-  const tick = header[1];
   const discs = [];
   for (let p = 0; p < maxPlayers; p++) {
     const o = p * DISC_FIELDS;
     discs.push({ x: payload[o], y: payload[o + 1], angle: payload[o + 2], isHeavy: payload[o + 3] === 1, alive: payload[o + 4] === 1 });
   }
-  return { tick, seq: seq1, discs };
+  const tick = header[1];
+  const seqAfter = header[0];
+  // A write committed mid-read (even seq changed) or left it in progress (odd)
+  // means the payload we just read was torn.
+  if (seqAfter % 2 === 1 || seqAfter !== seqBefore) return null;
+  return { tick, seq: seqBefore, discs };
 }
 
 /** Coherence check: seq is non-zero and unchanged between reads (no torn write). */
