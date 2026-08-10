@@ -125,6 +125,7 @@ applyInput(playerId: number, input: PlayerInput): void {
 | GPU-accelerated batch processing | ❌ | Low | Major | Offload computation to GPU |
 | Trajectory recording and playback | ⚠️ Partial | Medium | Debugging | Record/replay agent behavior |
 | Real-time statistics dashboard | ❌ | Low | Monitoring | Web-based monitoring UI |
+| Simulation renderer (M1–M5) | ✅ Done | Medium | Visualization | Native-coordinate renderer rebuilt from the base (`src/render/`); ~0 overhead on the sim hot path via a detached snapshot ring — see [RENDERER.md](RENDERER.md) |
 
 ### Custom Reward Functions (Implemented)
 

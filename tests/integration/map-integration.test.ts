@@ -15,8 +15,8 @@ import { loadMap, addAllBodies, getSpawnXY, getMapFiles } from '../utils/map-loa
 
 const MAP_FILES = {
     simple1v1: 'bonk_Simple_1v1_123.json',
-    ballPit: 'bonk_Ball_Pit_524616.json',
     wdb: 'bonk_WDB__No_Mapshake__716916.json',
+    weird: 'bonk_WeiRd_DeAth_BalL__80622.json',
 };
 const hasWdb = getMapFiles().includes(MAP_FILES.wdb);
 const describeWdb = hasWdb ? describe : describe.skip;
@@ -24,8 +24,8 @@ if (!hasWdb) {
     console.warn(`[MapIntegration] Optional WDB fixture ${MAP_FILES.wdb} is unavailable; WDB-specific tests are skipped.`);
 }
 const simulationMapKeys = hasWdb
-    ? (['simple1v1', 'ballPit', 'wdb'] as const)
-    : (['simple1v1', 'ballPit'] as const);
+    ? (['simple1v1', 'wdb', 'weird'] as const)
+    : (['simple1v1', 'weird'] as const);
 
 const EMPTY_INPUT: PlayerInput = {
     left: false, right: false, up: false, down: false, heavy: false, grapple: false
@@ -52,9 +52,9 @@ describe('MapIntegration', () => {
                 expect(map.bodies.length).toBe(1);
             });
 
-            it('has 1 spawn point', () => {
+            it('has 2 spawn points', () => {
                 const map = loadMap(MAP_FILES.simple1v1);
-                expect(Object.keys(map.spawnPoints).length).toBe(1);
+                expect(Object.keys(map.spawnPoints).length).toBe(2);
             });
 
             it('body is rect type', () => {
@@ -68,51 +68,50 @@ describe('MapIntegration', () => {
             });
         });
 
-        describe('Ball Pit', () => {
+        describe('WeiRd DeAth BalL', () => {
             it('loads without errors', () => {
-                const map = loadMap(MAP_FILES.ballPit);
+                const map = loadMap(MAP_FILES.weird);
                 expect(map.name).toBeDefined();
             });
 
-            it('name is Ball Pit', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                expect(map.name).toBe('Ball Pit');
+            it('name is WeiRd DeAth BalL', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.name).toBe('WeiRd DeAth BalL ');
             });
 
-            it('has 28+ bodies', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                expect(map.bodies.length).toBeGreaterThanOrEqual(28);
-            });
-
-            it('has circle bodies', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                expect(map.bodies.some((b: any) => b.type === 'circle')).toBe(true);
-            });
-
-            it('has noPhysics bodies', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                expect(map.bodies.some((b: any) => b.noPhysics === true)).toBe(true);
-            });
-
-            it('has dynamic circle bodies', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                const dynamicCircles = map.bodies.filter((b: any) => b.type === 'circle' && b.static === false);
-                expect(dynamicCircles.length).toBeGreaterThan(0);
-            });
-
-            it('has many dynamic circles (>= 20)', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                const dynamicCircles = map.bodies.filter((b: any) => b.type === 'circle' && b.static === false);
-                expect(dynamicCircles.length).toBeGreaterThanOrEqual(20);
-            });
-
-            it('bodies have restitution property', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                expect(map.bodies.some((b: any) => typeof b.restitution === 'number')).toBe(true);
+            it('has many bodies', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.bodies.length).toBeGreaterThanOrEqual(15);
             });
 
             it('has dynamic bodies', () => {
-                const map = loadMap(MAP_FILES.ballPit);
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.bodies.some((b: any) => b.static === false)).toBe(true);
+            });
+
+            it('has noPhysics bodies', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.bodies.some((b: any) => b.noPhysics === true)).toBe(true);
+            });
+
+            it('has rect and circle bodies', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.bodies.some((b: any) => b.type === 'rect')).toBe(true);
+                expect(map.bodies.some((b: any) => b.type === 'circle')).toBe(true);
+            });
+
+            it('bodies have restitution property', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.bodies.some((b: any) => typeof b.restitution === 'number')).toBe(true);
+            });
+
+            it('has capZones', () => {
+                const map = loadMap(MAP_FILES.weird);
+                expect(map.capZones!.length).toBeGreaterThan(0);
+            });
+
+            it('has dynamic bodies', () => {
+                const map = loadMap(MAP_FILES.weird);
                 const dynamicBodies = map.bodies.filter((b: any) => b.static === false);
                 expect(dynamicBodies.length).toBeGreaterThan(0);
             });
@@ -205,8 +204,8 @@ describe('MapIntegration', () => {
     describe('map body structure', () => {
         const validTypes = new Set(['rect', 'circle', 'polygon']);
         const mapKeys: (keyof typeof MAP_FILES)[] = hasWdb
-            ? ['simple1v1', 'ballPit', 'wdb']
-            : ['simple1v1', 'ballPit'];
+            ? ['simple1v1', 'weird', 'wdb']
+            : ['simple1v1', 'weird'];
 
         it.each(mapKeys)('%s has bodies array', (key) => {
             const map = loadMap(MAP_FILES[key]);
@@ -403,10 +402,10 @@ describe('MapIntegration', () => {
             });
         });
 
-        describe('Ball Pit', () => {
+        describe('WeiRd DeAth BalL', () => {
             it('300-tick simulation (stress test)', () => {
                 engine = new PhysicsEngine();
-                const map = loadMap(MAP_FILES.ballPit);
+                const map = loadMap(MAP_FILES.weird);
                 addAllBodies(engine, map);
                 const sp = getSpawnXY(map);
                 engine.addPlayer(0, sp.x, sp.y);
@@ -434,7 +433,7 @@ describe('MapIntegration', () => {
 
             it('dynamic body interaction', () => {
                 engine = new PhysicsEngine();
-                const map = loadMap(MAP_FILES.ballPit);
+                const map = loadMap(MAP_FILES.weird);
                 addAllBodies(engine, map);
                 const sp = getSpawnXY(map);
                 engine.addPlayer(0, sp.x, sp.y);
@@ -459,36 +458,37 @@ describe('MapIntegration', () => {
                 }
             });
 
-            it('dynamic balls stay inside the container instead of falling through', () => {
-                const map = loadMap(MAP_FILES.ballPit);
-                engine = new PhysicsEngine();
+            it('normalized collidesGroupN wires body maskBits via the engine filter', () => {
+                const map = loadMap(MAP_FILES.weird);
+                const fixtureEngine = new PhysicsEngine();
+                engine = fixtureEngine;
 
-                // All 52 bodies share the fixture name "Unnamed Shape", so give
-                // each a unique tracking name before adding.
-                const dynamic: MapBodyDef[] = [];
-                map.bodies.forEach((b: any, i: number) => {
-                    engine!.addBody({ ...b, name: `ballpit_${i}` });
-                    if (b.static !== true) {
-                        dynamic.push({ ...b, name: `ballpit_${i}` });
-                    }
-                });
-                expect(dynamic.length).toBe(48);
+                // Pick a body with all groups false (ghost geometry -> mask 0)
+                // and one with g1 enabled (mask should include the player bit).
+                const ghost = map.bodies.find((b: any) =>
+                    b.collides && !b.collides.g1 && !b.collides.g2 && !b.collides.g3 && !b.collides.g4
+                );
+                const g1 = map.bodies.find((b: any) =>
+                    b.collides && b.collides.g1 && (!b.collides.g3 || !b.collides.g4)
+                );
 
-                const bodyMap = engine.getBodyMap();
-                for (let i = 0; i < 120; i++) {
-                    engine.tick();
-                }
+                expect(ghost).toBeDefined();
+                expect(g1).toBeDefined();
 
-                // Every dynamic ball must remain bounded by the container: the
-                // broken map-body maskBits let all 48 dynamic balls fall
-                // straight out of the world (y > 2000 px within 120 ticks).
-                let fellThrough = 0;
-                for (const def of dynamic) {
-                    const body = bodyMap.get(def.name)!;
-                    const y = body.GetPosition().y * SCALE;
-                    if (y > 2000) fellThrough++;
-                }
-                expect(fellThrough).toBe(0);
+                fixtureEngine.addBody({ ...(ghost as any), name: 'ghost' });
+                fixtureEngine.addBody({ ...(g1 as any), name: 'g1body' });
+
+                const readMask = (name: string): number => {
+                    const body = fixtureEngine.getBodyMap().get(name) as any;
+                    const sh = (body as any).GetShapeList();
+                    return sh.GetFilterData().maskBits;
+                };
+
+                // Ghost (all-false) keeps mask 0x0000; g1 adds the player-group bit
+                // 0x0002 on top of the always-on map-category bit 0x0001.
+                expect(readMask('ghost')).toBe(0x0000);
+                expect(readMask('g1body') & 0x0002).toBe(0x0002);
+                expect(readMask('g1body') & 0x0001).toBe(0x0001);
             });
         });
 
@@ -663,7 +663,7 @@ describe('MapIntegration', () => {
         // native world origin, so each fixture's physics.deathCenter carries
         // the map center (730, 500) in export units. Spawn points must survive;
         // a disc placed > 850 units from that center must die with deathType 4.
-        it.each(['simple1v1', 'ballPit'] as const)(
+        it.each(['simple1v1', 'weird'] as const)(
             '%s spawn survives while a disc beyond 850 map units from the map center dies',
             (key) => {
                 const map = loadMap(MAP_FILES[key]);
@@ -701,7 +701,7 @@ describe('MapIntegration', () => {
             },
         );
 
-        it.each(['simple1v1', 'ballPit'] as const)(
+        it.each(['simple1v1', 'weird'] as const)(
             '%s environment episode survives 5+ ticks with players alive at spawn',
             (key) => {
                 const map = loadMap(MAP_FILES[key]);

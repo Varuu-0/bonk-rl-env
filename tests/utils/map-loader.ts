@@ -1,30 +1,17 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { PhysicsEngine, MapBodyDef } from '../../src/core/physics-engine';
+import { PhysicsEngine, MapDef } from '../../src/core/physics-engine';
+import { normalizeMap } from '../../src/core/map-adapter';
 
-export interface MapDef {
-  name: string;
-  spawnPoints: Record<string, { x: number; y: number }>;
-  bodies: MapBodyDef[];
-  capZones?: Array<{
-    name: string;
-    x: number;
-    y: number;
-    width: number;
-    height: number;
-    scoreBlue?: boolean;
-    scoreRed?: boolean;
-  }>;
-  joints?: Array<{ bodyA: string; bodyB: string }>;
-  physics?: {
-    ppm?: number;
-    bounds?: { halfWidth: number; halfHeight: number };
-  };
-}
+export { MapDef };
 
 export function loadMap(filename: string): MapDef {
   const filePath = path.join(process.cwd(), 'maps', filename);
-  return JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+  // Run the same adapter the engine uses so tests exercise the real exported
+  // bonk format end-to-end (spawns[] -> spawnPoints, collidesGroupN ->
+  // collides, fixtureIndex -> named platform, etc.).
+  return normalizeMap(raw);
 }
 
 export function addAllBodies(engine: PhysicsEngine, map: MapDef): void {
