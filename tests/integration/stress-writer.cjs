@@ -5,34 +5,29 @@
 'use strict';
 const { parentPort } = require('worker_threads');
 
-const DISC_FIELDS = 5;
 let gen = 0;
-
-function writeFrame(buffer, maxPlayers, slotIndex, tick, alive) {
-  const perSlot = 2 * 4 + maxPlayers * DISC_FIELDS * 4;
-  const header = new Int32Array(buffer, slotIndex * perSlot, 2);
-  const payload = new Float32Array(buffer, slotIndex * perSlot + 8, maxPlayers * DISC_FIELDS);
-  gen += 1;
-  header[0] = gen * 2 + 1; // odd = in-progress
-  for (let p = 0; p < maxPlayers; p++) {
-    const o = p * DISC_FIELDS;
-    payload[o] = tick;
-    payload[o + 1] = tick * 2;
-    payload[o + 2] = 0.5;
-    payload[o + 3] = 0;
-    payload[o + 4] = alive ? 1 : 0;
-  }
-  header[1] = tick;
-  header[0] = gen * 2; // even = committed, written last
-}
 
 parentPort.on('message', (msg) => {
   if (msg.cmd !== 'run') return;
-  const { buffer, iterations, maxPlayers } = msg;
+  const { buffer, iterations, maxPlayers, HEADER_INTS, headerBytes, DISC_FIELDS } = msg;
+  // Per-slot byte size = header (Int32[HEADER_INTS]) + maxPlayers*DISC_FIELDS*4
+  const perSlot = headerBytes + maxPlayers * DISC_FIELDS * 4;
+  const header = new Int32Array(buffer, 0, HEADER_INTS); // reuse a fixed-slot view
   for (let i = 0; i < iterations; i++) {
-    // alive toggles every 10 ticks so the reader can cross-check disc payload
-    // (alive) against the returned tick — a torn frame would mismatch.
-    writeFrame(buffer, maxPlayers, 0, i, i % 10 === 0);
+    gen += 1;
+    header[0] = gen * 2 + 1; // odd = in-progress
+    const payload = new Float32Array(buffer, headerBytes, maxPlayers * DISC_FIELDS);
+    for (let p = 0; p < maxPlayers; p++) {
+      const o = p * DISC_FIELDS;
+      payload[o] = i;          // x = tick (the cross-check basis)
+      payload[o + 1] = i * 2;  // y
+      payload[o + 2] = 0.5;    // angle
+      payload[o + 3] = 0;      // isHeavy
+      payload[o + 4] = i % 10 === 0 ? 1 : 0; // alive toggles every 10
+    }
+    header[1] = i;             // tick
+    header[0] = gen * 2;       // even = committed, written last
+    void perSlot;
   }
   parentPort.postMessage('done');
 });

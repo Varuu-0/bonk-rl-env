@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { Worker } from 'worker_threads';
 import * as path from 'path';
-import { allocRing, readSnapshotCoherent } from '../../src/render/snapshot-ring';
+import { allocRing, readSnapshotCoherent, HEADER_INTS, DISC_FIELDS } from '../../src/render/snapshot-ring';
 
 /**
  * Concurrent torn-read stress test for the snapshot-ring seqlock.
@@ -19,35 +19,46 @@ describe('snapshot-ring seqlock concurrency', () => {
     const iterations = 50_000;
     const maxPlayers = 1;
     const worker = new Worker(path.join(__dirname, 'stress-writer.cjs'));
-    await new Promise<void>((resolve, reject) => {
-      worker.once('online', resolve);
-      worker.once('error', reject);
-    });
+    let terminated = false;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        worker.once('online', resolve);
+        worker.once('error', reject);
+      });
 
-    const done = new Promise<void>((resolve, reject) => {
-      worker.on('message', (m) => { if (m === 'done') resolve(); });
-      worker.on('error', reject);
-      worker.postMessage({ cmd: 'run', buffer: ring, iterations, maxPlayers }, []);
-    });
+      const headerBytes = HEADER_INTS * 4;
+      const done = new Promise<void>((resolve, reject) => {
+        worker.on('message', (m) => { if (m === 'done') resolve(); });
+        worker.on('error', reject);
+        worker.postMessage({
+          cmd: 'run', buffer: ring, iterations, maxPlayers,
+          HEADER_INTS, headerBytes, DISC_FIELDS,
+        }, []);
+      });
 
-    // Read concurrently while the worker writes.
-    let coherentReads = 0;
-    let mismatches = 0;
-    let reads = 0;
-    while (reads < iterations) {
-      const raw = readSnapshotCoherent(ring, maxPlayers, 0);
-      if (raw) {
-        coherentReads++;
-        // alive is true for ticks % 10 === 0, false otherwise.
-        const expectedAlive = raw.tick % 10 === 0;
-        if (raw.discs[0].alive !== expectedAlive) mismatches++;
+      // Read concurrently while the worker writes.
+      let coherentReads = 0;
+      let mismatches = 0;
+      let reads = 0;
+      while (reads < iterations) {
+        const raw = readSnapshotCoherent(ring, maxPlayers, 0);
+        if (raw) {
+          coherentReads++;
+          // Strong coherence check: the disc x payload must equal the tick.
+          // alive toggles every 10 ticks, so x===tick is a much stronger torn
+          // detection than comparing the periodic alive flag alone.
+          if (raw.discs[0].x !== raw.tick) mismatches++;
+        }
+        reads++;
       }
-      reads++;
+      await done;
+      expect(coherentReads).toBeGreaterThan(0);
+      expect(mismatches).toBe(0);
+    } finally {
+      if (!terminated) {
+        terminated = true;
+        await worker.terminate();
+      }
     }
-    await done;
-    await worker.terminate();
-
-    expect(coherentReads).toBeGreaterThan(0);
-    expect(mismatches).toBe(0);
   }, 30_000);
 });

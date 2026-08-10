@@ -159,12 +159,13 @@ export function readSnapshotCoherent(
   // A write committed mid-read (even seq changed) or left it in progress (odd)
   // means the payload we just read was torn.
   //
-  // NOTE (test coverage): the odd-seq rejection above is deterministically
+  // NOTE (test coverage): the odd-seq rejection is deterministically
   // unit-tested, but the `seqAfter !== seqBefore` torn-commit branch can only
-  // trigger when a real write commits *between* the `seqBefore` read (line 149)
-  // and the `seqAfter` read here. A synchronous unit test cannot interleave a
-  // second write inside a single read call, so this branch is not covered by a
-  // plain unit test; it is exercised by the concurrent worker stress test
+  // trigger when a real write commits *between* the `seqBefore` read (the
+  // `seqBefore = header[0]` assignment above) and the `seqAfter` read here. A
+  // synchronous unit test cannot interleave a second write inside a single read
+  // call, so this branch is not covered by a plain unit test; it is exercised
+  // by the concurrent worker stress test
   // (tests/integration/snapshot-ring-stress.test.ts) and by real detached
   // render consumers reading while the sim writes.
   if (seqAfter % 2 === 1 || seqAfter !== seqBefore) return null;
