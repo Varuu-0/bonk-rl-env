@@ -123,6 +123,32 @@ export function readSnapshot(
   return { tick, seq, discs };
 }
 
+/**
+ * Torn-write-safe read for a single slot: reads seq, then the payload, then
+ * re-reads seq. If the two seq reads match (and are non-zero) no write happened
+ * in between, so the payload is a coherent committed frame. Returns null when
+ * the slot is unwritten (seq 0) or a torn write was detected.
+ */
+export function readSnapshotCoherent(
+  buf: SharedArrayBuffer,
+  maxPlayers: number,
+  slotIndex: number,
+): { tick: number; seq: number; discs: Array<{ x: number; y: number; angle: number; isHeavy: boolean; alive: boolean }> } | null {
+  const header = slotHeader(buf, maxPlayers, slotIndex);
+  const seq1 = header[0];
+  if (seq1 === 0) return null; // unwritten slot
+  const payload = slotPayload(buf, maxPlayers, slotIndex);
+  const seq2 = header[0]; // write would have landed seq AFTER updating payload
+  if (seq1 !== seq2) return null; // torn write
+  const tick = header[1];
+  const discs = [];
+  for (let p = 0; p < maxPlayers; p++) {
+    const o = p * DISC_FIELDS;
+    discs.push({ x: payload[o], y: payload[o + 1], angle: payload[o + 2], isHeavy: payload[o + 3] === 1, alive: payload[o + 4] === 1 });
+  }
+  return { tick, seq: seq1, discs };
+}
+
 /** Coherence check: seq is non-zero and unchanged between reads (no torn write). */
 export function isCoherent(seq: number, stable: boolean): boolean {
   return seq !== 0 && stable;

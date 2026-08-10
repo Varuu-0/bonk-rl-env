@@ -233,7 +233,7 @@ export function geometryFromExport(map: any, capZones?: CapZoneGeom[]): MapGeome
   // bodies with type 'rect'/'circle'/'polygon' and x/y in map px. Render each
   // as its own single-fixture body with the shape at body-local origin.
   if (!map.physicsBodies && Array.isArray(map.bodies)) {
-    return geometryFromMapDefBody(map);
+    return geometryFromMapDefBody(map, capZones);
   }
   return {
     bodies: (map.physicsBodies || []).map((b: any, i: number) => ({
@@ -299,5 +299,22 @@ export function geometryFromMapDefBody(map: any, capZones?: CapZoneGeom[]): MapG
     fixtures.push({ index: i, shapeIndex: i, color: b.color ?? 0xaaaaaa, noPhysics: b.noPhysics, death: b.isLethal });
     bodyRenderOrder.push(i);
   });
-  return { bodies, fixtures, shapes, capZones: capZones || [], bodyRenderOrder };
+
+  // In the flattened MapDef, each body IS its own fixture (index i). Cap zones
+  // reference that body by `fixture` NAME (MapDef contract), so resolve the name
+  // to the body's array index and treat that fixture as the cap-zone fixture —
+  // otherwise cap-zone outlines never render on the env load path (#review).
+  const nameToBodyIndex = new Map<string, number>();
+  ((map.bodies || []) as any[]).forEach((b, i) => {
+    if (b && typeof b.name === 'string') nameToBodyIndex.set(b.name, i);
+  });
+  const resolvedCapZones = (capZones || []).map((cz) => {
+    const idxFromName = typeof (cz as any).fixture === 'string'
+      ? nameToBodyIndex.get((cz as any).fixture)
+      : undefined;
+    const slot = idxFromName;
+    return { index: cz.index, fixtureIndex: slot ?? cz.fixtureIndex };
+  });
+
+  return { bodies, fixtures, shapes, capZones: resolvedCapZones, bodyRenderOrder };
 }

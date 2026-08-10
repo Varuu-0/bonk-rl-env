@@ -48,9 +48,14 @@ export interface EnvMapRender {
 export function envMapRender(env: BonkEnvironment): EnvMapRender {
   const mapDef = (env as any).config.mapData;
   const deathCenter = mapDef?.physics?.deathCenter;
+  // The env's mapDef.capZones are the normalized MapDef cap zones — they carry
+  // `fixture` as the body NAME (MapDef contract), not a numeric fixtureIndex.
+  // Pass them through so geometryFromMapDefBody can resolve the name -> body
+  // index to mark the cap-zone fixture. Do NOT coerce the name into an index.
   const capZones = (mapDef?.capZones || []).map((c: any, i: number) => ({
     index: c.index ?? i,
-    fixtureIndex: c.fixtureIndex ?? c.fixture ?? c.index ?? i,
+    fixture: c.fixture,
+    fixtureIndex: c.fixtureIndex,
   }));
   return {
     geometry: geometryFromExport(mapDef, capZones),

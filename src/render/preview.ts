@@ -37,17 +37,25 @@ function parseIntArg(value: string | undefined, fallback: number, name: string):
 async function main(): Promise<void> {
   const args = parseArgs();
   // Prefer a map that exists; error out rather than silently falling back to
-  // the Default_Box placeholder map.
-  const candidates = [
-    args.map,
+  // the Default_Box placeholder map. An explicit --map that doesn't exist is a
+  // hard error (surfaces typos) rather than a silent fallback (#review).
+  const defaults = [
     'maps/bonk_WDB__No_Mapshake__716916.json',
     'maps/bonk_WDB__no_nothing__1232248.json',
-  ].filter((m): m is string => !!m);
-  const resolved = candidates.find((m) => fs.existsSync(m));
-  if (!resolved) {
-    throw new Error('No map found. Pass --map <path> (a bundled maps/*.json file).');
+  ];
+  let map: string;
+  if (args.map) {
+    if (!fs.existsSync(args.map)) {
+      throw new Error(`Map not found: ${args.map}. Pass --map <path> to an existing maps/*.json file.`);
+    }
+    map = args.map;
+  } else {
+    const resolved = defaults.find((m) => fs.existsSync(m));
+    if (!resolved) {
+      throw new Error('No default map found. Pass --map <path> to a bundled maps/*.json file.');
+    }
+    map = resolved;
   }
-  const map = resolved;
   const ticks = parseIntArg(args.ticks, 20, 'ticks');
   const outDir = args.out || 'render-preview';
   const width = parseIntArg(args.width, 730, 'width');

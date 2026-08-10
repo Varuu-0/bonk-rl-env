@@ -9,7 +9,7 @@
  * slot at a sampled sub-cadence, and each render thread samples at its own rate.
  */
 
-import { readSnapshot } from './snapshot-ring';
+import { readSnapshotCoherent } from './snapshot-ring';
 import { buildSim, SimSnapshot } from './sim-layer';
 import { buildGeometry, DrawCommand, MapGeometryInput } from './map-geometry';
 import { Camera } from './render-math';
@@ -54,17 +54,16 @@ export class DetachedRenderSampler {
 
     // Scan up to the whole ring (single pass) starting at the freshest slot and
     // moving backward, to find the most recent coherent (non-torn) write.
-    let raw: ReturnType<typeof readSnapshot> | null = null;
-    for (let back = 0; back < count; back++) {
-      const idx = ((scan - back) % count + count) % count;
-      const candidate = readSnapshot(this.frame.ring, this.frame.maxPlayers, idx);
-      // A seq of 0 means the slot was never written; stop scanning that way.
-      if (candidate.seq === 0) continue;
-      const stable = readSnapshot(this.frame.ring, this.frame.maxPlayers, idx);
-      if (candidate.seq !== stable.seq) continue; // torn write — skip
-      raw = candidate;
-      break;
-    }
+    // readSnapshotCoherent brackets the payload read between seq reads, so it
+    // returns null on any torn write that lands mid-payload.
+    const raw = (() => {
+      for (let back = 0; back < count; back++) {
+        const idx = ((scan - back) % count + count) % count;
+        const candidate = readSnapshotCoherent(this.frame.ring, this.frame.maxPlayers, idx);
+        if (candidate) return candidate;
+      }
+      return null;
+    })();
     if (!raw) return null; // nothing coherent written yet
 
     // Never re-render a frame older than the last one (time-reversed guard).
