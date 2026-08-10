@@ -63,10 +63,13 @@ describe('physics fidelity P1: fixture physics (DEOBFUSCATION §33.4)', () => {
 
 /**
  * P1b — collision-filter semantics (§33.4). The engine's mask is built from the
- * exported collidesGroupN booleans (map category 0x0001 + player group bits),
- * which is the internal representation of the native "start full, subtract per
- * disabled group" rule. These tests pin that behavior so a refactor cannot
- * silently change map/player collision.
+ * exported collidesGroupN booleans (map category 0x0001 + player group bits).
+ * This is the engine's internal representation of the native "start full,
+ * subtract per disabled group" rule — it is NOT claimed to be native-exact
+ * (the native encoding is `categoryBits = 2^(f_c+1)` and a 65535-minus mask;
+ * exact bit parity is deferred to P4 differential validation). These tests pin
+ * the ENGINE's invariant so a refactor cannot silently change map/player
+ * collision.
  */
 describe('physics fidelity P1b: collision filters (DEOBFUSCATION §33.4)', () => {
   it('all groups true -> map category 0x0001 + all group bits in mask', () => {

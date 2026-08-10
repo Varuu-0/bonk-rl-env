@@ -1,7 +1,8 @@
 # Physics Fidelity Plan
 
 Make `bonk-rl-env`'s map physics simulation **faithful to bonk.io**, validated
-against the deobfuscation record (`docs/DEOBFUSCATION.md`, `docs/FIX_TRACKER.md`)
+against the deobfuscation record (`docs/DEOBFUSCATION.md`,
+`docs/DEOBFUSCATION_FIX_TRACKER.md`)
 and (where possible) differential comparison against recorded native-client state.
 
 ## Ground truth
@@ -45,7 +46,7 @@ no ground joints.
 | **P2** | Joint model | implement `rv` limits/motor, `d` fh/len, `lpj/lsj/p` prismatic params, gear `g`, ground joints | joint invariant tests per §33.7 formulas |
 | **P3** | Map physics settings | per-map `pq`→solver iters, `gd`→gravity override | engine-level tests: pq changes solver behavior; gd overrides |
 | **P4** | Differential validation | capture harness (record native snapshots) + replay comparator | comparator diff ≤ tolerance; fixture/joint exact-match gates |
-| **P5** | Docs + gating | update FIX_TRACKER with ✅/❌/partial per item; every claim cited | PR review gate |
+| **P5** | Docs + gating | update DEOBFUSCATION_FIX_TRACKER with ✅/❌/partial per item; every claim cited | PR review gate |
 
 ## Dependency order
 P0 → P1 → P4(capture harness) → P2 → P3 → P4(comparison) → P5.

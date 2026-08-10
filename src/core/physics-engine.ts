@@ -692,14 +692,23 @@ export class PhysicsEngine {
        shapeDef.vertexCount = maxVertices;
      }
 
-     // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): even a
-     // zero/NaN-authored dynamic density is raised to the 0.0001 floor so a
-     // dynamic body never ends up massless. Static bodies keep density 0 (static
-     // bodies contribute no mass in Box2D regardless of this value).
-     shapeDef.density = def.static ? 0 : Math.max(def.density ?? 1.0, 0.0001);
+     // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): a non-finite
+     // or sub-0.0001 authored dynamic density is raised to the 0.0001 floor so a
+     // dynamic body never ends up massless. `Math.max(NaN, ...)` is NaN, so guard
+     // non-finite values explicitly. Static bodies keep density 0 (static bodies
+     // contribute no mass in Box2D regardless of this value).
+     const authoredDensity = def.density;
+     const dynamicDensity = Number.isFinite(authoredDensity ?? NaN)
+       ? Math.max(authoredDensity!, 0.0001)
+       : 0.0001;
+     shapeDef.density = def.static ? 0 : dynamicDensity;
      // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`, and when
-     // `f_p` (fricPolarity) is truthy the signed friction is negative to select
-     // velocity-independent friction.
+     // `f_p` (fricPolarity) is set the signed friction is negative. The native
+     // client mixes friction via `b2MixFriction = sqrt(f1*f2)`, so a negative
+     // authored value drives the mix to NaN, which disables the solver's friction
+     // clamp ("velocity-independent friction"). This port reproduces the SIGN
+     // only; the actual sliding behavior depends on the solver MixFriction and
+     // is validated differentially in P4, not unit-tested here.
      shapeDef.friction = def.fricPolarity
        ? -(def.friction ?? 0.3)
        : (def.friction ?? 0.3);
