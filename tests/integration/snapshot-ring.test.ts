@@ -96,6 +96,28 @@ describe('snapshot-ring (M4)', () => {
     expect(readSnapshotCoherent(buf, 2, 3)).toBeNull();
   });
 
+  it('readSnapshotCoherent rejects an in-progress write (odd seq)', () => {
+    const buf = allocRing(4, 1);
+    writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
+    // Simulate a writer mid-frame: flip the committed even seq to odd (as
+    // writeSnapshot does with `writeGen*2 + 1` before touching the payload).
+    // The coherent read must skip because the slot is marked in-progress.
+    const headerView = new Int32Array(buf, 0, 2);
+    headerView[0] += 1; // even -> odd in-progress mark
+    expect(readSnapshotCoherent(buf, 1, 0)).toBeNull();
+  });
+
+  it('readSnapshotCoherent accepts a stable committed (even) slot', () => {
+    const buf = allocRing(4, 1);
+    writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
+    const headerView = new Int32Array(buf, 0, 2);
+    // Confirm the committed seq is even; a stable even slot reads coherently.
+    expect(headerView[0] % 2).toBe(0);
+    const c = readSnapshotCoherent(buf, 1, 0);
+    expect(c).not.toBeNull();
+    expect(c!.tick).toBe(5);
+  });
+
   it('toSimSnapshot attaches ids for the sim layer', () => {
     const snap = toSimSnapshot({ tick: 5, discs: [ALIVE0, DEAD1] }, { x: 0, y: 0 });
     expect(snap.discs[0].id).toBe(0);
