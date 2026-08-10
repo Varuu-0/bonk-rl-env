@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bonk Map Exporter
 // @namespace    https://bonk.io/
-// @version      2.2.0
+// @version      2.4.0
 // @description  Extracts and exports the current Bonk.io map as faithful JSON, preserving the full body→fixture→shape hierarchy and all physics fields
 // @author       you
 // @match        https://bonk.io/gameframe-release.html
@@ -18,23 +18,21 @@
   // at runtime is logged so the format can be kept up to date.
   const KNOWN = {
     root: new Set([
-      'physics','discs','capZones','mm','m','re','rx',
+      'physics','discs','capZones','spawns','mm','m','re','rx','v',
       'discDeaths','seed','fte','ftu','players','scores',
       'lscr','ms','rl','projectiles','rc',
       'shk','sts','s',
     ]),
     physics: new Set([
-      'ppm','bg','grav','bc','bdc','customres','bw','bh',
-      'bodies','fixtures','shapes','joints','bro','ss',
+      'ppm','ss','bodies','fixtures','shapes','joints','bro',
     ]),
-    settings: new Set(['re','nc','pq','gd','fl']),
+    settings: new Set(['re','nc','pq','gd','fl','v']),
     mm: new Set([
       'n','a','dbid','v','rxid',
       'dbv','authid','date','rxn','rxa','rxdb','cr','pub','mo','vu','vd',
     ]),
     fixture: new Set([
-      'sh','n','fr','re','de','d','np','ng','ig','f',
-      'frc','f_c','fc','fp','f_1','f_2','f_3','f_4',
+      'sh','n','fr','re','de','d','np','ng','ig','f','fp',
     ]),
     shape: new Set(['type','c','w','h','r','v','a','s','sk']),
     body: new Set([
@@ -46,13 +44,13 @@
       'f_1','f_2','f_3','f_4','fricp','frc','ld','ad','fr','bu',
     ]),
     disc: new Set([
-      'x','y','sx','sy','xv','yv','a','av','team','fn','fz',
+      'x','y','sx','sy','xv','yv','a','av','team',
       'sxv','syv','a1a','a1','lhid','lht','ds','da','vt',
-      'a2','ni',
+      'a2','ni','swing','spawnTeamInfo',
     ]),
-    capzone: new Set(['ty','o','p','l','i','ot','f']),
+    capzone: new Set(['n','ty','o','p','l','i','ot','f']),
     joint: new Set([
-      'type','ba','bb','d','aa','ab',
+      'type','ba','bb','d','aa','ab','l',
       'pax','pay','pa','pf','pl','pu','plen','pms',
       'sax','say','sf','slen',
     ]),
@@ -108,12 +106,16 @@
   // The game stores its internal state as a plain object with physics, discs,
   // capZones, mm, etc. We faithfully extract it into a clean JSON structure
   // that preserves the original bonk.io hierarchy: body → fixtures → shapes.
-  function extractMap(state) {
+  function extractMap(state, { capZoneTimeInTicks = false } = {}) {
     unknownFields = {};
 
     const ph = state.physics || {};
-    const mm = state.mm || {};
-    const settings = state.s || {};
+    // Tick state stores metadata under `mm`; the decoded map definition uses
+    // `m`. Supporting both here keeps direct primary-path exports lossless.
+    const mm = state.mm || state.m || {};
+    // Decoded map definitions use `s`; per-tick live state carries match
+    // settings as `ms`. Prefer the source-native map settings if both exist.
+    const settings = state.s || state.ms || {};
     const bodies = ph.bodies || [];
     const fixtures = ph.fixtures || [];
     const shapes = ph.shapes || [];
@@ -121,6 +123,19 @@
     const bro = ph.bro || [];
     const discs = state.discs || [];
     const capZones = state.capZones || [];
+
+    // Collision filter (f_c/f_p/f_1..f_4) lives on the BODY's surface, not on
+    // fixtures (world-build 7577-7628). Build a fixture->owningBodySurface map
+    // so fixture export can source collision fields correctly.
+    const fixtureOwnerSurface = {};
+    for (let b = 0; b < bodies.length; b++) {
+      const body = bodies[b];
+      if (!body) continue;
+      const surf = body.s || {};
+      for (const fxIdx of (body.fx || [])) {
+        if (typeof fxIdx === 'number') fixtureOwnerSurface[fxIdx] = surf;
+      }
+    }
 
     checkUnknown('root', state, KNOWN.root);
     checkUnknown('physics', ph, KNOWN.physics);
@@ -144,7 +159,9 @@
         contributors: mm.cr ? clone(mm.cr) : [],
         published: mm.pub ?? null,
         mode: mm.mo ?? null,
-        version: mm.v ?? null,
+        // Map format version `v` is a top-level key (blank-map template), not
+        // on `mm`. On the map path `state` is `gs.map`, so state.v resolves.
+        version: state.v ?? null,
       },
 
       // Map-level settings
@@ -210,9 +227,8 @@
         },
         angle: d.a ?? null,
         angularVelocity: d.av ?? null,
-        // Disc runtime fields
-        fn: d.fn ?? null,
-        fz: d.fz ?? null,
+        // Disc runtime fields (serializer set: x,y,sx,sy,xv,yv,a,av,team,
+        // a1a,a1,a2,ni,sxv,syv,ds,da,lhid,lht,vt,swing,spawnTeamInfo)
         a1a: d.a1a ?? null,
         a1: d.a1 ?? null,
         lhid: d.lhid ?? null,
@@ -222,6 +238,8 @@
         vt: d.vt ?? null,
         a2: d.a2 ?? null,
         ni: d.ni ?? null,
+        swing: d.swing ?? null,
+        spawnTeamInfo: d.spawnTeamInfo ?? null,
       });
     });
 
@@ -246,7 +264,7 @@
         name: fx?.n ?? `capzone_${i}`,
         type: cz.ty ?? null,
         typeName: capTypeNames[cz.ty] ?? `type_${cz.ty}`,
-        captureTime: cz.l ?? null,
+        captureTime: cz.l != null ? (capZoneTimeInTicks ? cz.l / 30 : cz.l) : null,
         fixtureIndex: cz.i ?? -1,
         fixtureName: fx?.n ?? null,
         // Runtime state fields
@@ -311,14 +329,15 @@
         noGrapple: fx.ng ?? false,
         innerGrapple: fx.ig ?? false,
         fricPlayers: fx.fp ?? null,
-        // Collision
-        collisionGroup: fx.f_c ?? fx.fc ?? null,
-        frictionCategory: fx.frc ?? null,
-        collidesGroup1: fx.f_1 ?? null,
-        collidesGroup2: fx.f_2 ?? null,
-        collidesGroup3: fx.f_3 ?? null,
-        collidesGroup4: fx.f_4 ?? null,
-        collidesPlayers: fx.f_p ?? null,
+        // Collision filter is body-level (sourced from the owning body.s).
+        // `frc` (frictionCategory) is absent from the runtime constant table.
+        collisionGroup: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_c) ?? null,
+        frictionCategory: null,
+        collidesGroup1: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_1) ?? null,
+        collidesGroup2: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_2) ?? null,
+        collidesGroup3: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_3) ?? null,
+        collidesGroup4: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_4) ?? null,
+        collidesPlayers: (fixtureOwnerSurface[i] && fixtureOwnerSurface[i].f_p) ?? null,
         // Visual
         color: fx.f ?? null,
       });
@@ -394,6 +413,7 @@
           const fx = fixtures[fxIdx];
           if (!fx) return null;
           const sh = fx.sh != null ? shapes[fx.sh] : null;
+          const fixtureSurface = fixtureOwnerSurface[fxIdx] || surf;
 
           const resolved = {
             fixtureIndex: fxIdx,
@@ -406,8 +426,13 @@
             friction: fx.fr ?? surf.fric ?? null,
             restitution: fx.re ?? surf.re ?? null,
             density: fx.de ?? surf.de ?? null,
-            fricPlayers: fx.fp ?? surf.fp ?? null,
-            collisionGroup: fx.f_c ?? surf.f_c ?? null,
+            fricPlayers: fx.fp ?? fixtureSurface.fricp ?? null,
+            collisionGroup: fixtureSurface.f_c ?? null,
+            collidesGroup1: fixtureSurface.f_1 ?? null,
+            collidesGroup2: fixtureSurface.f_2 ?? null,
+            collidesGroup3: fixtureSurface.f_3 ?? null,
+            collidesGroup4: fixtureSurface.f_4 ?? null,
+            collidesPlayers: fixtureSurface.f_p ?? null,
             color: fx.f ?? null,
           };
 
@@ -445,23 +470,22 @@
         const fx = fixtures[fxIdx];
         if (!fx) return;
         const sh = fx.sh != null ? shapes[fx.sh] : null;
-        if (!sh) return;
 
         const bx = Array.isArray(body.p) ? body.p[0] : 0;
         const by = Array.isArray(body.p) ? body.p[1] : 0;
-        const cx = Array.isArray(sh.c) ? (sh.c[0] || 0) : 0;
-        const cy = Array.isArray(sh.c) ? (sh.c[1] || 0) : 0;
+        const cx = Array.isArray(sh?.c) ? (sh.c[0] || 0) : 0;
+        const cy = Array.isArray(sh?.c) ? (sh.c[1] || 0) : 0;
 
         const flat = {
           bodyIndex: bodyIdx,
           fixtureIndex: fxIdx,
-          shapeIndex: fx.sh,
+          shapeIndex: fx.sh ?? null,
           name: fx.n || surf.n || `body_${bodyIdx}`,
-          type: sh.type === 'bx' ? 'rect' : sh.type === 'ci' ? 'circle' : 'polygon',
+          type: !sh ? null : sh.type === 'bx' ? 'rect' : sh.type === 'ci' ? 'circle' : 'polygon',
           bodyType: bodyDef.typeName,
           x: bx + cx,
           y: by + cy,
-          angle: (body.a || 0) + (sh.a || 0),
+          angle: (body.a || 0) + (sh?.a || 0),
           linearVelocity: body.lv ? { x: body.lv[0], y: body.lv[1] } : { x: 0, y: 0 },
           angularVelocity: body.av || 0,
           static: surf.type === 's',
@@ -472,22 +496,23 @@
           friction: fx.fr ?? surf.fric ?? null,
           restitution: fx.re ?? surf.re ?? null,
           density: fx.de ?? surf.de ?? null,
-          collisionGroup: fx.f_c ?? surf.f_c ?? null,
+          fricPlayers: fx.fp ?? surf.fricp ?? null,
+          collisionGroup: surf.f_c ?? null,
           collidesGroup1: surf.f_1 ?? null,
           collidesGroup2: surf.f_2 ?? null,
           collidesGroup3: surf.f_3 ?? null,
           collidesGroup4: surf.f_4 ?? null,
-          collidesPlayers: fx.f_p ?? surf.f_p ?? null,
+          collidesPlayers: surf.f_p ?? null,
           color: fx.f ?? null,
           ppm: ph.ppm ?? null,
         };
 
-        if (sh.type === 'bx') {
+        if (sh?.type === 'bx') {
           flat.width = sh.w ?? null;
           flat.height = sh.h ?? null;
-        } else if (sh.type === 'ci') {
+        } else if (sh?.type === 'ci') {
           flat.radius = sh.r ?? null;
-        } else if (sh.type === 'po') {
+        } else if (sh?.type === 'po') {
           flat.scale = sh.s ?? null;
           flat.vertices = (sh.v || []).map(v => ({
             x: bx + cx + v[0],
@@ -513,6 +538,8 @@
         bodyA: jt.ba ?? null,
         bodyB: jt.bb ?? null,
         data: jt.d ? clone(jt.d) : null,
+        // Chain joints keep their length on the joint itself rather than in d.
+        length: jt.l ?? null,
       };
 
       // Type-specific fields
@@ -699,7 +726,8 @@
 
   // ── Export button UI ───────────────────────────────────────────────────────
   function injectButton() {
-    if (document.getElementById('bonk-export-btn')) return;
+    const existing = document.getElementById('bonk-export-btn');
+    if (existing) return existing;
 
     const btn = document.createElement('button');
     btn.id = 'bonk-export-btn';
@@ -739,12 +767,14 @@
       const tickState = window.__bonkExportState;
 
       let mapSource = null;
+      let capZoneTimeInTicks = false;
       if (gs && gs.map && gs.map.physics && gs.map.physics.bodies) {
         // Game settings contains the full decoded map definition
         mapSource = gs.map;
       } else if (tickState && tickState.physics && tickState.physics.bodies) {
         // Per-tick state has physics + discs + capZones but not spawns
         mapSource = tickState;
+        capZoneTimeInTicks = true;
       }
 
       if (!mapSource) {
@@ -752,7 +782,7 @@
         return;
       }
 
-      const mapDef = extractMap(mapSource);
+      const mapDef = extractMap(mapSource, { capZoneTimeInTicks });
 
       const runtimeConstantTable = captureRuntimeConstantTable();
       if (runtimeConstantTable) {
@@ -789,6 +819,10 @@
         if (mapMeta.mo) mapDef.metadata.mode = mapMeta.mo;
         if (mapMeta.pub != null) mapDef.metadata.published = mapMeta.pub;
         if (mapMeta.cr) mapDef.metadata.contributors = mapMeta.cr;
+        if (mapMeta.rxid != null) mapDef.metadata.rxid = mapMeta.rxid;
+        if (mapMeta.rxn != null) mapDef.metadata.rxn = mapMeta.rxn;
+        if (mapMeta.rxa != null) mapDef.metadata.rxa = mapMeta.rxa;
+        if (mapMeta.rxdb != null) mapDef.metadata.rxdb = mapMeta.rxdb;
 
         // Merge map-level settings
         const mapSettings = gs.map.s || {};
@@ -841,8 +875,12 @@
       const a = document.createElement('a');
       a.href = url;
       a.download = `bonk_${(mapDef.metadata.name || 'map').replace(/[^a-z0-9_-]/gi, '_')}_${mapDef.metadata.dbid || Date.now()}.json`;
+      document.body.appendChild(a);
       a.click();
-      URL.revokeObjectURL(url);
+      a.remove();
+      // A detached link or immediate revocation can cancel downloads in some
+      // browsers. Let the browser start the transfer before releasing the URL.
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
       btn.textContent = '✅ Downloaded!';
       Object.assign(btn.style, { background: '#4caf50', color: '#1a1a2e' });
       setTimeout(() => {
@@ -860,14 +898,19 @@
     let lastMapId = null;
 
     setInterval(() => {
-      // Check game settings for map changes
+      // Prefer the full map definition, but also surface tick-only fallback
+      // captures so the button reflects every exportable source.
       const gs = window.__bonkExportGameSettings;
-      const mapMeta = gs?.map?.m;
-      const mapId = mapMeta?.dbid ?? mapMeta?.n;
+      const tickState = window.__bonkExportState;
+      const mapMeta = gs?.map?.m || tickState?.mm || null;
+      const hasMapSource = !!(
+        (gs?.map?.physics?.bodies) || (tickState?.physics?.bodies)
+      );
+      const mapId = mapMeta?.dbid ?? mapMeta?.n ?? (hasMapSource ? 'live-map' : null);
 
       if (mapId && mapId !== lastMapId) {
         lastMapId = mapId;
-        const name = mapMeta?.n || '?';
+        const name = mapMeta?.n || (hasMapSource ? 'Live map' : '?');
         btn.textContent = `⬇ ${name}`;
         console.log(`%c[BonkExport] Map: "${name}" (dbid=${mapMeta?.dbid ?? '?'})`,
           'color:#4caf50;font-weight:bold');
@@ -883,7 +926,7 @@
   function init() {
     const btn = injectButton();
     startPolling(btn);
-    console.log('%c[BonkExport] v2.2.0 active — requires Code Injector userscript',
+    console.log('%c[BonkExport] v2.4.0 active — requires Code Injector userscript',
       'color:#4caf50;font-weight:bold');
     console.log('%c[BonkExport] Install: https://greasyfork.org/en/scripts/433861',
       'color:#888;font-size:11px');
