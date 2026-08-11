@@ -12,9 +12,10 @@
  * map file is absent, env falls back to the built-in box map" premise no
  * longer holds: the shipped map's spawn rests inside the floor and its 11
  * moving platforms trip an infinite loop in this Box2D port's broadphase
- * when stepped with a small world AABB. TEST_MAP is four static walls whose
- * shape AABBs span exactly x ±515 / y ±300 map px — the same extents the
- * box map produced — so the documented arena numbers hold:
+ * when stepped with a small world AABB. TEST_MAP is two static walls whose
+ * shape AABBs span exactly x ±515 / y ±300 map px — the y extent comes from
+ * the walls' 600 px height — the same extents the box map produced — so the
+ * documented arena numbers hold:
  * arenaHalfWidth/Height = maxExtentPx + boundsMargin * scale:
  *   515 + 5*30 = 665 / 300 + 5*30 = 450 (defaults),
  *   515 / 300 (margin 0), 515 + 5*60 = 815 / 300 + 5*60 = 600 (scale 60).
