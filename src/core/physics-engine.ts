@@ -1603,10 +1603,11 @@ export class PhysicsEngine {
         const dx = pos.x - this.oobCenterX;
         const dy = pos.y - this.oobCenterY;
         const d2 = dx * dx + dy * dy;
-        // Fail-safe (#276): a non-finite position (NaN/Infinity from any
-        // solver corruption) must count as out-of-bounds. Without this guard,
-        // `NaN > threshold` is false, so a corrupted disc would be immortal
-        // and poison every observation for the rest of the episode.
+        // Fail-safe (#271, #276): a non-finite position/distance (NaN/Infinity
+        // from any solver corruption) must count as out-of-bounds. Without this
+        // guard, `NaN > threshold` is false, so a corrupted disc would be
+        // immortal (the death circle silently disabled) and poison every
+        // observation for the rest of the episode.
         if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
           this.playerAlive.set(id, false);
           this.playerDeathType.set(id, 4);
