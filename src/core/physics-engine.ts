@@ -242,6 +242,24 @@ export interface MapDef {
      * around the origin (see setDeathCircleCenter). */
     deathCenter?: { x: number; y: number };
   };
+  /** Native map settings (`s` in the bonk map format; blank-map defaults
+   * re:false, nc:false, pq:1, gd:25, fl:false — DEOBFUSCATION §33). `pq` gates
+   * solver iterations (1 → 2/6, 2 → 15/15). `gd` is the serialized gravity
+   * field: the native client enforces gravity (0, 20) at round start and never
+   * applies gd at runtime, so the engine keeps config/default gravity (P3 —
+   * runtime gd application is deferred to the P4 differential gate). */
+  settings?: {
+    /** Respawn enabled (native `re`). */
+    re?: boolean;
+    /** No collision (native `nc`). */
+    nc?: boolean;
+    /** Physics quality (native `pq`): 1 = low, 2 = high. */
+    pq?: number;
+    /** Gravity value (native `gd`, sanitized ≥ 2; serialized only). */
+    gd?: number;
+    /** Flipped (native `fl`). */
+    fl?: boolean;
+  };
 }
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
@@ -256,8 +274,16 @@ export interface MapDef {
 export interface PhysicsEngineOptions {
     /** Fixed physics update rate (ticks/second); dt = 1 / this value. Default: TPS (30). */
     ticksPerSecond?: number;
-    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2). */
+    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2),
+     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
     velocityIterations?: number;
+    /** Position constraint solver iterations per tick. Default: POSITION_ITERATIONS (6),
+     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
+    positionIterations?: number;
+    /** Native map setting `pq` (physics quality): 1 = low (2 velocity / 6 position
+     *  iterations), 2 = high (15 / 15). Explicit `velocityIterations` /
+     *  `positionIterations` always win over the pq-derived defaults. */
+    physicsQuality?: number;
     /** Pixels-per-metre conversion for exported map coordinates. Default: SCALE (30). */
     scale?: number;
     /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
@@ -338,6 +364,10 @@ export class PhysicsEngine {
   private tps: number = TPS;
   private dt: number = DT;
   private velocityIterations: number = VELOCITY_ITERATIONS;
+  private positionIterations: number = POSITION_ITERATIONS;
+  /** Native map `pq` gate: 1 (low) → 2/6, 2 (high) → 15/15 (DEOBFUSCATION
+   *  §Solver Iterations). Explicit iteration options override the pq defaults. */
+  private physicsQuality: number = 1;
   private scale: number = SCALE;
   private gravityX: number = GRAVITY_X;
   private gravityY: number = GRAVITY_Y;
@@ -388,7 +418,13 @@ export class PhysicsEngine {
     // `new PhysicsEngine()` keeps the exact behaviour it always had.
     this.tps = PhysicsEngine.sanitizePositive(options.ticksPerSecond, TPS);
     this.dt = 1 / this.tps;
-    this.velocityIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.velocityIterations, VELOCITY_ITERATIONS, 1);
+    // Native `pq` gate (map settings): low 2/6, high 15/15. Explicit iteration
+    // options are the documented override and win over the pq-derived defaults.
+    this.physicsQuality = options.physicsQuality === 2 ? 2 : 1;
+    const pqVelocity = this.physicsQuality === 2 ? 15 : VELOCITY_ITERATIONS;
+    const pqPosition = this.physicsQuality === 2 ? 15 : POSITION_ITERATIONS;
+    this.velocityIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.velocityIterations, pqVelocity, 1);
+    this.positionIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.positionIterations, pqPosition, 1);
     this.scale = PhysicsEngine.sanitizePositive(options.scale, SCALE);
     this.gravityX = PhysicsEngine.sanitizeFinite(options.gravityX, GRAVITY_X);
     this.gravityY = PhysicsEngine.sanitizeFinite(options.gravityY, GRAVITY_Y);
@@ -1454,8 +1490,13 @@ export class PhysicsEngine {
     tick(): void {
         if (!this.world) return;
         // This bundled Box2D v2.0 port accepts only one iteration count and
-        // ignores the third argument. The real client uses Step(dt, 2, 6);
-        // the configured solver iterations drive the velocity-iteration count.
+        // ignores the third argument; the second argument carries the resolved
+        // velocity iterations. The native client uses Step(dt, velIter, posIter)
+        // — 2/6 low, 15/15 high (pq, DEOBFUSCATION §Solver Iterations) — so the
+        // position count cannot be expressed exactly in this port. The engine
+        // still resolves and exposes both counts (positionIterations) so callers
+        // and tests see the pq contract; the port limitation is tracked for the
+        // P4 differential gate.
     // Count down last-hit attribution timers (native lht) before the step so
     // contacts created during this Step keep their full 120-tick window.
     for (const [id, ticks] of this.lastHitTicks) {
@@ -1472,7 +1513,7 @@ export class PhysicsEngine {
     this.updateGrappleEnergy();
     this.updateGrappleJointTuning();
 
-        this.world.Step(this.dt, this.velocityIterations, POSITION_ITERATIONS);
+        this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
     // Process cap-zone completion countdowns (before this tick's touches)

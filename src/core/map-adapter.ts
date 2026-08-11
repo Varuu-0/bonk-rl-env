@@ -196,6 +196,23 @@ export function normalizeMap(raw: unknown): MapDef {
 
     const map = (raw || {}) as ExportedMap;
 
+    // Native map settings (blank map: re:false, nc:false, pq:1, gd:25, fl:false
+    // — DEOBFUSCATION §33.1), validated against the native sanitizer
+    // (mergeIntoNewMap, pretty 12279-12287): pq kept when 1..2, gd kept when
+    // >= 2 (the native guard's `pq <= 100` half is always true since pq <= 2),
+    // re/nc/fl kept when booleans.
+    const settings = (() => {
+        const s = (map as any).settings;
+        if (!s || typeof s !== 'object') return undefined;
+        const out: NonNullable<MapDef['settings']> = {};
+        if (typeof s.re === 'boolean') out.re = s.re;
+        if (typeof s.nc === 'boolean') out.nc = s.nc;
+        if (typeof s.fl === 'boolean') out.fl = s.fl;
+        if (typeof s.pq === 'number' && Number.isInteger(s.pq) && s.pq >= 1 && s.pq <= 2) out.pq = s.pq;
+        if (typeof s.gd === 'number' && Number.isFinite(s.gd) && s.gd >= 2) out.gd = s.gd;
+        return Object.keys(out).length > 0 ? out : undefined;
+    })();
+
     // Prefer the exporter's flat `bodies[]` (already flattened rect/circle/
     // polygon with x/y/width in map px). Only fall back to physicsBodies when
     // the flat list is absent, and guard against that placeholder format (which
@@ -390,5 +407,6 @@ export function normalizeMap(raw: unknown): MapDef {
         capZones: capZones.length > 0 ? capZones : undefined,
         joints: joints.length > 0 ? joints as any : undefined,
         physics,
+        settings,
     };
 }
