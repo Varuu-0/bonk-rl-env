@@ -541,6 +541,82 @@ describe('CapZoneScoring', () => {
             }
         });
 
+        it('capzone on a polygon fixture captures identically to an equivalent rect (#277)', () => {
+            // Same bounds (200 x 100) as the rect control case above, but the
+            // zone fixture is a polygon. Previously the polygon sizing branch
+            // left w = h = 0, building a degenerate point sensor that never
+            // registered a touch, so the instant goal never fired.
+            const polygonFixture = {
+                name: 'zone_fixture', type: 'polygon' as const, x: 0, y: 190,
+                vertices: [{ x: -100, y: -50 }, { x: 100, y: -50 }, { x: 100, y: 50 }, { x: -100, y: 50 }],
+                static: true, noPhysics: true,
+            };
+            const mapData: MapDef = {
+                name: 'capzone-polygon-reward',
+                spawnPoints: {
+                    team_blue: { x: -300, y: -100 },
+                    team_red: { x: 300, y: -100 },
+                },
+                bodies: [
+                    { name: 'floor', type: 'rect', x: 0, y: 400, width: 800, height: 30, static: true },
+                    polygonFixture,
+                    { name: 'ball', type: 'circle', x: 0, y: 50, radius: 10, static: false, density: 1, restitution: 0, friction: 0 },
+                ],
+                capZones: [
+                    { index: 0, owner: 'neutral', type: 3, fixture: 'zone_fixture', shapeType: 'polygon' },
+                ],
+            };
+
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
+            try {
+                // The sensor must be non-degenerate: 4 vertices spanning the
+                // fixture's extent, not a coincident point at (0, 0).
+                const sensor = (env as any).physics.capZoneSensors[0] as { GetShapeList(): any };
+                const shape = sensor.GetShapeList();
+                expect(shape.m_vertexCount).toBe(4);
+                const xs: number[] = [];
+                const ys: number[] = [];
+                for (let i = 0; i < shape.m_vertexCount; i++) {
+                    xs.push(shape.m_vertices[i].x);
+                    ys.push(shape.m_vertices[i].y);
+                }
+                expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0);
+                expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0);
+
+                let captureReward: number | null = null;
+                for (let i = 0; i < 300; i++) {
+                    const r = env.step(0);
+                    if ((r.info.scoreBlue ?? 0) > 0) {
+                        captureReward = r.reward;
+                        break;
+                    }
+                    if (r.done) break;
+                }
+
+                // Polygon zone must capture in the same step budget as the
+                // rect control (step ~15), not silently never fire.
+                expect(captureReward).not.toBe(null);
+                expect(captureReward!).toBeCloseTo(0.999, 3);
+
+                // reset() rebuilds the sensor from the same map data — it must
+                // stay non-degenerate, otherwise the next episode is dead.
+                env.reset();
+                const resetSensor = (env as any).physics.capZoneSensors[0] as { GetShapeList(): any };
+                const resetShape = resetSensor.GetShapeList();
+                expect(resetShape.m_vertexCount).toBe(4);
+                const rxs: number[] = [];
+                const rys: number[] = [];
+                for (let i = 0; i < resetShape.m_vertexCount; i++) {
+                    rxs.push(resetShape.m_vertices[i].x);
+                    rys.push(resetShape.m_vertices[i].y);
+                }
+                expect(Math.max(...rxs) - Math.min(...rxs)).toBeGreaterThan(0);
+                expect(Math.max(...rys) - Math.min(...rys)).toBeGreaterThan(0);
+            } finally {
+                env.close();
+            }
+        });
+
         it('BonkEnvironment with capZones map includes capZones in step info', () => {
             const mapData: MapDef = {
                 name: 'capzone-test',

@@ -252,6 +252,37 @@ function pickRewardWeight(
     return fallback;
 }
 
+/**
+ * Derive the cap-zone sensor extent for a fixture body. Rect fixtures use
+ * their width/height and circle fixtures their radius*2; polygon fixtures use
+ * the bounding box of their vertices (local-space extents, same convention as
+ * rect width/height). Anything else warns loudly instead of silently building
+ * a zero-area sensor that can never capture (#277).
+ */
+function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } {
+    if (fixtureDef.type === 'rect') {
+        return { w: fixtureDef.width || 0, h: fixtureDef.height || 0 };
+    }
+    if (fixtureDef.type === 'circle') {
+        const w = (fixtureDef.radius || 0) * 2;
+        return { w, h: w };
+    }
+    if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices) && fixtureDef.vertices.length > 0) {
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        for (const v of fixtureDef.vertices) {
+            if (v.x < minX) minX = v.x;
+            if (v.x > maxX) maxX = v.x;
+            if (v.y < minY) minY = v.y;
+            if (v.y > maxY) maxY = v.y;
+        }
+        const w = Number.isFinite(minX) ? maxX - minX : 0;
+        const h = Number.isFinite(minY) ? maxY - minY : 0;
+        return { w, h };
+    }
+    console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — creating a zero-area sensor`);
+    return { w: 0, h: 0 };
+}
+
 export class BonkEnvironment {
     private physics: PhysicsEngine;
     /** Stored resolved config: flat reward keys are not stored — only the nested
@@ -458,18 +489,9 @@ export class BonkEnvironment {
             for (const zone of mapDef.capZones) {
                 const fixtureDef = mapDef.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    let cx = fixtureDef.x;
-                    let cy = fixtureDef.y;
-                    let w = 0, h = 0;
-                    if (fixtureDef.type === 'rect') {
-                        w = fixtureDef.width || 0;
-                        h = fixtureDef.height || 0;
-                    } else if (fixtureDef.type === 'circle') {
-                        w = (fixtureDef.radius || 0) * 2;
-                        h = w;
-                    }
+                    const { w, h } = getCapZoneSensorSize(fixtureDef);
                     if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, w, h);
                     }
                 } else {
                     console.warn(`CapZone fixture "${zone.fixture}" not found`);
@@ -534,18 +556,9 @@ export class BonkEnvironment {
             for (const zone of this.config.mapData.capZones) {
                 const fixtureDef = this.config.mapData.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    let cx = fixtureDef.x;
-                    let cy = fixtureDef.y;
-                    let w = 0, h = 0;
-                    if (fixtureDef.type === 'rect') {
-                        w = fixtureDef.width || 0;
-                        h = fixtureDef.height || 0;
-                    } else if (fixtureDef.type === 'circle') {
-                        w = (fixtureDef.radius || 0) * 2;
-                        h = w;
-                    }
+                    const { w, h } = getCapZoneSensorSize(fixtureDef);
                     if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, w, h);
                     }
                 }
             }
