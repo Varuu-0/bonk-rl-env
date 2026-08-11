@@ -698,9 +698,18 @@ export class PhysicsEngine {
      // non-finite values explicitly. Static bodies keep density 0 (static bodies
      // contribute no mass in Box2D regardless of this value).
      const authoredDensity = def.density;
-     const dynamicDensity = Number.isFinite(authoredDensity ?? NaN)
-       ? Math.max(authoredDensity!, 0.0001)
-       : 0.0001;
+     let dynamicDensity: number;
+     if (authoredDensity === undefined) {
+       // No authored density: default to the native surface default 1.0.
+       // Do NOT floor to 0.0001 here.
+       dynamicDensity = 1.0;
+     } else if (Number.isFinite(authoredDensity)) {
+       // Finite authored value, clamped up to the 0.0001 floor (§33.4).
+       dynamicDensity = Math.max(authoredDensity, 0.0001);
+     } else {
+       // NaN/Infinity would poison mass; floor per the clamp guard.
+       dynamicDensity = 0.0001;
+     }
      shapeDef.density = def.static ? 0 : dynamicDensity;
      // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`, and when
      // `f_p` (fricPolarity) is set the signed friction is negative. The native

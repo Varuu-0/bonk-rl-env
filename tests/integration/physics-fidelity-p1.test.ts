@@ -20,6 +20,15 @@ function fixtureOf(body: any): any {
 }
 
 describe('physics fidelity P1: fixture physics (DEOBFUSCATION §33.4)', () => {
+  it('keeps an unknown dynamic density at the native 1.0 default (not floored)', () => {
+    const e = makeEngine();
+    e.addBody({ name: 'undefined-density', type: 'rect', x: 400, y: 0, width: 40, height: 20, static: false } as any);
+    const shape = fixtureOf(e.getBodyMap().get('undefined-density')) as any;
+    // A body without an authored density must NOT fall to the 0.0001 floor
+    // (that would be a 10,000x mass reduction); it keeps the 1.0 default.
+    expect(shape.m_density).toBeCloseTo(1.0, 3);
+  });
+
   it('clamps dynamic density to the 0.0001 floor', () => {
     const e = makeEngine();
     e.addBody({ name: 'zero-density', type: 'rect', x: 0, y: 0, width: 40, height: 20, static: false, density: 0 } as any);

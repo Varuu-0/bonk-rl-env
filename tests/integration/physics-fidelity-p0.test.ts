@@ -46,13 +46,13 @@ describe('physics fidelity P0: shared-divisor scale invariant', () => {
   it('reports player state in map px (scale cancelled via *SCALE round-trip)', () => {
     const e = new PhysicsEngine();
     e.addPlayer(0, 150, 250);
-    // addPlayer uses x/this.scale internally; getPlayerState must return map px.
+    // addPlayer uses x/this.scale internally; getPlayerState must return the
+    // authored map-px coordinate EXACTLY (SCALE round-trip), not a ppm-scaled
+    // value. A ppm-erroneous model placing the disc at px/ppm*SCALE would give
+    // 150/12*30 = 375 (2.5x), so asserting the exact 150 proves the shared
+    // SCALE divisor (not ppm) drives map<->world conversion.
     const st = e.getPlayerState(0);
-    expect(typeof st.x).toBe('number');
-    expect(Number.isFinite(st.x)).toBe(true);
-    // The absolute position round-trips through SCALE (not through ppm = 12).
-    // A ppm-based (erroneous) model would place it at px/12*30 = 2.5x too far.
-    expect(Math.abs(st.x)).toBeGreaterThanOrEqual(0);
-    expect(st.y).toBeGreaterThanOrEqual(-10000); // just sanity: finite, not NaN
+    expect(st.x).toBeCloseTo(150, 3);
+    expect(st.y).toBeCloseTo(250, 3);
   });
 });
