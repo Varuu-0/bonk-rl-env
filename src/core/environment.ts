@@ -26,6 +26,7 @@ import {
 import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
+import { assertValidAction } from './action-validation';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -633,6 +634,12 @@ export class BonkEnvironment {
      *   - Bit 5: grapple
      */
     step(action: Action): StepResult {
+        // Reject malformed actions (arrays, empty objects, non-boolean field
+        // values, null, NaN, ...) with the same labeled error the pool
+        // surfaces, before any state is touched. A wrong-shaped action must
+        // not silently execute as a different no-op action or crash with an
+        // opaque TypeError (#278).
+        assertValidAction(action);
         // If terminal was already reached in a previous tick of this cycle,
         // return done immediately without stepping physics further (rewards
         // were already accumulated). terminalReached is only cleared by an

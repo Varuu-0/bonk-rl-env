@@ -651,6 +651,45 @@ describe('BonkEnvironment edge cases', () => {
     });
   });
 
+  describe('malformed action value rejection (issue #278)', () => {
+    it('rejects non-conforming action values with the labeled validation error', async () => {
+      env = new BonkEnvironment({ maxTicks: 30, numOpponents: 0, randomOpponent: false, seed: 42 });
+      env.reset();
+      const malformed: any[] = [
+        '2',
+        true,
+        [2],
+        null,
+        undefined,
+        NaN,
+        {},
+        { right: 'x' },
+        { left: 1 },
+        { left: true, right: 'false' },
+      ];
+      for (const bad of malformed) {
+        env.reset();
+        const e = env;
+        // A string/boolean/null/NaN/array/empty-object/non-boolean-field
+        // action must throw the labeled validation error instead of silently
+        // executing as a no-op or different action (#278).
+        expect(() => e.step(bad)).toThrow('Invalid action:');
+      }
+    });
+
+    it('applies valid numeric and PlayerInput actions (positive control)', async () => {
+      env = new BonkEnvironment({ maxTicks: 30, numOpponents: 0, randomOpponent: false, seed: 42 });
+      env.reset();
+      expect(env.step(0).observation.playerVelX).toBeCloseTo(0, 5);
+      env.reset();
+      expect(env.step(2).observation.playerVelX).toBeCloseTo(30, 5);
+      env.reset();
+      expect(env.step({ right: true } as any).observation.playerVelX).toBeCloseTo(30, 5);
+      env.reset();
+      expect(env.step(RIGHT_INPUT).observation.playerVelX).toBeCloseTo(30, 5);
+    });
+  });
+
   describe('reward calculation', () => {
     it('reward includes time penalty', async () => {
       env = new BonkEnvironment({ maxTicks: 10, numOpponents: 0 });

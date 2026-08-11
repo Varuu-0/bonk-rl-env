@@ -6,6 +6,7 @@ import { SharedMemoryManager } from '../ipc/shared-memory';
 import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
+import { assertValidAction } from './action-validation';
 
 /**
  * Observation data structure extracted from shared memory
@@ -885,18 +886,15 @@ export class WorkerPool {
      * Encodes a PlayerInput action to a number for shared memory storage
      * Uses bit flags: left=1, right=2, up=4, down=8, heavy=16, grapple=32
      *
-     * Null/undefined or otherwise malformed entries throw a labeled error
-     * instead of failing with an unlabelled TypeError, so callers can tell a
-     * bad request apart from a pool failure.
+     * Null/undefined, arrays, empty objects, non-boolean field values, and
+     * non-finite numbers (NaN, ±Infinity) throw a labeled error instead of
+     * being silently encoded as a different (usually no-op) action, so
+     * callers can tell a bad request apart from a pool failure (#278).
      */
     private encodeAction(action: PlayerInput | number): number {
+        assertValidAction(action);
         if (typeof action === 'number') {
             return action; // Already encoded
-        }
-        if (action === null || typeof action !== 'object') {
-            throw new Error(
-                `Invalid action: expected a PlayerInput object or an encoded number, got ${action === null ? 'null' : typeof action}`,
-            );
         }
         let encoded = 0;
         if (action.left) encoded |= 1;
