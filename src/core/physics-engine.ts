@@ -185,6 +185,12 @@ export interface MapBodyDef {
   noGrapple?: boolean;           // When true, cannot be grappled
   innerGrapple?: boolean;        // When true, grappable from inside the shape (§32.1 gate); outside grappling is unaffected
   friction?: number;             // Surface friction coefficient
+  /** Native `f_p` (fricp): when true the friction is signed negative to select
+   *  velocity-independent friction (DEOBFUSCATION §33.4). */
+  fricPolarity?: boolean;
+  /** Native `f_c` collision-group passthrough (provenance only; the engine
+   *   filter is driven by `collides.gN`). */
+  collisionGroup?: number;
   collides?: {                   // Collision group filtering
     g1: boolean;
     g2: boolean;
@@ -686,8 +692,35 @@ export class PhysicsEngine {
        shapeDef.vertexCount = maxVertices;
      }
 
-     shapeDef.density = def.static ? 0 : (def.density ?? 1.0);
-     shapeDef.friction = def.friction ?? 0.3;
+     // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): a non-finite
+     // or sub-0.0001 authored dynamic density is raised to the 0.0001 floor so a
+     // dynamic body never ends up massless. `Math.max(NaN, ...)` is NaN, so guard
+     // non-finite values explicitly. Static bodies keep density 0 (static bodies
+     // contribute no mass in Box2D regardless of this value).
+     const authoredDensity = def.density;
+     let dynamicDensity: number;
+     if (authoredDensity === undefined) {
+       // No authored density: default to the native surface default 1.0.
+       // Do NOT floor to 0.0001 here.
+       dynamicDensity = 1.0;
+     } else if (Number.isFinite(authoredDensity)) {
+       // Finite authored value, clamped up to the 0.0001 floor (§33.4).
+       dynamicDensity = Math.max(authoredDensity, 0.0001);
+     } else {
+       // NaN/Infinity would poison mass; floor per the clamp guard.
+       dynamicDensity = 0.0001;
+     }
+     shapeDef.density = def.static ? 0 : dynamicDensity;
+     // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`, and when
+     // `f_p` (fricPolarity) is set the signed friction is negative. The native
+     // client mixes friction via `b2MixFriction = sqrt(f1*f2)`, so a negative
+     // authored value drives the mix to NaN, which disables the solver's friction
+     // clamp ("velocity-independent friction"). This port reproduces the SIGN
+     // only; the actual sliding behavior depends on the solver MixFriction and
+     // is validated differentially in P4, not unit-tested here.
+     shapeDef.friction = def.fricPolarity
+       ? -(def.friction ?? 0.3)
+       : (def.friction ?? 0.3);
       const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
      shapeDef.restitution = restitutionValue;
 
