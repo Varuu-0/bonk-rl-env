@@ -7,11 +7,20 @@
  * simulation. These tests prove the configured value is actually used, per
  * wired key. Defaults are also pinned so the no-config behavior is unchanged.
  *
- * The environment's default map file is absent from this repository, so every
- * env falls back to the built-in box map (floor x±400@y200, walls at x±500 and
- * y±300). Its arena bounds are therefore deterministic: halfWidth/halfHeight
- * in observation px = maxMapExtentPx + boundsMargin * scale, i.e. 515+5*30=665
- * and 300+5*30=450 at the defaults (scale 30, margin 5).
+ * Every environment in this file loads TEST_MAP explicitly. The repo now
+ * ships a default map file (mapexporter PR #264), so the original "default
+ * map file is absent, env falls back to the built-in box map" premise no
+ * longer holds: the shipped map's spawn rests inside the floor and its 11
+ * moving platforms trip an infinite loop in this Box2D port's broadphase
+ * when stepped with a small world AABB. TEST_MAP is two static walls whose
+ * shape AABBs span exactly x ±515 / y ±300 map px — the y extent comes from
+ * the walls' 600 px height — the same extents the box map produced — so the
+ * documented arena numbers hold:
+ * arenaHalfWidth/Height = maxExtentPx + boundsMargin * scale:
+ *   515 + 5*30 = 665 / 300 + 5*30 = 450 (defaults),
+ *   515 / 300 (margin 0), 515 + 5*60 = 815 / 300 + 5*60 = 600 (scale 60).
+ * Velocity deltas are sampled over a single tick (v2 - v1), which keeps
+ * every measurement inside the 850-px death circle and away from the walls.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
@@ -19,18 +28,28 @@ import { PhysicsEngine } from '../../src/core/physics-engine';
 import { BonkEnv } from '../../src/env/bonk-env';
 import type { MapDef } from '../../src/core/physics-engine';
 
+/** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
+const TEST_MAP: MapDef = {
+    name: 'config-consumed-test-map',
+    spawnPoints: {
+        team_blue: { x: -200, y: -100 },
+        team_red: { x: 200, y: -100 },
+    },
+    bodies: [
+        { name: 'left', type: 'rect', x: -500, y: 0, width: 30, height: 600, static: true },
+        { name: 'right', type: 'rect', x: 500, y: 0, width: 30, height: 600, static: true },
+    ],
+};
+
 /** Free-fall vertical acceleration, in observation px/s per tick (g * dt * scale). */
 function measureFallAccel(physics: Record<string, number> = {}): number {
-    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, physics });
+    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP, physics });
     try {
         env.reset(1);
-        let v1 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = env.step(0);
-            if (i === 1) v1 = res.observation.playerVelY;
-            if (i === 11) return (res.observation.playerVelY - v1) / 10;
-        }
-        throw new Error('unreachable');
+        env.step(0);
+        const v1 = env.step(0).observation.playerVelY;
+        const v2 = env.step(0).observation.playerVelY;
+        return v2 - v1;
     } finally {
         env.close();
     }
@@ -38,16 +57,13 @@ function measureFallAccel(physics: Record<string, number> = {}): number {
 
 /** Horizontal thrust acceleration, in observation px/s per tick, for `action`. */
 function measureThrustAccel(player: Record<string, number>, action: number): number {
-    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, player });
+    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP, player });
     try {
         env.reset(1);
-        let v1 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = env.step(action);
-            if (i === 1) v1 = res.observation.playerVelX;
-            if (i === 11) return (res.observation.playerVelX - v1) / 10;
-        }
-        throw new Error('unreachable');
+        env.step(0);
+        const v1 = env.step(action).observation.playerVelX;
+        const v2 = env.step(action).observation.playerVelX;
+        return v2 - v1;
     } finally {
         env.close();
     }
@@ -55,7 +71,7 @@ function measureThrustAccel(player: Record<string, number>, action: number): num
 
 /** Observation arena bounds for a given tuning config. */
 function arenaBounds(cfg: Record<string, any>): { w: number; h: number } {
-    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, ...cfg });
+    const env = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP, ...cfg });
     try {
         env.reset(1);
         const o = env.step(0).observation;
@@ -82,19 +98,15 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
     });
 
     it('physics.gravityX produces horizontal drift', () => {
-        const env = new BonkEnvironment({ numOpponents: 0, seed: 1, physics: { gravityX: 5 } });
+        const env = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP, physics: { gravityX: 5 } });
         try {
             env.reset(1);
-            let v1 = 0;
-            for (let i = 0; i < 12; i++) {
-                const res = env.step(0);
-                if (i === 1) v1 = res.observation.playerVelX;
-                if (i === 11) {
-                    const accel = (res.observation.playerVelX - v1) / 10;
-                    expect(accel).toBeCloseTo(5, 6);
-                    expect(accel).not.toBeCloseTo(0, 1);
-                }
-            }
+            env.step(0);
+            const v1 = env.step(0).observation.playerVelX;
+            const v2 = env.step(0).observation.playerVelX;
+            const accel = v2 - v1;
+            expect(accel).toBeCloseTo(5, 6);
+            expect(accel).not.toBeCloseTo(0, 1);
         } finally {
             env.close();
         }
@@ -168,6 +180,7 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,
             seed: 1,
+            mapData: TEST_MAP,
             physics: { enableSleeping: false, worldAabbExtent: 250, solverIterations: 12 },
         });
         const eng: any = (env as any).physics;
@@ -192,6 +205,7 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,
             seed: 1,
+            mapData: TEST_MAP,
             physics: { gravityX: 3, gravityY: 7, enableSleeping: false, worldAabbExtent: 250 },
         });
         const eng: any = (env as any).physics;
@@ -345,8 +359,8 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         // cap-zone `(l ?? 3)*30`) are tick-counted: raising ticksPerSecond
         // changes the per-tick sim step, NOT the tick counters. This locks the
         // documented #217 contract so a future rescaling regression is caught.
-        const env30 = new BonkEnvironment({ numOpponents: 0, seed: 1 });
-        const env60 = new BonkEnvironment({ numOpponents: 0, seed: 1, physics: { ticksPerSecond: 60 } });
+        const env30 = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP });
+        const env60 = new BonkEnvironment({ numOpponents: 0, seed: 1, mapData: TEST_MAP, physics: { ticksPerSecond: 60 } });
         try {
             expect((env30 as any).config.maxTicks).toBe(900);
             // 60 TPS must NOT silently double the episode length to 1800.
@@ -371,7 +385,7 @@ describe('physics/arena/player config reaches workers through the pool (#217)', 
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { arena: { boundsMargin: 0 } },
+            config: { mapData: TEST_MAP, arena: { boundsMargin: 0 } },
         });
         envs.push(env);
         await env.start();
@@ -385,29 +399,24 @@ describe('physics/arena/player config reaches workers through the pool (#217)', 
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { physics: { gravityY: 5 }, numOpponents: 0 },
+            config: { mapData: TEST_MAP, physics: { gravityY: 5 }, numOpponents: 0 },
         });
         envs.push(env);
         await env.start();
 
         const obs0 = (await env.reset([1])) as any[];
         expect(obs0[0].playerVelY).toBeCloseTo(0, 6);
-        let v1 = 0;
-        let v2 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = (await env.step([0])) as any[];
-            if (i === 1) v1 = res[0].observation.playerVelY;
-            if (i === 11) v2 = res[0].observation.playerVelY;
-        }
-        const accel = (v2 - v1) / 10;
-        expect(accel).toBeCloseTo(5, 1);
+        await env.step([0]);
+        const v1 = ((await env.step([0])) as any[])[0].observation.playerVelY;
+        const v2 = ((await env.step([0])) as any[])[0].observation.playerVelY;
+        expect(v2 - v1).toBeCloseTo(5, 1);
     });
 
     it('physics.scale set in the per-env config changes worker arena observations', { timeout: 30000 }, async () => {
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { physics: { scale: 60 } },
+            config: { mapData: TEST_MAP, physics: { scale: 60 } },
         });
         envs.push(env);
         await env.start();
@@ -421,60 +430,48 @@ describe('physics/arena/player config reaches workers through the pool (#217)', 
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { physics: { ticksPerSecond: 60 }, numOpponents: 0 },
+            config: { mapData: TEST_MAP, physics: { ticksPerSecond: 60 }, numOpponents: 0 },
         });
         envs.push(env);
         await env.start();
 
         await env.reset([1]);
-        let v1 = 0;
-        let v2 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = (await env.step([0])) as any[];
-            if (i === 1) v1 = res[0].observation.playerVelY;
-            if (i === 11) v2 = res[0].observation.playerVelY;
-        }
+        await env.step([0]);
+        const v1 = ((await env.step([0])) as any[])[0].observation.playerVelY;
+        const v2 = ((await env.step([0])) as any[])[0].observation.playerVelY;
         // Per-tick Δv = g * dt * scale with dt = 1/60: 10, half of the 30-TPS 20.
-        expect((v2 - v1) / 10).toBeCloseTo(10, 1);
+        expect(v2 - v1).toBeCloseTo(10, 1);
     });
 
     it('player.moveForce set in the per-env config changes worker thrust', { timeout: 30000 }, async () => {
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { player: { moveForce: 60 }, numOpponents: 0 },
+            config: { mapData: TEST_MAP, player: { moveForce: 60 }, numOpponents: 0 },
         });
         envs.push(env);
         await env.start();
 
         await env.reset([1]);
-        let v1 = 0;
-        let v2 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = (await env.step([2])) as any[]; // action 2 = right
-            if (i === 1) v1 = res[0].observation.playerVelX;
-            if (i === 11) v2 = res[0].observation.playerVelX;
-        }
-        expect((v2 - v1) / 10).toBeCloseTo(60, 1);
+        await env.step([2]); // action 2 = right
+        const v1 = ((await env.step([2])) as any[])[0].observation.playerVelX;
+        const v2 = ((await env.step([2])) as any[])[0].observation.playerVelX;
+        expect(v2 - v1).toBeCloseTo(60, 1);
     });
 
     it('player.heavyMassMultiplier set in the per-env config changes worker heavy thrust', { timeout: 30000 }, async () => {
         const env = new BonkEnv({
             numEnvs: 1,
             useSharedMemory: false,
-            config: { player: { heavyMassMultiplier: 0.35 }, numOpponents: 0 },
+            config: { mapData: TEST_MAP, player: { heavyMassMultiplier: 0.35 }, numOpponents: 0 },
         });
         envs.push(env);
         await env.start();
 
         await env.reset([1]);
-        let v1 = 0;
-        let v2 = 0;
-        for (let i = 0; i < 12; i++) {
-            const res = (await env.step([18])) as any[]; // action 18 = right + heavy
-            if (i === 1) v1 = res[0].observation.playerVelX;
-            if (i === 11) v2 = res[0].observation.playerVelX;
-        }
-        expect((v2 - v1) / 10).toBeCloseTo(10.5, 1);
+        await env.step([18]); // action 18 = right + heavy
+        const v1 = ((await env.step([18])) as any[])[0].observation.playerVelX;
+        const v2 = ((await env.step([18])) as any[])[0].observation.playerVelX;
+        expect(v2 - v1).toBeCloseTo(10.5, 1);
     });
 });
