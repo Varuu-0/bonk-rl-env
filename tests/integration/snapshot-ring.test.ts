@@ -200,7 +200,7 @@ describe('DetachedRenderSampler', () => {
     expect(() => sampler.renderSlot(-1, 4)).not.toThrow();
   });
 
-  it('does not render a time-reversed (older) frame after a newer one', () => {
+  it('skips a genuinely stale (lower-seq) frame after a newer one', () => {
     const ring = allocRing(4, 2);
     const cam = computeCamera(730, 500, 12);
     const calls: string[] = [];
@@ -208,17 +208,47 @@ describe('DetachedRenderSampler', () => {
       { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
       { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
     );
-    // Render a newer frame first.
-    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 20));
-    const newer = sampler.renderSlot(0, 4);
+    // Write an older frame to slot 0 first.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 12));
+    // Then a newer frame to slot 1.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 20));
+    const newer = sampler.renderSlot(1, 4);
     expect(newer).not.toBeNull();
     expect(newer!.tick).toBe(20);
     calls.length = 0;
-    // An older/equal frame must be rejected (no time reversal).
-    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 20));
-    expect(sampler.renderSlot(1, 4)).toBeNull();
-    writeSnapshot(ring, 2, 2, makeReader([ALIVE0, DEAD1], 19));
-    expect(sampler.renderSlot(2, 4)).toBeNull();
+    // A genuinely stale ring position (slot 0 holds an older write with a lower
+    // seqlock seq) must still be rejected.
+    expect(sampler.renderSlot(0, 4)).toBeNull();
     expect(calls).toHaveLength(0);
+    // Re-sampling the already-rendered slot is skipped (same seq).
+    expect(sampler.renderSlot(1, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps rendering across consecutive episode resets (tick restarts at 0)', () => {
+    const ring = allocRing(8, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+
+    const epTicks: Array<Array<number>> = [
+      [0, 5, 10, 15, 20, 25],       // episode 1
+      [0, 5, 10, 15, 20, 25, 30, 40], // episode 2: sim resets, ticks restart at 0
+    ];
+
+    for (const ep of epTicks) {
+      const rendered: number[] = [];
+      for (const t of ep) {
+        const slot = Math.floor(t / 5) % 8;
+        writeSnapshot(ring, 2, slot, makeReader([ALIVE0, DEAD1], t));
+        if (sampler.renderSlot(slot, 8)) rendered.push(t);
+      }
+      // Every frame of the brand-new episode must render, even though the ticks
+      // restarted at 0 (which the old tick-keyed guard suppressed entirely).
+      expect(rendered).toEqual(ep);
+    }
   });
 });

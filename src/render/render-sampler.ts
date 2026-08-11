@@ -36,18 +36,19 @@ export interface RenderFrameInput {
 
 /**
  * A sampler that renders the highest slot written at or below `readSlot`.
- * Returns the rendered snapshot, or null if nothing new to render (same tick).
- * This is a *pull* consumer: it does no simulation work of its own.
+ * Returns the rendered snapshot, or null if nothing new to render (same seqlock
+ * generation — i.e. the slot holds no fresh write). This is a *pull* consumer: it
+ * does no simulation work of its own.
  */
 export class DetachedRenderSampler {
-  private lastTick = -1;
+  private lastSeq = -1;
 
   constructor(
     private readonly frame: RenderFrameInput,
     private readonly target: DetachedRenderTarget,
   ) { }
 
-  /** Sample the latest slot and render if its tick advanced. */
+  /** Sample the latest slot and render if a fresh write (seq) is present. */
   renderSlot(slotIndex: number, slotCount: number): SimSnapshot | null {
     const count = Math.max(1, Math.floor(slotCount));
     const scan = normalizeSlot(slotIndex, count);
@@ -67,8 +68,12 @@ export class DetachedRenderSampler {
     if (!raw) return null; // nothing coherent written yet
 
     // Never re-render a frame older than the last one (time-reversed guard).
-    if (raw.tick <= this.lastTick) return null;
-    this.lastTick = raw.tick;
+    // Key the guard on the seqlock write generation (`seq`), which is monotonic
+    // across episode resets. The sim tick is NOT monotonic across resets: every
+    // `BonkEnvironment.reset()` rebuilds the world and restarts ticks at 0, so a
+    // tick-keyed guard would suppress the entire next episode after a reset.
+    if (raw.seq <= this.lastSeq) return null;
+    this.lastSeq = raw.seq;
 
     const simSnap: SimSnapshot = {
       tick: raw.tick,
