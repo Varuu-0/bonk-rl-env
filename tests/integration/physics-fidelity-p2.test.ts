@@ -320,7 +320,7 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(ds.m_length).toBeCloseTo(50 / 30, 5);
   });
 
-  it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286)', () => {
+it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286)', () => {
     const e = makeEngine();
     // Exported d joint authored with spring tuning (d.fh=4 / d.dr=0.5) must
     // reach the engine's distance joint, which otherwise builds a rigid rod
@@ -409,6 +409,68 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     const start = gate.GetAngle();
     for (let i = 0; i < 120; i++) e.tick();
     expect(gate.GetAngle() - start).toBeGreaterThan(0.05);
+  });
+
+  it('derives the prismatic axis from the exported scalar angle (no axis field)', () => {
+    const e = makeEngine();
+    // Real exporter output: mapexporter.js emits `angle` (native pa), NEVER
+    // `axis`. normalizeMap forwards angle and leaves axis undefined, so the
+    // engine must derive the constraint axis from the authored angle (native
+    // §33.8: axis = (cos(pa - bodyA.angle), sin(pa - bodyA.angle))).
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 0, y: 100, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        // Author a vertical piston: angle: pi/2, no axis — the exporter shape.
+        { bodyA: 0, bodyB: 1, type: 'lpj', anchorA: { x: 0, y: 100 }, angle: Math.PI / 2,
+          lowerTranslation: 0, lowerLimit: 0, upperLimit: 0, maxMotorForce: 0 },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+
+    const pr = (e as any).createdJoints.get('joint_0');
+    const pa = Math.PI / 2;
+    // Authored vertical axis: cos(pi/2)=0, sin(pi/2)=1.
+    expect(pr.m_localXAxis1.x).toBeCloseTo(Math.cos(pa), 5);
+    expect(pr.m_localXAxis1.y).toBeCloseTo(Math.sin(pa), 5);
+    expect(Math.abs(pr.m_localXAxis1.y)).toBeGreaterThan(0.9);
+    expect(Math.abs(pr.m_localXAxis1.x)).toBeLessThan(0.1);
+  });
+
+  it('builds a vertical axis for the bundled map bonk_WeiRd_DeAth_BalL__80622.json lpj joint', () => {
+    const e = makeEngine();
+    const fs = require('fs');
+    const path = require('path');
+    const raw = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../maps/bonk_WeiRd_DeAth_BalL__80622.json'), 'utf8'));
+    const md = normalizeMap(raw) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+
+    const lpj = (e as any).createdJoints.get('joint_0');
+    const pr = md.joints.find((j: any) => j.type === 'lpj');
+    expect(pr).toBeTruthy();
+    expect(pr.axis).toBeUndefined();
+    expect(pr.angle).toBeCloseTo(Math.PI / 2, 5);
+    // Authored vertical: cos(pi/2)=0, sin(pi/2)=1.
+    expect(lpj.m_localXAxis1.x).toBeCloseTo(Math.cos(pr.angle), 5);
+    expect(lpj.m_localXAxis1.y).toBeCloseTo(Math.sin(pr.angle), 5);
+    expect(Math.abs(lpj.m_localXAxis1.y)).toBeGreaterThan(0.9);
+    expect(Math.abs(lpj.m_localXAxis1.x)).toBeLessThan(0.1);
   });
 
   it('resolves gear referents by index through the full normalizeMap pipeline', () => {

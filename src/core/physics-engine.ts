@@ -1126,7 +1126,14 @@ export class PhysicsEngine {
       created = this.world.CreateJoint(jd);
     } else if (type === 'lpj' || type === 'lsj' || type === 'p' || type === 'prismatic') {
       const jd = new b2PrismaticJointDef();
-      const axis = def.axis ? new b2Vec2(def.axis.x, def.axis.y) : new b2Vec2(1, 0);
+      // Native §33.8: axis is derived from the emitted scalar angle (pa) minus
+      // bodyA's own rotation. mapexporter emits `angle`, never `axis`.
+      const axis = def.axis
+        ? new b2Vec2(def.axis.x, def.axis.y)
+        : (typeof def.angle === 'number' && Number.isFinite(def.angle)
+            ? new b2Vec2(Math.cos(def.angle - bodyA.GetAngle()),
+                         Math.sin(def.angle - bodyA.GetAngle()))
+            : new b2Vec2(1, 0));
       jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA), axis);
       jd.collideConnected = cd;
       if (def.referenceAngle !== undefined) jd.referenceAngle = def.referenceAngle;
