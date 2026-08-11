@@ -89,6 +89,8 @@ interface FlatJoint {
     data?: Record<string, unknown>;
     // Native per-type fields (§33.8) surfaced flattened by the exporter:
     angle?: number;
+    axis?: { x: number; y: number };       // prismatic local axis
+    referenceAngle?: number;               // prismatic reference angle
     lowerTranslation?: number;
     upperTranslation?: number;
     lowerLimit?: number;
@@ -311,13 +313,15 @@ export function normalizeMap(raw: unknown): MapDef {
             // reference `physicsJoints` by index) resolve consistently.
             name: `joint_${jointIdx}`,
             bodyA: bodyA ?? '',
-            bodyB: bodyB ?? (isGround ? '' : ''),
+            bodyB: bodyB ?? '',
             isGround,
             anchorA: j.anchorA,
             anchorB: j.anchorB,
             collideConnected: j.collideConnected ?? j.data?.cc ?? false,
             // Native per-type fields (§33.8) forwarded for exact construction:
             angle: j.angle,
+            axis: j.axis,                          // prismatic local axis
+            referenceAngle: j.referenceAngle,       // prismatic reference angle
             lowerTranslation: j.lowerTranslation,
             upperTranslation: j.upperTranslation,
             lowerLimit: j.lowerLimit,
@@ -340,7 +344,7 @@ export function normalizeMap(raw: unknown): MapDef {
             if (jb !== undefined && src[jb]) out.jointB = `joint_${jb}`;
         }
         return out;
-    }).filter((j): j is NonNullable<typeof j> => j !== null && !!j.bodyA);
+    });
 
     const ph = map.physics || {};
     const bounds = {

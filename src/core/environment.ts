@@ -439,7 +439,15 @@ export class BonkEnvironment {
         if ((mapDef as any).joints && (mapDef as any).joints.length > 0) {
             const bodyMap = (this.physics as any).getBodyMap?.();
             if (bodyMap) {
+                // Create non-gear joints FIRST so gear referents (which the
+                // engine resolves from the created-joint map) always exist,
+                // regardless of the joint array order.
+                const gearJoints: any[] = [];
                 for (const j of (mapDef as any).joints) {
+                    if (j.type === 'g' || j.type === 'gear') gearJoints.push(j);
+                    else (this.physics as any).addJoint(j, bodyMap);
+                }
+                for (const j of gearJoints) {
                     (this.physics as any).addJoint(j, bodyMap);
                 }
             }
@@ -510,7 +518,12 @@ export class BonkEnvironment {
         if ((this.config.mapData as any).joints && (this.config.mapData as any).joints.length > 0) {
             const bodyMap = (this.physics as any).getBodyMap?.();
             if (bodyMap) {
+                const gearJoints: any[] = [];
                 for (const j of (this.config.mapData as any).joints) {
+                    if (j.type === 'g' || j.type === 'gear') gearJoints.push(j);
+                    else (this.physics as any).addJoint(j, bodyMap);
+                }
+                for (const j of gearJoints) {
                     (this.physics as any).addJoint(j, bodyMap);
                 }
             }
