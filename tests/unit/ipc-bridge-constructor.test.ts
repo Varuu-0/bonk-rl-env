@@ -631,6 +631,33 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     expect((bridge as any).maxClientSessions).toBe(1);
   });
 
+  it('floors a fractional session cap so it cannot silently relax the bound (issue #259)', () => {
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 1.5 } } as any) as any).maxClientSessions).toBe(1);
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 2.5 } } as any) as any).maxClientSessions).toBe(2);
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: '1.5' } } as any) as any).maxClientSessions).toBe(1);
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 0.5 } } as any) as any).maxClientSessions).toBe(1);
+  });
+
+  it('falls back to the default cap for non-number cap values instead of coercing them (issue #259)', () => {
+    for (const bad of [true, false, [5], {}, 'not-a-number']) {
+      const bridge = new IpcBridge({ server: { port: 12375, maxClientSessions: bad } } as any);
+      expect((bridge as any).maxClientSessions).toBe(32);
+    }
+  });
+
+  it('enforces a fractional cap as its floored integer: 1.5 admits one session, not two (issue #259)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12379, maxClientSessions: 1.5 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'init', numEnvs: 1 }));
+    const rejected = lastResponse();
+    expect(rejected.status).toBe('error');
+    expect(rejected.error).toContain('Too many active client sessions (max 1)');
+  });
+
   it('falls back to the default session cap when the cap is omitted', () => {
     // The getConfig mock normally reports 32; override it for both constructor
     // reads (port, then cap) with a cap-less config so the only path to a
