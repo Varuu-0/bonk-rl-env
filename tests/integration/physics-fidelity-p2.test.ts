@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { normalizeMap } from '../../src/core/map-adapter';
+import { BonkEnvironment } from '../../src/core/environment';
 
 /**
  * P2 — Native joint-model fidelity (DEOBFUSCATION §33.8).
@@ -597,5 +598,97 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       expect(j.m_upperTranslation).toBe(0);
       expect(j.m_lowerTranslation).toBeLessThanOrEqual(j.m_upperTranslation);
     }
+  });
+
+  it('skips null physicsJoints entries that the exporter emits for unexportable joints', () => {
+    // The mapexporter (Webscripts/mapexporter.js:528-532) pushes a literal
+    // `null` into physicsJoints for any joint it cannot export, keeping
+    // raw-array indices stable. normalizeMap must skip these instead of
+    // throwing on `j.bodyA`, so a map with an unexportable joint still
+    // loads its bodies, spawns and cap zones (#283).
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        null,
+        { bodyA: 0, bodyB: -1, type: 'lpj', anchorA: { x: 0, y: 0 } },
+      ],
+    } as any) as any;
+
+    expect(md.joints).toHaveLength(1);
+    // The surviving joint keeps its RAW array index so gear referents and
+    // the engine's createdJoints resolution stay consistent.
+    expect(md.joints[0].name).toBe('joint_1');
+    expect(md.joints[0].type).toBe('lpj');
+    expect(md.joints[0].isGround).toBe(true);
+
+    const e = makeEngine();
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body|no ground/i.test(w))).toHaveLength(0);
+  });
+
+  it('keeps gear referents indexed by the raw physicsJoints array when nulls are skipped', () => {
+    // The gear's ja/jb are indices into the RAW exported physicsJoints array
+    // (which includes the null the exporter pushed at position 0). Filtering
+    // the null must not re-number the surviving joints, or joint_1/joint_2
+    // would silently mis-wire to the wrong referents (#283).
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        null,
+        { bodyA: 0, bodyB: 1, type: 'rv', anchorA: { x: 0, y: 0 } },
+        { bodyA: 0, bodyB: 1, type: 'rv', anchorA: { x: 100, y: 0 } },
+        { bodyA: 0, bodyB: 1, type: 'g', ja: 1, jb: 2, ratio: 3 },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings).toHaveLength(0);
+    const gear = (e as any).createdJoints.get('joint_3');
+    expect(gear).toBeTruthy();
+    expect(gear.m_type).toBe(6);
+    expect(gear.m_ratio).toBe(3);
+    // Raw indices 1 and 2 are the two revolute referents, NOT the post-filter
+    // positions 0 and 1.
+    expect(gear.m_revolute1).toBe((e as any).createdJoints.get('joint_1'));
+    expect(gear.m_revolute2).toBe((e as any).createdJoints.get('joint_2'));
+  });
+
+  it('constructs a BonkEnvironment from a map with a null joint without throwing', () => {
+    // The programmatic mapData path (environment.ts) calls normalizeMap
+    // unguarded, so a map with an unexportable joint must never crash the
+    // BonkEnvironment constructor (#283).
+    const exportedMap = {
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        null,
+        { bodyA: 0, bodyB: -1, type: 'lpj', anchorA: { x: 0, y: 0 } },
+      ],
+    };
+    let env: BonkEnvironment | undefined;
+    expect(() => {
+      env = new BonkEnvironment({ mapData: exportedMap as any, numOpponents: 0, seed: 1, maxTicks: 10 });
+    }).not.toThrow();
+    // The map is actually used (not silently replaced by the box fallback).
+    expect((env as any).config.mapData.joints).toHaveLength(1);
+    expect((env as any).config.mapData.bodies.map((b: any) => b.name)).toContain('wall');
   });
 });
