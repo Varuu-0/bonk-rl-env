@@ -6,8 +6,9 @@ import { PhysicsEngine } from '../../src/core/physics-engine';
  *
  * Assert exact native behaviors that are PROVEN in the deobfuscation record:
  *   - density is clamped to a floor of 0.0001 for dynamic bodies (line 3269)
- *   - `f_p` (fricPolarity) makes surface friction sign-negative (velocity-
- *     independent friction) (line 3267)
+ *   - `f_p` (fricPolarity) surfaces are frictionless (0), not sign-negative
+ *     (line 3267) — the negative form would NaN the b2MixFriction sqrt with
+ *     this port's positive disc friction (#276)
  *   - static bodies keep density 0 (no mass contribution)
  */
 
@@ -52,14 +53,27 @@ describe('physics fidelity P1: fixture physics (DEOBFUSCATION §33.4)', () => {
     expect(shape.m_density).toBe(0);
   });
 
-  it('negates friction when f_p (fricPolarity) is set', () => {
+  it('makes f_p (fricPolarity) surfaces frictionless instead of negative (#276)', () => {
     const e = makeEngine();
     e.addBody({ name: 'polar', type: 'rect', x: 0, y: 0, width: 40, height: 20, static: true, friction: 0.3, fricPolarity: true } as any);
     e.addBody({ name: 'normal', type: 'rect', x: 200, y: 0, width: 40, height: 20, static: true, friction: 0.3, fricPolarity: false } as any);
     const polarShape = fixtureOf(e.getBodyMap().get('polar')) as any;
     const normalShape = fixtureOf(e.getBodyMap().get('normal')) as any;
-    expect(polarShape.m_friction).toBeCloseTo(-0.3);
+    // Native line 3267 negates the friction for `f_p` ("velocity-independent
+    // friction"), but that relies on the native disc friction being 0
+    // (sqrt(-f * 0) = -0). This port's disc friction is positive, so a
+    // negative surface friction would make the b2MixFriction sqrt NaN and
+    // corrupt the disc on first contact (#276). The frictionless native
+    // effect is reproduced as friction 0 instead.
+    expect(polarShape.m_friction).toBeCloseTo(0);
     expect(normalShape.m_friction).toBeCloseTo(0.3);
+  });
+
+  it('clamps authored negative friction up to 0 (#276)', () => {
+    const e = makeEngine();
+    e.addBody({ name: 'neg', type: 'rect', x: 0, y: 0, width: 40, height: 20, static: true, friction: -1, fricPolarity: false } as any);
+    const shape = fixtureOf(e.getBodyMap().get('neg')) as any;
+    expect(shape.m_friction).toBe(0);
   });
 
   it('defaults friction to the native surface default when unset', () => {
