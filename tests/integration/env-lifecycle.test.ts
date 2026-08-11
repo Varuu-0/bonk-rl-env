@@ -261,6 +261,9 @@ describe('BonkEnv lifecycle', () => {
       await env.stop();
       await env.start();
       expect(env.isActive()).toBe(true);
+      // A restart must re-register the port with the manager so a running env
+      // stays tracked and cannot be handed the same port again (issue #265).
+      expect(pm.isAllocated(env.port)).toBe(true);
     });
 
     it('releases port on stop', { timeout: 30000 }, async () => {
@@ -271,7 +274,7 @@ describe('BonkEnv lifecycle', () => {
       expect(pm.isAllocated(port)).toBe(false);
     });
 
-    it('overlapping start calls reject instead of spawning a second worker pool (#267)', { timeout: 30000 }, async () => {
+it('overlapping start calls reject instead of spawning a second worker pool (#267)', { timeout: 30000 }, async () => {
       env = new BonkEnv({ numEnvs: 1, portManager: pm });
       const results = await Promise.allSettled([env.start(), env.start()]);
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -322,6 +325,40 @@ describe('BonkEnv lifecycle', () => {
         await other.stop();
       }
       expect(pm.isAllocated(other.port)).toBe(false);
+    it('restart keeps the port tracked so wraparound allocation never collides', { timeout: 120000 }, async () => {
+      // Small range so the allocator wraps back onto the restarted env's port.
+      const smallPm = new PortManager({ startPort: 7450, endPort: 7455 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      await envA.start();
+      expect(envA.isActive()).toBe(true);
+      expect(smallPm.isAllocated(envA.port)).toBe(true);
+
+      const others: BonkEnv[] = [];
+      try {
+        // Fill every remaining port in the range; all must start cleanly and
+        // none may be handed the restarted env's port.
+        for (let i = 0; i < 5; i++) {
+          const other = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+          await other.start();
+          expect(other.port).not.toBe(envA.port);
+          others.push(other);
+        }
+
+        // Range capacity (6 ports) is exhausted: construction must fail with a
+        // clean allocation error, not silently reuse the live env's port and
+        // then reject the IPC bind with 'Address already in use'.
+        expect(
+          () => new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true }),
+        ).toThrow('No available ports');
+      } finally {
+        for (const other of others) {
+          try { await other.stop(); } catch { /* ignore */ }
+        }
+        try { await envA.stop(); } catch { /* ignore */ }
+        smallPm.releaseAll();
+      }
     });
   });
 
