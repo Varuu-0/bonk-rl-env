@@ -104,6 +104,11 @@ class BonkVecEnv(VecEnv):
 
         self._episode_returns = np.zeros(num_envs, dtype=np.float64)
         self._episode_lengths = np.zeros(num_envs, dtype=np.int64)
+        # Per-env flag recording whether the previous returned step was done.
+        # With frame_skip > 1 the backend serves `done` for the whole
+        # terminal hold window of an ended episode, so this distinguishes the
+        # first (boundary) done step from the hold-tail continuation steps.
+        self._done_reported = np.zeros(num_envs, dtype=bool)
 
     def _send_json(self, message, timeout_ms=None):
         command = message["command"]
@@ -233,6 +238,7 @@ class BonkVecEnv(VecEnv):
             
         self._episode_returns[:] = 0.0
         self._episode_lengths[:] = 0
+        self._done_reported[:] = False
 
         obs_data = message["data"]["observation"]
         obs_array = np.array([self._convert_obs(o) for o in obs_data])
@@ -339,38 +345,52 @@ class BonkVecEnv(VecEnv):
                 is_terminated = is_done and tick < max_ticks
                 is_truncated = is_done and tick >= max_ticks
             
-            terminated.append(is_terminated)
-            truncated.append(is_truncated)
+            is_done = is_terminated or is_truncated
+            # With frame_skip > 1 the backend serves `done` for the whole
+            # terminal hold window after an episode ends (the worker defers
+            # the auto-reset to the frame-skip cycle boundary, #228). A done
+            # step for an env that already reported done and has not produced
+            # a fresh episode since is a hold-tail continuation of the same
+            # episode end, not a new boundary: only the first done step may
+            # surface in `dones` and carry the episode bookkeeping, so a
+            # single truncation is reported exactly once (#260).
+            is_hold_tail = is_done and self._done_reported[idx]
+            self._done_reported[idx] = is_done
+
+            terminated.append(is_terminated and not is_hold_tail)
+            truncated.append(is_truncated and not is_hold_tail)
             
             # Build info dict
             info = d.get("info", {})
             
-            # Handle terminal observation for done episodes only (SB3 uses it
-            # to bootstrap value estimates on truncation, see GH issue #633)
-            if (is_terminated or is_truncated) and "terminal_observation" in info:
-                info["terminal_observation"] = self._convert_obs(info["terminal_observation"])
+            if not is_hold_tail:
+                # Handle terminal observation for done episodes only (SB3 uses
+                # it to bootstrap value estimates on truncation, see GH issue
+                # #633)
+                if is_done and "terminal_observation" in info:
+                    info["terminal_observation"] = self._convert_obs(info["terminal_observation"])
 
-            # SB3 convention: truncation (not termination) is signalled inside
-            # the info dict so done() can be treated uniformly.
-            if is_truncated and not is_terminated:
-                info["TimeLimit.truncated"] = True
+                # SB3 convention: truncation (not termination) is signalled
+                # inside the info dict so done() can be treated uniformly.
+                if is_truncated and not is_terminated:
+                    info["TimeLimit.truncated"] = True
+
+                self._episode_returns[idx] += float(d["reward"])
+                self._episode_lengths[idx] += 1
+
+                if is_done:
+                    info["episode"] = {
+                        "r": float(self._episode_returns[idx]),
+                        "l": int(self._episode_lengths[idx]),
+                    }
+                    self._episode_returns[idx] = 0.0
+                    self._episode_lengths[idx] = 0
             
             # Add individual episode info for debugging
             info["_episode"] = {
                 "terminated": is_terminated,
                 "truncated": is_truncated,
             }
-
-            self._episode_returns[idx] += float(d["reward"])
-            self._episode_lengths[idx] += 1
-
-            if is_terminated or is_truncated:
-                info["episode"] = {
-                    "r": float(self._episode_returns[idx]),
-                    "l": int(self._episode_lengths[idx]),
-                }
-                self._episode_returns[idx] = 0.0
-                self._episode_lengths[idx] = 0
             
             infos.append(info)
         
