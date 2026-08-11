@@ -63,16 +63,41 @@ export class IpcBridge {
     private _boundResolve: (() => void) | null = null;
     private _boundReject: ((reason?: any) => void) | null = null;
 
-    /**
-     * Resolves once the ZMQ Router socket is bound and accepting connections,
-     * and rejects if the bind fails. Embedders that drive the serve loop
-     * without awaiting start() (which only exits on close()) can await this
-     * to know when the advertised port is actually reachable.
-     */
-    readonly ready: Promise<void> = new Promise<void>((resolve, reject) => {
+    // Current bind signal for this serve cycle. Replaced on every start()
+    // (see rearmReady) so a restart after close() resolves/rejects a fresh
+    // promise instead of the stale, already-resolved first-bind one (#263).
+    private _ready: Promise<void> = new Promise<void>((resolve, reject) => {
         this._boundResolve = resolve;
         this._boundReject = reject;
     });
+
+    /**
+     * Resolves once the current serve cycle's ZMQ Router socket is bound and
+     * accepting connections, and rejects if the bind fails. Embedders that
+     * drive the serve loop without awaiting start() (which only exits on
+     * close()) can await this to know when the advertised port is actually
+     * reachable. Re-armed per start(), so awaiting it after a close() +
+     * start() restart reflects the new bind (issue #263).
+     */
+    get ready(): Promise<void> {
+        return this._ready;
+    }
+
+    /**
+     * Replace the one-shot `ready` signal with a fresh promise for the next
+     * serve cycle. A ZMQ bind can only settle a promise once, so a restart
+     * after close() must observe a new promise (issue #263). The rejection is
+     * swallowed for the same reason as in the constructor: consumers such as
+     * src/server.ts never await ready, so a bind failure must not surface as
+     * an unhandled rejection.
+     */
+    private rearmReady(): void {
+        this._ready = new Promise<void>((resolve, reject) => {
+            this._boundResolve = resolve;
+            this._boundReject = reject;
+        });
+        this._ready.catch(() => {});
+    }
     // Single-flight guard covering the entire post-step telemetry unit
     // (snapshot fetch through report). Prevents overlapping snapshot fetches
     // or duplicate reports when a second boundary step arrives during the
@@ -112,7 +137,7 @@ export class IpcBridge {
         // bind fails, both start() and ready reject; mark ready's rejection
         // as handled so it cannot surface as an unhandled-rejection crash for
         // consumers (such as src/server.ts) that never await ready.
-        this.ready.catch(() => {});
+        this._ready.catch(() => {});
     }
 
     private markBound(): void {
@@ -196,6 +221,16 @@ export class IpcBridge {
 
     async start() {
         const addr = `tcp://${this.bindAddress}:${this.port}`;
+        // A closed ZMQ socket is permanently destroyed and can never be
+        // re-bound (bind() throws "Socket is closed"). Recreate the transport
+        // so a later start() after close() binds a fresh ROUTER and serves
+        // again (issue #263): re-wrap the send function on the new socket and
+        // re-arm `ready` so `await bridge.ready` reflects the new bind.
+        if (this.sock.closed) {
+            this.sock = new zmq.Router();
+            this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
+            this.rearmReady();
+        }
         try {
             await this.sock.bind(addr);
         } catch (err) {
