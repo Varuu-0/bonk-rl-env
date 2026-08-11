@@ -121,27 +121,33 @@ describe('P3: per-map pq gates solver iterations (DEOBFUSCATION §Solver Iterati
         }
     });
 
-    it('solver behavior actually changes: a heavy stack settles faster at high quality', () => {
-        // High-quality solving (15/15) resolves the position constraint far more
-        // accurately per tick than low (2/6): a disc resting on a platform sinks
-        // measurably less after the same number of ticks.
+    it('solver behavior actually changes: a disc settles deeper at low quality', () => {
+        // With +y pointing down, "sinking" into a platform means a larger (more
+        // positive) settled y. High-quality solving (15/15) resolves the position
+        // constraint more accurately per tick than low (2/6), so a disc resting on
+        // a platform reaches a shallower rest depth. Use restitution-0 bodies (not
+        // the bouncy 0.95 player disc) so each engine settles to a fixed depth that
+        // reliably differs, and assert the correct, steadily converged direction.
         const build = (pq: number) => {
             const engine = new PhysicsEngine({ physicsQuality: pq });
-            (engine as any).addBody({ name: 'floor', type: 'rect', x: 0, y: 0, width: 800, height: 30, static: true });
-            (engine as any).addPlayer(0, 0, -100);
+            (engine as any).addBody({ name: 'floor', type: 'rect', x: 0, y: 40, width: 800, height: 40, static: true, restitution: 0 });
+            (engine as any).addBody({ name: 'disc', type: 'circle', x: 0, y: 20, radius: 30, static: false, restitution: 0, density: 1 });
             return engine;
         };
         const low = build(1);
         const high = build(2);
         try {
-            for (let i = 0; i < 120; i++) { low.tick(); high.tick(); }
-            const lowY = (low as any).getPlayerState(0).y;
-            const highY = (high as any).getPlayerState(0).y;
-            // Both discs rest on the platform (y ≈ -30 + radius), but the
-            // low-quality solve must sink at least as much as the high-quality one.
+            for (let i = 0; i < 300; i++) { low.tick(); high.tick(); }
+            const lowY = (low as any).getBodyMap().get('disc').GetPosition().y * (low as any).scale;
+            const highY = (high as any).getBodyMap().get('disc').GetPosition().y * (high as any).scale;
+            // Low quality must sink at least as deep as high quality (lowY is the
+            // more positive / deeper rest depth), and the pair must actually differ
+            // rather than settling identically (which would make the assertion
+            // trivial).
             expect(Number.isFinite(lowY)).toBe(true);
             expect(Number.isFinite(highY)).toBe(true);
-            expect(lowY).toBeLessThanOrEqual(highY + 1e-6);
+            expect(lowY).toBeGreaterThanOrEqual(highY);
+            expect(lowY - highY).toBeGreaterThan(1e-3);
         } finally {
             low.destroy();
             high.destroy();

@@ -259,7 +259,12 @@ Chronological record of fixes applied. Append new entries here.
     `normalizeMap()` with the native sanitizer's guards (pq 1..2; gd ≥ 2;
     bools only) — §33.1 and pretty 12279-12287.
   - `BonkEnvironment` forwards `mapData.settings.pq` as `physicsQuality`
-    (new documented config key `physics.positionIterations` also added).
+    and exposes `positionIterations` on `PhysicsTuningConfig`. Note: this is
+    a programmatic-only engine option (reachable via deepMerge/programmatic
+    config, exactly like `physicsQuality`); it is not yet surfaced in
+    `PhysicsConfig`, the JSON/env/CLI loader, or `config.example.json`, and
+    it has no runtime effect in this port (see port note below). Wiring it
+    as a first-class config key is a follow-up, not part of P3.
   - Port note: the bundled Box2D `Step(dt, iterations)` ignores the third
     argument, so only the resolved velocity count reaches the solver; the
     position count is resolved and asserted as the engine contract and

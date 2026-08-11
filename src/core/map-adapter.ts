@@ -198,9 +198,11 @@ export function normalizeMap(raw: unknown): MapDef {
 
     // Native map settings (blank map: re:false, nc:false, pq:1, gd:25, fl:false
     // — DEOBFUSCATION §33.1), validated against the native sanitizer
-    // (mergeIntoNewMap, pretty 12279-12287): pq kept when 1..2, gd kept when
-    // >= 2 (the native guard's `pq <= 100` half is always true since pq <= 2),
-    // re/nc/fl kept when booleans.
+    // (mergeIntoNewMap, .deobf/alpha2s.pretty.js 12279-12287):
+    //   - pq   kept when `1 <= pq <= 2`           (guard [326], line 12279)
+    //   - gd   kept when `gd >= 2 && pq <= 100`   (line 12282; since pq is
+    //         already validated to 1..2, the `pq <= 100` half is always true)
+    //   - re/nc/fl kept when booleans             (typeof === "boolean" guards)>
     const settings = (() => {
         const s = (map as any).settings;
         if (!s || typeof s !== 'object') return undefined;
