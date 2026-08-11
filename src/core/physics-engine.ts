@@ -1066,8 +1066,12 @@ export class PhysicsEngine {
       jd.collideConnected = cd;
       if (def.referenceAngle !== undefined) jd.referenceAngle = def.referenceAngle;
       jd.enableLimit = !!def.enableLimit;
-      jd.lowerTranslation = def.lowerTranslation ?? 0;
-      jd.upperTranslation = def.upperTranslation ?? 0;
+      // Issue #281: some maps/exporter shapes carry the native travel (±plen)
+      // under `length`; honor it as the symmetric limit when no explicit
+      // lower/upper translations were provided so the limit is never dropped.
+      const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length);
+      jd.lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : (lenLimit ? -def.length : 0);
+      jd.upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : (lenLimit ? +def.length : 0);
       jd.enableMotor = !!def.enableMotor;
       jd.motorSpeed = def.motorSpeed ?? 0;
       jd.maxMotorForce = def.maxMotorForce ?? 0;

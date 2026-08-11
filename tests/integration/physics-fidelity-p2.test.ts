@@ -182,4 +182,136 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(gear.m_revolute1).toBe((e as any).createdJoints.get('joint_0'));
     expect(gear.m_revolute2).toBe((e as any).createdJoints.get('joint_1'));
   });
+
+  it('builds an exported lpj piston as a driven, limited prismatic joint (issue #281)', () => {
+    // Exactly the field shape mapexporter.js now emits for an lpj: travel
+    // ±plen as the translation limit, pf as maxMotorForce, pms as motorSpeed,
+    // with the limit and motor enabled (DEOBFUSCATION §33.8 lpj).
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'piston', type: 'rect', x: 0, y: 30, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        {
+          index: 0, type: 'lpj', bodyA: 0, bodyB: 1,
+          anchorA: { x: 0, y: 0 }, angle: Math.PI / 2,  // axis derivation is #280
+          lowerTranslation: -50, upperTranslation: 50,  // native ±plen
+          length: 50,                                   // native plen (fallback source)
+          maxMotorForce: 1000,                          // native pf
+          motorSpeed: 3,                                // native pms
+          enableLimit: true, enableMotor: true,
+        },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    e.addJoint(md.joints[0], bm);
+    const j: any = (e as any).createdJoints.get('joint_0');
+    expect(j).toBeTruthy();
+    expect(j.m_enableLimit).toBe(true);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+    expect(j.m_enableMotor).toBe(true);
+    expect(j.m_motorSpeed).toBeCloseTo(3, 5);
+    expect(j.m_maxMotorForce).toBeCloseTo(1000, 5);
+  });
+
+  it('a motor-enabled lpj piston displaces along its axis under tick (issue #281)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'piston', type: 'rect', x: 0, y: 30, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        {
+          index: 0, type: 'lpj', bodyA: 0, bodyB: 1,
+          anchorA: { x: 0, y: 30 }, axis: { x: 1, y: 0 },  // horizontal to isolate motor from #280's axis
+          lowerTranslation: -50, upperTranslation: 50,
+          maxMotorForce: 1000, motorSpeed: 3,
+          enableLimit: true, enableMotor: true,
+        },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    e.addJoint(md.joints[0], bm);
+    const piston = bm.get('piston') as any;
+    const startX = piston.GetPosition().x;
+    let moved = false;
+    for (let i = 0; i < 120; i++) {
+      e.tick();
+      if (Math.abs(piston.GetPosition().x - startX) > 1 / 30) { moved = true; break; }
+    }
+    // Before the fix the motor was disabled (enableMotor=false, speed 0) and
+    // the piston never moved; now the motor must drive it along its axis.
+    expect(moved).toBe(true);
+  });
+
+  it('builds an exported lsj spring as a driven vertical-axis prismatic joint (issue #281)', () => {
+    // mapexporter.js lsj output: vertical axis (0,1), ±slen travel (limit
+    // disabled), motor enabled at speed 300 with sf as the force scale
+    // (DEOBFUSCATION §33.8 lsj, lines 3468–3487).
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        {
+          index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+          anchorA: { x: 0, y: 40 },
+          axis: { x: 0, y: 1 },
+          lowerTranslation: -40, upperTranslation: 40,
+          length: 40,
+          enableLimit: false, enableMotor: true,
+          motorSpeed: 300, maxMotorForce: 25,
+        },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    e.addJoint(md.joints[0], bm);
+    const j: any = (e as any).createdJoints.get('joint_0');
+    expect(j).toBeTruthy();
+    expect(j.m_enableLimit).toBe(false);
+    expect(j.m_lowerTranslation).toBeCloseTo(-40, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(40, 5);
+    expect(j.m_enableMotor).toBe(true);
+    expect(j.m_motorSpeed).toBeCloseTo(300, 5);
+    expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
+    expect(j.m_localXAxis1.x).toBeCloseTo(0, 5);
+    expect(j.m_localXAxis1.y).toBeCloseTo(1, 5);
+  });
+
+  it('honors a prismatic length field as the symmetric translation limit when lower/upper are absent (issue #281)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'piston', type: 'rect', x: 0, y: 30, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        { bodyA: 0, bodyB: 1, type: 'lpj', anchorA: { x: 0, y: 30 }, length: 50, enableLimit: true },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    e.addJoint(md.joints[0], bm);
+    const j: any = (e as any).createdJoints.get('joint_0');
+    expect(j.m_enableLimit).toBe(true);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+  });
 });

@@ -579,14 +579,21 @@
           jointDef.deleteOnBreak = jt.d.dl ?? null;
         }
         jointDef.anchorA = { x: jt.pax ?? 0, y: jt.pay ?? 0 };
-        jointDef.angle = jt.pa ?? null;
-        jointDef.lowerTranslation = jt.pf ?? null;
-        jointDef.lowerLimit = jt.pl ?? null;
-        jointDef.upperLimit = jt.pu ?? null;
-        jointDef.length = jt.plen ?? null;
-        jointDef.maxMotorForce = jt.pms ?? null;
+        jointDef.angle = jt.pa ?? null; // axis derivation tracked by issue #280
+        // Issue #281: the native piston is a DRIVEN joint with a limit. The
+        // travel (±plen) is the translation limit, pf is maxMotorForce and pms
+        // is motorSpeed, with the limit and motor enabled (DEOBFUSCATION §33.8).
+        const plen = jt.plen ?? 0;
+        jointDef.lowerTranslation = -plen;
+        jointDef.upperTranslation = +plen;
+        jointDef.maxMotorForce = jt.pf ?? null;
+        jointDef.motorSpeed = jt.pms ?? null;
+        jointDef.enableLimit = true;
+        jointDef.enableMotor = true;
       } else if (jt.type === 'lsj') {
-        // LSJ joint
+        // LSJ (springy prismatic) joint — the native game builds it as a
+        // prismatic joint with a vertical axis and an enabled motor, NOT a
+        // distance-style spring (DEOBFUSCATION §33.8 lsj, lines 3468–3487).
         if (jt.d) {
           checkUnknown(`joint[${i}].d (lsj)`, jt.d, KNOWN.jointData);
           jointDef.collideConnected = jt.d.cc ?? null;
@@ -594,7 +601,17 @@
           jointDef.deleteOnBreak = jt.d.dl ?? null;
         }
         jointDef.anchorA = { x: jt.sax ?? 0, y: jt.say ?? 0 };
-        jointDef.frequency = jt.sf ?? null;
+        // Issue #281: the native spring is a driven joint with the travel
+        // (±slen) as the translation limit, sf as the motor-force scale and a
+        // fixed vertical axis / motor speed of 300.
+        const slen = jt.slen ?? 0;
+        jointDef.axis = { x: 0, y: 1 };
+        jointDef.lowerTranslation = -slen;
+        jointDef.upperTranslation = +slen;
+        jointDef.enableLimit = false;
+        jointDef.enableMotor = true;
+        jointDef.motorSpeed = 300;
+        jointDef.maxMotorForce = jt.sf ?? null;
         jointDef.length = jt.slen ?? null;
       }
 
