@@ -122,7 +122,9 @@ interface ExportedMap {
 /**
  * Detect whether `raw` is already the engine's internal `MapDef` (a flattened
  * `spawnPoints` object + nested-collides `bodies[]`) versus the real exported
- * bonk format. A `spawnPoints` object with a `bodies[]` array marks MapDef.
+ * bonk format. A `spawnPoints` object marks MapDef; the real exported format
+ * keys spawns under a `spawns[]` array instead, so that positive marker alone
+ * is enough to discriminate without requiring a `bodies[]` array.
  */
 function isInternalMapDef(raw: any): raw is MapDef {
     return !!raw
@@ -130,12 +132,17 @@ function isInternalMapDef(raw: any): raw is MapDef {
         && raw.spawnPoints !== null
         && typeof raw.spawnPoints === 'object'
         && !Array.isArray(raw.spawnPoints)
-        && Array.isArray(raw.bodies)
-        // Don't require a non-empty bodies[] — a programmatic MapDef with no
-        // bodies (e.g. a pure-cap-zone or spawn-only map) must still pass
-        // through to preserve its spawnPoints/capZones/joints (#review).
-        && (raw.bodies.length === 0 || typeof raw.bodies[0] === 'object')
-        && (raw.bodies.length === 0 || !('collidesGroup1' in raw.bodies[0]));
+        // Accept an omitted `bodies` key as internal: a programmatic MapDef
+        // with no bodies (e.g. a pure-cap-zone or spawn-only map) legitimately
+        // carries spawnPoints/capZones/joints without a bodies array and must
+        // still pass through to preserve them (#273). The `spawnPoints`-object
+        // check above already excludes the real exported format (which uses
+        // `spawns[]`), so widening here does not misclassify exported maps.
+        && (raw.bodies === undefined || Array.isArray(raw.bodies))
+        && (raw.bodies === undefined
+            || raw.bodies.length === 0
+            || (typeof raw.bodies[0] === 'object'
+                && !('collidesGroup1' in raw.bodies[0])));
 }
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
@@ -191,8 +198,15 @@ function toBodyDef(body: FlatBody, index: number): any {
  * normalized MapDef (returned unchanged).
  */
 export function normalizeMap(raw: unknown): MapDef {
-    // Already in engine MapDef shape — pass through unchanged.
-    if (isInternalMapDef(raw)) return raw;
+    // Already in engine MapDef shape — pass through unchanged, defaulting an
+    // omitted `bodies` to `[]` so downstream `for (const b of mapData.bodies)`
+    // loops in the environment never iterate `undefined` (#273).
+    if (isInternalMapDef(raw)) {
+        return {
+            ...raw,
+            bodies: raw.bodies ?? [],
+        };
+    }
 
     const map = (raw || {}) as ExportedMap;
 

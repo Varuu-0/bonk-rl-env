@@ -728,4 +728,54 @@ describe('MapIntegration', () => {
             },
         );
     });
+
+    describe('spawn-only / pure-cap-zone MapDef (bodies key omitted) survives normalizeMap (#273)', () => {
+        const spawnOnlyMap = {
+            name: 'SpawnOnly',
+            spawnPoints: {
+                team_blue: { x: 111, y: 222 },
+                team_red: { x: 333, y: 444 },
+            },
+            capZones: [
+                { index: 0, owner: '', type: 1, fixture: 'plat_0', shapeType: 'rect' },
+            ],
+            joints: [
+                { type: 'rv', name: 'j0', bodyA: 'plat_0', bodyB: 'plat_1' },
+            ],
+            // NOTE: `bodies` key intentionally omitted (spawn-only map).
+        };
+
+        it('keeps authored spawnPoints/capZones/joints on the environment config', () => {
+            const env = new BonkEnvironment({
+                mapData: spawnOnlyMap as any,
+                numOpponents: 0,
+                randomOpponent: false,
+                seed: 1,
+            });
+            try {
+                expect((env as any).config.mapData.spawnPoints).toEqual(spawnOnlyMap.spawnPoints);
+                expect((env as any).config.mapData.capZones).toEqual(spawnOnlyMap.capZones);
+                expect((env as any).config.mapData.joints).toEqual(spawnOnlyMap.joints);
+                expect((env as any).config.mapData.bodies).toEqual([]);
+            } finally {
+                env.close();
+            }
+        });
+
+        it('spawns the AI player at the authored spawn instead of the hardcoded fallback', () => {
+            const env = new BonkEnvironment({
+                mapData: spawnOnlyMap as any,
+                numOpponents: 0,
+                randomOpponent: false,
+                seed: 1,
+            });
+            try {
+                const obs = env.getObservationFast();
+                expect(obs[0]).toBe(111);
+                expect(obs[1]).toBe(222);
+            } finally {
+                env.close();
+            }
+        });
+    });
 });
