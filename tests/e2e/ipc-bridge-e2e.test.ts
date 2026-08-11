@@ -187,9 +187,10 @@ describe('IpcBridge black-box E2E', () => {
       }
     });
 
-    it('out-of-range actions handled gracefully', async () => {
+    it('out-of-range actions return an error', async () => {
       const result = await sendCommand({ command: 'step', actions: [100, -1, 255] });
-      expect(result.status).toBe('ok');
+      expect(result.status).toBe('error');
+      expect(result.error).toContain('Invalid action: expected an encoded action in [0, 63], got 100');
     });
   });
 
