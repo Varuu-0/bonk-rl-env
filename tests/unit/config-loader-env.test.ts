@@ -1200,6 +1200,38 @@ describe('config-loader env vars and CLI', () => {
             const cfg = loadConfig(testDir);
             expect(cfg.workerPool.numWorkers).toBe(3);
         });
+
+        it('maxWorkers=0 cannot resolve the auto-detect to 0 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { maxWorkers: 0 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('maxWorkers=0 with numWorkers=0 resolves to at least 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: 0 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a negative maxWorkers cannot resolve the auto-detect to 0 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: -2 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a negative numWorkers in config.json is clamped to >= 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: -1 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
     });
 
     // ─── Priority Order ──────────────────────────────────────────────────

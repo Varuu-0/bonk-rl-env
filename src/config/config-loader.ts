@@ -1075,9 +1075,13 @@ export function loadConfig(projectRoot?: string): AppConfig {
     // Layer 4: CLI flags
     config = parseCliFlags(config);
 
-    // Resolve numWorkers=0 to actual CPU count
+    // Resolve numWorkers=0 to actual CPU count. Clamp maxWorkers to >= 1 and
+    // clamp negative numWorkers so a misconfigured workerPool can never
+    // resolve the auto-detect to 0 (which silently disables the pool) (#269).
     if (config.workerPool.numWorkers === 0) {
-        config.workerPool.numWorkers = Math.min(os.cpus().length, config.workerPool.maxWorkers);
+        config.workerPool.numWorkers = Math.max(1, Math.min(os.cpus().length, Math.max(1, Math.floor(config.workerPool.maxWorkers))));
+    } else if (config.workerPool.numWorkers < 0) {
+        config.workerPool.numWorkers = 1;
     }
 
     cachedConfig = config;
