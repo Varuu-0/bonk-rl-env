@@ -383,6 +383,17 @@ export class BonkEnvironment {
             reward,
         };
 
+        // The truncation predicate is `tickCount >= maxTicks`, so a
+        // non-positive maxTicks would make every step terminal and truncated
+        // from tick 1 — a permanently-terminal env that auto-resets forever
+        // (#266). Reject it loudly at construction (the choke point every
+        // surface converges on: programmatic, config.json, worker, IPC).
+        if (!Number.isInteger(this.config.maxTicks) || this.config.maxTicks < 1) {
+            throw new Error(
+                `Invalid maxTicks ${this.config.maxTicks}: expected a positive integer`,
+            );
+        }
+
         // The AI slot is config-driven, never hardcoded to 0 (#221). An
         // out-of-range slot fails loudly here instead of being silently
         // ignored: with numOpponents opponents the spawned players occupy
