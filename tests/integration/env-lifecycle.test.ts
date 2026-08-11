@@ -270,6 +270,24 @@ describe('BonkEnv lifecycle', () => {
       await env.stop();
       expect(pm.isAllocated(port)).toBe(false);
     });
+
+    it('overlapping start calls reject instead of spawning a second worker pool (#267)', { timeout: 30000 }, async () => {
+      env = new BonkEnv({ numEnvs: 1, portManager: pm });
+      const results = await Promise.allSettled([env.start(), env.start()]);
+      const fulfilled = results.filter((r) => r.status === 'fulfilled');
+      const rejected = results.filter((r) => r.status === 'rejected');
+      expect(fulfilled).toHaveLength(1);
+      expect(rejected).toHaveLength(1);
+      expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+      expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already running');
+
+      expect(env.isActive()).toBe(true);
+      const pool = env.getPool() as unknown as { workers: unknown[] };
+      await env.stop();
+      expect(env.isActive()).toBe(false);
+      expect(pm.isAllocated(env.port)).toBe(false);
+      expect(pool.workers).toHaveLength(0);
+    });
   });
 
   describe('init validation (#227)', () => {

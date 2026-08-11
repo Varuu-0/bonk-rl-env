@@ -45,6 +45,7 @@ export class BonkEnv {
     private bridge: IpcBridge | null = null;
     private portManager: PortManager;
     private isRunning: boolean = false;
+    private starting: boolean = false;
     private config: BonkEnvConfig;
     private static instanceCount: number = 0;
 
@@ -72,42 +73,43 @@ export class BonkEnv {
      * @returns Promise that resolves when the environment is started
      */
     async start(): Promise<void> {
-        if (this.isRunning) {
+        if (this.isRunning || this.starting) {
             throw new Error(`Environment ${this.id} is already running`);
         }
-        
+
+        // Claim the starting state before the first await so a second
+        // overlapping start() call rejects here immediately instead of
+        // spawning its own worker pool and (in IPC mode) bridge that would
+        // fight the first call for this.pool/this.bridge/this.port, orphaning
+        // a bound IPC server and an unclosed worker pool (issue #267). The
+        // flag is cleared in `finally`, so a failed start can be retried.
+        this.starting = true;
+
         console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
-        
-        // Create worker pool
-        this.pool = new WorkerPool();
-        
-        // Initialize the worker pool with the configured number of envs,
-        // forwarding the per-env config over the global defaults so configured
-        // environment, reward, and engine-tuning values all reach the workers.
-        const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
-        const override = this.config.config ?? {};
-        const envConfig = resolveEnvironmentConfig(override);
-        const engineSections = mergeEngineSections(override);
+
         try {
+            // Create worker pool
+            this.pool = new WorkerPool();
+
+            // Initialize the worker pool with the configured number of envs,
+            // forwarding the per-env config over the global defaults so configured
+            // environment, reward, and engine-tuning values all reach the workers.
+            const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
+            const override = this.config.config ?? {};
+            const envConfig = resolveEnvironmentConfig(override);
+            const engineSections = mergeEngineSections(override);
             await this.pool.init(
                 this.config.numEnvs ?? 1,
                 { ...envConfig, ...engineSections },
                 useSharedMemory
             );
-        } catch (error) {
-            // init() can spawn workers before rejecting. Always release both
-            // the partially created pool and the port reserved in the constructor.
-            await this.stop();
-            throw error;
-        }
 
-        // When IPC server mode is requested (enableIpcServer), bind an
-        // IpcBridge to this.port so external clients can connect. start()
-        // does not resolve until the Router socket is actually bound, so
-        // isActive() can never report success before the advertised port is
-        // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
-        // of silently completing (issue #223).
-        try {
+            // When IPC server mode is requested (enableIpcServer), bind an
+            // IpcBridge to this.port so external clients can connect. start()
+            // does not resolve until the Router socket is actually bound, so
+            // isActive() can never report success before the advertised port is
+            // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
+            // of silently completing (issue #223).
             if (this.config.enableIpcServer === true) {
                 const bridge = new IpcBridge({ server: { port: this.port } });
                 this.bridge = bridge;
@@ -146,13 +148,18 @@ export class BonkEnv {
                 );
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
+
+            this.isRunning = true;
+            console.log(`[BonkEnv:${this.id}] Started successfully`);
         } catch (error) {
+            // init() can spawn workers and, in IPC mode, bind the socket
+            // before rejecting. Always release the partially created pool and
+            // bridge and the port reserved in the constructor.
             await this.stop();
             throw error;
+        } finally {
+            this.starting = false;
         }
-        
-        this.isRunning = true;
-        console.log(`[BonkEnv:${this.id}] Started successfully`);
     }
 
     /**

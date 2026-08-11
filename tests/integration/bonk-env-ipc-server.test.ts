@@ -412,4 +412,36 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
       await env.stop();
     }
   });
+
+  it('overlapping start calls reject with "already running" and never leave a zombie IPC server (#267)', { timeout: 60000 }, async () => {
+    const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START + 450, endPort: IPC_SERVER_TEST_START + 499 });
+    const env = new BonkEnv({
+      numEnvs: 1,
+      useSharedMemory: false,
+      portManager,
+      enableIpcServer: true,
+    });
+
+    const results = await Promise.allSettled([env.start(), env.start()]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    // The loser must fail the "already running" guard, not race the winner to
+    // bind the same port.
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already running');
+    expect((rejected[0] as PromiseRejectedResult).reason.message).not.toContain('Address already in use');
+
+    try {
+      expect(env.isActive()).toBe(true);
+      expect(await canConnectTcp(env.port)).toBe(true);
+    } finally {
+      await env.stop();
+    }
+
+    expect(env.isActive()).toBe(false);
+    expect(portManager.isAllocated(env.port)).toBe(false);
+    expect(await canConnectTcp(env.port)).toBe(false);
+  });
 });
