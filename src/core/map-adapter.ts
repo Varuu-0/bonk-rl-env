@@ -87,6 +87,23 @@ interface FlatJoint {
     dampingRatio?: number;
     collideConnected?: boolean;
     data?: Record<string, unknown>;
+    // Native per-type fields (§33.8) surfaced flattened by the exporter:
+    angle?: number;
+    axis?: { x: number; y: number };       // prismatic local axis
+    referenceAngle?: number;               // prismatic reference angle
+    lowerTranslation?: number;
+    upperTranslation?: number;
+    lowerLimit?: number;
+    upperLimit?: number;
+    maxMotorForce?: number;
+    maxMotorTorque?: number;
+    motorSpeed?: number;
+    enableMotor?: boolean;
+    enableLimit?: boolean;
+    // Gear (g):
+    ja?: number;
+    jb?: number;
+    ratio?: number;
 }
 
 interface ExportedMap {
@@ -275,39 +292,59 @@ export function normalizeMap(raw: unknown): MapDef {
     flatSource.forEach((b, i) => {
         if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
-    const joints = (map.physicsJoints || []).map(j => {
+    const joints = (map.physicsJoints || []).map((j, jointIdx) => {
         // bodyA must be a valid, non-negative body index; an out-of-range or
         // negative bodyA is a malformed reference and cannot resolve.
         const bodyA = j.bodyA !== undefined && j.bodyA >= 0
             ? bodiesByName.get(j.bodyA)
             : undefined;
-        // bodyB: -1 means the joint is anchored to the ground (world), which
-        // the engine's addJoint cannot represent (it requires two named bodies).
+        // bodyB: -1 means the joint is anchored to the ground (world). Forward
+        // it as a ground joint (empty bodyB) rather than dropping it — P2
+        // supports ground-anchored joints via a synthetic static ground body.
         const isGround = j.bodyB !== undefined && j.bodyB < 0;
         const bodyB = j.bodyB !== undefined && j.bodyB >= 0
             ? bodiesByName.get(j.bodyB)
             : undefined;
-        if (isGround) {
-            // Ground-anchored joints are unsupported by the engine's joint model;
-            // surface them loudly instead of silently dropping them (#review).
-            const bodyAName = bodyA ?? (j.bodyA !== undefined ? `body#${j.bodyA}` : '?');
-            console.warn(`[map-adapter] Skipping ground-anchored ${j.type ?? 'joint'} (bodyA=${bodyAName}, bodyB=ground): the engine has no ground-joint support`);
-            return null;
-        }
-        const safeType = (t: string | undefined): 'rv' | 'distance' | 'lpj' | string =>
+        const safeType = (t: string | undefined): string =>
             t === undefined ? 'rv' : t;
         const out: Record<string, unknown> = {
             type: safeType(j.type),
+            // Joints are named by their array position so gear referents (which
+            // reference `physicsJoints` by index) resolve consistently.
+            name: `joint_${jointIdx}`,
             bodyA: bodyA ?? '',
             bodyB: bodyB ?? '',
+            isGround,
             anchorA: j.anchorA,
             anchorB: j.anchorB,
-            collideConnected: j.collideConnected ?? false,
+            collideConnected: j.collideConnected ?? j.data?.cc ?? false,
+            // Native per-type fields (§33.8) forwarded for exact construction:
+            angle: j.angle,
+            axis: j.axis,                          // prismatic local axis
+            referenceAngle: j.referenceAngle,       // prismatic reference angle
+            lowerTranslation: j.lowerTranslation,
+            upperTranslation: j.upperTranslation,
+            lowerLimit: j.lowerLimit,
+            upperLimit: j.upperLimit,
+            maxMotorForce: j.maxMotorForce,
+            maxMotorTorque: j.maxMotorTorque,
+            motorSpeed: j.motorSpeed,
+            enableMotor: j.enableMotor,
+            enableLimit: j.enableLimit,
+            length: j.length,
+            rayCast: (j as any).rayCast,
         };
-        if (j.frequencyHz !== undefined) out.frequencyHz = j.frequencyHz;
-        if (j.dampingRatio !== undefined) out.dampingRatio = j.dampingRatio;
+        // Gear (g) referents: ja/jb index into the SAME joints array.
+        if (j.type === 'g' || safeType(j.type) === 'g') {
+            out.ratio = j.ratio ?? 1;
+            const src = map.physicsJoints || [];
+            const ja = (j as any).ja !== undefined ? (j as any).ja : undefined;
+            const jb = (j as any).jb !== undefined ? (j as any).jb : undefined;
+            if (ja !== undefined && src[ja]) out.jointA = `joint_${ja}`;
+            if (jb !== undefined && src[jb]) out.jointB = `joint_${jb}`;
+        }
         return out;
-    }).filter((j): j is NonNullable<typeof j> => j !== null);
+    });
 
     const ph = map.physics || {};
     const bounds = {
