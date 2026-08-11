@@ -153,6 +153,50 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(ds.m_length).toBeCloseTo(50 / 30, 5);
   });
 
+  it('normalizeMap forwards distance-joint frequencyHz/dampingRatio (and preserves rigid defaults when absent)', () => {
+    const e = makeEngine();
+    const base = {
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any;
+
+    // Exported d joint authored with spring tuning (d.fh=4 / d.dr=0.5) must
+    // reach the engine's distance joint, which otherwise builds a rigid rod
+    // (frequencyHz=0, dampingRatio=0) — #286.
+    const sprung = normalizeMap({
+      ...base,
+      physicsJoints: [
+        { bodyA: 0, bodyB: 1, type: 'd', anchorA: { x: 0, y: 0 }, anchorB: { x: 0, y: 30 }, frequencyHz: 4, dampingRatio: 0.5 },
+      ],
+    } as any) as any;
+    const bm1 = new Map<string, any>();
+    for (const b of sprung.bodies) { e.addBody(b); bm1.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of sprung.joints) { e.addJoint(j, bm1); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+    const sprungJoint = (e as any).createdJoints.get('joint_0');
+    expect(sprungJoint.m_frequencyHz).toBe(4);
+    expect(sprungJoint.m_dampingRatio).toBeCloseTo(0.5, 5);
+
+    // A d joint with no authored fh/dr must still build the rigid defaults.
+    const rigid = normalizeMap({
+      ...base,
+      physicsJoints: [
+        { bodyA: 0, bodyB: 1, type: 'd', anchorA: { x: 0, y: 0 }, anchorB: { x: 0, y: 30 } },
+      ],
+    } as any) as any;
+    const bm2 = new Map<string, any>();
+    for (const b of rigid.bodies) { e.addBody(b); bm2.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const j of rigid.joints) { e.addJoint(j, bm2); }
+    const rigidJoint = (e as any).createdJoints.get('joint_0');
+    expect(rigidJoint.m_frequencyHz).toBe(0);
+    expect(rigidJoint.m_dampingRatio).toBe(0);
+  });
+
   it('resolves gear referents by index through the full normalizeMap pipeline', () => {
     const e = makeEngine();
     const md = normalizeMap({
