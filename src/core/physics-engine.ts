@@ -1024,19 +1024,36 @@ export class PhysicsEngine {
     const cd = def.collideConnected ?? false;
     const makeAnchorA = (a?: { x: number; y: number }) =>
       a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (bodyA.GetPosition().Copy());
-    const makeAnchorB = (a?: { x: number; y: number }, b?: any) =>
-      a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (b.GetPosition().Copy());
 
     const type = def.type;
     let created: any = null;
     if (type === 'distance' || type === 'd') {
       const jd = new b2DistanceJointDef();
-      // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
-      const a = makeAnchorA(def.anchorA);
-      const b = isGround
-        ? new b2Vec2((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale)
-        : makeAnchorB(def.anchorB, bodyB);
-      jd.Initialize(bodyA, bodyB, a, b);
+      if (isGround) {
+        // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
+        jd.Initialize(
+          bodyA,
+          bodyB,
+          makeAnchorA(def.anchorA),
+          new b2Vec2((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale),
+        );
+      } else {
+        // §33.8 d: aa/ab are body-relative local anchors, set directly in the
+        // connected bodies' frames (Initialize would subtract each body's
+        // position, pinning the joint ~one body-position away on any
+        // non-origin body).
+        jd.body1 = bodyA;
+        jd.body2 = bodyB;
+        jd.localAnchor1.Set((def.anchorA?.x ?? 0) / this.scale, (def.anchorA?.y ?? 0) / this.scale);
+        jd.localAnchor2.Set((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale);
+        if (!(typeof def.length === 'number' && Number.isFinite(def.length))) {
+          // No authored length: replicate Initialize's default — the distance
+          // between the anchor world points in the bodies' frames.
+          const wa = bodyA.GetWorldPoint(jd.localAnchor1);
+          const wb = bodyB.GetWorldPoint(jd.localAnchor2);
+          jd.length = Math.sqrt((wb.x - wa.x) * (wb.x - wa.x) + (wb.y - wa.y) * (wb.y - wa.y));
+        }
+      }
       // apply an explicit authored length after Initialize (Initialize sets
       // length from the anchor distance) (§33.7 d: len→0.01-floor).
       if (typeof def.length === 'number' && Number.isFinite(def.length)) {
@@ -1048,7 +1065,13 @@ export class PhysicsEngine {
       created = this.world.CreateJoint(jd);
     } else if (type === 'rv' || type === 'revolute') {
       const jd = new b2RevoluteJointDef();
-      jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA));
+      // §33.8 rv: aa is a body-relative offset; the pivot's world position is
+      // bodyA.p + R·(aa/ppm). Initialize converts it back via GetLocalPoint,
+      // so the joint's local anchor on bodyA lands exactly at aa/SCALE
+      // (GetPosition returns an internal reference — operate on a copy).
+      const pivot = bodyA.GetPosition().Copy();
+      pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
+      jd.Initialize(bodyA, bodyB, pivot);
       jd.collideConnected = cd;
       jd.enableLimit = !!def.enableLimit;
       // Adapter forwards the exporter's lower/upperLimit (which map to the

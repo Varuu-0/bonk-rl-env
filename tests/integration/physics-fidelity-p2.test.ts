@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PhysicsEngine } from '../../src/core/physics-engine';
+import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { normalizeMap } from '../../src/core/map-adapter';
 
 /**
@@ -50,6 +50,53 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       e.addJoint({ type: 'd', name: 'j1', bodyA: 'plat_0', bodyB: 'cart_0', anchorA: { x: 0, y: 100 }, anchorB: { x: 0, y: 140 }, frequencyHz: 4, dampingRatio: 0.5, length: 50, collideConnected: false }, bm);
     });
     expect(warnings.filter(w => /unknown joint type/.test(w))).toHaveLength(0);
+  });
+
+  it('rv/d anchors are body-relative offsets on a non-origin body, not world coordinates (#282)', () => {
+    const e = makeEngine();
+    // bodyA sits 100 map px right of the world origin; the authored anchors
+    // are body-relative offsets, exactly as the exporter stores them (§33.8).
+    e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: true, density: 0 } as any);
+    e.addBody({ name: 'bodyB', type: 'rect', x: 200, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+    const bodyA = bm.get('bodyA') as any;
+
+    e.addJoint({ type: 'rv', name: 'j_rv', bodyA: 'bodyA', bodyB: 'bodyB', anchorA: { x: 0, y: 50 }, enableLimit: false }, bm);
+    e.addJoint({ type: 'd', name: 'j_d', bodyA: 'bodyA', bodyB: 'bodyB', anchorA: { x: 0, y: 50 }, anchorB: { x: 0, y: -50 }, length: 60 }, bm);
+    // No authored length: the joint must still build (§33.7 d length default
+    // = distance between the anchor world points in the bodies' frames).
+    e.addJoint({ type: 'd', name: 'j_d_nolen', bodyA: 'bodyA', bodyB: 'bodyB', anchorA: { x: 0, y: 50 }, anchorB: { x: 0, y: -50 } }, bm);
+
+    const rv = (e as any).createdJoints.get('j_rv');
+    const d = (e as any).createdJoints.get('j_d');
+    const dNolen = (e as any).createdJoints.get('j_d_nolen');
+    expect(rv).toBeTruthy();
+    expect(d).toBeTruthy();
+    expect(dNolen).toBeTruthy();
+
+    // The local anchor on bodyA must be exactly anchorA / SCALE — NOT
+    // anchorA / SCALE − bodyA.position, which the old world-point
+    // interpretation would pin at x = −100/30 here.
+    expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(rv.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
+    // §33.8 d: aa/ab are local anchors in the connected bodies' frames.
+    expect(d.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
+    expect(d.m_localAnchor2.x).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor2.y).toBeCloseTo(-50 / SCALE, 5);
+    // Authored length survives; without a length the anchor distance is used.
+    expect(d.m_length).toBeCloseTo(60 / SCALE, 5);
+    expect(dNolen.m_length).toBeCloseTo(Math.sqrt(100 * 100 + 100 * 100) / SCALE, 5);
+
+    // The rv pivot's world position is bodyA.p + R·(aa/SCALE) = (100/30, 50/30);
+    // stepping keeps the anchor attached to the body at that point.
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
+    for (let i = 0; i < 30; i++) e.tick();
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
+    expect(bodyA.GetWorldPoint(d.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
+    expect(bodyA.GetWorldPoint(d.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
   });
 
   it('constructs a prismatic (lpj) joint with limits, motor, and axis', () => {
