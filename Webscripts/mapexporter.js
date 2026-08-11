@@ -53,6 +53,7 @@
       'type','ba','bb','d','aa','ab','l',
       'pax','pay','pa','pf','pl','pu','plen','pms',
       'sax','say','sf','slen',
+      'ja','jb','r',
     ]),
     jointData: new Set([
       'la','ua','mmt','ms','el','em',
@@ -596,6 +597,12 @@
         jointDef.anchorA = { x: jt.sax ?? 0, y: jt.say ?? 0 };
         jointDef.frequency = jt.sf ?? null;
         jointDef.length = jt.slen ?? null;
+      } else if (jt.type === 'g') {
+        // Gear joint: referents are joints (ja/jb, indexes into the same
+        // physicsJoints array) and r is the ratio; no ba/bb common block (§33.8).
+        jointDef.ja = jt.ja ?? null;
+        jointDef.jb = jt.jb ?? null;
+        jointDef.ratio = jt.r ?? 1;
       }
 
       mapDef.physicsJoints.push(jointDef);

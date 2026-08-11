@@ -342,6 +342,22 @@ export function normalizeMap(raw: unknown): MapDef {
             const jb = (j as any).jb !== undefined ? (j as any).jb : undefined;
             if (ja !== undefined && src[ja]) out.jointA = `joint_${ja}`;
             if (jb !== undefined && src[jb]) out.jointB = `joint_${jb}`;
+            // Native gear joints carry no ba/bb (§33.8 tag 5), so the exporter
+            // emits bodyA/bodyB as null. Derive them from the referent joints
+            // exactly like the native factory does (7836-7843: "bodyA/B from
+            // those joints") so the gear joint still resolves in the engine.
+            const refA = ja !== undefined ? src[ja] : undefined;
+            const refB = jb !== undefined ? src[jb] : undefined;
+            if (!out.bodyA && refA && refA.bodyA !== undefined && refA.bodyA >= 0) {
+                out.bodyA = bodiesByName.get(refA.bodyA) ?? '';
+            }
+            if (!out.bodyB && refB && refB.bodyB !== undefined) {
+                if (refB.bodyB >= 0) {
+                    out.bodyB = bodiesByName.get(refB.bodyB) ?? '';
+                } else {
+                    out.isGround = true;
+                }
+            }
         }
         return out;
     });
