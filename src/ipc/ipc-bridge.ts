@@ -252,8 +252,8 @@ export class IpcBridge {
             return this.localSession;
         }
         if (this.allowLocalSessionFallback && this.localSession.initialized) {
-            this.localSessionIdentity = sessionKey;
-            return this.localSession;
+            this.localSessionIdentity ??= sessionKey;
+            return this.localSessionIdentity === sessionKey ? this.localSession : undefined;
         }
         return this.allowLocalSessionFallback ? this.localSession : undefined;
     }
