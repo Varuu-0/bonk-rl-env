@@ -121,33 +121,37 @@ describe('P3: per-map pq gates solver iterations (DEOBFUSCATION §Solver Iterati
         }
     });
 
-    it('solver behavior actually changes: a disc settles deeper at low quality', () => {
-        // With +y pointing down, "sinking" into a platform means a larger (more
-        // positive) settled y. High-quality solving (15/15) resolves the position
-        // constraint more accurately per tick than low (2/6), so a disc resting on
-        // a platform reaches a shallower rest depth. Use restitution-0 bodies (not
-        // the bouncy 0.95 player disc) so each engine settles to a fixed depth that
-        // reliably differs, and assert the correct, steadily converged direction.
+    it('solver behavior actually changes: a loaded stack penetrates less at high quality', () => {
+        // Solver quality is observable through contact penetration of a disc
+        // under load. With +y pointing down, penetration moves the center toward
+        // larger y (deeper into the floor). Two discs rest on the platform; the
+        // weight of the top disc makes the bottom disc's settled penetration
+        // sensitive to the iteration count — and the difference is deterministic
+        // (probe: low bottom −8.97 vs high bottom −9.83, converged by 300 ticks).
+        // Use a clean, non-embedded spawn (discs well above the surface, restitution
+        // 0) so skinning excludes any ejection transient, and step to a converged
+        // rest before comparing.
         const build = (pq: number) => {
             const engine = new PhysicsEngine({ physicsQuality: pq });
             (engine as any).addBody({ name: 'floor', type: 'rect', x: 0, y: 40, width: 800, height: 40, static: true, restitution: 0 });
-            (engine as any).addBody({ name: 'disc', type: 'circle', x: 0, y: 20, radius: 30, static: false, restitution: 0, density: 1 });
+            (engine as any).addBody({ name: 'd0', type: 'circle', x: 0, y: -60, radius: 30, static: false, restitution: 0, density: 1 });
+            (engine as any).addBody({ name: 'd1', type: 'circle', x: 0, y: -140, radius: 30, static: false, restitution: 0, density: 1 });
             return engine;
         };
         const low = build(1);
         const high = build(2);
         try {
-            for (let i = 0; i < 300; i++) { low.tick(); high.tick(); }
-            const lowY = (low as any).getBodyMap().get('disc').GetPosition().y * (low as any).scale;
-            const highY = (high as any).getBodyMap().get('disc').GetPosition().y * (high as any).scale;
-            // Low quality must sink at least as deep as high quality (lowY is the
-            // more positive / deeper rest depth), and the pair must actually differ
-            // rather than settling identically (which would make the assertion
-            // trivial).
+            for (let i = 0; i < 1200; i++) { low.tick(); high.tick(); }
+            const bottom = (e: any) => e.getBodyMap().get('d0').GetPosition().y * e.scale;
+            const lowY = bottom(low);
+            const highY = bottom(high);
+            // More solver iterations resolve the load-bearing contact more tightly,
+            // so the high-quality bottom disc rests shallower (more negative y,
+            // less penetration). Low quality must not rest shallower than high.
             expect(Number.isFinite(lowY)).toBe(true);
             expect(Number.isFinite(highY)).toBe(true);
             expect(lowY).toBeGreaterThanOrEqual(highY);
-            expect(lowY - highY).toBeGreaterThan(1e-3);
+            expect(lowY - highY).toBeGreaterThan(0.1);
         } finally {
             low.destroy();
             high.destroy();
