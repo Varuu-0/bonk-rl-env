@@ -26,14 +26,21 @@ describe('snapshot-ring seqlock concurrency', () => {
       });
 
       const headerBytes = HEADER_INTS * 4;
+      // Handshake: the worker signals once it has committed its first frame,
+      // so the reader is guaranteed to poll an actively writing slot.
+      const started = new Promise<void>((resolve, reject) => {
+        worker.on('message', (m) => { if (m === 'started') resolve(); });
+        worker.on('error', reject);
+      });
       const done = new Promise<void>((resolve, reject) => {
         worker.on('message', (m) => { if (m === 'done') resolve(); });
         worker.on('error', reject);
-        worker.postMessage({
-          cmd: 'run', buffer: ring, iterations, maxPlayers,
-          HEADER_INTS, headerBytes, DISC_FIELDS,
-        }, []);
       });
+      worker.postMessage({
+        cmd: 'run', buffer: ring, iterations, maxPlayers,
+        HEADER_INTS, headerBytes, DISC_FIELDS,
+      }, []);
+      await started;
 
       // Read concurrently while the worker writes.
       let coherentReads = 0;

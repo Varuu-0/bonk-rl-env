@@ -25,6 +25,7 @@ parentPort.on('message', (msg) => {
     }
     header[1] = i;             // tick
     header[0] = gen * 2;       // even = committed, written last
+    if (i === 0) parentPort.postMessage('started'); // signal first committed frame
   }
   parentPort.postMessage('done');
 });
