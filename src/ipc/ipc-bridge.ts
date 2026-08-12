@@ -120,13 +120,16 @@ export class IpcBridge {
         // missing/non-finite value (e.g. a partial mock config, or empty
         // string env overrides) falls back to the loader-provided default
         // instead of producing NaN or clamping to 1, and numeric strings from
-        // env-style configs are honored like real numbers.
+        // env-style configs are honored like real numbers. The cap is an
+        // integer count of concurrent sessions, so a fractional value is
+        // floored (1.5 → 1, 2.5 → 2) rather than silently relaxing the bound
+        // by Math.ceil (issue #259).
         const rawCap: unknown = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
         const parsedCap = typeof rawCap === 'string'
             ? (rawCap.trim() === '' ? NaN : Number(rawCap))
             : rawCap;
         this.maxClientSessions = Number.isFinite(parsedCap as number)
-            ? Math.max(1, parsedCap as number)
+            ? Math.floor(Math.max(1, parsedCap as number))
             : DEFAULT_MAX_CLIENT_SESSIONS;
         this.sock = new zmq.Router();
         this.localSession = {

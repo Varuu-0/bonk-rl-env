@@ -158,8 +158,9 @@ been idle (no active request, no `init`/`reset`/`step`/`close`) for
 `CLIENT_SESSION_IDLE_TIMEOUT_MS` (5 minutes), detaching the client's identity
 so it must call `init` again; a session is never reaped while a request or its
 detached telemetry is still using its pool. `server.maxClientSessions`
-(default 32, clamped to a minimum of 1, falling back to the default when unset)
-caps the number of concurrent sessions; a new client `init` beyond the cap is
+(default 32, floored to an integer and clamped to a minimum of 1, falling back
+to the default when unset) caps the number of concurrent sessions; a new client
+`init` beyond the cap is
 rejected loudly with a clear error instead of silently evicting an existing
 session. Closed, rejected, and reaped identities keep failing loudly without
 retaining an unbounded identity registry: once any client has taken ownership
