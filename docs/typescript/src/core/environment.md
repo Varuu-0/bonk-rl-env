@@ -98,7 +98,7 @@ interface Observation {
 | Option | Type | Default | Description |
 |:-------|:-----|:--------|:------------|
 | `tickRate` | `number` | `30` | Ticks per second |
-| `maxTicks` | `number` | `1800` | Maximum ticks per episode |
+| `maxTicks` | `number` | `900` | Maximum ticks per episode (30 s at 30 TPS); must be a positive integer, otherwise construction fails |
 | `respawnTime` | `number` | `60` | Respawn delay in ticks |
 
 ---

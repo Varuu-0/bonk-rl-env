@@ -217,6 +217,34 @@ describe('IpcBridge handleRequest', () => {
       expect(truncated).toBe(true);
     });
 
+    it('rejects init with a non-positive max_ticks instead of serving a permanently-terminal pool (#266)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { max_ticks: 0 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid maxTicks 0: expected a positive integer');
+    });
+
+    it('rejects init with a negative max_ticks (#266)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { max_ticks: -3 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid maxTicks -3: expected a positive integer');
+    });
+
     it('forwards loader reward environment variables through IPC init to worker environments (#220)', { timeout: 30000 }, async () => {
       const rewardEnvKeys = ['KILL_REWARD', 'DEATH_PENALTY', 'TIME_PENALTY'] as const;
       const savedRewardEnv = Object.fromEntries(
