@@ -1,36 +1,42 @@
 /**
- * worker-pool-action-value-validation.test.ts — Regression coverage for issue #225
+ * worker-pool-action-value-validation.test.ts — Regression coverage for issues #225 and #278
  *
- * A full-length step batch whose entries are string/boolean values must be
+ * A full-length step batch whose entries are malformed action values must be
  * rejected as a per-request input error in BOTH transports, identically to the
- * length check (#191) and malformed-entry checks (#207). Previously
- * shared-memory mode rejected such entries inside `encodeAction()` while
- * message passing forwarded the raw values to the worker, where
- * `decodeAction()`/`applyInput()` silently treated them as all-falsy no-ops —
- * the identical request errored in one transport and silently dropped the
- * action in the other, silently corrupting trajectories.
+ * length check (#191) and malformed-entry checks (#207). Issue #225 covered
+ * string/boolean values; issue #278 extends the rejection to every other
+ * wrong-shaped value — arrays, empty objects, non-boolean field values, NaN,
+ * and null — which previously slipped through `encodeAction()` and were
+ * silently encoded as a different (usually no-op) action in both transports,
+ * or crashed with an opaque TypeError on the direct environment.
  */
 import { describe, it, expect } from 'vitest';
 import { WorkerPool } from '../../src/core/worker-pool';
 
-describe('WorkerPool action value validation (issue #225)', () => {
+describe('WorkerPool action value validation (issues #225/#278)', () => {
   const runRejectionSequence = async (useSharedMemory: boolean) => {
     const pool = new WorkerPool(1);
     try {
       await pool.init(2, {}, useSharedMemory);
       const baseline = (await pool.reset([1, 2]))[0].tick;
 
-      // String and boolean entries are the malformed shapes the issue
-      // reproduces. Every rejection must carry the offending type in the same
-      // message in both transports and must leave the pool ready.
+      // Every malformed shape must be rejected with a labeled error in both
+      // transports and must leave the pool ready. `NaN` stringifies as `null`,
+      // so the batch labels use the shape rather than a JSON round-trip.
       const invalidBatches: [any[], string][] = [
-        [['3', 0], 'string'],
-        [[true, 0], 'boolean'],
+        [['3', 0], 'Invalid action: expected a PlayerInput object or an encoded number, got string'],
+        [[true, 0], 'Invalid action: expected a PlayerInput object or an encoded number, got boolean'],
+        [[null, 0], 'Invalid action: expected a PlayerInput object or an encoded number, got null'],
+        [[NaN, 0], 'Invalid action: expected a finite encoded number, got NaN'],
+        [[[2], 0], 'Invalid action: expected a PlayerInput object, got array'],
+        [[{}, 0], 'Invalid action: expected a PlayerInput object, got no recognized boolean action fields'],
+        [[{ left: 'true' }, 0], 'Invalid action: field "left" must be boolean, got string'],
+        [[{ right: 1 }, 0], 'Invalid action: field "right" must be boolean, got number'],
+        [[{ left: true, graple: true }, 0], 'Invalid action: unknown field "graple"'],
+        [[{ right: true, attack: 'x' }, 0], 'Invalid action: unknown field "attack"'],
       ];
-      for (const [actions, type] of invalidBatches) {
-        await expect(pool.step(actions)).rejects.toThrow(
-          `Invalid action: expected a PlayerInput object or an encoded number, got ${type}`,
-        );
+      for (const [actions, message] of invalidBatches) {
+        await expect(pool.step(actions)).rejects.toThrow(message);
         expect((pool as any).state).toBe('ready');
       }
 
@@ -46,12 +52,12 @@ describe('WorkerPool action value validation (issue #225)', () => {
     }
   };
 
-  it('shared-memory mode: string/boolean action values are rejected and the pool recovers', async () => {
+  it('shared-memory mode: malformed action values are rejected and the pool recovers', async () => {
     if (!WorkerPool.isSupported()) return;
     await runRejectionSequence(true);
   });
 
-  it('message-passing mode: string/boolean action values are rejected and the pool recovers', async () => {
+  it('message-passing mode: malformed action values are rejected and the pool recovers', async () => {
     await runRejectionSequence(false);
   });
 });

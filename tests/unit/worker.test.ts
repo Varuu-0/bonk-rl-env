@@ -105,7 +105,7 @@ describe('Worker thread', () => {
         type: 'step',
         id: 'step-1',
         actions: [
-          { left: 0, right: 0, up: 0, down: 0, heavy: 0 },
+          { left: false, right: false, up: false, down: false, heavy: false },
         ],
       });
       expect(mockParentPort.postMessage).toHaveBeenCalledWith(
@@ -120,7 +120,7 @@ describe('Worker thread', () => {
 
     it('auto-resets environment when done is true', () => {
       const actions = [
-        { left: 0, right: 0, up: 0, down: 0, heavy: 0 },
+        { left: false, right: false, up: false, down: false, heavy: false },
       ];
 
       messageHandler({ type: 'step', id: 'step-pre', actions });
