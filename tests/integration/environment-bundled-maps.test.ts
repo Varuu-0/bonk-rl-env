@@ -106,8 +106,18 @@ describe('NaN disc dies via the fail-safe OOB check (#271)', () => {
             engine.addPlayer(0, 0, 0);
             // Corrupt the disc's transform to NaN, simulating a solver that
             // produced an invalid position (the issue's tick-4 explosion).
+            // The bundled box2d port exposes b2Body.SetXForm(position, angle)
+            // with a vector position; b2Vec2.SetV(v) copies v.x/v.y, so the
+            // plain object below genuinely lands in m_xf.position/m_sweep.c.
             const body = (engine as any).playerBodies.get(0);
             body.SetXForm({ x: NaN, y: NaN }, 0);
+
+            // Self-verify the corruption actually took effect so this test
+            // genuinely exercises the non-finite OOB branch and cannot silently
+            // degrade into a NaN-coercion no-op if the port's API ever changes.
+            const corrupted = body.GetPosition();
+            expect(Number.isNaN(corrupted.x)).toBe(true);
+            expect(Number.isNaN(corrupted.y)).toBe(true);
 
             engine.tick();
 
@@ -125,6 +135,12 @@ describe('NaN disc dies via the fail-safe OOB check (#271)', () => {
             engine.addPlayer(0, 0, 0);
             const body = (engine as any).playerBodies.get(0);
             body.SetXForm({ x: Infinity, y: Infinity }, 0);
+
+            // Same self-verification as the NaN variant: the Infinity branch
+            // must be genuinely exercised, not coerced to NaN by the API.
+            const corrupted = body.GetPosition();
+            expect(corrupted.x).toBe(Infinity);
+            expect(corrupted.y).toBe(Infinity);
 
             engine.tick();
 
