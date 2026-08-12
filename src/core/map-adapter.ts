@@ -305,7 +305,9 @@ export function normalizeMap(raw: unknown): MapDef {
         // bodyB: -1 means the joint is anchored to the ground (world). Forward
         // it as a ground joint (empty bodyB) rather than dropping it — P2
         // supports ground-anchored joints via a synthetic static ground body.
-        const isGround = j.bodyB !== undefined && j.bodyB < 0;
+        // Any other negative index is malformed and stays '' (warn+skip in
+        // engine), mirroring the bodyA policy above.
+        const isGround = j.bodyB !== undefined && j.bodyB === -1;
         const bodyB = j.bodyB !== undefined && j.bodyB >= 0
             ? bodiesByName.get(j.bodyB)
             : undefined;

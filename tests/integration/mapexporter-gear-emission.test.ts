@@ -289,4 +289,40 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(warnings.some(w => /unknown body/.test(w))).toBe(true);
     expect((e as any).createdJoints.has('joint_2')).toBe(false);
   });
+
+  it('binds flat-joint bodyB=-1 to ground but treats bodyB=-2 as malformed', () => {
+    const e = new PhysicsEngine();
+    // Only -1 denotes the static ground (§33.8) on the B side too: -1 becomes a
+    // ground-anchored joint, while -2 must warn+skip instead of silently
+    // binding to ground (mirroring the A-side policy).
+    const exported = extractJoints([
+      { type: 'rv', ba: 0, bb: -1, aa: [0, 0] },
+      { type: 'rv', ba: 0, bb: -2, aa: [100, 0] },
+    ]);
+
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: exported,
+    } as any) as any;
+
+    expect(md.joints[0].isGround).toBe(true);
+    expect(md.joints[1].isGround).toBe(false);
+    expect(md.joints[1].bodyB).toBe('');
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    // The -1 joint is created silently (ground-anchored); only the malformed
+    // -2 joint warns and is skipped.
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toMatch(/unknown body/);
+    expect((e as any).createdJoints.has('joint_0')).toBe(true);
+    expect((e as any).createdJoints.has('joint_1')).toBe(false);
+  });
 });
