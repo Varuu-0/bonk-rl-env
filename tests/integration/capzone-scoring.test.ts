@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
     PhysicsEngine,
     MapDef,
@@ -616,6 +616,53 @@ describe('CapZoneScoring', () => {
                 expect(Math.max(...rxs) - Math.min(...rxs)).toBeGreaterThan(0);
                 expect(Math.max(...rys) - Math.min(...rys)).toBeGreaterThan(0);
             } finally {
+                env.close();
+            }
+        });
+
+        it('capzone on a polygon fixture with too few finite vertices warns and builds no sensor (#277)', () => {
+            // 4 declared vertices but only 2 carry finite coordinates — the
+            // same degenerate case the >= 3 vertex guard exists for. The
+            // corrupted zone must be loud (warning) and must NOT silently
+            // build a zero-area point sensor that can never capture.
+            const polygonFixture = {
+                name: 'zone_fixture', type: 'polygon' as const, x: 0, y: 190,
+                vertices: [
+                    { x: -100, y: -50 },
+                    { x: NaN, y: -50 },
+                    { x: 100, y: NaN },
+                    { x: -100, y: 50 },
+                ],
+                static: true, noPhysics: true,
+            };
+            const mapData: MapDef = {
+                name: 'capzone-polygon-nan',
+                spawnPoints: {
+                    team_blue: { x: -300, y: -100 },
+                    team_red: { x: 300, y: -100 },
+                },
+                bodies: [
+                    { name: 'floor', type: 'rect', x: 0, y: 400, width: 800, height: 30, static: true },
+                    polygonFixture,
+                ],
+                capZones: [
+                    { index: 0, owner: 'neutral', type: 3, fixture: 'zone_fixture', shapeType: 'polygon' },
+                ],
+            };
+
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
+            try {
+                expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('insufficient finite vertices'));
+                // The malformed zone must not produce a zero-area sensor.
+                expect((env as any).physics.capZoneSensors.length).toBe(0);
+
+                // reset() rebuilds cap zones from the same map data — it must
+                // stay loud and sensor-less on every episode.
+                env.reset();
+                expect((env as any).physics.capZoneSensors.length).toBe(0);
+            } finally {
+                warnSpy.mockRestore();
                 env.close();
             }
         });

@@ -256,10 +256,12 @@ function pickRewardWeight(
  * Derive the cap-zone sensor extent for a fixture body. Rect fixtures use
  * their width/height and circle fixtures their radius*2; polygon fixtures use
  * the bounding box of their vertices (local-space extents, same convention as
- * rect width/height). Anything else warns loudly instead of silently building
- * a zero-area sensor that can never capture (#277).
+ * rect width/height). Returns null for malformed fixtures — fewer than 3
+ * declared vertices, fewer than 3 finite vertices, or an unsupported type —
+ * so the caller skips the sensor entirely instead of silently building a
+ * zero-area sensor that can never capture (#277).
  */
-function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } {
+function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } | null {
     if (fixtureDef.type === 'rect') {
         return { w: fixtureDef.width || 0, h: fixtureDef.height || 0 };
     }
@@ -274,7 +276,7 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } 
         // cover the same vertex window.
         if (fixtureDef.vertices.length < 3) {
             console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient vertices (need >= 3)`);
-            return { w: 0, h: 0 };
+            return null;
         }
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
         let finiteCount = 0;
@@ -290,14 +292,16 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } 
             if (v.y < minY) minY = v.y;
             if (v.y > maxY) maxY = v.y;
         }
-        if (finiteCount === 0) {
-            console.warn(`CapZone fixture "${fixtureDef.name}" has no finite vertices — creating a zero-area sensor`);
-            return { w: 0, h: 0 };
+        // Mirror the >= 3 vertex guard: fewer than 3 usable vertices cannot
+        // describe an area, so stay loud instead of building a zero-size sensor.
+        if (finiteCount < 3) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient finite vertices`);
+            return null;
         }
         return { w: maxX - minX, h: maxY - minY };
     }
-    console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — creating a zero-area sensor`);
-    return { w: 0, h: 0 };
+    console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — skipping cap-zone sensor`);
+    return null;
 }
 
 export class BonkEnvironment {
@@ -506,9 +510,9 @@ export class BonkEnvironment {
             for (const zone of mapDef.capZones) {
                 const fixtureDef = mapDef.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    const { w, h } = getCapZoneSensorSize(fixtureDef);
-                    if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, w, h);
+                    const size = getCapZoneSensorSize(fixtureDef);
+                    if (size && typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, size.w, size.h);
                     }
                 } else {
                     console.warn(`CapZone fixture "${zone.fixture}" not found`);
@@ -573,9 +577,9 @@ export class BonkEnvironment {
             for (const zone of this.config.mapData.capZones) {
                 const fixtureDef = this.config.mapData.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    const { w, h } = getCapZoneSensorSize(fixtureDef);
-                    if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, w, h);
+                    const size = getCapZoneSensorSize(fixtureDef);
+                    if (size && typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, size.w, size.h);
                     }
                 }
             }
