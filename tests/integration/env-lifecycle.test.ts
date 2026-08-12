@@ -278,8 +278,11 @@ describe('BonkEnv lifecycle', () => {
       const rejected = results.filter((r) => r.status === 'rejected');
       expect(fulfilled).toHaveLength(1);
       expect(rejected).toHaveLength(1);
+      // The loser must fail the transient "starting" guard with a distinct
+      // message, not the "already running" one reserved for a fully started env.
       expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
-      expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already running');
+      expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already starting');
+      expect((rejected[0] as PromiseRejectedResult).reason.message).not.toContain('already running');
 
       expect(env.isActive()).toBe(true);
       const pool = env.getPool() as unknown as { workers: unknown[] };
@@ -287,6 +290,20 @@ describe('BonkEnv lifecycle', () => {
       expect(env.isActive()).toBe(false);
       expect(pm.isAllocated(env.port)).toBe(false);
       expect(pool.workers).toHaveLength(0);
+    });
+
+    it('stop() during an in-flight start() waits for it and leaves the env stopped (#267)', { timeout: 30000 }, async () => {
+      env = new BonkEnv({ numEnvs: 1, portManager: pm });
+      // start() assigns its in-flight promise synchronously before suspending,
+      // so stop() called right after always observes the starting state. It
+      // must await the start instead of tearing the pool/port out from under
+      // it, then stop the now-running env cleanly.
+      const startPromise = env.start();
+      const stopPromise = env.stop();
+      await expect(stopPromise).resolves.toBeUndefined();
+      await startPromise;
+      expect(env.isActive()).toBe(false);
+      expect(pm.isAllocated(env.port)).toBe(false);
     });
   });
 
