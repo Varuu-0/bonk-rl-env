@@ -530,6 +530,42 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     expect(lsj.m_refAngle).not.toBeCloseTo(bb.GetAngle() - ba.GetAngle(), 5);
   });
 
+  it('applies the native referenceAngle override for a hand-authored lpj without an exported angle', () => {
+    const e = makeEngine();
+    // Hand-authored joint defs (like the rest of this suite) carry no `angle`
+    // field, yet native §33.8 sets def.referenceAngle = -bodyA.GetAngle() for
+    // lpj unconditionally (DEOBFUSCATION.md:3457). Both bodies are rotated so
+    // Initialize()'s default (bodyB.angle - bodyA.angle) differs from the
+    // native override.
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true, angle: 0.4 },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 0, y: 100, width: 20, height: 20, static: false, density: 1, angle: 0.3 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        // No `angle`, no `axis` — the exporter shape minus the axis scalar.
+        { bodyA: 0, bodyB: 1, type: 'lpj', anchorA: { x: 0, y: 100 },
+          lowerTranslation: 0, lowerLimit: 0, upperLimit: 0, maxMotorForce: 0 },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+
+    const pr = (e as any).createdJoints.get('joint_0');
+    const ba = bm.get('wall') as any;
+    const bb = bm.get('gate') as any;
+    expect(pr).toBeTruthy();
+    // Native §33.8 lpj override applies regardless of the `angle` field.
+    expect(pr.m_refAngle).toBeCloseTo(-ba.GetAngle(), 5);
+    expect(pr.m_refAngle).not.toBeCloseTo(bb.GetAngle() - ba.GetAngle(), 5);
+  });
+
   it('builds a vertical axis for the bundled map bonk_WeiRd_DeAth_BalL__80622.json lpj joint', () => {
     const e = makeEngine();
     const fs = require('fs');

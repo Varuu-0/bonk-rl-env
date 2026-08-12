@@ -1138,14 +1138,15 @@ export class PhysicsEngine {
             : new b2Vec2(1, 0));
       jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA), axis);
       jd.collideConnected = cd;
-      // Native §33.8: lpj (with exported `angle` pa) and lsj (no angle exported)
-      // both set def.referenceAngle = -bodyA.GetAngle(); Initialize() defaulted
-      // it to bodyB.angle - bodyA.angle. Native `p` leaves referenceAngle at the
+      // Native §33.8: lpj and lsj both set def.referenceAngle = -bodyA.GetAngle()
+      // unconditionally (DEOBFUSCATION.md:3457/3472) — regardless of whether the
+      // input carries the exported `angle` (pa) or not; Initialize() defaulted it
+      // to bodyB.angle - bodyA.angle. Native `p` leaves referenceAngle at the
       // def-default, so this override is NOT blanket-applied to the branch.
       const exportsAngle = typeof def.angle === 'number' && Number.isFinite(def.angle);
       if (def.referenceAngle !== undefined) {
         jd.referenceAngle = def.referenceAngle;
-      } else if (exportsAngle || type === 'lsj') {
+      } else if (exportsAngle || type === 'lsj' || type === 'lpj') {
         jd.referenceAngle = -bodyA.GetAngle();
       }
       jd.enableLimit = !!def.enableLimit;
