@@ -54,11 +54,14 @@ const SYNC_STATUS_OFFSET = 1;
 const MAX_SUPPORTED_RESET_SEED = 0xFFFFFFFE;
 
 // Encoded actions are six binary flags packed into one integer, so the valid
-// space is [0, 63] (mirrors the Python client's Discrete(64)). The range is
-// enforced for BOTH transports: a value outside it carries bits that
-// `decodeAction()` never reads, so it would silently execute a different
-// action than the caller requested (#261).
-const MAX_ENCODED_ACTION = 63;
+// space is [0, 63] (mirrors the Python client's Discrete(64)). The bound is
+// derived from the six-bit flag layout in encodeAction()/decodeAction(), not
+// hardcoded, so the two transports' action-space contract cannot silently
+// diverge from the bit flags if a flag is ever added. Values outside the
+// range are rejected in BOTH transports: they carry bits `decodeAction()`
+// never reads, so they would silently execute a different action than the
+// caller requested (#261).
+const MAX_ENCODED_ACTION = (1 << 6) - 1;
 const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
