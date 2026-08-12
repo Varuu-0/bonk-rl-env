@@ -142,4 +142,39 @@ describe('mapexporter joint export (issue #281)', () => {
     expect(j.maxMotorForce).toBe(25);
     expect(j.lowerTranslation).toBeLessThan(j.upperTranslation);
   });
+
+  it('never emits an inverted, NaN, or locked limit range for any native lsj slen (issue #281)', () => {
+    // Mirrors the lpj plen property check: negative, missing, zero or
+    // non-numeric slen must fall back to zero travel (lsj keeps the limit
+    // disabled) and never produce lower > upper or NaN limits.
+    const cases: Array<{ slen?: unknown; lower: number; upper: number }> = [
+      { slen: undefined, lower: 0, upper: 0 },
+      { slen: 0, lower: 0, upper: 0 },
+      { slen: null, lower: 0, upper: 0 },
+      { slen: NaN, lower: 0, upper: 0 },
+      { slen: 'abc', lower: 0, upper: 0 },
+      { slen: 40, lower: -40, upper: 40 },
+      { slen: '40', lower: -40, upper: 40 },
+      { slen: -40, lower: -40, upper: 40 },
+    ];
+    for (const c of cases) {
+      const joint: Record<string, unknown> = {
+        type: 'lsj',
+        ba: 0, bb: 1,
+        sax: 0, say: 0,
+        sf: 25,
+      };
+      if (c.slen !== undefined) joint.slen = c.slen;
+      const j = extractWithJoint(joint).physicsJoints[0];
+      expect(j.axis).toEqual({ x: 0, y: 1 });
+      expect(j.enableLimit).toBe(false);
+      expect(j.enableMotor).toBe(true);
+      expect(j.motorSpeed).toBe(300);
+      expect(Number.isFinite(j.lowerTranslation)).toBe(true);
+      expect(Number.isFinite(j.upperTranslation)).toBe(true);
+      expect(j.lowerTranslation).toBeCloseTo(c.lower, 5);
+      expect(j.upperTranslation).toBeCloseTo(c.upper, 5);
+      expect(j.lowerTranslation).toBeLessThanOrEqual(j.upperTranslation);
+    }
+  });
 });
