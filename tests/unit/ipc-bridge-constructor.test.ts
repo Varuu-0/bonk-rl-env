@@ -639,7 +639,7 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
   });
 
   it('falls back to the default cap for non-number cap values instead of coercing them (issue #259)', () => {
-    for (const bad of [true, false, [5], {}, 'not-a-number']) {
+    for (const bad of [true, false, [5], {}, 'not-a-number', NaN, Infinity, '1e999']) {
       const bridge = new IpcBridge({ server: { port: 12375, maxClientSessions: bad } } as any);
       expect((bridge as any).maxClientSessions).toBe(32);
     }
