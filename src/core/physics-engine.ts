@@ -1126,17 +1126,25 @@ export class PhysicsEngine {
       created = this.world.CreateJoint(jd);
     } else if (type === 'lpj' || type === 'lsj' || type === 'p' || type === 'prismatic') {
       const jd = new b2PrismaticJointDef();
-      // Native §33.8: axis is derived from the emitted scalar angle (pa) minus
-      // bodyA's own rotation. mapexporter emits `angle`, never `axis`.
+      // Native §33.8: pa is a WORLD angle; the joint's local axis is
+      // (cos(pa - bodyA.angle), sin(pa - bodyA.angle)). Initialize() converts
+      // the passed axis into bodyA's local frame via GetLocalVector, so pass
+      // the world axis (cos pa, sin pa) and let Initialize apply bodyA's own
+      // rotation. mapexporter emits `angle` (pa), never `axis`.
       const axis = def.axis
         ? new b2Vec2(def.axis.x, def.axis.y)
         : (typeof def.angle === 'number' && Number.isFinite(def.angle)
-            ? new b2Vec2(Math.cos(def.angle - bodyA.GetAngle()),
-                         Math.sin(def.angle - bodyA.GetAngle()))
+            ? new b2Vec2(Math.cos(def.angle), Math.sin(def.angle))
             : new b2Vec2(1, 0));
       jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA), axis);
       jd.collideConnected = cd;
-      if (def.referenceAngle !== undefined) jd.referenceAngle = def.referenceAngle;
+      if (def.referenceAngle !== undefined) {
+        jd.referenceAngle = def.referenceAngle;
+      } else if (typeof def.angle === 'number' && Number.isFinite(def.angle)) {
+        // Native §33.8 also sets def.referenceAngle = -bodyA.GetAngle() for the
+        // exported angle form; Initialize defaulted it to bodyB.angle - bodyA.angle.
+        jd.referenceAngle = -bodyA.GetAngle();
+      }
       jd.enableLimit = !!def.enableLimit;
       // Issue #281: some maps/exporter shapes carry the native travel (±plen)
       // under `length`; honor it as the symmetric limit when no explicit
