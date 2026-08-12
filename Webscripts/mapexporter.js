@@ -583,10 +583,12 @@
         // Issue #281: the native piston is a DRIVEN joint with a limit. The
         // travel (±plen) is the translation limit, pf is maxMotorForce and pms
         // is motorSpeed (DEOBFUSCATION §33.8). Travel is sign-clamped so the
-        // range can never invert, and the limit is only enabled when there is
-        // positive travel — a map with missing/zero plen stays unconstrained
-        // instead of being locked at zero travel.
-        const plen = Math.abs(jt.plen ?? 0);
+        // range can never invert, non-finite values fall back to zero travel,
+        // and the limit is only enabled when there is positive travel — a map
+        // with missing/zero/NaN plen stays unconstrained instead of being
+        // locked at zero travel or emitting NaN limits.
+        const rawPlen = Number(jt.plen);
+        const plen = Number.isFinite(rawPlen) ? Math.abs(rawPlen) : 0;
         jointDef.lowerTranslation = -plen;
         jointDef.upperTranslation = +plen;
         jointDef.maxMotorForce = jt.pf ?? null;
@@ -607,8 +609,10 @@
         // Issue #281: the native spring is a driven joint with the travel
         // (±slen) as the translation limit, sf as the motor-force scale and a
         // fixed vertical axis / motor speed of 300. Travel is sign-clamped so
-        // the stored range can never invert.
-        const slen = Math.abs(jt.slen ?? 0);
+        // the stored range can never invert; non-finite values fall back to
+        // zero travel.
+        const rawSlen = Number(jt.slen);
+        const slen = Number.isFinite(rawSlen) ? Math.abs(rawSlen) : 0;
         jointDef.axis = { x: 0, y: 1 };
         jointDef.lowerTranslation = -slen;
         jointDef.upperTranslation = +slen;

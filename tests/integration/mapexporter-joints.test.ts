@@ -8,7 +8,8 @@ import { extractMap } from '../../Webscripts/mapexporter.js';
  * bootstrap is skipped when `window`/`document` are absent), so the exact
  * native → exported field mapping for lpj/lsj joints is verified directly:
  * native pf → maxMotorForce, pms → motorSpeed, plen/slen → ±travel limits,
- * with sign-clamped travel so the limit range can never invert.
+ * with sign-clamped travel (non-finite values fall back to zero) so the limit
+ * range can never invert or carry NaN.
  */
 
 function extractWithJoint(joint: Record<string, unknown>): any {
@@ -87,14 +88,18 @@ describe('mapexporter joint export (issue #281)', () => {
     }
   });
 
-  it('never emits an inverted or locked limit range for any native plen (issue #281)', () => {
+  it('never emits an inverted, NaN, or locked limit range for any native plen (issue #281)', () => {
     // Table-driven property check mirroring the review finding: a negative,
-    // missing or zero plen must never produce lower > upper, and the limit is
-    // only enabled when there is positive travel.
+    // missing, zero or non-numeric plen must never produce lower > upper (or
+    // NaN limits), and the limit is only enabled when there is positive travel.
     const cases: Array<{ plen?: unknown; enableLimit: boolean; lower: number; upper: number }> = [
       { plen: undefined, enableLimit: false, lower: 0, upper: 0 },
       { plen: 0, enableLimit: false, lower: 0, upper: 0 },
+      { plen: null, enableLimit: false, lower: 0, upper: 0 },
+      { plen: NaN, enableLimit: false, lower: 0, upper: 0 },
+      { plen: 'abc', enableLimit: false, lower: 0, upper: 0 },
       { plen: 50, enableLimit: true, lower: -50, upper: 50 },
+      { plen: '50', enableLimit: true, lower: -50, upper: 50 },
       { plen: -50, enableLimit: true, lower: -50, upper: 50 },
       { plen: -1000, enableLimit: true, lower: -1000, upper: 1000 },
     ];
@@ -110,6 +115,8 @@ describe('mapexporter joint export (issue #281)', () => {
       if (c.plen !== undefined) joint.plen = c.plen;
       const j = extractWithJoint(joint).physicsJoints[0];
       expect(j.enableLimit).toBe(c.enableLimit);
+      expect(Number.isFinite(j.lowerTranslation)).toBe(true);
+      expect(Number.isFinite(j.upperTranslation)).toBe(true);
       expect(j.lowerTranslation).toBeCloseTo(c.lower, 5);
       expect(j.upperTranslation).toBeCloseTo(c.upper, 5);
       expect(j.lowerTranslation).toBeLessThanOrEqual(j.upperTranslation);
