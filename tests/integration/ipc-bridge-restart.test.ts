@@ -64,24 +64,55 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
 
   /**
    * Wait until the bridge's port is bindable again. The closed listener
-   * releases it synchronously, but poll with a throwaway ROUTER so the
-   * follow-up bind cannot flake on OS timing.
+   * releases it asynchronously, so poll with a throwaway ROUTER and await
+   * that probe's explicit unbind before allowing the follow-up bind.
    */
   async function waitForPortFree(): Promise<void> {
+    const endpoint = `tcp://127.0.0.1:${port}`;
     const deadline = Date.now() + 5000;
     while (Date.now() < deadline) {
       const probe = new zmq.Router();
+      let bound = false;
+      let unbound = false;
       try {
-        await probe.bind(`tcp://127.0.0.1:${port}`);
-        probe.close();
+        await probe.bind(endpoint);
+        bound = true;
+        await probe.unbind(endpoint);
+        unbound = true;
         return;
       } catch {
+        // Retry after the probe has been fully torn down below.
+      } finally {
+        if (bound && !unbound) {
+          try { await probe.unbind(endpoint); } catch { /* close below */ }
+        }
         probe.close();
-        await new Promise(r => setTimeout(r, 50));
       }
+      await new Promise(r => setTimeout(r, 50));
     }
     throw new Error(`port ${port} did not become free`);
   }
+
+  it('leaves the probe endpoint immediately rebindable (#327)', async () => {
+    const endpoint = `tcp://127.0.0.1:${port}`;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      await waitForPortFree();
+
+      const retry = new zmq.Router();
+      let bound = false;
+      try {
+        await retry.bind(endpoint);
+        bound = true;
+      } finally {
+        try {
+          if (bound) await retry.unbind(endpoint);
+        } finally {
+          retry.close();
+        }
+      }
+    }
+  }, 60000);
 
   it('start → close → start serves fresh DEALER round-trips on the same instance', async () => {
     // First serve cycle. start() only exits on close(), so never await it
