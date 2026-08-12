@@ -60,6 +60,9 @@ export const GRAVITY_Y = 20;
 /** Default player circle radius in metres */
 export const DEFAULT_PPM = 12;
 
+/** Native minimum rest length for an exported distance joint (map px / ppm). */
+const NATIVE_DISTANCE_JOINT_MIN_LENGTH = 0.01;
+
 /**
  * Verified native player-disc fixture (DEOBFUSCATION §35.4 / §38.6, live
  * 2026-07-29 fixture, alpha2s.pretty.js 7397-7401; Node-verified index labels
@@ -1178,10 +1181,19 @@ export class PhysicsEngine {
           jd.length = Math.sqrt((wb.x - wa.x) * (wb.x - wa.x) + (wb.y - wa.y) * (wb.y - wa.y));
         }
       }
-      // apply an explicit authored length after Initialize (Initialize sets
-      // length from the anchor distance) (§33.7 d: len→0.01-floor).
+      // Apply an explicit authored length after Initialize. Exported d-joint
+      // lengths are native world units (map px / ppm), while this Box2D world
+      // uses map px / this.scale. Preserve the native zero-length floor while
+      // converting between those unit systems (§33.8 d: len→0.01-floor).
       if (typeof def.length === 'number' && Number.isFinite(def.length)) {
-        jd.length = def.length / this.scale;
+        const nativeLength = def.length === 0
+          ? NATIVE_DISTANCE_JOINT_MIN_LENGTH
+          : def.length;
+        jd.length = (nativeLength * this.ppm) / this.scale;
+      } else if (jd.length === 0) {
+        // The fallback anchor-distance path also needs the native floor when
+        // both normalized anchors coincide.
+        jd.length = (NATIVE_DISTANCE_JOINT_MIN_LENGTH * this.ppm) / this.scale;
       }
       jd.collideConnected = cd;
       jd.frequencyHz = def.frequencyHz ?? 0;

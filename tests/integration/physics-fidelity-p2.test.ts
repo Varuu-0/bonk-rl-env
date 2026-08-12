@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
+import { DEFAULT_PPM, PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { normalizeMap } from '../../src/core/map-adapter';
 import { BonkEnvironment } from '../../src/core/environment';
 
@@ -89,8 +89,9 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(d.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
     expect(d.m_localAnchor2.x).toBeCloseTo(0, 5);
     expect(d.m_localAnchor2.y).toBeCloseTo(-50 / SCALE, 5);
-    // Authored length survives; without a length the anchor distance is used.
-    expect(d.m_length).toBeCloseTo(60 / SCALE, 5);
+    // Authored d lengths are native world units (map px / ppm); without a
+    // length the port uses the converted anchor distance.
+    expect(d.m_length).toBeCloseTo((60 * DEFAULT_PPM) / SCALE, 5);
     expect(dNolen.m_length).toBeCloseTo(Math.sqrt(100 * 100 + 100 * 100) / SCALE, 5);
 
     // Step the world: bodyA must actually move and rotate — otherwise the
@@ -315,9 +316,57 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(pr.m_localXAxis1.y).toBeCloseTo(1, 5);
     expect(pr.m_localXAxis1.x).toBeCloseTo(0, 5);
     expect(pr.m_refAngle).toBeCloseTo(0.3, 5);
-    // Distance: authored length applied after Initialize (px / scale).
+    // Distance: exported native-world length converted to the port world.
     const ds = (e as any).createdJoints.get('joint_2');
-    expect(ds.m_length).toBeCloseTo(50 / 30, 5);
+    expect(ds.m_length).toBeCloseTo((50 * DEFAULT_PPM) / SCALE, 5);
+  });
+
+  it('converts exported native distance length to map separation and preserves it (#313)', () => {
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'weight', type: 'circle', x: 120, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'exported-distance',
+      bodyA: 'anchor',
+      bodyB: 'weight',
+      anchorA: { x: 0, y: 0 },
+      anchorB: { x: 0, y: 0 },
+      length: 10, // 120 map px / ppm=12, as emitted by mapexporter.js
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('exported-distance');
+    expect(joint.m_length).toBeCloseTo((10 * DEFAULT_PPM) / SCALE, 5);
+
+    for (let i = 0; i < 120; i++) e.tick();
+
+    const anchor = bm.get('anchor').GetPosition();
+    const weight = bm.get('weight').GetPosition();
+    const dx = (weight.x - anchor.x) * SCALE;
+    const dy = (weight.y - anchor.y) * SCALE;
+    expect(Math.sqrt(dx * dx + dy * dy)).toBeCloseTo(120, 3);
+  });
+
+  it('applies the native minimum to an explicitly zero distance length (#313)', () => {
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'weight', type: 'circle', x: 120, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'zero-distance',
+      bodyA: 'anchor',
+      bodyB: 'weight',
+      anchorA: { x: 0, y: 0 },
+      anchorB: { x: 0, y: 0 },
+      length: 0,
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('zero-distance');
+    expect(joint.m_length).toBeCloseTo((0.01 * DEFAULT_PPM) / SCALE, 8);
   });
 
 it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286)', () => {
