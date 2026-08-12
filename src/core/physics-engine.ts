@@ -1014,6 +1014,7 @@ export class PhysicsEngine {
 
   /**
    * Set explicit map bounds from the map's physics.bounds.
+   * Inputs are world metres; map-pixel callers must convert through getScale().
    * Overrides dynamically calculated arena bounds.
    */
   setMapBounds(widthMetres: number, heightMetres: number): void {
@@ -1029,6 +1030,11 @@ export class PhysicsEngine {
     this._arenaBoundsCache.halfWidth = this.arenaHalfWidth * this.scale;
     this._arenaBoundsCache.halfHeight = this.arenaHalfHeight * this.scale;
     return this._arenaBoundsCache;
+  }
+
+  /** Resolved map-pixel to world-unit scale used by engine coordinate conversions. */
+  getScale(): number {
+    return this.scale;
   }
 
   /**
