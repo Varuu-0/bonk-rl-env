@@ -305,6 +305,24 @@ describe('BonkEnv lifecycle', () => {
       expect(env.isActive()).toBe(false);
       expect(pm.isAllocated(env.port)).toBe(false);
     });
+
+    it('stop() after a failed start does not release another env\u2019s reservation of the same port (#267)', { timeout: 30000 }, async () => {
+      env = new BonkEnv({ numEnvs: 0, portManager: pm });
+      await expect(env.start()).rejects.toThrow('Invalid environment count');
+      expect(pm.isAllocated(env.port)).toBe(false);
+
+      // Another env claims the released port before env is stopped. The
+      // subsequent stop() must NOT delete that env's reservation from the
+      // PortManager.
+      const other = new BonkEnv({ numEnvs: 1, port: env.port, portManager: pm });
+      try {
+        await env.stop();
+        expect(pm.isAllocated(other.port)).toBe(true);
+      } finally {
+        await other.stop();
+      }
+      expect(pm.isAllocated(other.port)).toBe(false);
+    });
   });
 
   describe('init validation (#227)', () => {

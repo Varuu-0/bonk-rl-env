@@ -244,8 +244,10 @@ export class BonkEnv {
             this.pool = null;
         }
         this.isRunning = false;
-        this.portManager.release(this.port);
-        this.portReserved = false;
+        if (this.portReserved) {
+            this.portManager.release(this.port);
+            this.portReserved = false;
+        }
         console.log(`[BonkEnv:${this.id}] Start failed; resources released`);
     }
 
@@ -270,10 +272,14 @@ export class BonkEnv {
         }
 
         if (!this.pool && !this.bridge) {
-            // Releasing is idempotent and covers a start failure before a
-            // worker pool was fully initialized.
-            this.portManager.release(this.port);
-            this.portReserved = false;
+            // Release only while this env still holds the reservation. After a
+            // failed start the port was already released (and may have been
+            // re-allocated to another env); releasing unconditionally here
+            // would delete that other env's claim (issue #267 review).
+            if (this.portReserved) {
+                this.portManager.release(this.port);
+                this.portReserved = false;
+            }
             console.log(`[BonkEnv:${this.id}] Already stopped`);
             return;
         }
@@ -297,8 +303,10 @@ export class BonkEnv {
         } finally {
             this.pool = null;
             this.isRunning = false;
-            this.portManager.release(this.port);
-            this.portReserved = false;
+            if (this.portReserved) {
+                this.portManager.release(this.port);
+                this.portReserved = false;
+            }
             console.log(`[BonkEnv:${this.id}] Stopped`);
         }
     }
