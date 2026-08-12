@@ -152,7 +152,10 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
       expect(bridge.isClosed()).toBe(true);
       await serve3;
     } finally {
-      await new Promise<void>(resolve => blocker.close(() => resolve()));
+      // The success path already closed the listener above; only close here
+      // if an assertion failed while it was still listening, so a redundant
+      // close (which rejects with ERR_SERVER_NOT_RUNNING) is a true no-op.
+      if (blocker.listening) await new Promise<void>(resolve => blocker.close(() => resolve()));
     }
   }, 60000);
 });
