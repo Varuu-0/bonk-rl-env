@@ -333,11 +333,13 @@ export function normalizeMap(raw: unknown): MapDef {
             enableLimit: j.enableLimit,
             length: j.length,
             rayCast: (j as any).rayCast,
-            // Forward distance-joint spring tuning when authored; the engine
-            // falls back to rigid (0/0) defaults when absent (#286).
+            // Forward distance-joint spring tuning when authored. The exporter
+            // emits null for un-tuned d joints (mapexporter.js:565-566), so the
+            // != null guard keeps the rigid (0/0) defaults for both absent and
+            // explicit-null values (#286).
         };
-        if (j.frequencyHz !== undefined) out.frequencyHz = j.frequencyHz;
-        if (j.dampingRatio !== undefined) out.dampingRatio = j.dampingRatio;
+        if (j.frequencyHz != null) out.frequencyHz = j.frequencyHz;
+        if (j.dampingRatio != null) out.dampingRatio = j.dampingRatio;
         // Gear (g) referents: ja/jb index into the SAME joints array.
         if (j.type === 'g' || safeType(j.type) === 'g') {
             out.ratio = j.ratio ?? 1;
