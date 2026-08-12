@@ -95,6 +95,8 @@ interface FlatJoint {
     upperTranslation?: number;
     lowerLimit?: number;
     upperLimit?: number;
+    lowerAngle?: number;
+    upperAngle?: number;
     maxMotorForce?: number;
     maxMotorTorque?: number;
     motorSpeed?: number;
@@ -332,6 +334,8 @@ export function normalizeMap(raw: unknown): MapDef {
             upperTranslation: j.upperTranslation,
             lowerLimit: j.lowerLimit,
             upperLimit: j.upperLimit,
+            lowerAngle: j.lowerAngle,
+            upperAngle: j.upperAngle,
             maxMotorForce: j.maxMotorForce,
             maxMotorTorque: j.maxMotorTorque,
             motorSpeed: j.motorSpeed,

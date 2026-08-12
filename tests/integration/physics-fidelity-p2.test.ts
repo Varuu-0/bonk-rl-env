@@ -375,6 +375,41 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     }
   });
 
+  it('forwards exporter-format rv angle limits (lowerAngle/upperAngle) through normalizeMap', () => {
+    // Regression: mapexporter.js emits lowerAngle/upperAngle for rv joints
+    // (from native la/ua); the adapter must forward them or the joint is
+    // built with equal 0/0 limits and locked rigid (issue #284).
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        { bodyA: 0, bodyB: 1, type: 'rv', anchorA: { x: 100, y: 0 }, enableLimit: true, lowerAngle: -1.0, upperAngle: 1.0, enableMotor: true, motorSpeed: 10, maxMotorTorque: 50 },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+
+    const rv = (e as any).createdJoints.get('joint_0');
+    expect(rv.m_lowerAngle).toBeCloseTo(-1, 5);
+    expect(rv.m_upperAngle).toBeCloseTo(1, 5);
+
+    // The motor-driven gate must swing within the authored [-1, 1] window
+    // rather than being welded rigid by equal 0/0 limits.
+    const gate = bm.get('gate') as any;
+    const start = gate.GetAngle();
+    for (let i = 0; i < 120; i++) e.tick();
+    expect(gate.GetAngle() - start).toBeGreaterThan(0.05);
+  });
+
   it('resolves gear referents by index through the full normalizeMap pipeline', () => {
     const e = makeEngine();
     const md = normalizeMap({
