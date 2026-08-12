@@ -459,8 +459,12 @@ export function normalizeMap(raw: unknown): MapDef {
     // `bodies: [null]`, valid JSON): filter them out so toBodyDef never
     // receives a null body and the filtered list stays index-aligned with
     // `bodies` downstream (#273).
-    const nativeBodies = (map.physicsBodies || [])
-        .filter((b): b is NativeBody => isNativeBody(b));
+    const nativeBodies = (map.physicsBodies || []).reduce<NativeBody[]>((out, body, i) => {
+        if (isNativeBody(body)) {
+            out.push(body.index === undefined ? { ...body, index: i } : body);
+        }
+        return out;
+    }, []);
     const nativeBodiesByIndex = new Map<number, NativeBody>();
     const nativeBodyByFixture = new Map<number, NativeBody>();
     nativeBodies.forEach((body, i) => {
@@ -472,6 +476,9 @@ export function normalizeMap(raw: unknown): MapDef {
             if (fixture?.fixtureIndex !== undefined) nativeBodyByFixture.set(fixture.fixtureIndex, body);
         }
     });
+    const nativeBodyFor = (body: FlatBody): NativeBody | undefined =>
+        (body.bodyIndex !== undefined ? nativeBodiesByIndex.get(body.bodyIndex) : undefined)
+        ?? (body.fixtureIndex !== undefined ? nativeBodyByFixture.get(body.fixtureIndex) : undefined);
 
     // Prefer the exporter's flat compatibility view when it exists. If an
     // export contains only the structured hierarchy, flatten its fixtures for
@@ -489,11 +496,7 @@ export function normalizeMap(raw: unknown): MapDef {
     // alias unique. The unique aliases are still backed by one grouped engine
     // body when they share a native bodyIndex.
     const baseNames = source.map((body, i) => {
-        const nativeBody = body.bodyIndex !== undefined
-            ? nativeBodiesByIndex.get(body.bodyIndex)
-            : body.fixtureIndex !== undefined
-                ? nativeBodyByFixture.get(body.fixtureIndex)
-            : undefined;
+        const nativeBody = nativeBodyFor(body);
         const fixtureName = body.name;
         return fixtureName && fixtureName !== 'Unnamed Shape'
             ? fixtureName
@@ -519,11 +522,7 @@ export function normalizeMap(raw: unknown): MapDef {
     });
 
     const bodies = source.map((body, i) => {
-        const nativeBody = body.bodyIndex !== undefined
-            ? nativeBodiesByIndex.get(body.bodyIndex)
-            : body.fixtureIndex !== undefined
-                ? nativeBodyByFixture.get(body.fixtureIndex)
-            : undefined;
+        const nativeBody = nativeBodyFor(body);
         const nativeFixture = nativeFixtureFor(nativeBody, body.fixtureIndex, map);
         return toBodyDef(body, i, names[i], nativeBody, nativeFixture);
     });
@@ -585,11 +584,7 @@ export function normalizeMap(raw: unknown): MapDef {
     // that one grouped Box2D body.
     const bodiesByName = new Map<number, string>();
     source.forEach((b, i) => {
-        const nativeBody = b.bodyIndex !== undefined
-            ? nativeBodiesByIndex.get(b.bodyIndex)
-            : b.fixtureIndex !== undefined
-                ? nativeBodyByFixture.get(b.fixtureIndex)
-                : undefined;
+        const nativeBody = nativeBodyFor(b);
         const bodyIndex = b.bodyIndex
             ?? nativeBody?.index
             ?? i;
