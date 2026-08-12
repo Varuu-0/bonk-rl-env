@@ -1069,7 +1069,9 @@ export class PhysicsEngine {
       // Issue #281: some maps/exporter shapes carry the native travel (±plen)
       // under `length`; honor it as the symmetric limit when no explicit
       // lower/upper translations were provided so the limit is never dropped.
-      const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length);
+      // Negative/zero lengths keep the previous 0/0 range (an inverted range
+      // would be degenerate), only positive lengths become a symmetric limit.
+      const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length) && def.length > 0;
       jd.lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : (lenLimit ? -def.length : 0);
       jd.upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : (lenLimit ? +def.length : 0);
       jd.enableMotor = !!def.enableMotor;

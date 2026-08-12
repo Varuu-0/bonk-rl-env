@@ -582,13 +582,16 @@
         jointDef.angle = jt.pa ?? null; // axis derivation tracked by issue #280
         // Issue #281: the native piston is a DRIVEN joint with a limit. The
         // travel (±plen) is the translation limit, pf is maxMotorForce and pms
-        // is motorSpeed, with the limit and motor enabled (DEOBFUSCATION §33.8).
-        const plen = jt.plen ?? 0;
+        // is motorSpeed (DEOBFUSCATION §33.8). Travel is sign-clamped so the
+        // range can never invert, and the limit is only enabled when there is
+        // positive travel — a map with missing/zero plen stays unconstrained
+        // instead of being locked at zero travel.
+        const plen = Math.abs(jt.plen ?? 0);
         jointDef.lowerTranslation = -plen;
         jointDef.upperTranslation = +plen;
         jointDef.maxMotorForce = jt.pf ?? null;
         jointDef.motorSpeed = jt.pms ?? null;
-        jointDef.enableLimit = true;
+        jointDef.enableLimit = plen > 0;
         jointDef.enableMotor = true;
       } else if (jt.type === 'lsj') {
         // LSJ (springy prismatic) joint — the native game builds it as a
@@ -603,8 +606,9 @@
         jointDef.anchorA = { x: jt.sax ?? 0, y: jt.say ?? 0 };
         // Issue #281: the native spring is a driven joint with the travel
         // (±slen) as the translation limit, sf as the motor-force scale and a
-        // fixed vertical axis / motor speed of 300.
-        const slen = jt.slen ?? 0;
+        // fixed vertical axis / motor speed of 300. Travel is sign-clamped so
+        // the stored range can never invert.
+        const slen = Math.abs(jt.slen ?? 0);
         jointDef.axis = { x: 0, y: 1 };
         jointDef.lowerTranslation = -slen;
         jointDef.upperTranslation = +slen;
@@ -728,18 +732,20 @@
   }
 
   // ── Register the code injector ─────────────────────────────────────────────
-  if (!window.bonkCodeInjectors) window.bonkCodeInjectors = [];
-  window.bonkCodeInjectors.push(function (bonkCode) {
-    try {
-      const patched = createInjector(bonkCode);
-      console.log('%c[BonkExport] Code injector registered',
-        'color:#4caf50;font-weight:bold');
-      return patched;
-    } catch (error) {
-      console.error('[BonkExport] Injector failed:', error);
-      return bonkCode; // Return unmodified on failure
-    }
-  });
+  if (typeof window !== 'undefined') {
+    if (!window.bonkCodeInjectors) window.bonkCodeInjectors = [];
+    window.bonkCodeInjectors.push(function (bonkCode) {
+      try {
+        const patched = createInjector(bonkCode);
+        console.log('%c[BonkExport] Code injector registered',
+          'color:#4caf50;font-weight:bold');
+        return patched;
+      } catch (error) {
+        console.error('[BonkExport] Injector failed:', error);
+        return bonkCode; // Return unmodified on failure
+      }
+    });
+  }
 
   // ── Export button UI ───────────────────────────────────────────────────────
   function injectButton() {
@@ -949,9 +955,16 @@
       'color:#888;font-size:11px');
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  // The pure extraction path is exercised directly by Node tests (the UI
+  // bootstrap below is browser-only and skipped there).
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { extractMap };
+  }
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
   }
 })();

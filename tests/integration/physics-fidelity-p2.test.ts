@@ -314,4 +314,31 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
     expect(j.m_upperTranslation).toBeCloseTo(50, 5);
   });
+
+  it('a prismatic joint with a negative or zero length keeps the previous 0/0 range — never inverted (issue #281)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'piston', type: 'rect', x: 0, y: 30, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        { bodyA: 0, bodyB: 1, type: 'lpj', anchorA: { x: 0, y: 30 }, length: -50, enableLimit: true },
+        { bodyA: 0, bodyB: 1, type: 'lpj', anchorA: { x: 0, y: 30 }, length: 0, enableLimit: true },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const j of md.joints) { e.addJoint(j, bm); }
+    for (const name of ['joint_0', 'joint_1']) {
+      const j: any = (e as any).createdJoints.get(name);
+      // Negative/zero lengths must not become a symmetric limit: the previous
+      // 0/0 behavior is preserved so the range can never invert.
+      expect(j.m_lowerTranslation).toBe(0);
+      expect(j.m_upperTranslation).toBe(0);
+      expect(j.m_lowerTranslation).toBeLessThanOrEqual(j.m_upperTranslation);
+    }
+  });
 });
