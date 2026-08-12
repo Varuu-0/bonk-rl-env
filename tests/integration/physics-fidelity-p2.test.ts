@@ -745,4 +745,37 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(md.bodies.map((b: any) => b.name)).toContain('wall');
     expect(md.joints).toBeUndefined();
   });
+
+  it('tolerates a sparse physicsJoints array (holes iterate as undefined)', () => {
+    // A programmatic mapData can hand normalizeMap a sparse physicsJoints;
+    // array holes iterate as `undefined` and must be skipped like nulls, not
+    // reach j.bodyA and throw the #283 TypeError (#283).
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        null,
+        ,
+        { bodyA: 0, bodyB: -1, type: 'lpj', anchorA: { x: 0, y: 0 } },
+      ],
+    } as any) as any;
+
+    expect(md).toBeTruthy();
+    expect(md.joints).toHaveLength(1);
+    // The surviving joint keeps its RAW array index (2), not the post-filter
+    // position 0.
+    expect(md.joints[0].name).toBe('joint_2');
+    expect(md.joints[0].type).toBe('lpj');
+    expect(md.joints[0].isGround).toBe(true);
+
+    const e = makeEngine();
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body|no ground/i.test(w))).toHaveLength(0);
+  });
 });
