@@ -83,6 +83,36 @@ describe('mapexporter joint export (issue #281)', () => {
       expect(j.lowerTranslation).toBeCloseTo(0, 5);
       expect(j.upperTranslation).toBeCloseTo(0, 5);
       expect(j.enableMotor).toBe(true);
+      expect(j.lowerTranslation).toBeLessThanOrEqual(j.upperTranslation);
+    }
+  });
+
+  it('never emits an inverted or locked limit range for any native plen (issue #281)', () => {
+    // Table-driven property check mirroring the review finding: a negative,
+    // missing or zero plen must never produce lower > upper, and the limit is
+    // only enabled when there is positive travel.
+    const cases: Array<{ plen?: unknown; enableLimit: boolean; lower: number; upper: number }> = [
+      { plen: undefined, enableLimit: false, lower: 0, upper: 0 },
+      { plen: 0, enableLimit: false, lower: 0, upper: 0 },
+      { plen: 50, enableLimit: true, lower: -50, upper: 50 },
+      { plen: -50, enableLimit: true, lower: -50, upper: 50 },
+      { plen: -1000, enableLimit: true, lower: -1000, upper: 1000 },
+    ];
+    for (const c of cases) {
+      const joint: Record<string, unknown> = {
+        type: 'lpj',
+        ba: 0, bb: 1,
+        pa: 0,
+        pax: 0, pay: 0,
+        pf: 100,
+        pms: 2,
+      };
+      if (c.plen !== undefined) joint.plen = c.plen;
+      const j = extractWithJoint(joint).physicsJoints[0];
+      expect(j.enableLimit).toBe(c.enableLimit);
+      expect(j.lowerTranslation).toBeCloseTo(c.lower, 5);
+      expect(j.upperTranslation).toBeCloseTo(c.upper, 5);
+      expect(j.lowerTranslation).toBeLessThanOrEqual(j.upperTranslation);
     }
   });
 
