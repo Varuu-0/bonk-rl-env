@@ -295,10 +295,11 @@ export function normalizeMap(raw: unknown): MapDef {
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
         // bodyA: -1 means the joint is anchored to the static ground body on the
         // A side (§33.8: ba/bb of -1 = ground on either side). Emit the reserved
-        // ground name; addJoint resolves it to the synthetic ground body.
+        // ground name; addJoint resolves it to the synthetic ground body. Any
+        // other negative index is malformed and stays '' (warn+skip in engine).
         const bodyA = j.bodyA !== undefined && j.bodyA >= 0
             ? bodiesByName.get(j.bodyA)
-            : j.bodyA !== undefined && j.bodyA < 0
+            : j.bodyA !== undefined && j.bodyA === -1
                 ? GROUND_BODY_NAME
                 : undefined;
         // bodyB: -1 means the joint is anchored to the ground (world). Forward
@@ -354,10 +355,14 @@ export function normalizeMap(raw: unknown): MapDef {
             const refA = ja !== undefined ? src[ja] : undefined;
             const refB = jb !== undefined ? src[jb] : undefined;
             if (!out.bodyA && refA && refA.bodyA !== undefined) {
-                out.bodyA = refA.bodyA >= 0 ? (bodiesByName.get(refA.bodyA) ?? '') : GROUND_BODY_NAME;
+                out.bodyA = refA.bodyA >= 0
+                    ? (bodiesByName.get(refA.bodyA) ?? '')
+                    : refA.bodyA === -1 ? GROUND_BODY_NAME : '';
             }
             if (!out.bodyB && refB && refB.bodyB !== undefined) {
-                out.bodyB = refB.bodyB >= 0 ? (bodiesByName.get(refB.bodyB) ?? '') : GROUND_BODY_NAME;
+                out.bodyB = refB.bodyB >= 0
+                    ? (bodiesByName.get(refB.bodyB) ?? '')
+                    : refB.bodyB === -1 ? GROUND_BODY_NAME : '';
             }
         }
         return out;

@@ -1009,8 +1009,12 @@ export class PhysicsEngine {
 
   addJoint(def: Record<string, any>, bodyMap: Map<string, any>): void {
     // GROUND_BODY_NAME is the adapter's reserved name for the static ground
-    // body (native ba/bb = -1) on EITHER side of a joint (§33.8).
-    const bodyA = def.bodyA === GROUND_BODY_NAME ? this.ensureGroundBody() : bodyMap.get(def.bodyA);
+    // body (native ba/bb = -1) on EITHER side of a joint (§33.8). The real body
+    // map is consulted FIRST so a user-authored body that happens to be named
+    // `__ground__` still resolves; the synthetic ground body is only the
+    // fallback when that name is absent.
+    const bodyA = bodyMap.get(def.bodyA)
+      ?? (def.bodyA === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
     // A joint is ground-anchored ONLY when explicitly marked `isGround` (the
     // adapter sets it for bodyB = -1). `bodyB` being empty/undefined for any
     // OTHER reason is a malformed reference and must warn+skip, NOT silently
@@ -1020,7 +1024,8 @@ export class PhysicsEngine {
     if (isGround) {
       bodyB = this.ensureGroundBody();
     } else {
-      bodyB = def.bodyB === GROUND_BODY_NAME ? this.ensureGroundBody() : bodyMap.get(def.bodyB);
+      bodyB = bodyMap.get(def.bodyB)
+        ?? (def.bodyB === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
       if (!bodyB) {
         console.warn(`Joint references unknown body "${def.bodyB}" (bodyA="${def.bodyA}")`);
         return;

@@ -214,4 +214,79 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(created.m_revolute1).toBe((e as any).createdJoints.get('joint_0'));
     expect(created.m_revolute2).toBe((e as any).createdJoints.get('joint_1'));
   });
+
+  it('keeps a gear joint whose second referent is anchored to the static ground (bodyB=-1)', () => {
+    const e = new PhysicsEngine();
+    // Mirror of the A-side ground case: the second revolute referent is bolted
+    // to the static ground body (bb = -1 per §33.8), exercising the engine's
+    // bodyB === GROUND_BODY_NAME branch in addJoint.
+    const exported = extractJoints([
+      { type: 'rv', ba: 0, bb: 1, aa: [0, 0] },
+      { type: 'rv', ba: 0, bb: -1, aa: [100, 0] },
+      { type: 'g', ja: 0, jb: 1, r: 3 },
+    ]);
+
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: exported,
+    } as any) as any;
+
+    const gear = md.joints[2];
+    expect(gear.jointA).toBe('joint_0');
+    expect(gear.jointB).toBe('joint_1');
+    expect(gear.ratio).toBe(3);
+    expect(gear.bodyA).toBe('wall');
+    expect(gear.bodyB).toBe(GROUND_BODY_NAME);
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings).toHaveLength(0);
+
+    // The ground-anchored referent itself must have been created too.
+    expect((e as any).createdJoints.get('joint_1')).toBeTruthy();
+    const created = (e as any).createdJoints.get('joint_2');
+    expect(created).toBeTruthy();
+    expect(created.m_type).toBe(6); // b2Joint.e_gearJoint
+    expect(created.m_ratio).toBe(3);
+    expect(created.m_revolute1).toBe((e as any).createdJoints.get('joint_0'));
+    expect(created.m_revolute2).toBe((e as any).createdJoints.get('joint_1'));
+  });
+
+  it('treats a malformed negative referent body (e.g. -2) as unresolvable, not ground', () => {
+    const e = new PhysicsEngine();
+    const exported = extractJoints([
+      { type: 'rv', ba: -2, bb: 1, aa: [0, 0] },
+      { type: 'rv', ba: 0, bb: 1, aa: [100, 0] },
+      { type: 'g', ja: 0, jb: 1, r: 3 },
+    ]);
+
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: exported,
+    } as any) as any;
+
+    // Only -1 is ground (§33.8); -2 must NOT bind to the ground body.
+    expect(md.joints[0].bodyA).not.toBe(GROUND_BODY_NAME);
+    expect(md.joints[2].bodyA).not.toBe(GROUND_BODY_NAME);
+    // The malformed referent joint is dropped (unknown body warning), and the
+    // gear then warns about its missing referent — never silently created.
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.some(w => /unknown body/.test(w))).toBe(true);
+    expect((e as any).createdJoints.has('joint_2')).toBe(false);
+  });
 });
