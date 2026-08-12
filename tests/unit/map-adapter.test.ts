@@ -123,5 +123,23 @@ describe('normalizeMap', () => {
             expect(out.bodies.length).toBe(1);
             expect((out.bodies[0] as any).collides.g1).toBe(true);
         });
+
+        it('exporter path filters null bodies before conversion (#273)', () => {
+            // No `spawnPoints` marker, so this is the real exported format even
+            // though `bodies` mixes a null placeholder with a flat body. The
+            // null entry must be filtered before toBodyDef (which would throw),
+            // and the remaining flat body converts normally.
+            const out = normalizeMap({
+                bodies: [
+                    null,
+                    { bodyIndex: 1, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true, collidesGroup1: true },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+            expect(out.bodies.length).toBe(1);
+            expect(out.bodies[0].name).toBe('wall');
+            expect((out.bodies[0] as any).collides.g1).toBe(true);
+            expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
+        });
     });
 });
