@@ -296,6 +296,7 @@ class TestBonkVecEnvFrameSkipConfig:
         assert obs[0][2] > 0
 
 
+@pytest.mark.slow
 class TestBonkVecEnvFrameSkipEpisodeBoundary:
     """Regression tests for #260.
 
