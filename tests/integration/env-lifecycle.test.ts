@@ -389,6 +389,36 @@ it('overlapping start calls reject instead of spawning a second worker pool (#26
         smallPm.releaseAll();
       }
     });
+
+    it('restart into an exhausted range rejects with restart context', { timeout: 30000 }, async () => {
+      const smallPm = new PortManager({ startPort: 7470, endPort: 7475 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      const stolenPort = envA.port;
+
+      // Steal envA's port and hold every other port in the range so the
+      // restart's fallback allocation has nothing left to hand out.
+      const holders: BonkEnv[] = [
+        new BonkEnv({ port: stolenPort, portManager: smallPm }),
+        ...([7471, 7472, 7473, 7474, 7475].map((p) => new BonkEnv({ port: p, portManager: smallPm }))),
+      ];
+
+      try {
+        // The restart must fail with restart context (not an opaque
+        // allocation error) and leave the env inactive (issue #265).
+        await expect(envA.start()).rejects.toThrow(
+          `Environment ${envA.id} restart failed`,
+        );
+        expect(envA.isActive()).toBe(false);
+      } finally {
+        try { await envA.stop(); } catch { /* ignore */ }
+        for (const holder of holders) {
+          try { await holder.stop(); } catch { /* ignore */ }
+        }
+        smallPm.releaseAll();
+      }
+    });
   });
 
   describe('init validation (#227)', () => {
