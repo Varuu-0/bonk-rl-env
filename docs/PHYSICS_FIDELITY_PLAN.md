@@ -23,13 +23,20 @@ All facts below are cited to DEOBFUSCATION §33 (state/encoder/decoder), §34
 - `filter.categoryBits = 2^(f_c+1)` (line 3270).
 - `filter.maskBits`: starts at 65535, subtracts a bit per disabled group (lines 3271-3273). **Must agree with the engine's disc category bits** — a calibration item for Phase 4 differential validation.
 
-### Joints (P2) — PROVEN, §33.7/33.8
+### Joints (P2) — PROVEN §33.7/33.8, IMPLEMENTED
 Native `g` = `b2GearJointDef` on created `ja/jb` with `ratio = r` (7836-7843).
 `lpj`/`lsj`/`p` all use `b2PrismaticJointDef` with exact anchor/force
 normalization (`plen, pms ÷ ppm`, `mmf *= 17280`, `ms *= 12`,
 `fh=0? 0.0001 : 1/period`, Y-flip rv limits, ground `bodyB=-1` anchors use
-`+365/250` map-px). Engine today: only `distance/rv/lpj`; no `g`, no `lsj`, no `p`,
-no ground joints.
+`+365/250` map-px). The engine's `addJoint` now implements every native joint
+type: `d` (fh/dr, authored `len` applied after Initialize, ground-px anchors),
+`rv` (lower/upper limits, motor speed/torque), `lpj`/`lsj`/`p` (prismatic:
+world axis from `angle`, `referenceAngle = -bodyA.angle` for lpj/lsj, #281
+symmetric ±length fallback, motor force), `g` (gear ratio with revolute/
+prismatic referent validation), and ground joints (`bodyB = -1`, map-px
+anchors). `lsj` runs on the prismatic branch per the §33.8 recipe — the
+bundled Box2D port has no dedicated `b2LineJoint`. Verified by
+`physics-fidelity-p2.test.ts` and the P4 joint exact-match gate.
 
 ### Map physics settings (P3) — pq PROVEN, gd RE-CLASSIFIED
 - `pq` → solver iterations: native low **2/6**, high **15/15** (lines 260, 634-635);
@@ -119,3 +126,20 @@ The remaining per-map settings now gate runtime behavior, all read from
 P0 → P1 → P4(capture harness) → P2 → P3 → P3b → P4(comparison) → P5.
 P4-capture must precede P2 so joint anchors are verified against real native
 state; P1 is independent and can proceed first.
+
+## Documentation gating (P5) — IMPLEMENTED (2026-08-12)
+
+Final docs pass over `DEOBFUSCATION_FIX_TRACKER.md` and this plan:
+
+- Every milestone now carries its delivery state in the plan (P0/P1 PROVEN,
+  P2/P3/P3b/P4 IMPLEMENTED, P5 this pass) and the milestone table rows reflect
+  what shipped.
+- `DEOBFUSCATION_FIX_TRACKER.md` per-item statuses were refreshed to the
+  post-P0–P4 state: H5 (joints) ✅ with the full §33.8 type coverage, C4 `nc`
+  row updated with the P3b map-settings wiring, H3 spawns noted for `re`
+  respawn consumption, and the header date/capture-status section updated.
+- Every claim carries its source citation (DEOBFUSCATION § section / pretty or
+  readable artifact line ranges); the Fix Log entries (P3, P4, P3b) hold the
+  chronological record with test counts and verification commands.
+
+The PR review gate is the remaining verification for this milestone.
