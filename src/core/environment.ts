@@ -253,21 +253,24 @@ function pickRewardWeight(
 }
 
 /**
- * Derive the cap-zone sensor extent for a fixture body. Rect fixtures use
- * their width/height and circle fixtures their radius*2; polygon fixtures use
- * the bounding box of their vertices (local-space extents, same convention as
- * rect width/height). Returns null for malformed fixtures — fewer than 3
- * declared vertices, fewer than 3 finite vertices, or an unsupported type —
+ * Derive the cap-zone sensor extent and placement for a fixture body. Rect
+ * fixtures use their width/height and circle fixtures their radius*2;
+ * polygon fixtures use the bounding box of their vertices (local-space
+ * extents, same convention as rect width/height) centered on the AABB center
+ * — rect/circle fixtures are symmetric about their origin, so their center is
+ * the origin itself, but asymmetric polygons need the AABB center offset.
+ * Returns null for malformed fixtures — fewer than 3 declared vertices,
+ * fewer than 3 finite vertices, a zero AABB extent, or an unsupported type —
  * so the caller skips the sensor entirely instead of silently building a
  * zero-area sensor that can never capture (#277).
  */
-function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } | null {
+function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number } | null {
     if (fixtureDef.type === 'rect') {
-        return { w: fixtureDef.width || 0, h: fixtureDef.height || 0 };
+        return { w: fixtureDef.width || 0, h: fixtureDef.height || 0, cx: 0, cy: 0 };
     }
     if (fixtureDef.type === 'circle') {
         const w = (fixtureDef.radius || 0) * 2;
-        return { w, h: w };
+        return { w, h: w, cx: 0, cy: 0 };
     }
     if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices)) {
         // Match addBody()'s validation (physics-engine.ts:698): fewer than 3
@@ -298,7 +301,14 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } 
             console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient finite vertices`);
             return null;
         }
-        return { w: maxX - minX, h: maxY - minY };
+        // Collinear finite vertices (e.g. all sharing an x or y) leave one
+        // AABB dimension at zero; addBody would reject such a degenerate
+        // polygon, so stay loud instead of calling SetAsBox(w/2, 0).
+        if (maxX - minX === 0 || maxY - minY === 0) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has a degenerate zero-area AABB`);
+            return null;
+        }
+        return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
     }
     console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — skipping cap-zone sensor`);
     return null;
@@ -512,7 +522,7 @@ export class BonkEnvironment {
                 if (fixtureDef) {
                     const size = getCapZoneSensorSize(fixtureDef);
                     if (size && typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, size.w, size.h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
                     }
                 } else {
                     console.warn(`CapZone fixture "${zone.fixture}" not found`);
@@ -579,7 +589,7 @@ export class BonkEnvironment {
                 if (fixtureDef) {
                     const size = getCapZoneSensorSize(fixtureDef);
                     if (size && typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x, fixtureDef.y, size.w, size.h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
                     }
                 }
             }
