@@ -738,11 +738,12 @@ export class PhysicsEngine {
       // poisons the contact impulse and then the disc position on the first
       // contact tick (#276). Reproduce the native frictionless effect as
       // friction 0, and clamp authored negative/non-finite friction up to 0 so
-      // the sqrt mix can never see a negative product.
+      // the sqrt mix can never see a negative product (map-vs-map divergence
+      // from the native negative mix is documented in DEOBFUSCATION §33.4).
       const authoredFriction = def.friction;
       const baseFriction = authoredFriction === undefined
         ? 0.3
-        : (Number.isFinite(authoredFriction) ? Math.max(authoredFriction, 0) : 0.3);
+        : (Number.isFinite(authoredFriction) ? Math.max(authoredFriction, 0) : 0);
       shapeDef.friction = def.fricPolarity ? 0 : baseFriction;
       const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
      shapeDef.restitution = restitutionValue;

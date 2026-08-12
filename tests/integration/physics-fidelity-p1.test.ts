@@ -76,6 +76,14 @@ describe('physics fidelity P1: fixture physics (DEOBFUSCATION §33.4)', () => {
     expect(shape.m_friction).toBe(0);
   });
 
+  it('floors non-finite authored friction (NaN/Infinity) to 0, not the 0.3 default (#276)', () => {
+    const e = makeEngine();
+    e.addBody({ name: 'nan', type: 'rect', x: 0, y: 0, width: 40, height: 20, static: true, friction: NaN, fricPolarity: false } as any);
+    e.addBody({ name: 'inf', type: 'rect', x: 200, y: 0, width: 40, height: 20, static: true, friction: Infinity, fricPolarity: false } as any);
+    expect((fixtureOf(e.getBodyMap().get('nan')) as any).m_friction).toBe(0);
+    expect((fixtureOf(e.getBodyMap().get('inf')) as any).m_friction).toBe(0);
+  });
+
   it('defaults friction to the native surface default when unset', () => {
     const e = makeEngine();
     e.addBody({ name: 'def', type: 'rect', x: 0, y: 0, width: 40, height: 20, static: true } as any);
