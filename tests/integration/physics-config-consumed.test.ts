@@ -22,10 +22,12 @@
  * Velocity deltas are sampled over a single tick (v2 - v1), which keeps
  * every measurement inside the 850-px death circle and away from the walls.
  */
-import { describe, it, expect, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
 import { PhysicsEngine } from '../../src/core/physics-engine';
 import { BonkEnv } from '../../src/env/bonk-env';
+import { WorkerPool } from '../../src/core/worker-pool';
+import { resetConfig } from '../../src/config/config-loader';
 import type { MapDef } from '../../src/core/physics-engine';
 
 /** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
@@ -374,11 +376,28 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
 
 describe('physics/arena/player config reaches workers through the pool (#217)', () => {
     const envs: BonkEnv[] = [];
+    let savedSolverIterations: string | undefined;
+    let savedArgv: string[];
+
+    beforeEach(() => {
+        savedSolverIterations = process.env.SOLVER_ITERATIONS;
+        savedArgv = [...process.argv];
+        delete (process.env as any).SOLVER_ITERATIONS;
+        process.argv = ['node', 'script.js'];
+        resetConfig();
+    });
 
     afterEach(async () => {
         for (const env of envs.splice(0)) {
             try { await env.stop(); } catch { /* ignore */ }
         }
+        if (savedSolverIterations === undefined) {
+            delete (process.env as any).SOLVER_ITERATIONS;
+        } else {
+            process.env.SOLVER_ITERATIONS = savedSolverIterations;
+        }
+        process.argv = savedArgv;
+        resetConfig();
     });
 
     it('arena.boundsMargin set in the per-env config changes worker observations', { timeout: 30000 }, async () => {
@@ -441,6 +460,71 @@ describe('physics/arena/player config reaches workers through the pool (#217)', 
         const v2 = ((await env.step([0])) as any[])[0].observation.playerVelY;
         // Per-tick Δv = g * dt * scale with dt = 1/60: 10, half of the 30-TPS 20.
         expect(v2 - v1).toBeCloseTo(10, 1);
+    });
+
+    it('BonkEnv.start forwards a pq=2 map without the loader solver default (#325)', { timeout: 30000 }, async () => {
+        const captured: any[] = [];
+        const initSpy = vi.spyOn(WorkerPool.prototype, 'init').mockImplementation(async (_count, config) => {
+            captured.push(config);
+        });
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: {
+                mapData: { ...TEST_MAP, settings: { pq: 2 } },
+                numOpponents: 0,
+            },
+        });
+        envs.push(env);
+
+        try {
+            await env.start();
+            expect(captured).toHaveLength(1);
+            expect(captured[0].mapData.settings.pq).toBe(2);
+            expect(captured[0].physics.solverIterations).toBeUndefined();
+
+            const workerEnv = new BonkEnvironment(captured[0]);
+            try {
+                expect((workerEnv as any).physics.velocityIterations).toBe(15);
+                expect((workerEnv as any).physics.positionIterations).toBe(15);
+            } finally {
+                workerEnv.close();
+            }
+        } finally {
+            initSpy.mockRestore();
+        }
+    });
+
+    it('BonkEnv.start preserves an explicit solverIterations override over pq=2 (#325)', { timeout: 30000 }, async () => {
+        const captured: any[] = [];
+        const initSpy = vi.spyOn(WorkerPool.prototype, 'init').mockImplementation(async (_count, config) => {
+            captured.push(config);
+        });
+        const env = new BonkEnv({
+            numEnvs: 1,
+            useSharedMemory: false,
+            config: {
+                mapData: { ...TEST_MAP, settings: { pq: 2 } },
+                numOpponents: 0,
+                physics: { solverIterations: 12 },
+            },
+        });
+        envs.push(env);
+
+        try {
+            await env.start();
+            expect(captured[0].physics.solverIterations).toBe(12);
+
+            const workerEnv = new BonkEnvironment(captured[0]);
+            try {
+                expect((workerEnv as any).physics.velocityIterations).toBe(12);
+                expect((workerEnv as any).physics.positionIterations).toBe(15);
+            } finally {
+                workerEnv.close();
+            }
+        } finally {
+            initSpy.mockRestore();
+        }
     });
 
     it('player.moveForce set in the per-env config changes worker thrust', { timeout: 30000 }, async () => {

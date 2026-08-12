@@ -359,7 +359,8 @@ export function mergeEnvironmentConfig(
 
 /** The engine-tuning sections of AppConfig (physics/arena/player). */
 export interface EngineTuningSections {
-    physics: PhysicsConfig;
+    /** The loader default solverIterations is omitted when it was not authored. */
+    physics: Omit<PhysicsConfig, 'solverIterations'> & { solverIterations?: number };
     arena: ArenaConfig;
     player: PlayerConfig;
 }
@@ -413,17 +414,31 @@ function mergeTuningSection(
  * forwarded (via the worker pool / IPC bridge) to BonkEnvironment, which hands
  * the values to PhysicsEngine — so values set in config.json, env vars, CLI
  * flags, or the Python client's spawn config actually reach the simulation
- * (issue #217). Overrides that are not plain objects (e.g. null) are ignored,
- * proto-polluting keys are skipped by deepMerge, and snake_case sub-keys
- * (gravity_y, move_force, ...) are resolved into their camelCase slots.
+ * (issue #217). The built-in solverIterations value is omitted unless it was
+ * explicitly authored, allowing the map's native `pq` quality gate to choose
+ * the engine default (issue #325). Overrides that are not plain objects (e.g.
+ * null) are ignored, proto-polluting keys are skipped by deepMerge, and
+ * snake_case sub-keys (gravity_y, move_force, ...) are resolved into their
+ * camelCase slots.
  */
 export function mergeEngineSections(override: Record<string, any> = {}): EngineTuningSections {
+    const physicsOverride = isPlainObject(override.physics) ? override.physics : {};
+    const physics = mergeTuningSection(
+        getConfig().physics as any,
+        physicsOverride,
+        PHYSICS_KEY_ALIASES,
+    ) as Omit<PhysicsConfig, 'solverIterations'> & { solverIterations?: number };
+    const hasPerEnvSolverOverride =
+        (Object.prototype.hasOwnProperty.call(physicsOverride, 'solverIterations') &&
+            physicsOverride.solverIterations != null) ||
+        (Object.prototype.hasOwnProperty.call(physicsOverride, 'solver_iterations') &&
+            physicsOverride.solver_iterations != null);
+    if (!hasPerEnvSolverOverride && !explicitPhysicsKeys.has('solverIterations')) {
+        delete physics.solverIterations;
+    }
+
     return {
-        physics: mergeTuningSection(
-            getConfig().physics as any,
-            isPlainObject(override.physics) ? override.physics : {},
-            PHYSICS_KEY_ALIASES,
-        ) as PhysicsConfig,
+        physics,
         arena: mergeTuningSection(
             getConfig().arena as any,
             isPlainObject(override.arena) ? override.arena : {},
@@ -642,7 +657,10 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     }
     if (env.SOLVER_ITERATIONS !== undefined) {
         const v = parseInt(env.SOLVER_ITERATIONS, 10);
-        if (!isNaN(v) && v >= 1 && v <= 64) config.physics.solverIterations = v;
+        if (!isNaN(v) && v >= 1 && v <= 64) {
+            config.physics.solverIterations = v;
+            explicitPhysicsKeys.add('solverIterations');
+        }
     }
     if (env.PHYSICS_SCALE !== undefined) {
         const v = parseFloat(env.PHYSICS_SCALE);
@@ -850,6 +868,7 @@ case '--ai-player-id':
                     const v = parseInt(next, 10);
                     if (!isNaN(v) && v >= 1 && v <= 64) {
                         config.physics.solverIterations = v;
+                        explicitPhysicsKeys.add('solverIterations');
                         i++;
                     }
                 }
@@ -1015,6 +1034,23 @@ case '--ai-player-id':
 let cachedConfig: AppConfig | null = null;
 
 /**
+ * Physics keys authored by config.json, environment variables, or CLI flags.
+ * The built-in solverIterations default is retained in AppConfig for
+ * compatibility, but is not an explicit per-environment override (#325).
+ */
+let explicitPhysicsKeys: Set<string> = new Set();
+
+function recordExplicitPhysicsKeys(physics: unknown): void {
+    if (!isPlainObject(physics)) return;
+    if (
+        Object.prototype.hasOwnProperty.call(physics, 'solverIterations') &&
+        physics.solverIterations != null
+    ) {
+        explicitPhysicsKeys.add('solverIterations');
+    }
+}
+
+/**
  * Load configuration from all sources, applying layered resolution.
  *
  * Call order:
@@ -1031,6 +1067,10 @@ export function loadConfig(projectRoot?: string): AppConfig {
         return cachedConfig;
     }
 
+    // Keep provenance aligned with this resolution pass even if a caller
+    // clears the cache without going through resetConfig().
+    explicitPhysicsKeys = new Set();
+
     // Layer 1: defaults
     let config: AppConfig = JSON.parse(JSON.stringify(DEFAULTS));
 
@@ -1040,6 +1080,7 @@ export function loadConfig(projectRoot?: string): AppConfig {
     if (fs.existsSync(configPath)) {
         const fileConfig = loadConfigFile(configPath);
         if (fileConfig) {
+            recordExplicitPhysicsKeys(fileConfig.physics);
             config = deepMerge(config, fileConfig);
             if (isPlainObject(fileConfig.environment)) {
                 // Resolve snake_case aliases against the injected camelCase
@@ -1058,6 +1099,7 @@ export function loadConfig(projectRoot?: string): AppConfig {
         if (found) {
             const fileConfig = loadConfigFile(found);
             if (fileConfig) {
+                recordExplicitPhysicsKeys(fileConfig.physics);
                 config = deepMerge(config, fileConfig);
                 if (isPlainObject(fileConfig.environment)) {
                     config.environment = mergeEnvironmentConfig(
@@ -1099,6 +1141,7 @@ export function loadConfig(projectRoot?: string): AppConfig {
  */
 export function resetConfig(): void {
     cachedConfig = null;
+    explicitPhysicsKeys = new Set();
 }
 
 /**

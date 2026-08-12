@@ -287,6 +287,30 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
     });
 
     describe('mergeEngineSections', () => {
+        it('omits the loader solverIterations default when no source authored it (#325)', () => {
+            const sections = mergeEngineSections({});
+            expect(sections.physics.solverIterations).toBeUndefined();
+            expect(sections.physics.ticksPerSecond).toBe(30);
+            expect(sections.physics.worldAabbExtent).toBe(1000);
+        });
+
+        it('preserves an explicit config.json solverIterations even when it equals the default (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+        });
+
+        it('preserves authored environment and CLI solverIterations in the merged sections (#325)', () => {
+            process.env.SOLVER_ITERATIONS = '12';
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(12);
+
+            resetConfig();
+            delete (process.env as any).SOLVER_ITERATIONS;
+            process.argv = ['node', 'script.js', '--solver-iterations', '13'];
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(13);
+        });
+
         it('resolves overrides over the resolved config defaults', () => {
             process.env.GRAVITY_Y = '11';
             process.env.PLAYER_MOVE_FORCE = '55';
@@ -325,6 +349,11 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
         it('an explicit camelCase override wins over the snake_case alias', () => {
             const sections = mergeEngineSections({ physics: { gravity_y: 5, gravityY: 7 } });
             expect(sections.physics.gravityY).toBe(7);
+        });
+
+        it('preserves an explicit per-env solverIterations override over map quality defaults (#325)', () => {
+            expect(mergeEngineSections({ physics: { solverIterations: 2 } }).physics.solverIterations).toBe(2);
+            expect(mergeEngineSections({ physics: { solver_iterations: 12 } }).physics.solverIterations).toBe(12);
         });
     });
 });

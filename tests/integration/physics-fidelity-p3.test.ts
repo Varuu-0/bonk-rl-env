@@ -14,10 +14,11 @@
  *   the position count is resolved and asserted as the contract (tracked for
  *   the P4 differential gate).
  */
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PhysicsEngine } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import { normalizeMap } from '../../src/core/map-adapter';
+import { mergeEngineSections, resolveEnvironmentConfig, resetConfig } from '../../src/config/config-loader';
 import type { MapDef } from '../../src/core/physics-engine';
 
 /** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
@@ -199,6 +200,69 @@ describe('P3: map settings parse through normalizeMap (DEOBFUSCATION §33.1)', (
 });
 
 describe('P3: map settings reach the environment (pq applied, gd enforced away)', () => {
+    let savedSolverIterations: string | undefined;
+    let savedArgv: string[];
+
+    beforeEach(() => {
+        savedSolverIterations = process.env.SOLVER_ITERATIONS;
+        savedArgv = [...process.argv];
+        delete (process.env as any).SOLVER_ITERATIONS;
+        process.argv = ['node', 'script.js'];
+        resetConfig();
+    });
+
+    afterEach(() => {
+        if (savedSolverIterations === undefined) {
+            delete (process.env as any).SOLVER_ITERATIONS;
+        } else {
+            process.env.SOLVER_ITERATIONS = savedSolverIterations;
+        }
+        process.argv = savedArgv;
+        resetConfig();
+    });
+
+    it('map settings.pq = 2 survives the production config merge with 15/15 iterations (#325)', () => {
+        const config = {
+            ...resolveEnvironmentConfig({}),
+            ...mergeEngineSections({}),
+            numOpponents: 0,
+            seed: 1,
+            mapData: { ...TEST_MAP, settings: { pq: 2 } },
+        };
+        const env = new BonkEnvironment(config);
+        const eng: any = (env as any).physics;
+        let stepSpy: ReturnType<typeof vi.spyOn> | undefined;
+        try {
+            expect(eng.velocityIterations).toBe(15);
+            expect(eng.positionIterations).toBe(15);
+            env.reset(1);
+            stepSpy = vi.spyOn(eng.world, 'Step');
+            env.step(0);
+            expect(stepSpy).toHaveBeenCalledWith(expect.closeTo(1 / 30, 12), 15, 15);
+        } finally {
+            stepSpy?.mockRestore();
+            env.close();
+        }
+    });
+
+    it('an explicit solverIterations in the production config merge still overrides map pq (#325)', () => {
+        const config = {
+            ...resolveEnvironmentConfig({}),
+            ...mergeEngineSections({ physics: { solverIterations: 12 } }),
+            numOpponents: 0,
+            seed: 1,
+            mapData: { ...TEST_MAP, settings: { pq: 2 } },
+        };
+        const env = new BonkEnvironment(config);
+        const eng: any = (env as any).physics;
+        try {
+            expect(eng.velocityIterations).toBe(12);
+            expect(eng.positionIterations).toBe(15);
+        } finally {
+            env.close();
+        }
+    });
+
     it('map settings.pq = 2 makes the env step with 15 velocity iterations', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,

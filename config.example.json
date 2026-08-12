@@ -18,7 +18,7 @@
     "ticksPerSecond": 30,
     "_doc_ticksPerSecond": "Fixed physics update rate. Type: int. Range: 1-240. Default: 30. Env: TICKS_PER_SECOND. CLI: --ticks-per-second. Consumed by the engine (issue #217). NOTE: this rescales only the per-tick simulation step (dt = 1/tps). Every native timer is tick-counted and therefore unchanged at a non-default rate: episode maxTicks (900), the a1a grapple meter drain/recharge (4/3 per tick), last-hit attribution (120 ticks) and cap-zone hold `(l ?? 3) * 30` all keep their tick counts, so their real-time duration changes with the tick rate.",
     "solverIterations": 2,
-    "_doc_solverIterations": "Velocity constraint solver iterations per tick. Type: int. Range: 1-64. Default: 2. Env: SOLVER_ITERATIONS. CLI: --solver-iterations",
+    "_doc_solverIterations": "Velocity constraint solver iterations per tick. Type: int. Range: 1-64. Built-in default: 2; when this key is absent from the authored config, map settings.pq selects low 2/6 or high 15/15 quality. An explicit value, including 2, overrides pq. Env: SOLVER_ITERATIONS. CLI: --solver-iterations",
     "scale": 30.0,
     "_doc_scale": "Pixels-per-meter conversion factor. Type: float. Range: 0.1+. Default: 30.0. Env: PHYSICS_SCALE. CLI: --scale",
     "gravityX": 0.0,
