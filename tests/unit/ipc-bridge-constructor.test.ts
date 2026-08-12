@@ -11,8 +11,9 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const sock: { bind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+  const sock: { bind: () => Promise<void>; unbind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
     bind: async () => {},
+    unbind: async () => {},
     close: () => {},
     send: async () => {},
   };
@@ -78,6 +79,7 @@ let currentBridge: any = null;
 
 const mockSock = mocks.sock;
 let bindSpy: ReturnType<typeof vi.spyOn>;
+let unbindSpy: ReturnType<typeof vi.spyOn>;
 let closeSpy: ReturnType<typeof vi.spyOn>;
 let sendSpy: ReturnType<typeof vi.spyOn>;
 
@@ -108,6 +110,7 @@ beforeEach(() => {
   mocks.gpReport.mockClear();
   mocks.setLatestWorkerTelemetry.mockClear();
   bindSpy = vi.spyOn(mockSock, 'bind').mockResolvedValue(undefined);
+  unbindSpy = vi.spyOn(mockSock, 'unbind').mockResolvedValue(undefined);
   closeSpy = vi.spyOn(mockSock, 'close');
   sendSpy = vi.spyOn(mockSock, 'send').mockResolvedValue(undefined);
   delete mockSock[Symbol.asyncIterator];
@@ -115,6 +118,7 @@ beforeEach(() => {
 
 afterEach(() => {
   bindSpy.mockRestore();
+  unbindSpy.mockRestore();
   closeSpy.mockRestore();
   sendSpy.mockRestore();
   currentBridge = null;
@@ -337,6 +341,25 @@ describe('IpcBridge close() (lines 159-173)', () => {
   it('closes the socket (line 167)', async () => {
     const bridge = new IpcBridge({ server: { port: 12353 } });
     await bridge.close();
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it('awaits endpoint unbind before closing the socket (#316)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12357 } });
+    const endpoint = 'tcp://127.0.0.1:12357';
+    (bridge as any).boundEndpoint = endpoint;
+
+    let releaseUnbind!: () => void;
+    unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
+      releaseUnbind = resolve;
+    }));
+
+    const closePromise = bridge.close();
+    expect(unbindSpy).toHaveBeenCalledWith(endpoint);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    releaseUnbind();
+    await closePromise;
     expect(closeSpy).toHaveBeenCalled();
   });
 

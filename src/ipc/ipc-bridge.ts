@@ -69,6 +69,8 @@ export class IpcBridge {
     private _hostUseSharedMemory: boolean | undefined = undefined;
     private _boundResolve: (() => void) | null = null;
     private _boundReject: ((reason?: any) => void) | null = null;
+    private boundEndpoint: string | null = null;
+    private closePromise: Promise<void> | null = null;
 
     // Current bind signal for this serve cycle. Replaced on every start()
     // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -230,12 +232,22 @@ export class IpcBridge {
     private _wrappedSend: Function;
 
     async start() {
-        const addr = `tcp://${this.bindAddress}:${this.port}`;
-        // Re-arm `ready` on every serve cycle, not only when the socket is
-        // recreated: a failed bind rejects the current promise and nulls its
-        // handlers, so the next start() must install fresh ones or a
-        // successful retry bind could never resolve ready (issue #263).
+        // Re-arm `ready` before waiting for a prior close to finish. Callers
+        // can read the new readiness promise immediately after invoking
+        // start(), even while the previous socket is still unbinding.
         this.rearmReady();
+        if (this.closePromise) {
+            const previousClose = this.closePromise;
+            try {
+                await previousClose;
+            } finally {
+                if (this.closePromise === previousClose) {
+                    this.closePromise = null;
+                }
+            }
+        }
+
+        const addr = `tcp://${this.bindAddress}:${this.port}`;
         // A closed ZMQ socket is permanently destroyed and can never be
         // re-bound (bind() throws "Socket is closed"). Recreate the transport
         // so a later start() after close() binds a fresh ROUTER and serves
@@ -261,6 +273,11 @@ export class IpcBridge {
             }
             throw err;
         }
+        // libzmq resolves wildcard binds to a concrete endpoint (for example,
+        // tcp://0.0.0.0:<port>). Keep that resolved value because unbind()
+        // requires the endpoint returned by lastEndpoint, not the original
+        // tcp://*:<port> request.
+        this.boundEndpoint = this.sock.lastEndpoint ?? addr;
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
         if (!this._hostPool) {
@@ -803,9 +820,12 @@ export class IpcBridge {
         return this._closed;
     }
 
-    async close() {
+    close(): Promise<void> {
+        if (this.closePromise) {
+            return this.closePromise;
+        }
         if (this._closed) {
-            return;
+            return Promise.resolve();
         }
         this._closed = true;
         if (this.sessionReapTimer) {
@@ -829,13 +849,45 @@ export class IpcBridge {
         }
         this.sessions.clear();
 
-        // Close the socket to break out of the for await loop
-        try {
-            this.sock.close();
-        } catch (e) {
-            // Ignore close errors
-        }
+        // libzmq closes its TCP listener asynchronously when the socket is
+        // destroyed. Unbind the endpoint explicitly and await that operation
+        // before closing the socket so callers do not release/reuse a port
+        // while the old listener is still alive (#316).
+        const endpoint = this.boundEndpoint;
+        this.boundEndpoint = null;
+        this.closePromise = (async () => {
+            let failure: { error: unknown } | null = null;
 
-        await Promise.all(pools.map(pool => pool.close()));
+            if (endpoint) {
+                try {
+                    await this.sock.unbind(endpoint);
+                } catch (error) {
+                    failure = { error };
+                }
+            }
+
+            // Close the socket to break out of the for await loop. Preserve
+            // the existing best-effort handling for socket close errors, but
+            // do not hide an unbind or worker-pool failure from the caller.
+            try {
+                this.sock.close();
+            } catch (error) {
+                // Ignore close errors.
+            }
+
+            try {
+                await Promise.all(pools.map(pool => pool.close()));
+            } catch (error) {
+                if (!failure) {
+                    failure = { error };
+                }
+            }
+
+            if (failure) {
+                throw failure.error;
+            }
+        })();
+
+        return this.closePromise;
     }
 }
