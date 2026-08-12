@@ -55,6 +55,38 @@ describe('normalizeMap', () => {
             expect(out.bodies).toEqual(md.bodies);
             expect(out.spawnPoints).toEqual(md.spawnPoints);
         });
+
+        it('preserves authored data when bodies is explicitly null (#273)', () => {
+            const spawnOnly = {
+                name: 'SpawnOnly',
+                spawnPoints: { team_blue: { x: 111, y: 222 }, team_red: { x: 333, y: 444 } },
+                capZones: [
+                    { index: 0, owner: '', type: 1, fixture: 'plat_0', shapeType: 'rect' },
+                ],
+                joints: [
+                    { type: 'rv', name: 'j0', bodyA: 'plat_0', bodyB: 'plat_1' },
+                ],
+                bodies: null,
+            };
+            const out = normalizeMap(spawnOnly as any);
+            expect(out.spawnPoints).toEqual(spawnOnly.spawnPoints);
+            expect(out.capZones).toEqual(spawnOnly.capZones);
+            expect(out.joints).toEqual(spawnOnly.joints);
+            expect(out.bodies).toEqual([]);
+        });
+
+        it('does not crash on a bodies array containing null (#273)', () => {
+            // A corrupt/placeholder payload like bodies: [null] is valid JSON
+            // and must fall through to the exporter path instead of throwing.
+            const out = normalizeMap({
+                name: 'Corrupt',
+                spawnPoints: { team_blue: { x: 111, y: 222 } },
+                bodies: [null],
+            } as any);
+            expect(Array.isArray(out.bodies)).toBe(true);
+            expect(out.bodies.length).toBe(0);
+            expect(out.spawnPoints).toBeDefined();
+        });
     });
 
     describe('exported bonk format detection', () => {

@@ -132,16 +132,19 @@ function isInternalMapDef(raw: any): raw is MapDef {
         && raw.spawnPoints !== null
         && typeof raw.spawnPoints === 'object'
         && !Array.isArray(raw.spawnPoints)
-        // Accept an omitted `bodies` key as internal: a programmatic MapDef
-        // with no bodies (e.g. a pure-cap-zone or spawn-only map) legitimately
-        // carries spawnPoints/capZones/joints without a bodies array and must
-        // still pass through to preserve them (#273). The `spawnPoints`-object
-        // check above already excludes the real exported format (which uses
-        // `spawns[]`), so widening here does not misclassify exported maps.
-        && (raw.bodies === undefined || Array.isArray(raw.bodies))
+        // Accept an omitted or `null` `bodies` key as internal: a programmatic
+        // MapDef with no bodies (e.g. a pure-cap-zone or spawn-only map)
+        // legitimately carries spawnPoints/capZones/joints without a bodies
+        // array and must still pass through to preserve them (#273). The
+        // `spawnPoints`-object check above already excludes the real exported
+        // format (which uses `spawns[]`), so widening here does not
+        // misclassify exported maps.
+        && (raw.bodies === undefined || raw.bodies === null || Array.isArray(raw.bodies))
         && (raw.bodies === undefined
+            || raw.bodies === null
             || raw.bodies.length === 0
-            || (typeof raw.bodies[0] === 'object'
+            || (raw.bodies[0] !== null
+                && typeof raw.bodies[0] === 'object'
                 && !('collidesGroup1' in raw.bodies[0])));
 }
 
@@ -216,7 +219,13 @@ export function normalizeMap(raw: unknown): MapDef {
     // carries `position`/`fixtures`, not x/y/width) silently producing
     // degenerate 0×0 bodies.
     const flatBodies = map.bodies && map.bodies.length ? map.bodies : null;
-    const bodies = (flatBodies || map.physicsBodies || []).map(toBodyDef);
+    // Guard the exporter path against corrupt/placeholder entries (e.g.
+    // `bodies: [null]`, valid JSON): filter them out so toBodyDef never
+    // receives a null body and the filtered list stays index-aligned with
+    // `bodies` downstream (#273).
+    const flatSource = (flatBodies || map.physicsBodies || [])
+        .filter((b): b is FlatBody => b !== null && b !== undefined);
+    const bodies = flatSource.map(toBodyDef);
 
     // Build a fixture-index -> body-name map so cap zones can resolve their
     // platform body. Export fixtures all share the name "Unnamed Shape", so a
@@ -224,7 +233,6 @@ export function normalizeMap(raw: unknown): MapDef {
     // cap-zone-referenced body a fixture-unique name (e.g. "Unnamed Shape#13")
     // so the engine's `bodies.find(b => b.name === zone.fixture)` selects the
     // actual platform rather than the first "Unnamed Shape."
-    const flatSource = flatBodies || map.physicsBodies || [];
     const nameByFixture = new Map<number, string>();
     const capFriendlyNames = new Map<number, string>();
     flatSource.forEach((b, i) => {
