@@ -1,14 +1,12 @@
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as path from 'path';
 import * as os from 'os';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
 
-// A real bundled map, used as the end-to-end map-path fixture. The default
-// config map (bonk_WDB__No_Mapshake__716916.json) is absent from maps/, so a
-// path surface that reaches the loader must load this file instead of falling
-// back to the Default_Box map (#199).
+// A real bundled map, used as the end-to-end map-path fixture.
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
+const DEFAULT_WDB = path.join(process.cwd(), 'maps', 'bonk_WDB__No_Mapshake__716916.json');
 
 describe('Environment map-path wiring (#199)', () => {
   let env: BonkEnvironment | null = null;
@@ -17,6 +15,20 @@ describe('Environment map-path wiring (#199)', () => {
     if (env) {
       await env.close();
       env = null;
+    }
+  });
+
+  it('loads the shipped WDB map for a default-config environment (#315)', () => {
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      env = new BonkEnvironment({ numOpponents: 0, seed: 1 });
+
+      expect((env as any).config.mapPath).toBe(DEFAULT_WDB);
+      expect((env as any).config.mapData.name).toBe('WDB (No Mapshake)');
+      expect((env as any).physics.getBodyMap().size).toBeGreaterThan(1);
+      expect(warnSpy).not.toHaveBeenCalledWith(expect.stringContaining('using fallback box'));
+    } finally {
+      warnSpy.mockRestore();
     }
   });
 
