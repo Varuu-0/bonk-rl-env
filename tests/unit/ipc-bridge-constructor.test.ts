@@ -636,9 +636,10 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     expect((bridge as any).localSessionIdentity).toBe(Buffer.from('clientA').toString('hex'));
 
     // A second pre-init identity must not silently steal the pin: it fails
-    // loudly on its own first use instead of revoking the first client.
+    // loudly on its own first use (with a pin-specific error, not the generic
+    // uninitialized-pool error) instead of revoking the first client.
     await handleRequest(Buffer.from('clientB'), JSON.stringify({ command: 'step', actions: [0] }));
-    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Worker pool not initialized' });
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Local pool is pinned to another identity' });
     expect((bridge as any).localSessionIdentity).toBe(Buffer.from('clientA').toString('hex'));
 
     // Session mode engages; the first bypass client keeps its pool.
@@ -647,6 +648,31 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
 
     await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'step', actions: [0] }));
     expect(lastResponse().status).toBe('ok');
+  });
+
+  it('does not pin the local pool to an identity whose request fails validation (issue #270)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12379, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+
+    await bridge.initEnv(1, {}, false);
+
+    // A transient identity sends an invalid step (empty actions); its request
+    // must fail without claiming the pin, or it would permanently lock out
+    // the real programmatic caller.
+    await handleRequest(Buffer.from('transient'), JSON.stringify({ command: 'step', actions: [] }));
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Invalid actions: array cannot be empty' });
+    expect((bridge as any).localSessionIdentity).toBeUndefined();
+
+    // An invalid reset (non-array seeds) is equally non-pinning.
+    await handleRequest(Buffer.from('transient'), JSON.stringify({ command: 'reset', seeds: 'nope' }));
+    expect(lastResponse()).toMatchObject({ status: 'error', error: 'Invalid seeds: must be an array' });
+    expect((bridge as any).localSessionIdentity).toBeUndefined();
+
+    // The legitimate identity can still use the local pool afterwards and
+    // becomes the pinned bypass identity.
+    await handleRequest(Buffer.from('clientA'), JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
+    expect((bridge as any).localSessionIdentity).toBe(Buffer.from('clientA').toString('hex'));
   });
 
   it('clamps an invalid (zero/negative) session cap to 1 instead of rejecting every init', () => {
