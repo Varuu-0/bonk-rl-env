@@ -13,7 +13,7 @@
  * format into the engine's `MapDef` so shipped maps load faithfully.
  */
 
-import { MapDef } from './physics-engine';
+import { MapDef, GROUND_BODY_NAME } from './physics-engine';
 
 interface FlatBody {
     bodyIndex: number;
@@ -293,11 +293,14 @@ export function normalizeMap(raw: unknown): MapDef {
         if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
-        // bodyA must be a valid, non-negative body index; an out-of-range or
-        // negative bodyA is a malformed reference and cannot resolve.
+        // bodyA: -1 means the joint is anchored to the static ground body on the
+        // A side (§33.8: ba/bb of -1 = ground on either side). Emit the reserved
+        // ground name; addJoint resolves it to the synthetic ground body.
         const bodyA = j.bodyA !== undefined && j.bodyA >= 0
             ? bodiesByName.get(j.bodyA)
-            : undefined;
+            : j.bodyA !== undefined && j.bodyA < 0
+                ? GROUND_BODY_NAME
+                : undefined;
         // bodyB: -1 means the joint is anchored to the ground (world). Forward
         // it as a ground joint (empty bodyB) rather than dropping it — P2
         // supports ground-anchored joints via a synthetic static ground body.
@@ -346,17 +349,15 @@ export function normalizeMap(raw: unknown): MapDef {
             // emits bodyA/bodyB as null. Derive them from the referent joints
             // exactly like the native factory does (7836-7843: "bodyA/B from
             // those joints") so the gear joint still resolves in the engine.
+            // A referent side of -1 (static ground) becomes the reserved ground
+            // name, which addJoint resolves to the synthetic ground body.
             const refA = ja !== undefined ? src[ja] : undefined;
             const refB = jb !== undefined ? src[jb] : undefined;
-            if (!out.bodyA && refA && refA.bodyA !== undefined && refA.bodyA >= 0) {
-                out.bodyA = bodiesByName.get(refA.bodyA) ?? '';
+            if (!out.bodyA && refA && refA.bodyA !== undefined) {
+                out.bodyA = refA.bodyA >= 0 ? (bodiesByName.get(refA.bodyA) ?? '') : GROUND_BODY_NAME;
             }
             if (!out.bodyB && refB && refB.bodyB !== undefined) {
-                if (refB.bodyB >= 0) {
-                    out.bodyB = bodiesByName.get(refB.bodyB) ?? '';
-                } else {
-                    out.isGround = true;
-                }
+                out.bodyB = refB.bodyB >= 0 ? (bodiesByName.get(refB.bodyB) ?? '') : GROUND_BODY_NAME;
             }
         }
         return out;

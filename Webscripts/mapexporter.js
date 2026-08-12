@@ -53,7 +53,7 @@
       'type','ba','bb','d','aa','ab','l',
       'pax','pay','pa','pf','pl','pu','plen','pms',
       'sax','say','sf','slen',
-      'ja','jb','r',
+      'ja','jb','r','n',
     ]),
     jointData: new Set([
       'la','ua','mmt','ms','el','em',

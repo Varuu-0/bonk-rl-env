@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
 import { normalizeMap } from '../../src/core/map-adapter';
-import { PhysicsEngine } from '../../src/core/physics-engine';
+import { PhysicsEngine, GROUND_BODY_NAME } from '../../src/core/physics-engine';
 
 /**
  * Issue #285 regression — mapexporter gear joint emission.
@@ -118,9 +118,9 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(joint.ratio).toBe(3);
   });
 
-  it('shipped mapexporter.js still lists ja/jb/r and emits them for gear joints', () => {
+  it('shipped mapexporter.js still lists ja/jb/r/n and emits ja/jb/r for gear joints', () => {
     const source = fs.readFileSync(MAPEXPORTER, 'utf8');
-    expect(source).toContain(`'ja','jb','r',`);
+    expect(source).toContain(`'ja','jb','r','n',`);
     expect(source).toContain(`} else if (jt.type === 'g') {`);
     expect(source).toContain(`jointDef.ja = jt.ja ?? null;`);
     expect(source).toContain(`jointDef.jb = jt.jb ?? null;`);
@@ -163,6 +163,50 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     });
     expect(warnings).toHaveLength(0);
 
+    const created = (e as any).createdJoints.get('joint_2');
+    expect(created).toBeTruthy();
+    expect(created.m_type).toBe(6); // b2Joint.e_gearJoint
+    expect(created.m_ratio).toBe(3);
+    expect(created.m_revolute1).toBe((e as any).createdJoints.get('joint_0'));
+    expect(created.m_revolute2).toBe((e as any).createdJoints.get('joint_1'));
+  });
+
+  it('keeps a gear joint whose referent is anchored to the static ground (bodyA=-1)', () => {
+    const e = new PhysicsEngine();
+    // Native fixed-axle pattern: the first revolute referent is bolted to the
+    // static ground body (ba = -1 per §33.8), so the gear's derived bodyA must
+    // resolve to the synthetic ground body instead of being dropped.
+    const exported = extractJoints([
+      { type: 'rv', ba: -1, bb: 1, aa: [0, 0] },
+      { type: 'rv', ba: 0, bb: 1, aa: [100, 0] },
+      { type: 'g', ja: 0, jb: 1, r: 3 },
+    ]);
+
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: exported,
+    } as any) as any;
+
+    const gear = md.joints[2];
+    expect(gear.jointA).toBe('joint_0');
+    expect(gear.jointB).toBe('joint_1');
+    expect(gear.ratio).toBe(3);
+    expect(gear.bodyA).toBe(GROUND_BODY_NAME);
+    expect(gear.bodyB).toBe('gate');
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings).toHaveLength(0);
+
+    // The ground-anchored referent itself must have been created too.
+    expect((e as any).createdJoints.get('joint_0')).toBeTruthy();
     const created = (e as any).createdJoints.get('joint_2');
     expect(created).toBeTruthy();
     expect(created.m_type).toBe(6); // b2Joint.e_gearJoint
