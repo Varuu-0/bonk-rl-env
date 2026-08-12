@@ -125,28 +125,34 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
     await serve1;
 
     // Occupy the port so the restart's bind deterministically fails once.
+    // The listener is closed in `finally` so a failed assertion can never
+    // leave the port bound for the rest of the suite.
     const blocker = net.createServer();
-    await new Promise<void>((resolve, reject) => {
-      blocker.once('error', reject);
-      blocker.listen(port, '127.0.0.1', resolve);
-    });
+    try {
+      await new Promise<void>((resolve, reject) => {
+        blocker.once('error', reject);
+        blocker.listen(port, '127.0.0.1', resolve);
+      });
 
-    const serve2 = bridge.start();
-    serve2.catch(() => {}); // the bind failure surfaces via bridge.ready
-    await expect(bridge.ready).rejects.toThrow();
-    expect(bridge.isClosed()).toBe(true);
+      const serve2 = bridge.start();
+      serve2.catch(() => {}); // the bind failure surfaces via bridge.ready
+      await expect(bridge.ready).rejects.toThrow();
+      expect(bridge.isClosed()).toBe(true);
 
-    // Release the port; the retry must re-arm ready and bind fresh.
-    await new Promise<void>(resolve => blocker.close(() => resolve()));
-    await waitForPortFree();
+      // Release the port; the retry must re-arm ready and bind fresh.
+      await new Promise<void>(resolve => blocker.close(() => resolve()));
+      await waitForPortFree();
 
-    const serve3 = bridge.start();
-    serve3.catch(() => {});
-    await expect(bridge.ready).resolves.toBeUndefined();
-    expect(bridge.isClosed()).toBe(false);
+      const serve3 = bridge.start();
+      serve3.catch(() => {});
+      await expect(bridge.ready).resolves.toBeUndefined();
+      expect(bridge.isClosed()).toBe(false);
 
-    await bridge.close();
-    expect(bridge.isClosed()).toBe(true);
-    await serve3;
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await serve3;
+    } finally {
+      await new Promise<void>(resolve => blocker.close(() => resolve()));
+    }
   }, 60000);
 });

@@ -240,11 +240,13 @@ export class IpcBridge {
             await this.sock.bind(addr);
         } catch (err) {
             this.markBindFailed(err);
-            // The recreated socket was never bound, and _closed is still true
-            // (it is only reset after a successful bind), so a later close()
-            // would early-return and leak the open handle. Close it so a
-            // failed restart is fully clean and a retry recreates from scratch.
-            if (recreated && this._closed) {
+            // A socket recreated here is always a restart-after-close() (the
+            // original socket was destroyed by close(), which also left
+            // _closed true until a successful bind). Its bind never succeeded,
+            // so a later close() would early-return and leak the open handle;
+            // close it here so a failed restart is fully clean and a retry
+            // recreates from scratch.
+            if (recreated) {
                 this.sock.close();
             }
             throw err;
