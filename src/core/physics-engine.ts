@@ -188,7 +188,7 @@ export interface MapBodyDef {
   width?: number;    // For rect
   height?: number;   // For rect
   radius?: number;   // For circle
-  vertices?: { x: number; y: number }[]; // For polygon
+  vertices?: { x: number; y: number }[]; // Body-local map-px vertices for polygons
   /** Omitted static defaults to a dynamic body. */
   static?: boolean;
   density?: number;

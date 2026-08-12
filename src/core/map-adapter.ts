@@ -160,16 +160,25 @@ function isInternalMapDef(raw: any): raw is MapDef {
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
 function toBodyDef(body: FlatBody, index: number): any {
+    const x = body.x ?? 0;
+    const y = body.y ?? 0;
+    // The exporter's flat polygon view stores vertices in map/world pixels
+    // (`bx + cx + v`), while MapBodyDef vertices are body-local for Box2D and
+    // the normalized renderer/cap-zone consumers. Convert only polygons here;
+    // rects and circles already express their extent around x/y.
+    const vertices = body.type === 'polygon' && body.vertices
+        ? body.vertices.map(v => ({ x: v.x - x, y: v.y - y }))
+        : body.vertices;
     return {
         name: body.name ?? body.bodyType ?? `body_${index}`,
         type: (body.type === 'rect' || body.type === 'circle'
             || body.type === 'polygon') ? body.type : 'rect',
-        x: body.x ?? 0,
-        y: body.y ?? 0,
+        x,
+        y,
         width: body.width,
         height: body.height,
         radius: body.radius,
-        vertices: body.vertices,
+        vertices,
         static: body.static ?? body.bodyType === 'static',
         density: body.density,
         restitution: body.restitution,
@@ -463,8 +472,21 @@ export function normalizeMap(raw: unknown): MapDef {
             let bx0 = b.x, bx1 = b.x, by0 = b.y, by1 = b.y;
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
-            else if (b.vertices && b.vertices.length) {
-                for (const v of b.vertices) { if (v.x < bx0) bx0 = v.x; if (v.x > bx1) bx1 = v.x; if (v.y < by0) by0 = v.y; if (v.y > by1) by1 = v.y; }
+            else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
+                // Polygon vertices in the normalized MapDef are body-local.
+                // Apply the body transform before folding them into the map
+                // bounds; the exporter input was absolute before toBodyDef()
+                // converted it to this local frame.
+                const angle = b.angle ?? 0;
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
+                bx0 = Infinity; bx1 = -Infinity; by0 = Infinity; by1 = -Infinity;
+                for (const v of b.vertices) {
+                    const wx = b.x + v.x * cosA - v.y * sinA;
+                    const wy = b.y + v.x * sinA + v.y * cosA;
+                    if (wx < bx0) bx0 = wx; if (wx > bx1) bx1 = wx;
+                    if (wy < by0) by0 = wy; if (wy > by1) by1 = wy;
+                }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
             if (by0 < minY) minY = by0; if (by1 > maxY) maxY = by1;

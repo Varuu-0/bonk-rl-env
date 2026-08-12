@@ -141,5 +141,42 @@ describe('normalizeMap', () => {
             expect((out.bodies[0] as any).collides.g1).toBe(true);
             expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
         });
+
+        it('converts exported polygon vertices to body-local coordinates (#318)', () => {
+            const out = normalizeMap({
+                bodies: [
+                    {
+                        bodyIndex: 0,
+                        name: 'exported-triangle',
+                        type: 'polygon',
+                        x: 300,
+                        y: 200,
+                        angle: 0,
+                        vertices: [
+                            { x: 300, y: 150 },
+                            { x: 350, y: 200 },
+                            { x: 300, y: 250 },
+                        ],
+                        static: true,
+                    },
+                    { bodyIndex: 1, name: 'rect', type: 'rect', x: 25, y: 40, width: 20, height: 10, static: true },
+                    { bodyIndex: 2, name: 'circle', type: 'circle', x: -25, y: -40, radius: 8, static: true },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].vertices).toEqual([
+                { x: 0, y: -50 },
+                { x: 50, y: 0 },
+                { x: 0, y: 50 },
+            ]);
+            expect(out.bodies[1]).toMatchObject({ x: 25, y: 40, width: 20, height: 10 });
+            expect(out.bodies[2]).toMatchObject({ x: -25, y: -40, radius: 8 });
+            // The center includes all three fixtures: polygon [300..350,
+            // 150..250], rect [15..35, 35..45], and circle [-33..-17,
+            // -48..-32]. Polygon bounds must be reconstructed from its body
+            // transform after normalization rather than from local vertices.
+            expect(out.physics.deathCenter).toEqual({ x: 158.5, y: 101 });
+        });
     });
 });

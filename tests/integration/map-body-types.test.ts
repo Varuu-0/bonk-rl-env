@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PhysicsEngine, MapBodyDef, SCALE } from '../../src/core/physics-engine';
+import { normalizeMap } from '../../src/core/map-adapter';
 import { safeDestroy } from '../utils/test-helpers';
 
 describe('MapBodyTypes', () => {
@@ -139,6 +140,43 @@ describe('MapBodyTypes', () => {
   });
 
   describe('polygon bodies', () => {
+    it('rebuilds an exported polygon at its authored non-origin position (#318)', () => {
+      const authoredVertices = [
+        { x: 300, y: 150 },
+        { x: 350, y: 200 },
+        { x: 300, y: 250 },
+      ];
+      const map = normalizeMap({
+        bodies: [{
+          bodyIndex: 0,
+          name: 'exported-triangle',
+          type: 'polygon',
+          x: 300,
+          y: 200,
+          angle: 0,
+          vertices: authoredVertices,
+          static: true,
+        }],
+        spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      } as any);
+
+      engine = new PhysicsEngine();
+      engine.addBody(map.bodies[0]);
+
+      const body = engine.getBodyMap().get('exported-triangle') as any;
+      const shape = body.GetShapeList();
+      const worldVertices = Array.from({ length: shape.m_vertexCount }, (_, i) => {
+        const point = body.GetWorldPoint(shape.m_vertices[i]);
+        return { x: point.x * SCALE, y: point.y * SCALE };
+      });
+
+      expect(worldVertices).toHaveLength(authoredVertices.length);
+      worldVertices.forEach((actual, i) => {
+        expect(actual.x).toBeCloseTo(authoredVertices[i].x, 4);
+        expect(actual.y).toBeCloseTo(authoredVertices[i].y, 4);
+      });
+    });
+
     it('triangle polygon (3 vertices) is added', () => {
       engine = new PhysicsEngine();
       const triangle: MapBodyDef = {
