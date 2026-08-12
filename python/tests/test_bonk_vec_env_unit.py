@@ -389,12 +389,14 @@ def _step_result(tick, terminated, reward, terminal_obs=None):
             # Mid-cycle termination (death on tick 2 of a frame_skip=4 cycle):
             # the backend serves the death step plus the rest of the hold
             # window (2 hold steps) before auto-resetting, so only the death
-            # step is an episode boundary.
+            # step is an episode boundary. The hold steps carry the raw
+            # backend terminal_observation too (applyStepAutoReset attaches it
+            # to every done step), which step_wait() must strip from the info.
             [
                 {"status": "ok", "data": [_step_result(1, False, 1.0)]},
                 {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2))]},
-                {"status": "ok", "data": [_step_result(2, True, 0.0)]},
-                {"status": "ok", "data": [_step_result(2, True, 0.0)]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
                 {"status": "ok", "data": [_step_result(1, False, 0.5)]},
             ],
             [False, True, False, False, False],
@@ -407,16 +409,35 @@ def _step_result(tick, terminated, reward, terminal_obs=None):
             # swallowed as a hold-tail continuation of the previous episode.
             [
                 {"status": "ok", "data": [_step_result(1, True, 5.0, terminal_obs=_obs(1))]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
                 {"status": "ok", "data": [_step_result(1, True, 7.0, terminal_obs=_obs(1))]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
-                {"status": "ok", "data": [_step_result(1, True, 0.0)]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
             ],
             [True, False, False, False, True, False, False, False],
             {0: {"r": 5.0, "l": 1}, 4: {"r": 7.0, "l": 1}},
+        ),
+        (
+            # Mid-cycle death followed by a spawn-in-death-circle episode:
+            # death at tick 2 (two hold steps), then the fresh episode dies on
+            # its very first tick — a DONE step arriving MID-window
+            # (_hold_steps < frame_skip) with an ADVANCED tick. The tick
+            # change, not the window elapsing, marks it as a new boundary.
+            [
+                {"status": "ok", "data": [_step_result(1, False, 1.0)]},
+                {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(1, True, 5.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+            ],
+            [False, True, False, False, True, False, False, False],
+            {1: {"r": 3.0, "l": 2}, 4: {"r": 5.0, "l": 1}},
         ),
     ],
 )
