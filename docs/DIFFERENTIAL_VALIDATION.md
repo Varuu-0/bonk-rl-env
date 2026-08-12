@@ -109,7 +109,7 @@ deterministically without a live match:
 
 - trace schema round-trip + rejection of wrong schema/version,
 - fixture gate passes on the bundled `bonk_Simple_1v1_123.json`,
-- joint gate passes on the bundled `bonk_WDB__No_Mapshake__716916.json`
+- joint gate passes on the bundled `bonk_WDB__no_nothing__1232248.json`
   (ground-anchored prismatic joints),
 - a **recorded** neutral-input run replays with tight tolerance (worst
   position error < 1e-6 map px) — proving the comparator compares real engine

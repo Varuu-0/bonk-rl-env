@@ -191,7 +191,10 @@
   }
 
   window[API] = {
-    startRecording() { S.recording = true; S.ticks = []; S.map = null; S.players = []; S.spawns = []; S.settings = null; S.roundStartFig = 0; S.rc = null; S.lastState = null; S._fallback = 0; },
+    // Capture the CURRENT monotonic fig at recording start so a mid-session
+    // recording still emits 0-based ticks (t = fig - roundStartFig) instead of
+    // absolute-fig values until the next rc change rebases it.
+    startRecording() { S.recording = true; S.ticks = []; S.map = null; S.players = []; S.spawns = []; S.settings = null; S.roundStartFig = (typeof window.__bonkFig === 'number') ? window.__bonkFig : 0; S.rc = null; S.lastState = null; S._fallback = 0; },
     stopRecording() { S.recording = false; },
     isRecording() { return S.recording; },
     getTrace() { return buildTrace(); },
