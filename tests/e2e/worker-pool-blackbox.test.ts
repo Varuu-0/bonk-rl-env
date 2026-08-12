@@ -149,12 +149,11 @@ describe('WorkerPool black-box', () => {
       }
     });
 
-    it('out-of-range actions handled gracefully', async () => {
-      const results = await pool.step([100, -1, 255]);
-      expect(results).toHaveLength(3);
-      for (const r of results) {
-        expect(Number.isFinite(r.reward)).toBe(true);
-      }
+    it('out-of-range actions are rejected', async () => {
+      await expect(pool.step([100, -1, 255])).rejects.toThrow(
+        'Invalid action: expected an encoded action in [0, 63], got 100',
+      );
+      await expect(pool.step([0, 0, 0])).resolves.toHaveLength(3);
     });
 
     it('multiple sequential steps produce consistent results', async () => {
