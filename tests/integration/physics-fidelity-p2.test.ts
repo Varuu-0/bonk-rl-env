@@ -228,6 +228,40 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(warnings.filter(w => /unknown joint type/.test(w))).toHaveLength(0);
   });
 
+  it('scales authored map-pixel translation limits for lpj, lsj, and p joints (#322)', () => {
+    const e = makeEngine();
+    const cases = [
+      { type: 'lpj', lower: -50, upper: 50 },
+      { type: 'lsj', lower: -40, upper: 40 },
+      { type: 'p', lower: -25, upper: 75 },
+    ];
+
+    for (const { type, lower, upper } of cases) {
+      const suffix = type;
+      e.addBody({ name: `${suffix}_anchor`, type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true } as any);
+      e.addBody({ name: `${suffix}_slider`, type: 'rect', x: 0, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+      const bm = e.getBodyMap() as Map<string, any>;
+
+      e.addJoint({
+        type,
+        name: `${suffix}_joint`,
+        bodyA: `${suffix}_anchor`,
+        bodyB: `${suffix}_slider`,
+        anchorA: { x: 0, y: 0 },
+        axis: { x: 1, y: 0 },
+        enableLimit: true,
+        lowerTranslation: lower,
+        upperTranslation: upper,
+      }, bm);
+
+      const joint: any = (e as any).createdJoints.get(`${suffix}_joint`);
+      expect(joint).toBeTruthy();
+      expect(joint.m_enableLimit).toBe(true);
+      expect(joint.m_lowerTranslation).toBeCloseTo(lower / SCALE, 5);
+      expect(joint.m_upperTranslation).toBeCloseTo(upper / SCALE, 5);
+    }
+  });
+
   it('supports a ground-anchored prismatic joint (bodyB=-1) without warning', () => {
     const e = makeEngine();
     const bm = makeBodyMap(e);
@@ -664,8 +698,8 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j).toBeTruthy();
     expect(j.m_enableLimit).toBe(true);
-    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50 / SCALE, 5);
     expect(j.m_enableMotor).toBe(true);
     expect(j.m_motorSpeed).toBeCloseTo(3, 5);
     expect(j.m_maxMotorForce).toBeCloseTo(1000, 5);
@@ -735,8 +769,8 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j).toBeTruthy();
     expect(j.m_enableLimit).toBe(false);
-    expect(j.m_lowerTranslation).toBeCloseTo(-40, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(40, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-40 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(40 / SCALE, 5);
     expect(j.m_enableMotor).toBe(true);
     expect(j.m_motorSpeed).toBeCloseTo(300, 5);
     expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
@@ -762,8 +796,8 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     e.addJoint(md.joints[0], bm);
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j.m_enableLimit).toBe(true);
-    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50 / SCALE, 5);
   });
 
   it('a prismatic joint with a negative or zero length keeps the previous 0/0 range — never inverted (issue #281)', () => {
