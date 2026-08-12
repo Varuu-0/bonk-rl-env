@@ -251,4 +251,39 @@ describe('DetachedRenderSampler', () => {
       expect(rendered).toEqual(ep);
     }
   });
+
+  it('survives the Int32 seq wrap (writeGen * 2 truncation)', () => {
+    const ring = allocRing(4, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+    // Per-slot header ints: [seq, tick] followed by 2 discs * 5 Float32 fields.
+    const slotHeader = (slot: number) => new Int32Array(ring, slot * (2 + 2 * 5) * 4, 2);
+    // Plant the final positive seq before the wrap: writeGen * 2 with writeGen
+    // at 2^30 - 1 gives 2147483646, the largest even Int32.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 900));
+    slotHeader(0)[0] = 2147483646;
+    expect(sampler.renderSlot(0, 4)).not.toBeNull();
+    expect(sampler.renderSlot(0, 4)).toBeNull(); // same seq -> stale
+
+    calls.length = 0;
+    // A small negative delta within one seq cycle is a genuinely stale frame
+    // and must stay rejected.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 901));
+    slotHeader(1)[0] = 2147483644;
+    expect(sampler.renderSlot(1, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    // After the wrap the stored seq is negative (writeGen * 2 = 2^31 truncates
+    // to Int32 min). The delta beyond one Int32 cycle is a fresh write and must
+    // render — the naive `seq <= lastSeq` guard would freeze the sampler here.
+    writeSnapshot(ring, 2, 2, makeReader([ALIVE0, DEAD1], 902));
+    slotHeader(2)[0] = -2147483648;
+    const afterWrap = sampler.renderSlot(2, 4);
+    expect(afterWrap).not.toBeNull();
+    expect(afterWrap!.tick).toBe(902);
+  });
 });

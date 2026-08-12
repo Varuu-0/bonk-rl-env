@@ -72,7 +72,12 @@ export class DetachedRenderSampler {
     // across episode resets. The sim tick is NOT monotonic across resets: every
     // `BonkEnvironment.reset()` rebuilds the world and restarts ticks at 0, so a
     // tick-keyed guard would suppress the entire next episode after a reset.
-    if (raw.seq <= this.lastSeq) return null;
+    // `seq` is `writeGen * 2` truncated to Int32 and wraps negative after 2^31
+    // process-wide commits, so a delta beyond one Int32 cycle is a fresh write
+    // after the wrap, while a small negative delta is a genuinely stale frame.
+    if (raw.seq === this.lastSeq) return null;
+    const seqDelta = raw.seq - this.lastSeq;
+    if (seqDelta < 0 && seqDelta > -2147483648) return null;
     this.lastSeq = raw.seq;
 
     const simSnap: SimSnapshot = {
