@@ -142,6 +142,15 @@ export const WORLD_AABB_EXTENT = 5000;
  */
 export const MOVE_FORCE = 30.0;
 
+/**
+ * Native `fl` (flipped) ratio: the move-force base is 12 normally and 20 on
+ * flipped maps (DEOBFUSCATION §11 "Move Force", readable
+ * `state.ms.fl ? 20 : 12`), so the flipped base = base × 20/12. The port keeps
+ * its own tuned base (MOVE_FORCE, #234 ascent invariant) and applies the same
+ * ratio, preserving the native proportion on any scale (P0 abstraction rule).
+ */
+export const MOVE_FORCE_FLIP_MULTIPLIER = 20 / 12;
+
 /** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
 export const OUT_OF_BOUNDS_DISTANCE = 850;
 
@@ -317,6 +326,18 @@ export interface PhysicsEngineOptions {
     /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7).
      *  `moveForce × heavyForceMultiplier` must exceed `gravityY` for up+heavy to lift. */
     heavyForceMultiplier?: number;
+    /** Native map setting `fl` (flipped): when true the movement-force base is
+     *  `flippedMoveForce` instead of `moveForce` (native 12 → 20, §11). */
+    flipped?: boolean;
+    /** Move-force base used while `flipped` is true. Default: MOVE_FORCE ×
+     *  MOVE_FORCE_FLIP_MULTIPLIER (30 × 20/12 = 50), preserving the native
+     *  12 → 20 ratio on the port's tuned base. */
+    flippedMoveForce?: number;
+    /** Native map setting `re` (respawning): when true a disc that dies
+     *  (except the permanent cap-zone elimination, death type 3) respawns
+     *  immediately at its spawn point with cleared grapple (native state-sync
+     *  branch, readable 8595-8606). */
+    respawnEnabled?: boolean;
 }
 
 /** Frozen final transforms of a dead disc, snapshotted when its body is detached
@@ -384,6 +405,16 @@ export class PhysicsEngine {
   private arenaBoundsMargin: number = ARENA_BOUNDS_MARGIN;
   private moveForce: number = MOVE_FORCE;
   private heavyForceMultiplier: number = HEAVY_FORCE_MULTIPLIER;
+  /** Native map setting `fl`: flipped maps use the flipped move-force base. */
+  private flipped: boolean = false;
+  /** Move-force base used while flipped (native 12 → 20, §11). */
+  private flippedMoveForce: number = MOVE_FORCE * MOVE_FORCE_FLIP_MULTIPLIER;
+  /** Native map setting `re`: dead discs respawn at their spawn point
+   *  (cap-zone eliminations stay permanent). */
+  private respawnEnabled: boolean = false;
+  /** Spawn point per player (world units), recorded at addPlayer for `re`
+   *  respawns (native `sx`/`sy`). */
+  private playerSpawnPoints: Map<number, { x: number; y: number }> = new Map();
   /** Running arena extents in metres, folded in O(1) per addBody so map build
    *  and episode reset stay linear instead of rescanning every platform body
    *  (the old per-add full pass was O(bodies²)). */
@@ -443,6 +474,9 @@ export class PhysicsEngine {
     this.arenaBoundsMargin = PhysicsEngine.sanitizeNonNegative(options.arenaBoundsMargin, ARENA_BOUNDS_MARGIN);
     this.moveForce = PhysicsEngine.sanitizePositive(options.moveForce, MOVE_FORCE);
     this.heavyForceMultiplier = PhysicsEngine.sanitizeNonNegative(options.heavyForceMultiplier, HEAVY_FORCE_MULTIPLIER);
+    this.flipped = PhysicsEngine.sanitizeBoolean(options.flipped, false);
+    this.flippedMoveForce = PhysicsEngine.sanitizePositive(options.flippedMoveForce, this.moveForce * MOVE_FORCE_FLIP_MULTIPLIER);
+    this.respawnEnabled = PhysicsEngine.sanitizeBoolean(options.respawnEnabled, false);
     this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
     this.warnAscentInvariantBreak();
     this.createWorld();
@@ -468,10 +502,13 @@ export class PhysicsEngine {
     // only ever helps a disc rise, so it is always in a lifting regime.
     if (this.gravityY <= 0) return;
     const gravity = this.gravityY;
-    const heavyLift = this.moveForce * this.heavyForceMultiplier;
-    if (gravity >= this.moveForce) {
+    // Flipped maps run on the flipped base — the invariant must hold for the
+    // base that is actually applied per tick.
+    const base = this.flipped ? this.flippedMoveForce : this.moveForce;
+    const heavyLift = base * this.heavyForceMultiplier;
+    if (gravity >= base) {
       console.warn(
-        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} >= moveForce ${this.moveForce.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
+        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} >= moveForce ${base.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
       );
     } else if (gravity >= heavyLift) {
       console.warn(
@@ -890,6 +927,16 @@ export class PhysicsEngine {
     this.updateAllPlayerFilters();
   }
 
+  /** Enable/disable the native flipped (`fl`) move-force base. */
+  setFlipped(enabled: boolean): void {
+    this.flipped = !!enabled;
+  }
+
+  /** Enable/disable the native respawning (`re`) mode. */
+  setRespawnEnabled(enabled: boolean): void {
+    this.respawnEnabled = !!enabled;
+  }
+
   /**
    * Native last-hit attribution (`lhid`/`lht`) for a player.
    * Returns null once the 120-tick attribution window has expired.
@@ -1282,6 +1329,9 @@ export class PhysicsEngine {
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
     this.playerDeathType.set(id, 0);
+    // Record the spawn point (world units) for `re` respawns — the native
+    // `sx`/`sy` a disc returns to on respawn (readable 8599-8602).
+    this.playerSpawnPoints.set(id, { x: x / this.scale, y: y / this.scale });
     // Native a1a spawn value (DEOBFUSCATION §32.3, line 6866).
     this.grappleEnergy.set(id, A1A_SPAWN);
   }
@@ -1312,10 +1362,14 @@ export class PhysicsEngine {
     // no per-map `ppm` factor is needed. Heavy then damps the vector via the
     // configured heavy multiplier. The base and the heavy damp are the
     // documented `player.moveForce` / `player.heavyMassMultiplier` surfaces.
-    if (input.left) force.x -= this.moveForce;
-    if (input.right) force.x += this.moveForce;
-    if (input.up) force.y -= this.moveForce;
-    if (input.down) force.y += this.moveForce;
+    // Flipped maps (`fl`) move on the flipped force base — native `12` vs `20`
+    // (DEOBFUSCATION §11). The base and the heavy damp are the documented
+    // `player.moveForce` / `player.heavyMassMultiplier` surfaces.
+    const base = this.flipped ? this.flippedMoveForce : this.moveForce;
+    if (input.left) force.x -= base;
+    if (input.right) force.x += base;
+    if (input.up) force.y -= base;
+    if (input.down) force.y += base;
 
     if (input.heavy) force.Multiply(this.heavyForceMultiplier);
     body.ApplyForce(force, body.GetWorldCenter());
@@ -1580,6 +1634,33 @@ export class PhysicsEngine {
   }
 
   /**
+   * Native `re` respawn: return a disc that just died to its spawn point with
+   * cleared grapple and fresh velocity, keeping it alive in the round. Mirrors
+   * the native state-sync respawn branch (readable 8595-8606): x/y = sx/sy,
+   * swing cleared (`delete disc.swing`), `ni` new-spawn marker. The engine
+   * does not model spawn velocity, so the body re-spawns at rest; a1a is NOT
+   * reset (the native branch does not touch it). Falls back to detach when no
+   * spawn point is recorded.
+   */
+  private respawnPlayer(id: number, body: any): void {
+    const spawn = this.playerSpawnPoints.get(id);
+    if (!spawn) {
+      this.detachPlayer(id, body);
+      return;
+    }
+    this.releaseGrapple(id);
+    this.pendingSwingDestroy.delete(id);
+    body.SetXForm(new b2Vec2(spawn.x, spawn.y), 0);
+    body.SetLinearVelocity(new b2Vec2(0, 0));
+    body.SetAngularVelocity(0);
+    body.WakeUp();
+    this.detachedPlayerStates.delete(id);
+    this.playerAlive.set(id, true);
+    this.playerDeathType.set(id, 0);
+    this.playerHeavyState.set(id, false);
+  }
+
+  /**
    * Advance the physics simulation by exactly one tick (1/30s).
    * This is the core synchronous step — no real-time clock involved.
    */
@@ -1657,7 +1738,16 @@ export class PhysicsEngine {
       }
 
       if (!this.playerAlive.get(id)) {
-        this.detachPlayer(id, body);
+        // Native `re` respawning: a disc that died (any type except the
+        // permanent cap-zone elimination, type 3) comes back immediately at
+        // its spawn point (readable 8595-8606; the alive rule at 8463 keeps
+        // type-3 eliminations dead). Without respawning, or for type 3, the
+        // dead disc is detached and frozen.
+        if (this.respawnEnabled && this.playerDeathType.get(id) !== 3) {
+          this.respawnPlayer(id, body);
+        } else {
+          this.detachPlayer(id, body);
+        }
       }
     }
 
@@ -1829,6 +1919,7 @@ export class PhysicsEngine {
     this.playerAlive.clear();
     this.detachedPlayerStates.clear();
     this.playerDeathType.clear();
+    this.playerSpawnPoints.clear();
     this.playerGrappleJoints.clear();
     this.grappleEnergy.clear();
     this.swingJustStarted.clear();

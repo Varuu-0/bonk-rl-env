@@ -461,7 +461,7 @@ export class BonkEnvironment {
             randomOppHeavyProb: oppHeavyProb,
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
-            noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
+            noCollide: config.noCollide ?? (mapDef as any).settings?.nc ?? false,
             physics: config.physics ?? {},
             arena: config.arena ?? {},
             player: config.player ?? {},
@@ -504,6 +504,12 @@ export class BonkEnvironment {
             // anything else → 2/6 (DEOBFUSCATION §Solver Iterations). Explicit
             // solverIterations/positionIterations config keys override it.
             physicsQuality: this.config.mapData.settings?.pq,
+            // Per-map native settings (P3b): `fl` flips the move-force base,
+            // `re` enables immediate respawn on death (except cap-zone
+            // eliminations). Both are read from mapData.settings like pq —
+            // the config object is not a settings source.
+            flipped: !!this.config.mapData.settings?.fl,
+            respawnEnabled: !!this.config.mapData.settings?.re,
             scale: config.physics?.scale,
             gravityX: config.physics?.gravityX,
             gravityY: config.physics?.gravityY,
