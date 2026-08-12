@@ -1655,11 +1655,15 @@ export class PhysicsEngine {
     // Fail-safe (malformed-map guard): a spawn point outside the OOB death
     // circle would respawn a disc that dies again on the very next tick —
     // unbounded death→respawn churn with telemetry/body work every tick.
-    // Native has no such escape (it would churn identically); the port
-    // detaches instead, matching its other corruption fail-safes (#271/#276).
+    // Non-finite coordinates must count as out-of-bounds too: `NaN > r²` is
+    // false, so a plain comparison would let a NaN spawn slip through and
+    // restart the churn — the same fail-safe the OOB check itself uses
+    // (#271/#276). Native has no such escape (it would churn identically);
+    // the port detaches instead.
     const sx = spawn.x - this.oobCenterX;
     const sy = spawn.y - this.oobCenterY;
-    if (sx * sx + sy * sy > this.oobRadiusSquared) {
+    const sd2 = sx * sx + sy * sy;
+    if (!Number.isFinite(sd2) || sd2 > this.oobRadiusSquared) {
       this.detachPlayer(id, body);
       return;
     }

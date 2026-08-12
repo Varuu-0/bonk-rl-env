@@ -269,6 +269,24 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
         }
     });
 
+    it('a non-finite spawn coordinate detaches too (NaN bypasses a plain > comparison)', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            const anyEng: any = engine;
+            // Corrupt the recorded spawn: `NaN > r²` is false, so only the
+            // explicit non-finite guard can stop the death→respawn churn.
+            anyEng.playerSpawnPoints.set(0, { x: NaN, y: 0 });
+            anyEng.playerAlive.set(0, false);
+            anyEng.playerDeathType.set(0, 4);
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
     it('explicit env config respawnEnabled overrides the map setting', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,
