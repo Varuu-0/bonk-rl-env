@@ -112,15 +112,20 @@ and `tests/unit/config-example-sanity.test.ts`.
   layouts, binary field orders, factories/defaults, `createNewState`
   normalization math, and world-build semantics are all resolved.
 - **Progress:** `src/core/map-adapter.ts` (`normalizeMap`) converts real
-  native exported maps (`metadata/settings/spawns/physicsBodies/
-  physicsFixtures/physicsShapes/physicsJoints/capZones` → engine `MapDef`),
-  including the bundled native-export fixtures (`bonk_Simple_1v1_123.json`,
+  native exported maps (`metadata/settings/spawns/bodies|physicsBodies/
+  physicsJoints/capZones` → engine `MapDef`), including the bundled
+  native-export fixtures (`bonk_Simple_1v1_123.json`,
   `bonk_WDB__no_nothing__1232248.json`) exercised by the P4 fixture/joint
-  exact-match gates. The engine keeps the flattened `MapDef` as its internal
-  model by design (H2/H3 remain the structural gaps).
-- **Fix:** (remaining) per-shape ppm scaling + rotation, fixture
-  inheritance/negated-friction/filter-bit math are handled in the adapter;
-  multi-fixture support and kinematic types remain on H2/H3 scope.
+  exact-match gates. Per-shape ppm scaling + rotation and fixture
+  inheritance/negated-friction/filter-bit math are applied on the EXPORTER
+  side (`Webscripts/mapexporter.js`, which emits the flat `bodies[]`); the
+  adapter prefers that flat list and falls back to `physicsBodies` — the raw
+  `physicsFixtures`/`physicsShapes` arrays are never read. The engine keeps
+  the flattened `MapDef` as its internal model by design (H2/H3 remain the
+  structural gaps).
+- **Remaining:** multi-fixture bodies (one body, several shapes) and
+  kinematic body types (H2) are the structural gaps; `physicsFixtures`/
+  `physicsShapes` parity would require a fixture-aware MapBodyDef.
 
 ### H2. Body types: static boolean vs s/d/k
 
@@ -155,21 +160,26 @@ and `tests/unit/config-example-sanity.test.ts`.
   (2→red, 3→blue, 4→green, 5→yellow), dynamic-body-only triggers, and
   elimination of non-owners. Verified by `capzone-scoring.test.ts`.
 
-### H5. Joints: distance only vs 4 types — ✅ FIXED (P2 + P4 gate)
+### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` ⚠️ blocked)
 
-- **Status:** ✅ Implemented (verified 2026-08-12) — `addJoint` builds every
-  native joint type per §33.8:
+- **Status:** 🔧 Implemented (verified 2026-08-12) — `addJoint` builds every
+  native joint type per §33.8 except `lsj`'s dedicated line-joint primitive:
   - `d` (distance): fh/dr, authored `len` applied after Initialize (with
     ground `bodyB=-1` anchors in map-px `+365/250` coords),
   - `rv` (revolute): lower/upper limits (`lowerAngle ?? lowerLimit ?? 0`),
     motor speed / max torque,
-  - `lpj`/`lsj`/`p` (prismatic): world axis from `angle`, `referenceAngle =
+  - `lpj`/`p` (prismatic): world axis from `angle`, `referenceAngle =
     -bodyA.angle` for lpj/lsj, #281 symmetric ±length limit fallback, motor
-    force; `lsj` runs on this branch per the §33.8 recipe (the bundled Box2D
-    port has no dedicated `b2LineJoint`),
+    force,
   - `g` (gear): ratio + revolute/prismatic referent validation (other
     referent types silently produce NaN coordinates and are skipped loudly),
   - ground joints: `bodyB = -1` binds to the world with map-px anchors.
+- **`lsj` — ⚠️ Blocked (port limitation, per legend):** native `lsj` is a
+  `b2LineJointDef` (t$e[57]); the bundled Box2D port has no `b2LineJoint`.
+  `addJoint` routes `lsj` onto the prismatic branch per the §33.8 substitute
+  recipe (vertical axis, limits off, `maxMotorForce sf*|k|`, motorSpeed ±300
+  from initial-side computation), but a true line joint needs the ported
+  primitive from `reference/bonk1-box2d`.
 - **Fix refs:** `src/core/physics-engine.ts addJoint`; verified by
   `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
   §33.7 formulas) and the P4 joint exact-match gate (`verifyJointGates` on the

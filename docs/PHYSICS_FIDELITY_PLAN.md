@@ -135,8 +135,11 @@ Final docs pass over `DEOBFUSCATION_FIX_TRACKER.md` and this plan:
   P2/P3/P3b/P4 IMPLEMENTED, P5 this pass) and the milestone table rows reflect
   what shipped.
 - `DEOBFUSCATION_FIX_TRACKER.md` per-item statuses were refreshed to the
-  post-P0–P4 state: H5 (joints) ✅ with the full §33.8 type coverage, C4 `nc`
-  row updated with the P3b map-settings wiring, H3 spawns noted for `re`
+  post-P0–P4 state: H1 marked converter-implemented (exporter emits flat
+  `bodies[]`; adapter prefers it with `physicsBodies` fallback —
+  `physicsFixtures`/`physicsShapes` unread), H5 marked partially fixed with
+  `lsj` ⚠️ blocked on the port (prismatic substitute recipe in place), C4
+  `nc` row updated with the P3b map-settings wiring, H3 spawns noted for `re`
   respawn consumption, and the header date/capture-status section updated.
 - Every claim carries its source citation (DEOBFUSCATION § section / pretty or
   readable artifact line ranges); the Fix Log entries (P3, P4, P3b) hold the
