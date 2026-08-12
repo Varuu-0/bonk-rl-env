@@ -162,7 +162,7 @@ and `tests/unit/config-example-sanity.test.ts`.
   (2→red, 3→blue, 4→green, 5→yellow), dynamic-body-only triggers, and
   elimination of non-owners. Verified by `capzone-scoring.test.ts`.
 
-### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` spring bias ⚠️ blocked)
+### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` spring bias ❌ unimplemented)
 
 - **Status:** 🔧 Implemented (verified 2026-08-12) — `addJoint` builds every
   native joint type per §33.8:
@@ -180,14 +180,15 @@ and `tests/unit/config-example-sanity.test.ts`.
   - `g` (gear): ratio + revolute/prismatic referent validation (other
     referent types silently produce NaN coordinates and are skipped loudly),
   - ground joints: `bodyB = -1` binds to the world with map-px anchors.
-- **`lsj` spring bias — ⚠️ Blocked (port limitation):** the native
-  initial-side spring bias (`maxMotorForce = sf*|k|`, `motorSpeed ±300` from
-  the k factor, §33.8 3496-3505) is NOT implemented — the exporter emits a
-  static `motorSpeed = 300` / `maxMotorForce = sf` (mapexporter.js 622-623)
-  and the engine applies those statically. A faithful spring needs a JS port
-  of `b2LineJoint`/`b2LineJointDef` from the repo's `reference/bonk1-box2d`
-  (the AS3 source ships it); the §33.8 prismatic substitute with the static
-  motor stands in until then.
+- **`lsj` spring bias — ❌ Not implemented:** the native initial-side spring
+  bias (`maxMotorForce = sf*|k|`, `motorSpeed ±300` from the k factor,
+  §33.8 3496-3505) is absent — the exporter emits a static
+  `motorSpeed = 300` / `maxMotorForce = sf` (mapexporter.js 622-623) and the
+  engine applies those statically. No line-joint port is required: §33.9
+  3522-3527 prescribes emulating this on the existing `b2PrismaticJoint`
+  branch with a translation-proportional force and the signed 300 motor speed.
+  `reference/bonk1-box2d` does ship AS3 `b2LineJoint` source, but it is not a
+  prerequisite for this native-client prismatic implementation.
 - **Fix refs:** `src/core/physics-engine.ts addJoint`; verified by
   `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
   §33.7 formulas) and the P4 joint exact-match gate (`verifyJointGates` on the
@@ -688,7 +689,8 @@ tests unless a port limitation is noted.
 | R3H1/R3H2/R3M2/R3L1/R3L2 | ✅ | Fixed telemetry gather ordering, explicit flag precedence, gauge reset, timeout cleanup, and flag-prefix false positives. |
 | R3C1, R3H5-R3H8, R3M10-R3M11 | ✅ | Fixed composite reward construction, enabled propagation, navigation bonus logic, curiosity repeat reward, normalization, and validator state cleanup. |
 | R2M4/R2M5, R3M12-R3M15, R3L9 | ✅ | Fixed Python episode metadata/close behavior, logger durability, visualization default map, benchmark metrics/timing, and BonkHost trimmed-mean arithmetic. |
-| R2H4, H1-H5, `fz`/`cf`/`fr`/`bu`/`sk`, full native grapple anchor, `lsj`, Step 2/6 parity, ClearForces | ⚠️ Blocked | Requires captured native maps, unresolved runtime traces, or Box2D-port capabilities unavailable in the installed dependency. |
+| R2H4, H2-H4, `fz`/`cf`/`fr`/`bu`/`sk`, full native grapple anchor, Step 2/6 parity, ClearForces | ⚠️ Blocked | Requires captured native maps, unresolved runtime traces, or Box2D-port capabilities unavailable in the installed dependency. H1/H5 are superseded by their current sections above. |
+| `lsj` initial-side spring bias | ❌ Not implemented | §33.9 prescribes a translation-proportional force / signed-300 motor emulation on the existing prismatic branch; no Box2D-port capability is missing. |
 
 Verification on 2026-07-28:
 
