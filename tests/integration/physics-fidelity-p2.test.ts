@@ -746,10 +746,12 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(md.joints).toBeUndefined();
   });
 
-  it('tolerates a sparse physicsJoints array (holes iterate as undefined)', () => {
-    // A programmatic mapData can hand normalizeMap a sparse physicsJoints;
-    // array holes iterate as `undefined` and must be skipped like nulls, not
-    // reach j.bodyA and throw the #283 TypeError (#283).
+  it('tolerates dense physicsJoints entries that are literal undefined', () => {
+    // A programmatic mapData can hand normalizeMap a DENSE physicsJoints array
+    // containing literal `undefined` entries. (Sparse holes never reach the map
+    // callback — Array.prototype.map skips them — so only a dense undefined can
+    // exercise the guard.) The old null-only guard dereferenced these at
+    // j.bodyA and threw the #283 TypeError; they must be skipped like nulls.
     const md = normalizeMap({
       bodies: [
         { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
@@ -757,7 +759,7 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       spawns: [{ x: 0, y: 0, blue: true, red: true }],
       physicsJoints: [
         null,
-        ,
+        undefined,
         { bodyA: 0, bodyB: -1, type: 'lpj', anchorA: { x: 0, y: 0 } },
       ],
     } as any) as any;

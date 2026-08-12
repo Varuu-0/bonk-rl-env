@@ -300,12 +300,14 @@ export function normalizeMap(raw: unknown): MapDef {
     // The exporter (Webscripts/mapexporter.js) emits a literal `null` for any
     // joint it cannot export to keep raw-array indices stable, so `physicsJoints`
     // may contain `null` entries (per the `(FlatJoint | null)` contract). A
-    // programmatic `mapData` may also hand us a sparse array, whose holes
-    // iterate as `undefined`. Skip both (with a warning) instead of throwing on
-    // dereference — a map with an unexportable joint must still load its bodies,
-    // spawns and cap zones. The raw array position (`jointIdx`) is kept for
-    // joint naming and gear-referent lookups so filtered-out entries cannot
-    // mis-wire gear referents.
+    // programmatic `mapData` may also hand us a dense array containing literal
+    // `undefined` entries (Array.prototype.map skips sparse holes without
+    // invoking its callback, so holes never reach this code). Skip both null
+    // and undefined (with a warning) instead of throwing on dereference — a map
+    // with an unexportable joint must still load its bodies, spawns and cap
+    // zones. The raw array position (`jointIdx`) is kept for joint naming and
+    // gear-referent lookups so filtered-out entries cannot mis-wire gear
+    // referents.
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
         if (j === null || j === undefined) {
             console.warn(`[map-adapter] Skipping null/undefined physicsJoints entry at index ${jointIdx}`);
