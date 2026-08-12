@@ -3,7 +3,7 @@
 Tracks every discrepancy between verified bonk.io deobfuscation findings
 (`docs/DEOBFUSCATION.md`) and the local simulator, and the status of each fix.
 
-**Last updated:** 2026-08-04
+**Last updated:** 2026-08-12
 **Audit source:** `docs/DEOBFUSCATION.md` (38 sections; current artifact and
 audit baseline verified August 3, 2026)
 
@@ -83,7 +83,7 @@ and `tests/unit/config-example-sanity.test.ts`.
 | Instant cap zones (`ty 2-5`) | ✅ Native mapping 2→red, 3→blue, 4→green, 5→yellow; dynamic-body trigger only |
 | Cap-zone progress `p`, limit `l*30`, countdown `f=20` | ✅ Implemented |
 | Same-team collision disabled (`tea && same team`) | ✅ Implemented via team-slot category bits (g1–g4 = red/blue/green/yellow) with own-team bit masked out; port ignores `SetContactFilter` so mask data is the enforcement path (verified empty-call repro) |
-| No-collide mode (`nc`) | ✅ All disc-disc contacts disabled via mask; `noCollide` env config wired |
+| No-collide mode (`nc`) | ✅ All disc-disc contacts disabled via mask; wired end-to-end from `mapData.settings.nc` (config `noCollide` override wins; the old `mapDef.physics?.nc` lookup was a dead path the adapter never emits) — P3b |
 | Force zones (`fz`) in contact | **RESOLVED (§31.1):** source behavior is documented; port implementation status remains separate |
 | Grapple destroy on disc collision (`swingCollideDestroyEvents`) | ✅ Pending-destroy set processed after each Step; verified `swing` = active grapple joint |
 | Last-hit attribution (`lhid`/`lht=120`) | ✅ Both directions recorded, `LAST_HIT_TIMER_TICKS=120` countdown, expiry clears attribution |
@@ -107,15 +107,27 @@ and `tests/unit/config-example-sanity.test.ts`.
 
 ### H1. Map format flattened (1 level) vs native 3-level (body → fixture → shape)
 
-- **Status:** ❌ Not fixed — **spec complete (DEOBFUSCATION §33, 2026-07-29)**:
-  full body/fixture/shape field layouts, binary field orders, factories/defaults,
-  `createNewState` normalization math, and world-build semantics are all resolved.
-- **Impact:** Cannot load native exported maps without a converter. Root blocker
-  for using real captured maps.
-- **Fix:** Implement a native-to-flat converter per §33: replicate
-  `(p+365,250)/ppm` body offsets, per-shape ppm scaling + rotation, fixture
-  inheritance/negated-friction/filter-bit math, and the per-joint normalization
-  (§33.8). Unblocks R2M9.
+- **Status:** 🔧 Converter implemented; internal model stays flat. **Spec
+  complete (DEOBFUSCATION §33, 2026-07-29)**: full body/fixture/shape field
+  layouts, binary field orders, factories/defaults, `createNewState`
+  normalization math, and world-build semantics are all resolved.
+- **Progress:** `src/core/map-adapter.ts` (`normalizeMap`) converts real
+  native exported maps (`metadata/settings/spawns/bodies|physicsBodies/
+  physicsJoints/capZones` → engine `MapDef`), including the bundled
+  native-export fixtures (`bonk_Simple_1v1_123.json`,
+  `bonk_WDB__no_nothing__1232248.json`) exercised by the P4 fixture/joint
+  exact-match gates. The flattening work is split across layers: rotation and
+  fixture inheritance are applied by the exporter (`Webscripts/mapexporter.js`
+  emits the flat `bodies[]`); `f_p` friction polarity and `collidesGroupN` →
+  `collides{g1..g4}` mapping are adapter-side (map-adapter.ts 182-200); ppm
+  scaling of body/shape coordinates is engine-side (`def.x / this.scale`,
+  physics-engine.ts 762/789). The raw `physicsFixtures`/`physicsShapes`
+  arrays are never read — the adapter prefers flat `bodies[]` and falls back
+  to `physicsBodies`. The engine keeps the flattened `MapDef` as its internal
+  model by design (H2/H3 remain the structural gaps).
+- **Remaining:** multi-fixture bodies (one body, several shapes) and
+  kinematic body types (H2) are the structural gaps; `physicsFixtures`/
+  `physicsShapes` parity would require a fixture-aware MapBodyDef.
 
 ### H2. Body types: static boolean vs s/d/k
 
@@ -134,6 +146,10 @@ and `tests/unit/config-example-sanity.test.ts`.
   matches teams via `ty1↔f, 2↔r, 3↔b, 4↔gr, 5↔ye`. `sx/sy/sxv/syv/
   spawnTeamInfo` are runtime disc fields, not map fields.
 - **Impact:** Discards spawn velocities, team filtering, priority. Assumes 2 spawns.
+- **Partial progress (P3b):** `re` respawns consume the recorded spawn points
+  (engine `playerSpawnPoints` from `addPlayer`), and the P4 capture harness
+  records per-disc `sx`/`sy` from live state — but the map data model
+  (`MapSpawnPoints` team-keyed object) is unchanged.
 - **Fix:** Replace `MapSpawnPoints` with array of
   `{x, y, xv, yv, priority, teams: {f,r,b,gr,ye}}` (equivalent to requested
   `{sx, sy, sxv, syv, spawnTeamInfo}` shape after normalization).
@@ -146,18 +162,37 @@ and `tests/unit/config-example-sanity.test.ts`.
   (2→red, 3→blue, 4→green, 5→yellow), dynamic-body-only triggers, and
   elimination of non-owners. Verified by `capzone-scoring.test.ts`.
 
-### H5. Joints: distance only vs 4 types — 🔧 Partially fixed
+### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` spring bias ❌ unimplemented)
 
-- **Status:** 🔧 `distance`, `rv` (revolute), `lpj` (prismatic) implemented;
-  `lsj` (line/spring joint) not exported by this Box2D port. **Full native
-  construction spec now resolved (§33.8)**: `lpj`/`p`/`lsj` are all native
-  `b2LineJointDef` (t$e[57]); `lsj` = vertical-axis line joint, limits off,
-  maxMotorForce `sf*|k|`, motorSpeed ±300 from initial-side computation;
-  `d.fh` on disk is a period → runtime `1/fh`.
-- **Fix:** `addJoint` now builds revolute and prismatic joints with anchors and
-  axes. `lsj` remains ⚠️ Blocked on the port — implementation recipe in §33.8/§33.9
-  (substitute prismatic + translation-proportional force, or port
-  `b2LineJoint.as` from `reference/bonk1-box2d`).
+- **Status:** 🔧 Implemented (verified 2026-08-12) — `addJoint` builds every
+  native joint type per §33.8:
+  - `d` (distance): fh/dr, authored `len` applied after Initialize (with
+    ground `bodyB=-1` anchors in map-px `+365/250` coords),
+  - `rv` (revolute): lower/upper limits (`lowerAngle ?? lowerLimit ?? 0`),
+    motor speed / max torque,
+  - `lpj`/`p` (prismatic): world axis from `angle`, `referenceAngle =
+    -bodyA.angle` for lpj/lsj, #281 symmetric ±length limit fallback, motor
+    force,
+  - `lsj` (springy prismatic): vertical axis (0,1), limits ±slen with
+    `enableLimit=false`, motor 300 — §33.8 3487-3506 constructs `lsj` with
+    `b2PrismaticJointDef` (NOT a line joint; the earlier `t$e[57]` line-joint
+    reading was corrected by the 2026-07-29 §33.8 audit),
+  - `g` (gear): ratio + revolute/prismatic referent validation (other
+    referent types silently produce NaN coordinates and are skipped loudly),
+  - ground joints: `bodyB = -1` binds to the world with map-px anchors.
+- **`lsj` spring bias — ❌ Not implemented:** the native initial-side spring
+  bias (`maxMotorForce = sf*|k|`, `motorSpeed ±300` from the k factor,
+  §33.8 3496-3505) is absent — the exporter emits a static
+  `motorSpeed = 300` / `maxMotorForce = sf` (mapexporter.js 622-623) and the
+  engine applies those statically. No line-joint port is required: §33.9
+  3522-3527 prescribes emulating this on the existing `b2PrismaticJoint`
+  branch with a translation-proportional force and the signed 300 motor speed.
+  `reference/bonk1-box2d` does ship AS3 `b2LineJoint` source, but it is not a
+  prerequisite for this native-client prismatic implementation.
+- **Fix refs:** `src/core/physics-engine.ts addJoint`; verified by
+  `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
+  §33.7 formulas) and the P4 joint exact-match gate (`verifyJointGates` on the
+  bundled WDB ground-prismatic map).
 
 ---
 
@@ -240,6 +275,12 @@ the required room-list, lobby, and map-picker IDs against the retained fixtures.
 These changes remove the local injection-sequencing blind spot; an authenticated
 live session and the server-side lobby connection are still required to capture
 the maps.
+
+**Per-tick trace harness (2026-08-12, P4):** `Webscripts/rl-trace-capture.user.js`
+additionally provides a live per-tick disc-state recorder (`__bonkRlTrace` +
+JSON download) for differential validation — see `docs/DIFFERENTIAL_VALIDATION.md`.
+It does not replace the full map-export capture above, but the same live session
+can capture both in one run.
 
 ---
 
@@ -648,7 +689,8 @@ tests unless a port limitation is noted.
 | R3H1/R3H2/R3M2/R3L1/R3L2 | ✅ | Fixed telemetry gather ordering, explicit flag precedence, gauge reset, timeout cleanup, and flag-prefix false positives. |
 | R3C1, R3H5-R3H8, R3M10-R3M11 | ✅ | Fixed composite reward construction, enabled propagation, navigation bonus logic, curiosity repeat reward, normalization, and validator state cleanup. |
 | R2M4/R2M5, R3M12-R3M15, R3L9 | ✅ | Fixed Python episode metadata/close behavior, logger durability, visualization default map, benchmark metrics/timing, and BonkHost trimmed-mean arithmetic. |
-| R2H4, H1-H5, `fz`/`cf`/`fr`/`bu`/`sk`, full native grapple anchor, `lsj`, Step 2/6 parity, ClearForces | ⚠️ Blocked | Requires captured native maps, unresolved runtime traces, or Box2D-port capabilities unavailable in the installed dependency. |
+| R2H4, H2-H4, `fz`/`cf`/`fr`/`bu`/`sk`, full native grapple anchor, Step 2/6 parity, ClearForces | ⚠️ Blocked | Requires captured native maps, unresolved runtime traces, or Box2D-port capabilities unavailable in the installed dependency. H1/H5 are superseded by their current sections above. |
+| `lsj` initial-side spring bias | ❌ Not implemented | §33.9 prescribes a translation-proportional force / signed-300 motor emulation on the existing prismatic branch; no Box2D-port capability is missing. |
 
 Verification on 2026-07-28:
 

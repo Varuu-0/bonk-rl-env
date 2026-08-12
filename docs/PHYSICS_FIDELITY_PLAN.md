@@ -23,13 +23,25 @@ All facts below are cited to DEOBFUSCATION §33 (state/encoder/decoder), §34
 - `filter.categoryBits = 2^(f_c+1)` (line 3270).
 - `filter.maskBits`: starts at 65535, subtracts a bit per disabled group (lines 3271-3273). **Must agree with the engine's disc category bits** — a calibration item for Phase 4 differential validation.
 
-### Joints (P2) — PROVEN, §33.7/33.8
+### Joints (P2) — PROVEN §33.7/33.8, PARTIALLY IMPLEMENTED
 Native `g` = `b2GearJointDef` on created `ja/jb` with `ratio = r` (7836-7843).
 `lpj`/`lsj`/`p` all use `b2PrismaticJointDef` with exact anchor/force
 normalization (`plen, pms ÷ ppm`, `mmf *= 17280`, `ms *= 12`,
 `fh=0? 0.0001 : 1/period`, Y-flip rv limits, ground `bodyB=-1` anchors use
-`+365/250` map-px). Engine today: only `distance/rv/lpj`; no `g`, no `lsj`, no `p`,
-no ground joints.
+`+365/250` map-px). The engine's `addJoint` now implements every native joint
+type: `d` (fh/dr, authored `len` applied after Initialize, ground-px anchors),
+`rv` (lower/upper limits, motor speed/torque), `lpj`/`lsj`/`p` (prismatic:
+world axis from `angle`, `referenceAngle = -bodyA.angle` for lpj/lsj, #281
+symmetric ±length fallback, motor force — `lsj` is the §33.8 springy
+prismatic variant, motor 300), `g` (gear ratio with revolute/
+prismatic referent validation), and ground joints (`bodyB = -1`, map-px
+anchors). The `lsj` initial-side spring bias (`maxMotorForce = sf*|k|`,
+motorSpeed ±300, §33.8 3496-3505) remains ❌ unimplemented: §33.9
+3522-3527 prescribes emulating it on the existing prismatic branch with a
+translation-proportional force and signed motor speed, so no `b2LineJoint`
+port is required. The current exporter/engine use static 300/sf instead.
+Other joint coverage is verified by `physics-fidelity-p2.test.ts` and the P4
+joint exact-match gate.
 
 ### Map physics settings (P3) — pq PROVEN, gd RE-CLASSIFIED
 - `pq` → solver iterations: native low **2/6**, high **15/15** (lines 260, 634-635);
@@ -109,13 +121,36 @@ The remaining per-map settings now gate runtime behavior, all read from
 |---|-------|-------------|--------------|
 | **P0** | Scale/ppm model | Audit doc + shared-divisor invariant tests; no risky refactor | unit test: body & disc proportions exact across scale; spacing/radius invariants |
 | **P1** | Fixture fidelity | density clamp ≥0.0001, friction polarity, restitution fallback, mask-bit spec | fixture-level unit tests asserting exact numbers from §33.4 |
-| **P2** | Joint model | implement `rv` limits/motor, `d` fh/len, `lpj/lsj/p` prismatic params, gear `g`, ground joints | joint invariant tests per §33.7 formulas |
+| **P2** | Joint model | `rv` limits/motor, `d` fh/len, `lpj/p` prismatic params, gear `g`, ground joints ✅; `lsj` static prismatic base ✅ but k-biased spring motor ❌ | joint invariant tests per §33.7 formulas + P4 exact-match gate |
+| **P2b** | LSJ spring fidelity | emulate §33.8 initial-side `k` with `maxMotorForce = sf*|k|` and motorSpeed ±300 on the existing prismatic branch | deterministic initial-side ±k tests against §33.8 3496-3505 |
 | **P3** | Map physics settings | per-map `pq`→solver iters (2/6 low, 15/15 high), `gd`→exposed on MapDef.settings (runtime application deferred: native enforces gravity 20, pretty 7238-7240) | engine-level tests: pq changes solver behavior; gd does NOT override gravity (enforcement parity) |
 | **P3b** | Settings runtime gating | `fl`→flipped move-force base (×20/12), `nc`→disc-disc no-collide, `re`→immediate respawn at spawn point (type-3 deaths permanent) | engine/env-level tests: flipped force magnitude; nc masks drop player bits + pass-through behavior; OOB death respawns vs stays dead; type-3 permanence |
 | **P4** | Differential validation | capture harness (record native snapshots) + replay comparator + fixture/joint exact-match gates | comparator diff ≤ tolerance (validated: neutral-run replay ≈ 0, perturbed trace fails); gates pass on bundled maps; live capture workflow documented |
 | **P5** | Docs + gating | update DEOBFUSCATION_FIX_TRACKER with ✅/❌/partial per item; every claim cited | PR review gate |
 
 ## Dependency order
-P0 → P1 → P4(capture harness) → P2 → P3 → P3b → P4(comparison) → P5.
+P0 → P1 → P4(capture harness) → P2 → P3 → P3b → P4(comparison) → P5 → P2b.
 P4-capture must precede P2 so joint anchors are verified against real native
 state; P1 is independent and can proceed first.
+
+## Documentation gating (P5) — IMPLEMENTED (2026-08-12)
+
+Final docs pass over `DEOBFUSCATION_FIX_TRACKER.md` and this plan:
+
+- Every milestone now carries its delivery state in the plan (P0/P1 PROVEN,
+  P2 PARTIAL, P3/P3b/P4 IMPLEMENTED, P5 this pass) and the milestone table
+  rows reflect what shipped; P2b records the remaining, emulatable `lsj`
+  spring-bias work.
+- `DEOBFUSCATION_FIX_TRACKER.md` per-item statuses were refreshed to the
+  post-P0–P4 state: H1 marked converter-implemented (exporter emits flat
+  `bodies[]`; adapter prefers it with `physicsBodies` fallback —
+  `physicsFixtures`/`physicsShapes` unread), H5 marked partially fixed with
+  `lsj` spring bias ❌ unimplemented (emulatable on the prismatic branch), C4
+  `nc` row updated with the P3b map-settings wiring, H3 spawns noted for `re`
+  respawn consumption, and the header date/capture-status section updated.
+- Every claim carries its source citation (DEOBFUSCATION § section / pretty or
+  readable artifact line ranges); the Fix Log entries (P3, P4, P3b) hold the
+  chronological record with test counts and verification commands.
+
+The PR review gate is the remaining verification for this documentation
+milestone; P2b remains the only physics-fidelity implementation follow-up.
