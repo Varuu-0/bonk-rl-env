@@ -156,6 +156,59 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(pos.y, 5);
   });
 
+  it('malformed truthy anchors degrade to the body origin, never a NaN pivot (#282)', () => {
+    // The map adapter passes anchorA through verbatim (map-adapter.ts:318), so
+    // hand-authored maps can carry truthy-but-invalid anchors (`{}`, `{x: null}`).
+    // makeAnchorA would compute a.x / scale = NaN for these; the rv pivot must
+    // fall back to the body origin exactly like the d-joint branch does via
+    // `?.x ?? 0` — no NaN coordinates may reach the joint def.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: false, density: 1, angularVelocity: 0.5 } as any);
+    e.addBody({ name: 'bodyB', type: 'rect', x: 200, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+    const bodyA = bm.get('bodyA') as any;
+
+    for (const [name, anchor] of [
+      ['j_empty', {}],
+      ['j_nullx', { x: null, y: 0 }],
+      ['j_nully', { x: 0, y: null }],
+    ] as [string, any][]) {
+      e.addJoint({ type: 'rv', name, bodyA: 'bodyA', bodyB: 'bodyB', anchorA: anchor, enableLimit: false }, bm);
+      e.addJoint({ type: 'd', name: name + '_d', bodyA: 'bodyA', bodyB: 'bodyB', anchorA: anchor, anchorB: anchor }, bm);
+    }
+
+    for (const name of ['j_empty', 'j_nullx', 'j_nully']) {
+      const rv = (e as any).createdJoints.get(name);
+      const d = (e as any).createdJoints.get(name + '_d');
+      expect(rv).toBeTruthy();
+      expect(d).toBeTruthy();
+      // Both branches degrade the malformed anchor to the body origin: the rv
+      // pivot lands at local (0,0) instead of NaN, and the d joint pins its
+      // local anchors at (0,0) (the `?.x ?? 0` coerce path).
+      for (const a of [rv.m_localAnchor1, d.m_localAnchor1, d.m_localAnchor2]) {
+        expect(Number.isFinite(a.x)).toBe(true);
+        expect(Number.isFinite(a.y)).toBe(true);
+        expect(a.x).toBeCloseTo(0, 5);
+        expect(a.y).toBeCloseTo(0, 5);
+      }
+      expect(Number.isFinite(d.m_length)).toBe(true);
+      expect(d.m_length).toBeCloseTo(100 / SCALE, 5);
+    }
+
+    // And the rv pivot stays finite and origin-pinned while the body rotates.
+    for (let i = 0; i < 30; i++) e.tick();
+    const rv = (e as any).createdJoints.get('j_empty');
+    expect(bodyA.GetAngle()).not.toBeCloseTo(0, 2);
+    expect(Number.isFinite(rv.m_localAnchor1.x)).toBe(true);
+    expect(Number.isFinite(rv.m_localAnchor1.y)).toBe(true);
+    expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(rv.m_localAnchor1.y).toBeCloseTo(0, 5);
+    const pos = bodyA.GetPosition();
+    expect(Number.isFinite(bodyA.GetWorldPoint(rv.m_localAnchor1).x)).toBe(true);
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(pos.x, 5);
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(pos.y, 5);
+  });
+
   it('constructs a prismatic (lpj) joint with limits, motor, and axis', () => {
     const e = makeEngine();
     const bm = makeBodyMap(e);

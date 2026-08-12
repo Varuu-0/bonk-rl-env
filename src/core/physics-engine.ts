@@ -1070,12 +1070,17 @@ export class PhysicsEngine {
       // so the joint's local anchor on bodyA lands exactly at aa/SCALE
       // (GetPosition returns an internal reference — operate on a copy).
       const pivot = bodyA.GetPosition().Copy();
-      // Only add the body-relative offset when the map authored an anchor:
-      // when `aa` is absent the exporter emits `anchorA: null`, and
+      // Only add the body-relative offset when the map authored a valid
+      // anchor: when `aa` is absent the exporter emits `anchorA: null`, and
       // makeAnchorA then falls back to a WORLD position (bodyA.GetPosition()).
-      // Adding it again would produce p + R·p instead of p. The un-authored
-      // fallback pins the pivot at the body origin (local anchor (0,0)).
-      if (def.anchorA) pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
+      // Adding it again would produce p + R·p instead of p. Truthy-but-invalid
+      // anchors (e.g. `{}`, `{x: null}`) must degrade to the same origin —
+      // makeAnchorA would compute a.x / scale = NaN, while the d-joint branch
+      // coerces the same input to 0 via `?.x ?? 0`. The un-authored fallback
+      // pins the pivot at the body origin (local anchor (0,0)).
+      if (def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y)) {
+        pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
+      }
       jd.Initialize(bodyA, bodyB, pivot);
       jd.collideConnected = cd;
       jd.enableLimit = !!def.enableLimit;
