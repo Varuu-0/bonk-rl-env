@@ -1022,14 +1022,17 @@ export class PhysicsEngine {
     }
 
     const cd = def.collideConnected ?? false;
-    // §33.8 anchor coordinates: only finite numbers are honored — anything
-    // else (null/undefined, NaN, non-numeric strings) degrades to 0 so no
-    // joint branch can emit a NaN anchor. A bare `?? 0` does not coerce NaN
-    // (`NaN ?? 0` is still NaN), so the d-branch anchors must go through the
-    // same finite check as the rv pivot guard. Returns the value in world
-    // units (map px / this.scale).
-    const anchorCoord = (v: unknown): number =>
-      (typeof v === 'number' && Number.isFinite(v) ? v : 0) / this.scale;
+    // §33.8 anchor parity: an anchor is honored only when BOTH coordinates are
+    // finite numbers — anything else (null/undefined, NaN, non-numeric strings)
+    // degrades the WHOLE anchor to (0,0), matching the rv branch's whole-anchor
+    // pivot guard. Per-coordinate coercion would pin e.g. `{x: 5, y: null}` at
+    // (5/SCALE, 0) in the d branch while the rv pivot degrades fully to (0,0).
+    // A bare `?? 0` does not coerce NaN (`NaN ?? 0` is still NaN). Returns the
+    // pair in world units (map px / this.scale).
+    const anchorPair = (a?: { x: number; y: number }): [number, number] =>
+      a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? [a.x / this.scale, a.y / this.scale]
+        : [0, 0];
     const makeAnchorA = (a?: { x: number; y: number }) =>
       a && Number.isFinite(a.x) && Number.isFinite(a.y)
         ? new b2Vec2(a.x / this.scale, a.y / this.scale)
@@ -1041,21 +1044,24 @@ export class PhysicsEngine {
       const jd = new b2DistanceJointDef();
       if (isGround) {
         // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
+        const [abx, aby] = anchorPair(def.anchorB);
         jd.Initialize(
           bodyA,
           bodyB,
           makeAnchorA(def.anchorA),
-          new b2Vec2(anchorCoord(def.anchorB?.x), anchorCoord(def.anchorB?.y)),
+          new b2Vec2(abx, aby),
         );
       } else {
         // §33.8 d: aa/ab are body-relative local anchors, set directly in the
         // connected bodies' frames (Initialize would subtract each body's
         // position, pinning the joint ~one body-position away on any
         // non-origin body).
+        const [ax, ay] = anchorPair(def.anchorA);
+        const [bx, by] = anchorPair(def.anchorB);
         jd.body1 = bodyA;
         jd.body2 = bodyB;
-        jd.localAnchor1.Set(anchorCoord(def.anchorA?.x), anchorCoord(def.anchorA?.y));
-        jd.localAnchor2.Set(anchorCoord(def.anchorB?.x), anchorCoord(def.anchorB?.y));
+        jd.localAnchor1.Set(ax, ay);
+        jd.localAnchor2.Set(bx, by);
         if (!(typeof def.length === 'number' && Number.isFinite(def.length))) {
           // No authored length: replicate Initialize's default — the distance
           // between the anchor world points in the bodies' frames.
@@ -1084,11 +1090,11 @@ export class PhysicsEngine {
       // anchor: when `aa` is absent the exporter emits `anchorA: null`, and
       // makeAnchorA then falls back to a WORLD position (bodyA.GetPosition()).
       // Adding it again would produce p + R·p instead of p. Truthy-but-invalid
-      // anchors (e.g. `{}`, `{x: null}`, `{x: NaN}`, string coordinates) must
-      // degrade to the same origin — makeAnchorA would compute a.x / scale =
-      // NaN, while the d branch's anchorCoord coerces the same input to 0.
-      // The un-authored fallback pins the pivot at the body origin (local
-      // anchor (0,0)).
+      // and partially-valid anchors (e.g. `{}`, `{x: null}`, `{x: NaN}`, string
+      // coordinates, `{x: 5, y: null}`) must degrade the whole anchor to the
+      // body origin — makeAnchorA would compute a.x / scale = NaN, while the d
+      // branch's anchorPair applies the same whole-anchor finite check. The
+      // un-authored fallback pins the pivot at the body origin (local (0,0)).
       if (def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y)) {
         pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
       }
