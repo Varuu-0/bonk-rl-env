@@ -116,7 +116,10 @@ interface ExportedMap {
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
     physicsBodies?: FlatBody[];
-    physicsJoints?: FlatJoint[];
+    // The exporter (Webscripts/mapexporter.js) pushes a literal `null` for any
+    // joint it cannot export to keep raw-array indices stable, so entries may
+    // be null as well as FlatJoint.
+    physicsJoints?: (FlatJoint | null)[];
     physicsFixtures?: unknown[];
     physicsShapes?: unknown[];
 }
@@ -294,7 +297,22 @@ export function normalizeMap(raw: unknown): MapDef {
     flatSource.forEach((b, i) => {
         if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
+    // The exporter (Webscripts/mapexporter.js) emits a literal `null` for any
+    // joint it cannot export to keep raw-array indices stable, so `physicsJoints`
+    // may contain `null` entries (per the `(FlatJoint | null)` contract). A
+    // programmatic `mapData` may also hand us a dense array containing literal
+    // `undefined` entries (Array.prototype.map skips sparse holes without
+    // invoking its callback, so holes never reach this code). Skip both null
+    // and undefined (with a warning) instead of throwing on dereference — a map
+    // with an unexportable joint must still load its bodies, spawns and cap
+    // zones. The raw array position (`jointIdx`) is kept for joint naming and
+    // gear-referent lookups so filtered-out entries cannot mis-wire gear
+    // referents.
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
+        if (j === null || j === undefined) {
+            console.warn(`[map-adapter] Skipping null/undefined physicsJoints entry at index ${jointIdx}`);
+            return null;
+        }
         // bodyA: -1 means the joint is anchored to the static ground body on the
         // A side (§33.8: ba/bb of -1 = ground on either side). Emit the reserved
         // ground name; addJoint resolves it to the synthetic ground body. Any
@@ -378,7 +396,7 @@ export function normalizeMap(raw: unknown): MapDef {
             }
         }
         return out;
-    });
+    }).filter((j): j is Record<string, unknown> => j !== null);
 
     const ph = map.physics || {};
     const bounds = {
