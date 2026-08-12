@@ -412,4 +412,117 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
       await env.stop();
     }
   });
+
+  it('overlapping start calls reject with "already starting" and never leave a zombie IPC server (#267)', { timeout: 60000 }, async () => {
+    const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START + 450, endPort: IPC_SERVER_TEST_START + 499 });
+    const env = new BonkEnv({
+      numEnvs: 1,
+      useSharedMemory: false,
+      portManager,
+      enableIpcServer: true,
+    });
+
+    const results = await Promise.allSettled([env.start(), env.start()]);
+    const fulfilled = results.filter((r) => r.status === 'fulfilled');
+    const rejected = results.filter((r) => r.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    // The loser must fail the transient "starting" guard with a distinct
+    // message, not race the winner to bind the same port.
+    expect((rejected[0] as PromiseRejectedResult).reason).toBeInstanceOf(Error);
+    expect((rejected[0] as PromiseRejectedResult).reason.message).toContain('already starting');
+    expect((rejected[0] as PromiseRejectedResult).reason.message).not.toContain('already running');
+    expect((rejected[0] as PromiseRejectedResult).reason.message).not.toContain('Address already in use');
+
+    try {
+      expect(env.isActive()).toBe(true);
+      expect(await canConnectTcp(env.port)).toBe(true);
+    } finally {
+      await env.stop();
+    }
+
+    expect(env.isActive()).toBe(false);
+    expect(portManager.isAllocated(env.port)).toBe(false);
+    expect(await canConnectTcp(env.port)).toBe(false);
+  });
+
+  it('a failed start can be retried on the same env with the port re-reserved (#267)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 500;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const blocker = await occupyPort(port);
+
+    let env: BonkEnv;
+    try {
+      env = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+
+      await expect(env.start()).rejects.toThrow();
+      expect(env.isActive()).toBe(false);
+      // The failed attempt released the constructor's port reservation.
+      expect(portManager.isAllocated(port)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+
+    // Retry on the same env must re-reserve the port and bind it, instead of
+    // dying with EADDRINUSE because the reservation was lost.
+    await env.start();
+    try {
+      expect(env.isActive()).toBe(true);
+      expect(await canConnectTcp(port)).toBe(true);
+    } finally {
+      await env.stop();
+    }
+
+    expect(env.isActive()).toBe(false);
+    expect(portManager.isAllocated(port)).toBe(false);
+    expect(await canConnectTcp(port)).toBe(false);
+  });
+
+  it('a retry after failed start re-allocates a fresh port when another env took the old one (#267)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 550;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const blocker = await occupyPort(port);
+
+    let envA: BonkEnv;
+    try {
+      envA = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+
+      await expect(envA.start()).rejects.toThrow();
+      expect(envA.isActive()).toBe(false);
+      // The failed attempt released the reservation.
+      expect(portManager.isAllocated(port)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+
+    // Another env constructed before the retry is allocated the released port.
+    const envB = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager, enableIpcServer: true });
+    expect(envB.port).toBe(port);
+
+    // The retry must NOT bind envB's port: envA no longer owns it, so it has
+    // to re-allocate a fresh port instead of double-claiming a foreign one.
+    await envA.start();
+    try {
+      expect(envA.isActive()).toBe(true);
+      expect(envA.port).not.toBe(port);
+      expect(await canConnectTcp(envA.port)).toBe(true);
+      expect(await canConnectTcp(port)).toBe(false);
+    } finally {
+      await envA.stop();
+    }
+    expect(portManager.isAllocated(envA.port)).toBe(false);
+    await envB.stop();
+  });
 });

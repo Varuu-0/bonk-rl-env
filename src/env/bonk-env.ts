@@ -39,12 +39,24 @@ export class BonkEnv {
     public readonly id: string;
     
     /** Port number this environment is running on (if IPC server enabled) */
-    public readonly port: number;
+    public port: number;
     
     private pool: WorkerPool | null = null;
     private bridge: IpcBridge | null = null;
     private portManager: PortManager;
     private isRunning: boolean = false;
+    // True while THIS env holds the reservation for this.port.
+    // PortManager.isAllocated() only tracks Set membership, not ownership:
+    // after a failed start releases the reservation, another env can be
+    // allocated the same port, so membership alone cannot decide whether a
+    // retry may reuse this.port (issue #267 review).
+    private portReserved: boolean = false;
+    // Non-null while a start() is in flight. Doubles as the "starting" state
+    // guard (a second start() rejects with "already starting") and lets stop()
+    // await the in-flight start instead of tearing the pool/port out from under
+    // it. Cleared in the wrapper's finally once the attempt settles, so a
+    // failed start can be retried (issue #267).
+    private startPromise: Promise<void> | null = null;
     private config: BonkEnvConfig;
     private static instanceCount: number = 0;
 
@@ -64,6 +76,7 @@ export class BonkEnv {
             // Allocate a unique port
             this.port = this.portManager.allocate();
         }
+        this.portReserved = true;
     }
 
     /**
@@ -75,39 +88,88 @@ export class BonkEnv {
         if (this.isRunning) {
             throw new Error(`Environment ${this.id} is already running`);
         }
-        
-        console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
-        
-        // Create worker pool
-        this.pool = new WorkerPool();
-        
-        // Initialize the worker pool with the configured number of envs,
-        // forwarding the per-env config over the global defaults so configured
-        // environment, reward, and engine-tuning values all reach the workers.
-        const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
-        const override = this.config.config ?? {};
-        const envConfig = resolveEnvironmentConfig(override);
-        const engineSections = mergeEngineSections(override);
+        if (this.startPromise) {
+            throw new Error(`Environment ${this.id} is already starting`);
+        }
+
+        // A failed prior start released the port reserved in the constructor
+        // (teardownFailedStart), so a retry must re-claim it before binding.
+        // If the port was handed to another env in the meantime, allocate a
+        // fresh one instead of binding a port the PortManager no longer
+        // considers ours (issue #267 review).
+        this.reservePortForStart();
+
+        // Assign startPromise before the first await so a second overlapping
+        // start() call rejects immediately instead of spawning its own worker
+        // pool and (in IPC mode) bridge that would fight this call for
+        // this.pool/this.bridge/this.port (issue #267).
+        const startPromise = this.performStart();
+        this.startPromise = startPromise;
         try {
-            await this.pool.init(
+            await startPromise;
+        } finally {
+            if (this.startPromise === startPromise) {
+                this.startPromise = null;
+            }
+        }
+    }
+
+    /**
+     * Re-claims the port allocated in the constructor. The reservation is
+     * released when a start attempt fails, so a retry must reserve it again
+     * before spawning anything; if the port was allocated to another env in
+     * the meantime, allocate a fresh port for this env. The early return is
+     * keyed on this env's own portReserved flag — isAllocated() would see the
+     * other env's claim and wrongly keep a foreign port (issue #267 review).
+     */
+    private reservePortForStart(): void {
+        if (this.portReserved) {
+            return;
+        }
+        try {
+            this.portManager.reserve(this.port);
+            this.portReserved = true;
+        } catch {
+            // The port was handed to another env after we released it; take a
+            // fresh one instead of binding a port we no longer own.
+            this.port = this.portManager.allocate();
+            this.portReserved = true;
+        }
+    }
+
+    /**
+     * Body of a start() attempt. Runs with this.startPromise already set, so
+     * the failure path must NOT call the public stop() — stop() awaits the
+     * in-flight start() and would deadlock. Teardown goes through
+     * teardownFailedStart() instead.
+     */
+    private async performStart(): Promise<void> {
+        console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
+
+        try {
+            // Create worker pool
+            const pool = new WorkerPool();
+            this.pool = pool;
+
+            // Initialize the worker pool with the configured number of envs,
+            // forwarding the per-env config over the global defaults so configured
+            // environment, reward, and engine-tuning values all reach the workers.
+            const useSharedMemory = this.config.useSharedMemory ?? getConfig().workerPool.useSharedMemory;
+            const override = this.config.config ?? {};
+            const envConfig = resolveEnvironmentConfig(override);
+            const engineSections = mergeEngineSections(override);
+            await pool.init(
                 this.config.numEnvs ?? 1,
                 { ...envConfig, ...engineSections },
                 useSharedMemory
             );
-        } catch (error) {
-            // init() can spawn workers before rejecting. Always release both
-            // the partially created pool and the port reserved in the constructor.
-            await this.stop();
-            throw error;
-        }
 
-        // When IPC server mode is requested (enableIpcServer), bind an
-        // IpcBridge to this.port so external clients can connect. start()
-        // does not resolve until the Router socket is actually bound, so
-        // isActive() can never report success before the advertised port is
-        // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
-        // of silently completing (issue #223).
-        try {
+            // When IPC server mode is requested (enableIpcServer), bind an
+            // IpcBridge to this.port so external clients can connect. start()
+            // does not resolve until the Router socket is actually bound, so
+            // isActive() can never report success before the advertised port is
+            // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
+            // of silently completing (issue #223).
             if (this.config.enableIpcServer === true) {
                 const bridge = new IpcBridge({ server: { port: this.port } });
                 this.bridge = bridge;
@@ -115,7 +177,7 @@ export class BonkEnv {
                 // its numEnvs/config/useSharedMemory instead of spawning a
                 // second set of default-config workers (no double workers,
                 // env config forwarded).
-                bridge.adoptPool(this.pool!, this.config.numEnvs ?? 1, { config: envConfig, useSharedMemory });
+                bridge.adoptPool(pool, this.config.numEnvs ?? 1, { config: envConfig, useSharedMemory });
                 // start() keeps the serve loop alive until close(); bind
                 // failures surface through bridge.ready, so await ready
                 // rather than the serve promise.
@@ -146,13 +208,47 @@ export class BonkEnv {
                 );
                 console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
             }
+
+            this.isRunning = true;
+            console.log(`[BonkEnv:${this.id}] Started successfully`);
         } catch (error) {
-            await this.stop();
+            // init() can spawn workers and, in IPC mode, bind the socket
+            // before rejecting. Release everything this attempt created and
+            // the constructor's port reservation so a retry re-acquires it.
+            await this.teardownFailedStart();
             throw error;
         }
-        
-        this.isRunning = true;
-        console.log(`[BonkEnv:${this.id}] Started successfully`);
+    }
+
+    /**
+     * Releases the pool, bridge, and port reservation a failed start attempt
+     * created. Runs while this.startPromise is still set, so it must not go
+     * through the public stop() (which awaits the in-flight start and would
+     * deadlock).
+     */
+    private async teardownFailedStart(): Promise<void> {
+        if (this.bridge) {
+            try {
+                await this.bridge.close();
+            } catch (error) {
+                console.error(`[BonkEnv:${this.id}] Error closing IPC bridge after failed start:`, error);
+            }
+            this.bridge = null;
+        }
+        if (this.pool) {
+            try {
+                await this.pool.close();
+            } catch (error) {
+                console.error(`[BonkEnv:${this.id}] Error closing worker pool after failed start:`, error);
+            }
+            this.pool = null;
+        }
+        this.isRunning = false;
+        if (this.portReserved) {
+            this.portManager.release(this.port);
+            this.portReserved = false;
+        }
+        console.log(`[BonkEnv:${this.id}] Start failed; resources released`);
     }
 
     /**
@@ -160,10 +256,30 @@ export class BonkEnv {
      * @returns Promise that resolves when the environment is stopped
      */
     async stop(): Promise<void> {
+        // A start() may be in flight (worker spawn and IPC bind can take
+        // seconds). Tearing down now would close the pool being initialized,
+        // null it, and release the port underneath the in-flight start(),
+        // leaving isRunning=true with a dead pool. Wait for the in-flight
+        // start to settle first: on success we stop the now-running env, on
+        // failure the attempt already released its own resources (issue #267
+        // review).
+        if (this.startPromise) {
+            try {
+                await this.startPromise;
+            } catch {
+                // The in-flight start failed and already cleaned up after itself.
+            }
+        }
+
         if (!this.pool && !this.bridge) {
-            // Releasing is idempotent and covers a start failure before a
-            // worker pool was fully initialized.
-            this.portManager.release(this.port);
+            // Release only while this env still holds the reservation. After a
+            // failed start the port was already released (and may have been
+            // re-allocated to another env); releasing unconditionally here
+            // would delete that other env's claim (issue #267 review).
+            if (this.portReserved) {
+                this.portManager.release(this.port);
+                this.portReserved = false;
+            }
             console.log(`[BonkEnv:${this.id}] Already stopped`);
             return;
         }
@@ -187,7 +303,10 @@ export class BonkEnv {
         } finally {
             this.pool = null;
             this.isRunning = false;
-            this.portManager.release(this.port);
+            if (this.portReserved) {
+                this.portManager.release(this.port);
+                this.portReserved = false;
+            }
             console.log(`[BonkEnv:${this.id}] Stopped`);
         }
     }
