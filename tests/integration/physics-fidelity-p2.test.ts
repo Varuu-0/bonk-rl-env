@@ -394,7 +394,10 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
 
     const bm = new Map<string, any>();
     for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
-    for (const j of md.joints) { e.addJoint(j, bm); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
 
     const rv = (e as any).createdJoints.get('joint_0');
     expect(rv.m_lowerAngle).toBeCloseTo(-1, 5);
