@@ -261,6 +261,9 @@ describe('BonkEnv lifecycle', () => {
       await env.stop();
       await env.start();
       expect(env.isActive()).toBe(true);
+      // A restart must re-register the port with the manager so a running env
+      // stays tracked and cannot be handed the same port again (issue #265).
+      expect(pm.isAllocated(env.port)).toBe(true);
     });
 
     it('releases port on stop', { timeout: 30000 }, async () => {
@@ -271,7 +274,7 @@ describe('BonkEnv lifecycle', () => {
       expect(pm.isAllocated(port)).toBe(false);
     });
 
-    it('overlapping start calls reject instead of spawning a second worker pool (#267)', { timeout: 30000 }, async () => {
+it('overlapping start calls reject instead of spawning a second worker pool (#267)', { timeout: 30000 }, async () => {
       env = new BonkEnv({ numEnvs: 1, portManager: pm });
       const results = await Promise.allSettled([env.start(), env.start()]);
       const fulfilled = results.filter((r) => r.status === 'fulfilled');
@@ -322,6 +325,113 @@ describe('BonkEnv lifecycle', () => {
         await other.stop();
       }
       expect(pm.isAllocated(other.port)).toBe(false);
+    });
+
+    it('restart keeps the port tracked so wraparound allocation never collides', { timeout: 120000 }, async () => {
+      // Small range so the allocator wraps back onto the restarted env's port.
+      const smallPm = new PortManager({ startPort: 7450, endPort: 7455 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      await envA.start();
+      expect(envA.isActive()).toBe(true);
+      expect(smallPm.isAllocated(envA.port)).toBe(true);
+
+      const others: BonkEnv[] = [];
+      try {
+        // Fill every remaining port in the range; all must start cleanly and
+        // none may be handed the restarted env's port.
+        for (let i = 0; i < 5; i++) {
+          const other = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+          await other.start();
+          expect(other.port).not.toBe(envA.port);
+          others.push(other);
+        }
+
+        // Range capacity (6 ports) is exhausted: construction must fail with a
+        // clean allocation error, not silently reuse the live env's port and
+        // then reject the IPC bind with 'Address already in use'.
+        expect(
+          () => new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true }),
+        ).toThrow('No available ports');
+      } finally {
+        for (const other of others) {
+          try { await other.stop(); } catch { /* ignore */ }
+        }
+        try { await envA.stop(); } catch { /* ignore */ }
+        smallPm.releaseAll();
+      }
+    });
+
+    it('restart acquires a fresh port when the old one was handed to another env', { timeout: 120000 }, async () => {
+      const smallPm = new PortManager({ startPort: 7460, endPort: 7465 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      const stolenPort = envA.port;
+
+      // While envA is stopped its port is free: a new env takes it explicitly.
+      const envB = new BonkEnv({ numEnvs: 1, useSharedMemory: false, port: stolenPort, portManager: smallPm, enableIpcServer: true });
+      await envB.start();
+      expect(envB.port).toBe(stolenPort);
+
+      try {
+        // envA's restart must not reuse the stolen port (reserve() would
+        // throw and brick the env): it re-allocates a fresh port instead,
+        // leaving envB's reservation untouched (issue #265).
+        await expect(envA.start()).resolves.toBeUndefined();
+        expect(envA.port).not.toBe(stolenPort);
+        expect(envA.isActive()).toBe(true);
+        expect(envB.isActive()).toBe(true);
+        expect(smallPm.isAllocated(envA.port)).toBe(true);
+        expect(smallPm.isAllocated(stolenPort)).toBe(true);
+      } finally {
+        try { await envA.stop(); } catch { /* ignore */ }
+        try { await envB.stop(); } catch { /* ignore */ }
+        smallPm.releaseAll();
+      }
+    });
+
+    it('restart into an exhausted range rejects with restart context', { timeout: 30000 }, async () => {
+      const smallPm = new PortManager({ startPort: 7470, endPort: 7475 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      const stolenPort = envA.port;
+
+      // Steal envA's port and hold every other port in the range so the
+      // restart's fallback allocation has nothing left to hand out. Derive
+      // the holder ports from the range rather than assuming the allocator
+      // started at the range's first port (issue #265).
+      const holders: BonkEnv[] = [
+        new BonkEnv({ port: stolenPort, portManager: smallPm }),
+      ];
+      for (let p = 7470; p <= 7475; p++) {
+        if (p !== stolenPort) {
+          holders.push(new BonkEnv({ port: p, portManager: smallPm }));
+        }
+      }
+
+      try {
+        // The restart must fail cleanly (not an opaque bind failure) and leave
+        // the env inactive. The retained port-lifecycle implementation surfaces
+        // a "No available ports in range" allocation error when every port is
+        // held or the reservation cannot be reclaimed (issue #265/#267).
+        await expect(envA.start()).rejects.toThrow(/No available ports|restart failed/);
+        expect(envA.isActive()).toBe(false);
+
+        // A follow-up stop() on the failed env must not release the stolen
+        // port: the env no longer owns it, and the holder's reservation must
+        // survive (issue #265).
+        await expect(envA.stop()).resolves.toBeUndefined();
+        expect(smallPm.isAllocated(stolenPort)).toBe(true);
+      } finally {
+        try { await envA.stop(); } catch { /* ignore */ }
+        for (const holder of holders) {
+          try { await holder.stop(); } catch { /* ignore */ }
+        }
+        smallPm.releaseAll();
+      }
     });
   });
 
