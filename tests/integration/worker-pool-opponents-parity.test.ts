@@ -194,16 +194,75 @@ describe('snake_case num_opponents alias parity (issue #262)', () => {
     await message.pool.close();
   });
 
+  it('prefers camelCase numOpponents over the snake_case alias when both are supplied', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const run = async (useSharedMemory: boolean) => {
+      const pool = new WorkerPool(1);
+      try {
+        // Both spellings supplied: the camelCase key must win, mirroring
+        // BonkEnvironment's `numOpponents ?? num_opponents ?? 1` resolution
+        // (src/core/environment.ts). A reordering of that chain in either
+        // site would silently diverge from the environment without this test.
+        await pool.init(1, { maxTicks: 300, numOpponents: 5, num_opponents: 3, seed: 42 }, useSharedMemory);
+        const resetObs = (await pool.reset([42]))[0];
+        expect(resetObs.opponents.length).toBe(5);
+
+        const stepLens: number[] = [];
+        for (let i = 0; i < 5; i++) {
+          stepLens.push((await pool.step([2]))[0].observation.opponents.length);
+        }
+        expect((pool as any).state).toBe('ready');
+        return { resetObs, stepLens, pool };
+      } catch (e) {
+        await pool.close();
+        throw e;
+      }
+    };
+
+    const shared = await run(true);
+    const message = await run(false);
+
+    expect(shared.resetObs.opponents.length).toBe(5);
+    expect(message.resetObs.opponents.length).toBe(5);
+    expect(shared.stepLens).toEqual([5, 5, 5, 5, 5]);
+    expect(message.stepLens).toEqual([5, 5, 5, 5, 5]);
+
+    await shared.pool.close();
+    await message.pool.close();
+  });
+
   it('normalizes snake_case num_opponents: 0 to zero opponents, not the default 1', async () => {
     if (!WorkerPool.isSupported()) return;
-    const pool = new WorkerPool(1);
-    try {
-      await pool.init(1, { maxTicks: 300, num_opponents: 0, seed: 42 }, true);
-      const resetObs = (await pool.reset([42]))[0];
-      expect(resetObs.opponents.length).toBe(0);
-      expect((pool as any).state).toBe('ready');
-    } finally {
-      await pool.close();
-    }
+
+    const run = async (useSharedMemory: boolean) => {
+      const pool = new WorkerPool(1);
+      try {
+        await pool.init(1, { maxTicks: 300, num_opponents: 0, seed: 42 }, useSharedMemory);
+        const resetObs = (await pool.reset([42]))[0];
+        expect(resetObs.opponents.length).toBe(0);
+
+        // A step after the empty reset pins the 16-float empty layout write
+        // path (no opponent blocks written) on both transports.
+        const stepObs = (await pool.step([2]))[0].observation;
+        expect(stepObs.opponents.length).toBe(0);
+        expect((pool as any).state).toBe('ready');
+        return { resetObs, stepObs, pool };
+      } catch (e) {
+        await pool.close();
+        throw e;
+      }
+    };
+
+    const shared = await run(true);
+    const message = await run(false);
+
+    expect(shared.resetObs.opponents.length).toBe(0);
+    expect(message.resetObs.opponents.length).toBe(0);
+    expect(shared.stepObs.opponents.length).toBe(0);
+    expect(message.stepObs.opponents.length).toBe(0);
+
+    await shared.pool.close();
+    await message.pool.close();
   });
 });
