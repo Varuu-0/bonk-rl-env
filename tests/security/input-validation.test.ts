@@ -4,22 +4,37 @@ import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy } from '../utils/test-helpers';
 
 describe('Input validation', () => {
-  it('handles out-of-range action (100) without crash', () => {
+  it('rejects out-of-range action (100) with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
-    expect(() => env.step(100)).not.toThrow();
-    env.close();
+    try {
+      expect(() => env.step(100)).toThrow(
+        'Invalid action: expected an encoded action in [0, 63], got 100',
+      );
+    } finally {
+      env.close();
+    }
   });
 
-  it('handles negative action without crash', () => {
+  it('rejects negative action with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
-    expect(() => env.step(-1)).not.toThrow();
-    env.close();
+    try {
+      expect(() => env.step(-1)).toThrow(
+        'Invalid action: expected an encoded action in [0, 63], got -1',
+      );
+    } finally {
+      env.close();
+    }
   });
 
-  it('handles float action without crash', () => {
+  it('rejects float action with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
-    expect(() => env.step(3.14)).not.toThrow();
-    env.close();
+    try {
+      expect(() => env.step(3.14)).toThrow(
+        'Invalid action: expected an encoded action in [0, 63], got 3.14',
+      );
+    } finally {
+      env.close();
+    }
   });
 
   it('handles negative seed in reset without crash', () => {

@@ -12,6 +12,8 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
     'grapple',
 ];
 
+const MAX_ENCODED_ACTION = (1 << PLAYER_INPUT_FIELDS.length) - 1;
+
 /**
  * Validates an `Action` (PlayerInput | number) and throws a labeled
  * `Invalid action: ...` error for every malformed shape, so every transport
@@ -20,10 +22,7 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
  * executing a different/no-op action (issue #278).
  *
  * A conforming value is either:
- *   - a finite encoded number (the documented contract is an integer in
- *     [0, 63]; the out-of-range integer rejection is covered separately by
- *     issue #261, and finite non-integer numbers remain accepted for backward
- *     compatibility with the pinned input-validation behavior), or
+ *   - an integer encoded number in [0, 63], or
  *   - a plain object whose own enumerable keys are exactly the six
  *     PlayerInput fields, each present field boolean, with at least one field
  *     set; missing fields default to false.
@@ -37,6 +36,11 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
         if (!Number.isFinite(action)) {
             throw new Error(
                 `Invalid action: expected a finite encoded number, got ${String(action)}`,
+            );
+        }
+        if (!Number.isInteger(action) || action < 0 || action > MAX_ENCODED_ACTION) {
+            throw new Error(
+                `Invalid action: expected an encoded action in [0, ${MAX_ENCODED_ACTION}], got ${action}`,
             );
         }
         return;
