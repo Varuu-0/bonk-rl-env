@@ -66,7 +66,7 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
     );
     if (unknownKey !== undefined) {
         throw new Error(
-            `Invalid action: unknown field "${unknownKey}" (expected only left, right, up, down, heavy, grapple)`,
+            `Invalid action: unknown field "${unknownKey}" (expected only ${PLAYER_INPUT_FIELDS.join(', ')})`,
         );
     }
     if (!hasField) {
