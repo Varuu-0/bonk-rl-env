@@ -130,11 +130,23 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
   if (!Array.isArray(t.ticks)) errors.push('ticks must be an array');
 
   if (errors.length === 0) {
+    if (t.map === null || typeof t.map !== 'object' || Array.isArray(t.map)) {
+      errors.push('map must be an object (the raw exported map)');
+    }
     const seenIds = new Set<number>();
     for (const p of t.players) {
       if (typeof p.id !== 'number' || p.id < 0) errors.push('player id must be a non-negative number');
       if (seenIds.has(p.id)) errors.push(`duplicate player id ${p.id}`);
       seenIds.add(p.id);
+    }
+    for (const s of t.spawns) {
+      if (s === null || typeof s !== 'object' || Array.isArray(s)) {
+        errors.push('spawn entries must be objects');
+        continue;
+      }
+      if (typeof s.id !== 'number' || s.id < 0) errors.push(`spawn id invalid: ${String(s.id)}`);
+      if (typeof s.x !== 'number' || !Number.isFinite(s.x)) errors.push(`spawn ${s.id} x must be a finite number`);
+      if (typeof s.y !== 'number' || !Number.isFinite(s.y)) errors.push(`spawn ${s.id} y must be a finite number`);
     }
     for (const tick of t.ticks) {
       if (typeof tick.t !== 'number' || tick.t < 0) errors.push(`tick index invalid: ${String(tick.t)}`);

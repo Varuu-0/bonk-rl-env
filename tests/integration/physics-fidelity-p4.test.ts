@@ -39,7 +39,9 @@ import {
 import type { NativeTrace } from '../../src/core/differential/native-trace';
 
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
-const WDB_MAPSHAKE = path.join(process.cwd(), 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+// Tracked repo fixture (5 ground lpj joints); maps/bonk_WDB__No_Mapshake__
+// 716916.json is gitignored scratch and must never be a test dependency.
+const WDB_GROUND_JOINTS = path.join(process.cwd(), 'maps', 'bonk_WDB__no_nothing__1232248.json');
 
 function loadMap(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -148,7 +150,7 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
   });
 
   it('engine joints match the traced WDB map authored ground-prismatic joints', () => {
-    const raw = loadMap(WDB_MAPSHAKE);
+    const raw = loadMap(WDB_GROUND_JOINTS);
     const trace: NativeTrace = {
       schema: 'bonk.rl.env.native-trace',
       version: TRACE_SCHEMA_VERSION,
@@ -205,10 +207,43 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.worst.dx).toBeGreaterThan(2.5);
   });
 
-  it('native-absent ticks surface as mismatches when the engine keeps a player alive', () => {
+  it('native-absent ticks surface as mismatches and FAIL the verdict when the engine keeps a player alive', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     for (const tick of bad.ticks) tick.discs[1] = null; // opponent never exists natively
     const verdict = compareTrace(bad, { seed: 0 });
     expect(verdict.perTick.some(t => t.mismatches.length > 0)).toBe(true);
+    // Death agreement is part of the gate: a living engine disc where native
+    // reports absence must fail the run, not just annotate it.
+    expect(verdict.pass).toBe(false);
+  });
+
+  it('trace settings drive the engine through the map-settings path (pq high → 15 solver iterations)', () => {
+    // Settings must reach PhysicsEngine via mapData.settings (the only path
+    // BonkEnvironment reads pq from); both the trace and explicit overrides
+    // are merged into the raw map before normalization.
+    const viaTrace: NativeTrace = JSON.parse(JSON.stringify(trace));
+    viaTrace.settings = { pq: 2 };
+    const viaOverride: NativeTrace = JSON.parse(JSON.stringify(trace));
+    const envA = buildTraceEnvironment(viaTrace, { seed: 0 });
+    try {
+      expect((envA as any).physics.velocityIterations).toBe(15);
+      expect((envA as any).physics.positionIterations).toBe(15);
+    } finally {
+      envA.close();
+    }
+    const envB = buildTraceEnvironment(viaOverride, { seed: 0, settingsOverrides: { pq: 2 } });
+    try {
+      expect((envB as any).physics.velocityIterations).toBe(15);
+    } finally {
+      envB.close();
+    }
+    // The default (trace/map pq = 1) stays low.
+    const envC = buildTraceEnvironment(viaOverride, { seed: 0 });
+    try {
+      expect((envC as any).physics.velocityIterations).toBe(2);
+      expect((envC as any).physics.positionIterations).toBe(6);
+    } finally {
+      envC.close();
+    }
   });
 });

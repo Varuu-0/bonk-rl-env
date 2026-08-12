@@ -88,11 +88,14 @@ export function verifyFixtureGates(env: BonkEnvironment, trace: NativeTrace): Ga
       );
     }
 
-    // Restitution (§33.4): authored, with -1 → 0.8 fallback; unset → 0.8.
+    // Restitution (§33.4): mirror the engine formula exactly
+    // (physics-engine addBody): -1/absent/null → 0.8, everything else
+    // passes through VERBATIM — including non-finite values the engine
+    // would also pass through (never a false mismatch on NaN/Infinity).
     const rest = body.restitution;
-    const expectedRest = rest === undefined || rest === -1
+    const expectedRest = rest === -1 || rest === undefined || rest === null
       ? 0.8
-      : (Number.isFinite(rest) ? rest : 0.8);
+      : rest;
     if (Math.abs((shape as any).m_restitution - expectedRest) > 1e-9) {
       mismatches.push(
         `body "${body.name}" restitution ${(shape as any).m_restitution} != authored ${expectedRest}`,
@@ -111,6 +114,7 @@ export function verifyFixtureGates(env: BonkEnvironment, trace: NativeTrace): Ga
 export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): GateResult {
   const mismatches: string[] = [];
   const physics: any = (env as any).physics;
+  const scale: number = physics.scale;
   const created: Map<string, any> = physics.createdJoints ?? new Map();
   const mapDef: any = normalizeMap(trace.map);
   const joints: any[] = mapDef.joints ?? [];
@@ -128,10 +132,16 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
     }
     const t = j.type;
     if (t === 'rv' || t === 'revolute') {
-      if (Math.abs((built as any).m_lowerLimit - (j.lowerAngle ?? 0)) > 1e-9) {
+      // The port's b2RevoluteJoint stores the limit angles as
+      // m_lowerAngle/m_upperAngle (box2dnode b2RevoluteJoint), and the engine
+      // forwards the exporter's lower/upperLimit into those angles
+      // (physics-engine addJoint: lowerAngle ?? lowerLimit ?? 0).
+      const la = j.lowerAngle ?? j.lowerLimit ?? 0;
+      const ua = j.upperAngle ?? j.upperLimit ?? 0;
+      if (Math.abs((built as any).m_lowerAngle - la) > 1e-9) {
         mismatches.push(`joint "${name}" rv lowerAngle mismatch`);
       }
-      if (Math.abs((built as any).m_upperLimit - (j.upperAngle ?? 0)) > 1e-9) {
+      if (Math.abs((built as any).m_upperAngle - ua) > 1e-9) {
         mismatches.push(`joint "${name}" rv upperAngle mismatch`);
       }
       if (Math.abs((built as any).m_motorSpeed - (j.motorSpeed ?? 0)) > 1e-9) {
@@ -141,17 +151,27 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
         mismatches.push(`joint "${name}" rv maxMotorTorque mismatch`);
       }
     } else if (t === 'd' || t === 'distance') {
-      if (Math.abs((built as any).m_length - (j.length ?? 0)) > 1e-9) {
-        mismatches.push(`joint "${name}" d length mismatch`);
+      // The engine stores m_length in metres (authored map px / scale,
+      // physics-engine addJoint: `jd.length = def.length / this.scale`). Only
+      // compare when a length was authored — otherwise the engine replicates
+      // b2DistanceJointDef.Initialize's anchor-distance default and there is
+      // no authored value to diff against.
+      if (typeof j.length === 'number' && Number.isFinite(j.length)) {
+        if (Math.abs((built as any).m_length - j.length / scale) > 1e-9) {
+          mismatches.push(`joint "${name}" d length mismatch`);
+        }
       }
     } else if (t === 'g' || t === 'gear') {
       if (Math.abs((built as any).m_ratio - (j.ratio ?? 1)) > 1e-9) {
         mismatches.push(`joint "${name}" g ratio mismatch`);
       }
     } else {
-      // prismatic (lpj/lsj/p): translation limits + motor force.
-      const lt = j.lowerTranslation !== undefined ? j.lowerTranslation : 0;
-      const ut = j.upperTranslation !== undefined ? j.upperTranslation : 0;
+      // prismatic (lpj/lsj/p): translation limits + motor force, mirroring the
+      // engine's #281 symmetric ±length fallback exactly — a positive authored
+      // length with no explicit translations becomes a symmetric limit.
+      const lenLimit = typeof j.length === 'number' && Number.isFinite(j.length) && j.length > 0;
+      const lt = j.lowerTranslation !== undefined ? j.lowerTranslation : (lenLimit ? -j.length : 0);
+      const ut = j.upperTranslation !== undefined ? j.upperTranslation : (lenLimit ? +j.length : 0);
       if (Math.abs((built as any).m_lowerTranslation - lt) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic lowerTranslation mismatch`);
       }

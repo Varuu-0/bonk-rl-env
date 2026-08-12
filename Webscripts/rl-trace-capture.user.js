@@ -39,8 +39,32 @@
     return /[A-Za-z]\[[A-Za-z0-9$_]{3}(\[[0-9]{1,3}\]){2}\]={discs/;
   }
 
+  // Bonk-Host's proven fig anchor: "[a5H[6] - 30]" -> figVar "a5H[6]"; the
+  // first `figVar++;` is patched to also publish window.__bonkFig so tick
+  // rebasing can use the true native frame counter (LIVE_STATE_EXTRACTION
+  // §9.1) instead of a synthesized fallback.
+  function figAnchorRegex() {
+    return /\[[A-Za-z0-9\$_]{3}\[[0-9]{1,3}\] \- 30\]/;
+  }
+
   window.bonkCodeInjectors.push(function traceInjector(code) {
     if (typeof code !== 'string') return code;
+
+    // (b) monotonic frame counter capture (fig++) — do this FIRST so the
+    // needle is guaranteed to be in the original code.
+    try {
+      const fm = code.match(figAnchorRegex());
+      if (fm) {
+        const figVar = fm[0].split(' ')[0].slice(1);
+        const first = code.indexOf(figVar + '++;');
+        if (first !== -1) {
+          const patched = figVar + '++;window.__bonkFig=' + figVar + ';';
+          code = code.slice(0, first) + patched + code.slice(first + (figVar + '++;').length);
+        }
+      }
+    } catch (e) { /* fig is optional */ }
+
+    // (a) state capture.
     const sm = code.match(stateAnchorRegex());
     if (sm) {
       const cap = '{try{if(arguments[0]&&arguments[0].discs){window.__bonkExportState=arguments[0];}if(arguments[4]){window.__bonkExportGameSettings=arguments[4];}}catch(e){}}';
@@ -59,13 +83,15 @@
     map: null,
     settings: null,
     roundStartFig: 0,
-    lastFig: -1,
     rc: null,
   };
 
   function rebaseTick(state) {
-    // mirror the bridge's per-round rebase: track rc changes and the current
-    // monotonic fig if the injector captured one; otherwise use a local counter.
+    // Mirror the bridge's per-round rebase: track rc changes against the
+    // injected monotonic fig (window.__bonkFig); when the fig injector did
+    // not apply (older build), fall back to a local counter that ALSO
+    // rebases to 0 on every rc change so rounds never leak ticks into each
+    // other (§9.1 per-round rebase).
     let fig = null;
     if (typeof window.__bonkFig === 'number') fig = window.__bonkFig;
     const stateTicks = () => {
@@ -74,7 +100,10 @@
     };
     if (state) {
       const rc = state.rc;
-      if (S.rc !== null && rc !== null && rc !== S.rc) S.roundStartFig = fig ?? 0;
+      if (S.rc !== null && rc !== null && rc !== S.rc) {
+        S.roundStartFig = fig ?? 0;
+        if (fig === null) S._fallback = 0;
+      }
       S.rc = rc !== undefined ? rc : S.rc;
     }
     return stateTicks();
@@ -162,7 +191,7 @@
   }
 
   window[API] = {
-    startRecording() { S.recording = true; S.ticks = []; S.map = null; S.players = []; S.spawns = []; S.settings = null; S.roundStartFig = 0; S.lastFig = -1; S.rc = null; S.lastState = null; },
+    startRecording() { S.recording = true; S.ticks = []; S.map = null; S.players = []; S.spawns = []; S.settings = null; S.roundStartFig = 0; S.rc = null; S.lastState = null; S._fallback = 0; },
     stopRecording() { S.recording = false; },
     isRecording() { return S.recording; },
     getTrace() { return buildTrace(); },

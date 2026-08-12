@@ -96,14 +96,28 @@ export function buildTraceEnvironment(
   trace: NativeTrace,
   opts: ComparatorOptions = {},
 ): BonkEnvironment {
-  const mapDef = normalizeMap(trace.map);
+  // Merge the trace's native settings (and any explicit overrides) into the
+  // RAW map's settings before normalization, so the adapter's settings
+  // sanitizer forwards them into mapDef.settings — the only path
+  // BonkEnvironment reads pq/re/nc/gd/fl from (environment.ts:
+  // physicsQuality <- mapData.settings.pq). Passing settings through the
+  // config.physics object is silently dropped by the environment. The map is
+  // shallow-cloned so the caller's trace object is never mutated.
+  const rawMap: any = trace.map;
+  const mapObj: any = (rawMap !== null && typeof rawMap === 'object' && !Array.isArray(rawMap))
+    ? { ...rawMap }
+    : rawMap;
+  const overrides = { ...(trace.settings ?? {}), ...(opts.settingsOverrides ?? {}) };
+  if (Object.keys(overrides).length > 0 && mapObj !== null && typeof mapObj === 'object') {
+    mapObj.settings = { ...(mapObj.settings ?? {}), ...overrides };
+  }
+  const mapDef = normalizeMap(mapObj);
   const players = trace.players.map(p => p.id);
 
   const env = new BonkEnvironment({
     numOpponents: Math.max(0, players.length - 1),
     seed: opts.seed ?? 42,
     mapData: mapDef as any,
-    physics: opts.settingsOverrides ? { ...(opts.settingsOverrides as any) } : {},
     randomOpponent: false,
     maxTicks: trace.ticks.length + 8,
   } as any);
@@ -176,9 +190,14 @@ export function compareTrace(
       recorded.discs.forEach((rec, id) => {
         if (!rec) {
           // Native says the disc is absent this tick. It must be absent in the
-          // engine too — a living engine disc here is a mismatch.
+          // engine too — a living engine disc here is a mismatch that fails
+          // the tick (and therefore the verdict): death agreement is part of
+          // the differential gate, not informational noise.
           const st = physics.getPlayerState(id);
-          if (st && st.alive) mismatches.push({ id, reason: 'native absent but engine alive' });
+          if (st && st.alive) {
+            mismatches.push({ id, reason: 'native absent but engine alive' });
+            withinTolerance = false;
+          }
           return;
         }
         const st = physics.getPlayerState(id);
