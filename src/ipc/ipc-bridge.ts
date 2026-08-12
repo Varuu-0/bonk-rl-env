@@ -9,6 +9,10 @@ import { getConfig, type AppConfig, type DeepPartial, resolveEnvironmentConfig, 
 const parseJson = wrap(TelemetryIndices.JSON_PARSE, JSON.parse) as (text: string) => any;
 const CLIENT_SESSION_IDLE_TIMEOUT_MS = 5 * 60 * 1000;
 const CLIENT_SESSION_REAP_INTERVAL_MS = 60 * 1000;
+// Distinct error for a pre-init identity denied the local/bypass pool because
+// it is pinned to another identity; keeps the denial debuggable instead of
+// masquerading as an uninitialized pool (issue #270).
+const LOCAL_SESSION_PINNED_ERROR = 'Local pool is pinned to another identity';
 
 /**
  * Per-client session state. Each ZMQ routing identity that calls `init` owns
@@ -49,6 +53,9 @@ export class IpcBridge {
     // session mode began keeps that pool. There is only one local pool, so one
     // routing identity is sufficient and remains bounded. It is the only
     // identity allowed to use the local pool once session mode has engaged.
+    // The pin is committed only when the first fallback request actually
+    // succeeds, so a transient identity sending an invalid request cannot
+    // lock out the real caller (issue #270).
     private localSessionIdentity?: string;
     // Bypass/local session for initEnv/resetEnv/stepEnv. Before IPC
     // client-session mode begins, requests can use it so programmatic init
@@ -234,28 +241,56 @@ export class IpcBridge {
      *   an identity that used it while initialized retains that access after
      *   session mode begins, preserving an established programmatic caller.
      */
-    private resolveSession(sessionKey: string): PoolSession | undefined {
+    private resolveSession(
+        sessionKey: string,
+    ): { session?: PoolSession; pinnedToOtherIdentity?: boolean } {
         // An adopted host pool is intentionally shared by all IPC identities.
         // It is already initialized by BonkEnv before the bridge starts, and
         // clients cannot own or reap child pools in this mode.
         if (this._hostPool) {
-            return this.localSession;
+            return { session: this.localSession };
         }
         const session = this.sessions.get(sessionKey);
         if (session) {
-            return session;
+            return { session };
         }
         // Only the single pinned programmatic caller may use the local pool
         // once IPC session mode has engaged; every other without a session
         // fails loudly rather than silently borrowing another pool.
         if (this.localSessionIdentity === sessionKey) {
-            return this.localSession;
+            return { session: this.localSession };
         }
         if (this.allowLocalSessionFallback && this.localSession.initialized) {
-            this.localSessionIdentity = sessionKey;
-            return this.localSession;
+            if (this.localSessionIdentity === undefined) {
+                // Provisionally grant the local pool, but do not pin this
+                // identity yet: the pin is committed only once the request
+                // actually succeeds, so a transient identity sending an
+                // invalid request cannot permanently lock out the real
+                // programmatic caller (issue #270).
+                return { session: this.localSession };
+            }
+            // First-wins: the local pool is already pinned to another
+            // pre-init identity. Report a distinct signal so callers reject
+            // loudly instead of appearing to have no pool at all.
+            return { pinnedToOtherIdentity: true };
         }
-        return this.allowLocalSessionFallback ? this.localSession : undefined;
+        return this.allowLocalSessionFallback ? { session: this.localSession } : {};
+    }
+
+    /**
+     * Commit the bypass pin for `sessionKey` after its request on the
+     * local/bypass pool succeeded. The pin is intentionally committed only
+     * on success: claiming it on request arrival would let a transient
+     * identity with an invalid request lock out the real caller (issue #270).
+     */
+    private commitLocalSessionPin(sessionKey: string, session: PoolSession): void {
+        if (
+            session === this.localSession &&
+            this.allowLocalSessionFallback &&
+            this.localSessionIdentity === undefined
+        ) {
+            this.localSessionIdentity = sessionKey;
+        }
     }
 
     private startSessionReaper(): void {
@@ -437,12 +472,15 @@ export class IpcBridge {
                     }
                 }
             } else if (command === "reset") {
-                const session = this.resolveSession(sessionKey);
+                const resolution = this.resolveSession(sessionKey);
+                const session = resolution.session;
                 if (session) {
                     activeSession = session;
                     this.beginSessionRequest(session);
                 }
-                if (!session || !session.initialized) {
+                if (resolution.pinnedToOtherIdentity) {
+                    response = { status: "error", error: LOCAL_SESSION_PINNED_ERROR };
+                } else if (!session || !session.initialized) {
                     response = { status: "error", error: "Worker pool not initialized" };
                 } else if (payload.seeds !== undefined && !Array.isArray(payload.seeds)) {
                     response = { status: "error", error: "Invalid seeds: must be an array" };
@@ -461,6 +499,7 @@ export class IpcBridge {
                     // JSON serialization below is the ownership boundary, so
                     // avoid an otherwise redundant snapshot allocation here.
                     const obs = await session.pool.reset(payload.seeds, { ownership: 'borrowed' });
+                    this.commitLocalSessionPin(sessionKey, session);
                     console.log(`[IPC] Reset response: obs is ${Array.isArray(obs) ? 'array of length ' + obs.length : obs}`);
                     response = {
                         status: "ok",
@@ -470,13 +509,16 @@ export class IpcBridge {
                     };
                 }
             } else if (command === "step") {
-                const session = this.resolveSession(sessionKey);
+                const resolution = this.resolveSession(sessionKey);
+                const session = resolution.session;
                 if (session) {
                     activeSession = session;
                     this.beginSessionRequest(session);
                 }
                 const actions = payload.actions;
-                if (!Array.isArray(actions)) {
+                if (resolution.pinnedToOtherIdentity) {
+                    response = { status: "error", error: LOCAL_SESSION_PINNED_ERROR };
+                } else if (!Array.isArray(actions)) {
                     response = { status: "error", error: "Invalid actions: must be an array" };
                 } else if (actions.length === 0) {
                     response = { status: "error", error: "Invalid actions: array cannot be empty" };
@@ -497,6 +539,7 @@ export class IpcBridge {
                     // borrowed graph below is only valid until the next pool
                     // call, so serialize it before the telemetry branch awaits.
                     const results = await session.pool.step(actions, { ownership: 'borrowed' });
+                    this.commitLocalSessionPin(sessionKey, session);
 
                     // JSON.stringify is the ownership boundary: it consumes the
                     // borrowed `_convertedResults` graph immediately, before any
