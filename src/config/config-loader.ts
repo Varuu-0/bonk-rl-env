@@ -1075,13 +1075,19 @@ export function loadConfig(projectRoot?: string): AppConfig {
     // Layer 4: CLI flags
     config = parseCliFlags(config);
 
-    // Resolve numWorkers=0 to actual CPU count. Clamp maxWorkers to >= 1 and
-    // clamp negative numWorkers so a misconfigured workerPool can never
-    // resolve the auto-detect to 0 (which silently disables the pool) (#269).
+    // Resolve numWorkers=0 to actual CPU count. Sanitize every configured
+    // value to a positive integer so a misconfigured workerPool can never
+    // silently disable the pool or defer a NaN/float to the WorkerPool runtime
+    // guard: non-numeric maxWorkers falls back to the CPU count, and negative,
+    // non-numeric, or fractional numWorkers clamp/floor to >= 1 (#269).
     if (config.workerPool.numWorkers === 0) {
-        config.workerPool.numWorkers = Math.max(1, Math.min(os.cpus().length, Math.max(1, Math.floor(config.workerPool.maxWorkers))));
-    } else if (config.workerPool.numWorkers < 0) {
+        config.workerPool.numWorkers = Number.isFinite(config.workerPool.maxWorkers)
+            ? Math.max(1, Math.min(os.cpus().length, Math.max(1, Math.floor(config.workerPool.maxWorkers))))
+            : Math.max(1, os.cpus().length);
+    } else if (!Number.isFinite(config.workerPool.numWorkers) || config.workerPool.numWorkers < 1) {
         config.workerPool.numWorkers = 1;
+    } else if (!Number.isInteger(config.workerPool.numWorkers)) {
+        config.workerPool.numWorkers = Math.max(1, Math.floor(config.workerPool.numWorkers));
     }
 
     cachedConfig = config;

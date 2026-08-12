@@ -1232,6 +1232,31 @@ describe('config-loader env vars and CLI', () => {
             const cfg = loadConfig(testDir);
             expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
         });
+
+        it('a non-numeric maxWorkers cannot resolve the auto-detect to NaN (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: 'abc' },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(Number.isInteger(cfg.workerPool.numWorkers)).toBe(true);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a fractional numWorkers in config.json is floored to a positive integer (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 1.5 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBe(1);
+        });
+
+        it('a non-numeric numWorkers in config.json is clamped to 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 'abc' },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBe(1);
+        });
     });
 
     // ─── Priority Order ──────────────────────────────────────────────────
