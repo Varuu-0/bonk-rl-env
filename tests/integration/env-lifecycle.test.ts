@@ -398,11 +398,17 @@ it('overlapping start calls reject instead of spawning a second worker pool (#26
       const stolenPort = envA.port;
 
       // Steal envA's port and hold every other port in the range so the
-      // restart's fallback allocation has nothing left to hand out.
+      // restart's fallback allocation has nothing left to hand out. Derive
+      // the holder ports from the range rather than assuming the allocator
+      // started at the range's first port (issue #265).
       const holders: BonkEnv[] = [
         new BonkEnv({ port: stolenPort, portManager: smallPm }),
-        ...([7471, 7472, 7473, 7474, 7475].map((p) => new BonkEnv({ port: p, portManager: smallPm }))),
       ];
+      for (let p = 7470; p <= 7475; p++) {
+        if (p !== stolenPort) {
+          holders.push(new BonkEnv({ port: p, portManager: smallPm }));
+        }
+      }
 
       try {
         // The restart must fail with restart context (not an opaque
@@ -411,6 +417,12 @@ it('overlapping start calls reject instead of spawning a second worker pool (#26
           `Environment ${envA.id} restart failed`,
         );
         expect(envA.isActive()).toBe(false);
+
+        // A follow-up stop() on the failed env must not release the stolen
+        // port: the env no longer owns it, and the holder's reservation must
+        // survive (issue #265).
+        await expect(envA.stop()).resolves.toBeUndefined();
+        expect(smallPm.isAllocated(stolenPort)).toBe(true);
       } finally {
         try { await envA.stop(); } catch { /* ignore */ }
         for (const holder of holders) {
