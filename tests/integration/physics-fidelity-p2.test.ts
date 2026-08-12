@@ -450,12 +450,15 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const e = makeEngine();
     // Author bodyA with a non-zero rotation so the `- bodyA.GetAngle()` term of
     // the native recipe (localAxisA = (cos(pa - bodyA.angle), sin(pa -
-    // bodyA.angle))) is actually exercised. normalizeMap forwards body `angle`
-    // (map-adapter.ts), and addBody applies it to the b2BodyDef.
+    // bodyA.angle))) is actually exercised. bodyB is ALSO rotated so that
+    // Initialize()'s default referenceAngle (bodyB.angle - bodyA.angle = -0.1)
+    // differs from the native override (-bodyA.angle = -0.4). normalizeMap
+    // forwards body `angle` (map-adapter.ts), and addBody applies it to the
+    // b2BodyDef.
     const md = normalizeMap({
       bodies: [
         { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true, angle: 0.4 },
-        { bodyIndex: 1, name: 'gate', type: 'rect', x: 0, y: 100, width: 20, height: 20, static: false, density: 1 },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 0, y: 100, width: 20, height: 20, static: false, density: 1, angle: 0.3 },
       ],
       spawns: [{ x: 0, y: 0, blue: true, red: true }],
       physicsJoints: [
@@ -475,16 +478,56 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const pr = (e as any).createdJoints.get('joint_0');
     const pa = Math.PI / 2;
     const ba = bm.get('wall') as any;
+    const bb = bm.get('gate') as any;
     expect(ba.GetAngle()).toBeCloseTo(0.4, 5); // sanity: the rotation was applied
+    expect(bb.GetAngle()).toBeCloseTo(0.3, 5);
     // Native §33.8: localAxisA = (cos(pa - bodyA.angle), sin(pa - bodyA.angle)).
     // Initialize() receives the world axis (cos pa, sin pa) and rotates it into
     // bodyA's local frame, so a subtracted-only (or double-subtracted) axis
     // fails here.
     expect(pr.m_localXAxis1.x).toBeCloseTo(Math.cos(pa - ba.GetAngle()), 5);
     expect(pr.m_localXAxis1.y).toBeCloseTo(Math.sin(pa - ba.GetAngle()), 5);
-    // Native §33.8 also sets referenceAngle = -bodyA.GetAngle() (not
-    // Initialize's default bodyB.angle - bodyA.angle).
+    // Native §33.8 also sets referenceAngle = -bodyA.GetAngle(). Because bodyB
+    // is rotated, that differs from Initialize's default bodyB.angle -
+    // bodyA.angle (-0.1), so deleting the override would fail this assertion.
     expect(pr.m_refAngle).toBeCloseTo(-ba.GetAngle(), 5);
+    expect(pr.m_refAngle).not.toBeCloseTo(bb.GetAngle() - ba.GetAngle(), 5);
+  });
+
+  it('applies the native referenceAngle override for lsj on a rotated bodyA', () => {
+    const e = makeEngine();
+    // lsj exports NO angle (mapexporter emits sax/say/sf/slen), yet native
+    // §33.8 sets def.referenceAngle = -bodyA.GetAngle() unconditionally for
+    // lsj (DEOBFUSCATION.md:3472). Both bodies are rotated so the Initialize
+    // default (bodyB.angle - bodyA.angle) differs from the native override.
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true, angle: 0.4 },
+        { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 100, width: 20, height: 20, static: false, density: 1, angle: 0.3 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        // Real lsj exporter shape: sax/say/sf/slen, no angle.
+        { bodyA: 0, bodyB: 1, type: 'lsj', anchorA: { x: 0, y: 100 }, anchorB: { x: 0, y: 130 },
+          sax: 0, say: 100, sf: 100, slen: 30, collideConnected: false },
+      ],
+    } as any) as any;
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.filter(w => /unknown joint type|unknown body/i.test(w))).toHaveLength(0);
+
+    const lsj = (e as any).createdJoints.get('joint_0');
+    const ba = bm.get('wall') as any;
+    const bb = bm.get('spring') as any;
+    expect(lsj).toBeTruthy();
+    expect(lsj.m_type).toBe(2); // b2Joint.e_prismaticJoint
+    // Native §33.8 lsj override: referenceAngle = -bodyA.GetAngle().
+    expect(lsj.m_refAngle).toBeCloseTo(-ba.GetAngle(), 5);
+    expect(lsj.m_refAngle).not.toBeCloseTo(bb.GetAngle() - ba.GetAngle(), 5);
   });
 
   it('builds a vertical axis for the bundled map bonk_WeiRd_DeAth_BalL__80622.json lpj joint', () => {
@@ -518,7 +561,11 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     expect(ba).toBeTruthy();
     expect(lpj.m_localXAxis1.x).toBeCloseTo(Math.cos(pr.angle - ba.GetAngle()), 5);
     expect(lpj.m_localXAxis1.y).toBeCloseTo(Math.sin(pr.angle - ba.GetAngle()), 5);
-    expect(lpj.m_refAngle).toBeCloseTo(-ba.GetAngle(), 5);
+    // No referenceAngle assertion here: this lpj is ground-anchored (bodyB is
+    // the angle-0 ground), so Initialize()'s default (bodyB.angle - bodyA.angle
+    // = -bodyA.angle) always coincides with the native override and the
+    // assertion would be degenerate. referenceAngle is covered by the rotated
+    // lpj/lsj tests above.
   });
 
   it('resolves gear referents by index through the full normalizeMap pipeline', () => {
