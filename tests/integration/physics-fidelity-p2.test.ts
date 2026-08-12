@@ -239,6 +239,91 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(warnings.filter(w => /unknown joint|unknown body|no ground/i.test(w))).toHaveLength(0);
   });
 
+  it('keeps exported compound fixtures on one Box2D body and attaches the joint to it (#307)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'rect', x: -50, y: 0, width: 20, height: 10, static: false, density: 1 },
+        { bodyIndex: 0, fixtureIndex: 1, name: 'Unnamed Shape', type: 'rect', x: 50, y: 0, width: 20, height: 10, static: false, density: 1 },
+        { bodyIndex: 1, fixtureIndex: 2, name: 'Unnamed Shape', type: 'rect', x: 0, y: 100, width: 200, height: 10, static: true },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'compound',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 0 },
+          fixtureIndices: [0, 1],
+          fixtures: [
+            { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: -50, y: 0 }, angle: 0, width: 20, height: 10 } },
+            { fixtureIndex: 1, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 50, y: 0 }, angle: 0, width: 20, height: 10 } },
+          ],
+        },
+        {
+          index: 1,
+          name: 'anchor',
+          type: 's',
+          typeName: 'static',
+          position: { x: 0, y: 100 },
+          fixtureIndices: [2],
+          fixtures: [
+            { fixtureIndex: 2, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 200, height: 10 } },
+          ],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [{ type: 'lpj', bodyA: 0, bodyB: -1, anchorA: { x: 0, y: 0 }, axis: { x: 0, y: 1 } }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    for (const joint of md.joints) e.addJoint(joint, bodyMap);
+
+    const grouped = bodyMap.get(md.joints[0].bodyA);
+    let shapeCount = 0;
+    for (let shape = grouped.GetShapeList(); shape !== null; shape = shape.GetNext()) shapeCount++;
+    const created = (e as any).createdJoints.get('joint_0');
+
+    expect(shapeCount).toBe(2);
+    expect(created).toBeTruthy();
+    expect(created.m_body1).toBe(grouped);
+    expect(grouped.GetPosition().x).toBeCloseTo(0, 5);
+    expect(grouped.GetPosition().y).toBeCloseTo(0, 5);
+  });
+
+  it('resolves every bundled WDB ground joint to its authored native body (#307)', () => {
+    const fs = require('fs');
+    const path = require('path');
+    const raw = JSON.parse(fs.readFileSync(
+      path.resolve(__dirname, '../../maps/bonk_WDB__no_nothing__1232248.json'), 'utf8'));
+    const md = normalizeMap(raw) as any;
+    const e = makeEngine();
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    for (const joint of md.joints) e.addJoint(joint, bodyMap);
+
+    expect(md.joints).toHaveLength(5);
+    for (const [i, joint] of md.joints.entries()) {
+      const nativeIndex = 8 + i;
+      const aliases = md.bodies
+        .filter((body: any) => body.nativeBody?.index === nativeIndex)
+        .map((body: any) => body.name);
+      const grouped = bodyMap.get(joint.bodyA);
+      const created = (e as any).createdJoints.get(`joint_${i}`);
+      let shapeCount = 0;
+      for (let shape = grouped.GetShapeList(); shape !== null; shape = shape.GetNext()) shapeCount++;
+
+      expect(joint.bodyB).toBe('');
+      expect(joint.isGround).toBe(true);
+      expect(joint.bodyA).toBe(aliases[0]);
+      expect(joint.bodyA).not.toBe(aliases[aliases.length - 1]);
+      expect(created.m_body1).toBe(grouped);
+      expect(shapeCount).toBe(aliases.length);
+    }
+  });
+
   it('a prismatic joint constrains a dynamic body to its axis', () => {
     const e = makeEngine();
     const bm = makeBodyMap(e);
@@ -586,13 +671,15 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     expect(pr).toBeTruthy();
     expect(pr.axis).toBeUndefined();
     expect(pr.angle).toBeCloseTo(Math.PI / 2, 5);
-    // Anchor the expectation on the RESOLVED bodyA's actual angle instead of
-    // assuming a vertical result: bodyA (index 6) resolves by name through
-    // bodiesByName, and the exported "Unnamed Shape" name is shared by several
-    // fixtures, so the engine body the joint lands on is the last one added.
-    // Asserting against the resolved body's GetAngle() keeps this
-    // self-consistent (native §33.8: localAxisA = (cos(pa - bodyA.angle),
-    // sin(pa - bodyA.angle))).
+    // The joint's bodyA must be the first fixture alias for native body index 6,
+    // not the last fixture alias from that compound body (the pre-#307
+    // last-wins name map always selected the final flat fixture).
+    const bodyAliases = md.bodies
+      .filter((b: any) => b.nativeBody?.index === 6)
+      .map((b: any) => b.name);
+    expect(bodyAliases.length).toBeGreaterThan(1);
+    expect(pr.bodyA).toBe(bodyAliases[0]);
+    expect(pr.bodyA).not.toBe(bodyAliases[bodyAliases.length - 1]);
     const ba = bm.get(pr.bodyA) as any;
     expect(ba).toBeTruthy();
     expect(lpj.m_localXAxis1.x).toBeCloseTo(Math.cos(pr.angle - ba.GetAngle()), 5);

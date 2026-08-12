@@ -141,5 +141,50 @@ describe('normalizeMap', () => {
             expect((out.bodies[0] as any).collides.g1).toBe(true);
             expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
         });
+
+        it('keeps fixture aliases unique and resolves joints to the first fixture of each native body (#307)', () => {
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'rect', x: -50, y: 0, width: 20, height: 10, static: false },
+                    { bodyIndex: 0, fixtureIndex: 1, name: 'Unnamed Shape', type: 'rect', x: 50, y: 0, width: 20, height: 10, static: false },
+                    { bodyIndex: 1, fixtureIndex: 2, name: 'Unnamed Shape', type: 'rect', x: 0, y: 100, width: 200, height: 10, static: true },
+                ],
+                physicsBodies: [
+                    {
+                        index: 0,
+                        name: 'compound',
+                        type: 'd',
+                        typeName: 'dynamic',
+                        position: { x: 0, y: 0 },
+                        fixtureIndices: [0, 1],
+                        fixtures: [
+                            { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: -50, y: 0 }, angle: 0, width: 20, height: 10 } },
+                            { fixtureIndex: 1, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 50, y: 0 }, angle: 0, width: 20, height: 10 } },
+                        ],
+                    },
+                    {
+                        index: 1,
+                        name: 'anchor',
+                        type: 's',
+                        typeName: 'static',
+                        position: { x: 0, y: 100 },
+                        fixtureIndices: [2],
+                        fixtures: [
+                            { fixtureIndex: 2, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 200, height: 10 } },
+                        ],
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+                physicsJoints: [{ type: 'lpj', bodyA: 0, bodyB: -1 }],
+            } as any) as any;
+
+            expect(out.bodies.map((body: any) => body.name)).toEqual([
+                'compound#0', 'compound#1', 'anchor',
+            ]);
+            expect(out.bodies[0].nativeBody.index).toBe(0);
+            expect(out.bodies[1].nativeBody.index).toBe(0);
+            expect(out.joints[0].bodyA).toBe('compound#0');
+            expect(out.joints[0].isGround).toBe(true);
+        });
     });
 });

@@ -26,8 +26,19 @@ export interface GateResult {
   mismatches: string[];
 }
 
-function fixtureOf(body: any): any {
-  return body.GetShapeList ? body.GetShapeList() : body.GetFixtureList().GetShape();
+function fixtureOf(body: any, bodyDef?: any): any {
+  if (!body.GetShapeList) return body.GetFixtureList().GetShape();
+  const first = body.GetShapeList();
+  if (!bodyDef) return first;
+
+  // Exported compound bodies share one Box2D body but retain one shape-level
+  // MapBodyDef per fixture. Select the shape carrying this fixture alias so
+  // heterogeneous fixture properties are checked against the right shape.
+  for (let shape = first; shape !== null; shape = shape.GetNext()) {
+    const userData = typeof shape.GetUserData === 'function' ? shape.GetUserData() : undefined;
+    if (userData?.name === bodyDef.name) return shape;
+  }
+  return first;
 }
 
 /**
@@ -50,7 +61,7 @@ export function verifyFixtureGates(env: BonkEnvironment, trace: NativeTrace): Ga
       mismatches.push(`body "${body?.name ?? '?'}" not found in engine body map`);
       continue;
     }
-    const shape = fixtureOf(built);
+    const shape = fixtureOf(built, body);
     if (!shape) {
       mismatches.push(`body "${body.name}" has no fixture shape`);
       continue;
