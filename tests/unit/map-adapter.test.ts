@@ -75,17 +75,29 @@ describe('normalizeMap', () => {
             expect(out.bodies).toEqual([]);
         });
 
-        it('does not crash on a bodies array containing null (#273)', () => {
-            // A corrupt/placeholder payload like bodies: [null] is valid JSON
-            // and must fall through to the exporter path instead of throwing.
+        it('preserves authored spawnPoints/capZones/joints for bodies: [null] (#273)', () => {
+            // A corrupt/placeholder bodies array (valid JSON) is treated as
+            // internal so authored data survives; the null entries are dropped
+            // and the empty remainder reaches the environment safely.
             const out = normalizeMap({
-                name: 'Corrupt',
-                spawnPoints: { team_blue: { x: 111, y: 222 } },
+                name: 'SpawnOnly',
+                spawnPoints: { team_blue: { x: 111, y: 222 }, team_red: { x: 333, y: 444 } },
+                capZones: [
+                    { index: 0, owner: '', type: 1, fixture: 'plat_0', shapeType: 'rect' },
+                ],
+                joints: [
+                    { type: 'rv', name: 'j0', bodyA: 'plat_0', bodyB: 'plat_1' },
+                ],
                 bodies: [null],
             } as any);
-            expect(Array.isArray(out.bodies)).toBe(true);
-            expect(out.bodies.length).toBe(0);
-            expect(out.spawnPoints).toBeDefined();
+            expect(out.spawnPoints).toEqual({ team_blue: { x: 111, y: 222 }, team_red: { x: 333, y: 444 } });
+            expect(out.capZones).toEqual([
+                { index: 0, owner: '', type: 1, fixture: 'plat_0', shapeType: 'rect' },
+            ]);
+            expect(out.joints).toEqual([
+                { type: 'rv', name: 'j0', bodyA: 'plat_0', bodyB: 'plat_1' },
+            ]);
+            expect(out.bodies).toEqual([]);
         });
     });
 

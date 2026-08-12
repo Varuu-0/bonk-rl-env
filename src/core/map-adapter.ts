@@ -140,12 +140,17 @@ function isInternalMapDef(raw: any): raw is MapDef {
         // format (which uses `spawns[]`), so widening here does not
         // misclassify exported maps.
         && (raw.bodies === undefined || raw.bodies === null || Array.isArray(raw.bodies))
+        // Null/undefined array entries (e.g. `bodies: [null]`, valid JSON) are
+        // corrupt placeholders, not flat exported bodies — treat them as
+        // internal so authored spawnPoints/capZones/joints are preserved and
+        // only the empty remainder reaches the pass-through (which sanitizes
+        // it) or the exporter path. Any real flat body (collidesGroupN)
+        // still classifies the payload as exported (#273).
         && (raw.bodies === undefined
             || raw.bodies === null
-            || raw.bodies.length === 0
-            || (raw.bodies[0] !== null
-                && typeof raw.bodies[0] === 'object'
-                && !('collidesGroup1' in raw.bodies[0])));
+            || raw.bodies.every((b: any) => b === null
+                || b === undefined
+                || (typeof b === 'object' && !('collidesGroup1' in b))));
 }
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
@@ -202,12 +207,13 @@ function toBodyDef(body: FlatBody, index: number): any {
  */
 export function normalizeMap(raw: unknown): MapDef {
     // Already in engine MapDef shape — pass through unchanged, defaulting an
-    // omitted `bodies` to `[]` so downstream `for (const b of mapData.bodies)`
-    // loops in the environment never iterate `undefined` (#273).
+    // omitted `bodies` to `[]` (and dropping corrupt null/undefined entries
+    // from a present array) so downstream `for (const b of mapData.bodies)`
+    // loops in the environment never iterate `undefined` or `null` (#273).
     if (isInternalMapDef(raw)) {
         return {
             ...raw,
-            bodies: raw.bodies ?? [],
+            bodies: (raw.bodies ?? []).filter((b: unknown) => b !== null && b !== undefined),
         };
     }
 
