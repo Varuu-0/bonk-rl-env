@@ -691,4 +691,58 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect((env as any).config.mapData.joints).toHaveLength(1);
     expect((env as any).config.mapData.bodies.map((b: any) => b.name)).toContain('wall');
   });
+
+  it('drops a gear whose referents point at skipped null entries, with a warning', () => {
+    // A gear's ja/jb are raw physicsJoints indices; when they land on a null
+    // the exporter emitted, the referents resolve to nothing and the engine
+    // must drop the gear with a warn instead of constructing a broken joint.
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+        { bodyIndex: 1, name: 'gate', type: 'rect', x: 100, y: 0, width: 20, height: 20, static: false, density: 1 },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [
+        null,
+        { bodyA: 0, bodyB: 1, type: 'rv', anchorA: { x: 0, y: 0 } },
+        null,
+        { bodyA: 0, bodyB: 1, type: 'g', ja: 0, jb: 2, ratio: 3 },
+      ],
+    } as any) as any;
+
+    // The gear keeps its raw index (joint_3) but neither referent resolves
+    // because src[0] and src[2] are the skipped nulls.
+    const gearDef = md.joints.find((j: any) => j.type === 'g');
+    expect(gearDef).toBeTruthy();
+    expect(gearDef.name).toBe('joint_3');
+    expect(gearDef.jointA).toBeUndefined();
+    expect(gearDef.jointB).toBeUndefined();
+
+    const bm = new Map<string, any>();
+    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    const warnings = captureWarn(() => {
+      for (const j of md.joints) { e.addJoint(j, bm); }
+    });
+    expect(warnings.some(w => /Gear joint references missing referent joints/.test(w))).toBe(true);
+    expect((e as any).createdJoints.has('joint_3')).toBe(false);
+  });
+
+  it('handles an all-null physicsJoints array without crashing', () => {
+    // Every entry skipped -> joints is empty and the MapDef drops the field
+    // entirely (joints.length > 0 guard), while the map still normalizes.
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [null, null, null],
+    } as any) as any;
+
+    expect(md).toBeTruthy();
+    expect(md.name).toBe('Untitled Map');
+    expect(md.spawnPoints).toBeTruthy();
+    expect(md.bodies.map((b: any) => b.name)).toContain('wall');
+    expect(md.joints).toBeUndefined();
+  });
 });

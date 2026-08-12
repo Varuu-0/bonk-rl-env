@@ -116,7 +116,10 @@ interface ExportedMap {
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
     physicsBodies?: FlatBody[];
-    physicsJoints?: FlatJoint[];
+    // The exporter (Webscripts/mapexporter.js) pushes a literal `null` for any
+    // joint it cannot export to keep raw-array indices stable, so entries may
+    // be null as well as FlatJoint.
+    physicsJoints?: (FlatJoint | null)[];
     physicsFixtures?: unknown[];
     physicsShapes?: unknown[];
 }
@@ -296,14 +299,14 @@ export function normalizeMap(raw: unknown): MapDef {
     });
     // The exporter (Webscripts/mapexporter.js) emits a literal `null` for any
     // joint it cannot export to keep raw-array indices stable, so `physicsJoints`
-    // may contain falsy entries. Skip them (with a warning) instead of throwing
-    // on dereference — a map with an unexportable joint must still load its
-    // bodies, spawns and cap zones. The raw array position (`jointIdx`) is kept
-    // for joint naming and gear-referent lookups so filtered-out nulls cannot
-    // mis-wire gear referents.
+    // may contain `null` entries (per the `(FlatJoint | null)` contract). Skip
+    // them (with a warning) instead of throwing on dereference — a map with an
+    // unexportable joint must still load its bodies, spawns and cap zones. The
+    // raw array position (`jointIdx`) is kept for joint naming and gear-referent
+    // lookups so filtered-out nulls cannot mis-wire gear referents.
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
-        if (!j) {
-            console.warn(`[map-adapter] Skipping null/empty physicsJoints entry at index ${jointIdx}`);
+        if (j === null) {
+            console.warn(`[map-adapter] Skipping null physicsJoints entry at index ${jointIdx}`);
             return null;
         }
         // bodyA: -1 means the joint is anchored to the static ground body on the
