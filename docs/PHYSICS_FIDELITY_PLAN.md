@@ -52,6 +52,34 @@ no ground joints.
   (nc → no-collide, fl → flipped move-force base) is a follow-up (P3b).
 - Death circle = 850 map px from map center, ppm-independent (lines 1557-1563) — engine already correct.
 
+### Differential validation (P4) — IMPLEMENTED (2026-08-12)
+- **Capture harness** (`Webscripts/rl-trace-capture.user.js` +
+  `src/core/differential/capture-recorder.ts`): records per-tick native disc
+  state (x,y,xv,yv,a,av,a1,a2,a1a,team,ds; LIVE_STATE_EXTRACTION §9.4) with
+  alive == presence (§9.2) into a versioned `NativeTrace` JSON for offline
+  replay. The same mapping is unit-tested against deterministic fixture state.
+- **Replay comparator** (`src/core/differential/replay-comparator.ts`):
+  rebuilds the traced world via the normal adapter→environment path, re-seeds
+  players at their recorded spawns, replays the recorded Discrete(64) inputs
+  per tick, and diffs per-tick `getPlayerState` against the recorded disc
+  kinematics within per-field tolerances (position px, velocity px/s, angle
+  rad, angular vel rad/s). Coordinate reconciliation (§9.5) makes the units
+  1:1, so diffs are compared directly.
+- **Fixture/joint exact-match gates** (`src/core/differential/exact-match-gates.ts`):
+  verify the engine's built fixtures reproduce the traced map's authored
+  density/friction/restitution (§33.4) and that every authored joint was
+  created with the authored params (§33.8).
+- Validation: `physics-fidelity-p4.test.ts` (7 tests) — trace round-trip;
+  fixture gate on the bundled Simple 1v1 map; joint gate on the bundled WDB
+  No-Mapshake map (ground prismatic joints); a recorded neutral run replays
+  within tight tolerance (worst dx/dy < 1e-6); a perturbed trace fails the
+  same run (gate discriminates); native-absent ticks surface as mismatches.
+- What still needs a live capture: the harness/comparator are fully validated
+  offline, but confirming the *native client actually produces* trajectories
+  within these tolerances requires recording a real match with
+  `rl-trace-capture.user.js` and replaying it (documented in
+  `docs/DIFFERENTIAL_VALIDATION.md`).
+
 ## Milestones
 
 | # | Scope | Deliverable | Verification |
@@ -60,7 +88,7 @@ no ground joints.
 | **P1** | Fixture fidelity | density clamp ≥0.0001, friction polarity, restitution fallback, mask-bit spec | fixture-level unit tests asserting exact numbers from §33.4 |
 | **P2** | Joint model | implement `rv` limits/motor, `d` fh/len, `lpj/lsj/p` prismatic params, gear `g`, ground joints | joint invariant tests per §33.7 formulas |
 | **P3** | Map physics settings | per-map `pq`→solver iters (2/6 low, 15/15 high), `gd`→exposed on MapDef.settings (runtime application deferred: native enforces gravity 20, pretty 7238-7240) | engine-level tests: pq changes solver behavior; gd does NOT override gravity (enforcement parity) |
-| **P4** | Differential validation | capture harness (record native snapshots) + replay comparator | comparator diff ≤ tolerance; fixture/joint exact-match gates |
+| **P4** | Differential validation | capture harness (record native snapshots) + replay comparator + fixture/joint exact-match gates | comparator diff ≤ tolerance (validated: neutral-run replay ≈ 0, perturbed trace fails); gates pass on bundled maps; live capture workflow documented |
 | **P5** | Docs + gating | update DEOBFUSCATION_FIX_TRACKER with ✅/❌/partial per item; every claim cited | PR review gate |
 
 ## Dependency order
