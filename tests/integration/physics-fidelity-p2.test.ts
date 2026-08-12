@@ -52,11 +52,15 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(warnings.filter(w => /unknown joint type/.test(w))).toHaveLength(0);
   });
 
-  it('rv/d anchors are body-relative offsets on a non-origin body, not world coordinates (#282)', () => {
-    const e = makeEngine();
-    // bodyA sits 100 map px right of the world origin; the authored anchors
-    // are body-relative offsets, exactly as the exporter stores them (§33.8).
-    e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: true, density: 0 } as any);
+  it('rv/d anchors are body-relative offsets that track a rotating body, not world coordinates (#282)', () => {
+    // No gravity: the two dynamic bodies move only from their authored
+    // velocities, so the pivot assertions below are exact.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    // bodyA starts 100 map px right of the world origin and is dynamic with
+    // linear + angular velocity, so its pose changes every tick. A static
+    // body could never expose a detached pivot — drive a moving, rotating
+    // body to prove the world pivot really tracks it (§33.8).
+    e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: false, density: 1, linearVelocity: { x: 0.5, y: 0 }, angularVelocity: 0.5 } as any);
     e.addBody({ name: 'bodyB', type: 'rect', x: 200, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
     const bm = e.getBodyMap() as Map<string, any>;
     const bodyA = bm.get('bodyA') as any;
@@ -88,15 +92,68 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(d.m_length).toBeCloseTo(60 / SCALE, 5);
     expect(dNolen.m_length).toBeCloseTo(Math.sqrt(100 * 100 + 100 * 100) / SCALE, 5);
 
-    // The rv pivot's world position is bodyA.p + R·(aa/SCALE) = (100/30, 50/30);
-    // stepping keeps the anchor attached to the body at that point.
-    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
-    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
+    // Step the world: bodyA must actually move and rotate — otherwise the
+    // post-tick pivot assertions below would be vacuous.
     for (let i = 0; i < 30; i++) e.tick();
-    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
-    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
-    expect(bodyA.GetWorldPoint(d.m_localAnchor1).x).toBeCloseTo(100 / SCALE, 5);
-    expect(bodyA.GetWorldPoint(d.m_localAnchor1).y).toBeCloseTo(50 / SCALE, 5);
+    expect(bodyA.GetAngle()).not.toBeCloseTo(0, 2);
+    const pos = bodyA.GetPosition();
+    expect(pos.x).not.toBeCloseTo(100 / SCALE, 5);
+
+    // The world pivot tracks the rotating body: it stays the authored
+    // body-relative offset transformed by the CURRENT pose — never a fixed
+    // world point (the joint's local anchor is invariant, and its world
+    // position is exactly pos + R·(aa/SCALE) recomputed from the live pose).
+    expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(rv.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
+    const angle = bodyA.GetAngle();
+    const pivot = bodyA.GetWorldPoint(rv.m_localAnchor1);
+    expect(pivot.x).toBeCloseTo(pos.x + (0 * Math.cos(angle) - (50 / SCALE) * Math.sin(angle)), 5);
+    expect(pivot.y).toBeCloseTo(pos.y + (0 * Math.sin(angle) + (50 / SCALE) * Math.cos(angle)), 5);
+    // The distance-joint anchor stays attached to the same body-frame point.
+    const dPivot = bodyA.GetWorldPoint(d.m_localAnchor1);
+    expect(dPivot.x).toBeCloseTo(pivot.x, 5);
+    expect(dPivot.y).toBeCloseTo(pivot.y, 5);
+  });
+
+  it('rv/d joints without authored anchors pin the pivot at the body origin, not p + R·p (#282)', () => {
+    // The exporter emits anchorA/anchorB: null for joints whose game
+    // definition has no aa/ab (Webscripts/mapexporter.js:560), so this is the
+    // path real maps take. bodyA sits off the world origin — the reported
+    // regression (pivot = p + R·p) is invisible at the origin and would
+    // misplace the pivot by the full body position here.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: false, density: 1, angularVelocity: 0.5 } as any);
+    e.addBody({ name: 'bodyB', type: 'rect', x: 200, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+    const bodyA = bm.get('bodyA') as any;
+
+    e.addJoint({ type: 'rv', name: 'j_rv', bodyA: 'bodyA', bodyB: 'bodyB', enableLimit: false }, bm);
+    // No anchors and no length: the d joint constrains the two body origins
+    // to their initial separation (the default length), so nothing yanks.
+    e.addJoint({ type: 'd', name: 'j_d', bodyA: 'bodyA', bodyB: 'bodyB' }, bm);
+
+    const rv = (e as any).createdJoints.get('j_rv');
+    const d = (e as any).createdJoints.get('j_d');
+    expect(rv).toBeTruthy();
+    expect(d).toBeTruthy();
+
+    // No authored anchor → local anchor (0,0): the pivot is the body origin.
+    // The double-add regression would leave rv.m_localAnchor1 at (100/30, 0).
+    expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(rv.m_localAnchor1.y).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor1.y).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor2.x).toBeCloseTo(0, 5);
+    expect(d.m_localAnchor2.y).toBeCloseTo(0, 5);
+
+    // And it stays pinned to the body frame while the body rotates.
+    for (let i = 0; i < 30; i++) e.tick();
+    expect(bodyA.GetAngle()).not.toBeCloseTo(0, 2);
+    expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(rv.m_localAnchor1.y).toBeCloseTo(0, 5);
+    const pos = bodyA.GetPosition();
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).x).toBeCloseTo(pos.x, 5);
+    expect(bodyA.GetWorldPoint(rv.m_localAnchor1).y).toBeCloseTo(pos.y, 5);
   });
 
   it('constructs a prismatic (lpj) joint with limits, motor, and axis', () => {
