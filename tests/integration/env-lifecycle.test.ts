@@ -360,6 +360,35 @@ it('overlapping start calls reject instead of spawning a second worker pool (#26
         smallPm.releaseAll();
       }
     });
+
+    it('restart acquires a fresh port when the old one was handed to another env', { timeout: 120000 }, async () => {
+      const smallPm = new PortManager({ startPort: 7460, endPort: 7465 });
+      const envA = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager: smallPm, enableIpcServer: true });
+      await envA.start();
+      await envA.stop();
+      const stolenPort = envA.port;
+
+      // While envA is stopped its port is free: a new env takes it explicitly.
+      const envB = new BonkEnv({ numEnvs: 1, useSharedMemory: false, port: stolenPort, portManager: smallPm, enableIpcServer: true });
+      await envB.start();
+      expect(envB.port).toBe(stolenPort);
+
+      try {
+        // envA's restart must not reuse the stolen port (reserve() would
+        // throw and brick the env): it re-allocates a fresh port instead,
+        // leaving envB's reservation untouched (issue #265).
+        await expect(envA.start()).resolves.toBeUndefined();
+        expect(envA.port).not.toBe(stolenPort);
+        expect(envA.isActive()).toBe(true);
+        expect(envB.isActive()).toBe(true);
+        expect(smallPm.isAllocated(envA.port)).toBe(true);
+        expect(smallPm.isAllocated(stolenPort)).toBe(true);
+      } finally {
+        try { await envA.stop(); } catch { /* ignore */ }
+        try { await envB.stop(); } catch { /* ignore */ }
+        smallPm.releaseAll();
+      }
+    });
   });
 
   describe('init validation (#227)', () => {
