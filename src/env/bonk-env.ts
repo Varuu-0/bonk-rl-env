@@ -45,6 +45,12 @@ export class BonkEnv {
     private bridge: IpcBridge | null = null;
     private portManager: PortManager;
     private isRunning: boolean = false;
+    // True while THIS env holds the reservation for this.port.
+    // PortManager.isAllocated() only tracks Set membership, not ownership:
+    // after a failed start releases the reservation, another env can be
+    // allocated the same port, so membership alone cannot decide whether a
+    // retry may reuse this.port (issue #267 review).
+    private portReserved: boolean = false;
     // Non-null while a start() is in flight. Doubles as the "starting" state
     // guard (a second start() rejects with "already starting") and lets stop()
     // await the in-flight start instead of tearing the pool/port out from under
@@ -70,6 +76,7 @@ export class BonkEnv {
             // Allocate a unique port
             this.port = this.portManager.allocate();
         }
+        this.portReserved = true;
     }
 
     /**
@@ -111,16 +118,22 @@ export class BonkEnv {
      * Re-claims the port allocated in the constructor. The reservation is
      * released when a start attempt fails, so a retry must reserve it again
      * before spawning anything; if the port was allocated to another env in
-     * the meantime, allocate a fresh port for this env.
+     * the meantime, allocate a fresh port for this env. The early return is
+     * keyed on this env's own portReserved flag — isAllocated() would see the
+     * other env's claim and wrongly keep a foreign port (issue #267 review).
      */
     private reservePortForStart(): void {
-        if (this.portManager.isAllocated(this.port)) {
+        if (this.portReserved) {
             return;
         }
         try {
             this.portManager.reserve(this.port);
+            this.portReserved = true;
         } catch {
+            // The port was handed to another env after we released it; take a
+            // fresh one instead of binding a port we no longer own.
             this.port = this.portManager.allocate();
+            this.portReserved = true;
         }
     }
 
@@ -232,6 +245,7 @@ export class BonkEnv {
         }
         this.isRunning = false;
         this.portManager.release(this.port);
+        this.portReserved = false;
         console.log(`[BonkEnv:${this.id}] Start failed; resources released`);
     }
 
@@ -259,6 +273,7 @@ export class BonkEnv {
             // Releasing is idempotent and covers a start failure before a
             // worker pool was fully initialized.
             this.portManager.release(this.port);
+            this.portReserved = false;
             console.log(`[BonkEnv:${this.id}] Already stopped`);
             return;
         }
@@ -283,6 +298,7 @@ export class BonkEnv {
             this.pool = null;
             this.isRunning = false;
             this.portManager.release(this.port);
+            this.portReserved = false;
             console.log(`[BonkEnv:${this.id}] Stopped`);
         }
     }

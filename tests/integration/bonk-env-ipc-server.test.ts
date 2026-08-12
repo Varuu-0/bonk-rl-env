@@ -483,4 +483,46 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
     expect(portManager.isAllocated(port)).toBe(false);
     expect(await canConnectTcp(port)).toBe(false);
   });
+
+  it('a retry after failed start re-allocates a fresh port when another env took the old one (#267)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 550;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const blocker = await occupyPort(port);
+
+    let envA: BonkEnv;
+    try {
+      envA = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+
+      await expect(envA.start()).rejects.toThrow();
+      expect(envA.isActive()).toBe(false);
+      // The failed attempt released the reservation.
+      expect(portManager.isAllocated(port)).toBe(false);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+
+    // Another env constructed before the retry is allocated the released port.
+    const envB = new BonkEnv({ numEnvs: 1, useSharedMemory: false, portManager, enableIpcServer: true });
+    expect(envB.port).toBe(port);
+
+    // The retry must NOT bind envB's port: envA no longer owns it, so it has
+    // to re-allocate a fresh port instead of double-claiming a foreign one.
+    await envA.start();
+    try {
+      expect(envA.isActive()).toBe(true);
+      expect(envA.port).not.toBe(port);
+      expect(await canConnectTcp(envA.port)).toBe(true);
+      expect(await canConnectTcp(port)).toBe(false);
+    } finally {
+      await envA.stop();
+    }
+    expect(portManager.isAllocated(envA.port)).toBe(false);
+    await envB.stop();
+  });
 });
