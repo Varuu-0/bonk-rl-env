@@ -580,14 +580,26 @@
           jointDef.deleteOnBreak = jt.d.dl ?? null;
         }
         jointDef.anchorA = { x: jt.pax ?? 0, y: jt.pay ?? 0 };
-        jointDef.angle = jt.pa ?? null;
-        jointDef.lowerTranslation = jt.pf ?? null;
-        jointDef.lowerLimit = jt.pl ?? null;
-        jointDef.upperLimit = jt.pu ?? null;
-        jointDef.length = jt.plen ?? null;
-        jointDef.maxMotorForce = jt.pms ?? null;
+        jointDef.angle = jt.pa ?? null; // axis derivation tracked by issue #280
+        // Issue #281: the native piston is a DRIVEN joint with a limit. The
+        // travel (±plen) is the translation limit, pf is maxMotorForce and pms
+        // is motorSpeed (DEOBFUSCATION §33.8). Travel is sign-clamped so the
+        // range can never invert, non-finite values fall back to zero travel,
+        // and the limit is only enabled when there is positive travel — a map
+        // with missing/zero/NaN plen stays unconstrained instead of being
+        // locked at zero travel or emitting NaN limits.
+        const rawPlen = Number(jt.plen);
+        const plen = Number.isFinite(rawPlen) ? Math.abs(rawPlen) : 0;
+        jointDef.lowerTranslation = -plen;
+        jointDef.upperTranslation = +plen;
+        jointDef.maxMotorForce = jt.pf ?? null;
+        jointDef.motorSpeed = jt.pms ?? null;
+        jointDef.enableLimit = plen > 0;
+        jointDef.enableMotor = true;
       } else if (jt.type === 'lsj') {
-        // LSJ joint
+        // LSJ (springy prismatic) joint — the native game builds it as a
+        // prismatic joint with a vertical axis and an enabled motor, NOT a
+        // distance-style spring (DEOBFUSCATION §33.8 lsj, lines 3468–3487).
         if (jt.d) {
           checkUnknown(`joint[${i}].d (lsj)`, jt.d, KNOWN.jointData);
           jointDef.collideConnected = jt.d.cc ?? null;
@@ -595,7 +607,20 @@
           jointDef.deleteOnBreak = jt.d.dl ?? null;
         }
         jointDef.anchorA = { x: jt.sax ?? 0, y: jt.say ?? 0 };
-        jointDef.frequency = jt.sf ?? null;
+        // Issue #281: the native spring is a driven joint with the travel
+        // (±slen) as the translation limit, sf as the motor-force scale and a
+        // fixed vertical axis / motor speed of 300. Travel is sign-clamped so
+        // the stored range can never invert; non-finite values fall back to
+        // zero travel.
+        const rawSlen = Number(jt.slen);
+        const slen = Number.isFinite(rawSlen) ? Math.abs(rawSlen) : 0;
+        jointDef.axis = { x: 0, y: 1 };
+        jointDef.lowerTranslation = -slen;
+        jointDef.upperTranslation = +slen;
+        jointDef.enableLimit = false;
+        jointDef.enableMotor = true;
+        jointDef.motorSpeed = 300;
+        jointDef.maxMotorForce = jt.sf ?? null;
         jointDef.length = jt.slen ?? null;
       } else if (jt.type === 'g') {
         // Gear joint: referents are joints (ja/jb, indexes into the same
@@ -718,18 +743,20 @@
   }
 
   // ── Register the code injector ─────────────────────────────────────────────
-  if (!window.bonkCodeInjectors) window.bonkCodeInjectors = [];
-  window.bonkCodeInjectors.push(function (bonkCode) {
-    try {
-      const patched = createInjector(bonkCode);
-      console.log('%c[BonkExport] Code injector registered',
-        'color:#4caf50;font-weight:bold');
-      return patched;
-    } catch (error) {
-      console.error('[BonkExport] Injector failed:', error);
-      return bonkCode; // Return unmodified on failure
-    }
-  });
+  if (typeof window !== 'undefined') {
+    if (!window.bonkCodeInjectors) window.bonkCodeInjectors = [];
+    window.bonkCodeInjectors.push(function (bonkCode) {
+      try {
+        const patched = createInjector(bonkCode);
+        console.log('%c[BonkExport] Code injector registered',
+          'color:#4caf50;font-weight:bold');
+        return patched;
+      } catch (error) {
+        console.error('[BonkExport] Injector failed:', error);
+        return bonkCode; // Return unmodified on failure
+      }
+    });
+  }
 
   // ── Export button UI ───────────────────────────────────────────────────────
   function injectButton() {
@@ -939,9 +966,16 @@
       'color:#888;font-size:11px');
   }
 
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
+  // The pure extraction path is exercised directly by Node tests (the UI
+  // bootstrap below is browser-only and skipped there).
+  if (typeof module !== 'undefined' && module.exports) {
+    module.exports = { extractMap };
+  }
+  if (typeof document !== 'undefined') {
+    if (document.readyState === 'loading') {
+      document.addEventListener('DOMContentLoaded', init);
+    } else {
+      init();
+    }
   }
 })();
