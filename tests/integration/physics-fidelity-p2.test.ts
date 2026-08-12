@@ -331,7 +331,6 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       ],
       spawns: [{ x: 0, y: 0, blue: true, red: true }],
       physicsJoints: [
-      physicsJoints: [
         { bodyA: 0, bodyB: 1, type: 'd', anchorA: { x: 0, y: 0 }, anchorB: { x: 0, y: 30 }, frequencyHz: 4, dampingRatio: 0.5 },
       ],
     } as any) as any;
@@ -409,7 +408,6 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     const start = gate.GetAngle();
     for (let i = 0; i < 120; i++) e.tick();
     expect(gate.GetAngle() - start).toBeGreaterThan(0.05);
-  });
   });
 
   it('resolves gear referents by index through the full normalizeMap pipeline', () => {
