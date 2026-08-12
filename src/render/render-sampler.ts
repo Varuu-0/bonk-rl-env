@@ -36,18 +36,23 @@ export interface RenderFrameInput {
 
 /**
  * A sampler that renders the highest slot written at or below `readSlot`.
- * Returns the rendered snapshot, or null if nothing new to render (same tick).
- * This is a *pull* consumer: it does no simulation work of its own.
+ * Returns the rendered snapshot, or null if nothing new to render (same seqlock
+ * generation — i.e. the slot holds no fresh write). This is a *pull* consumer: it
+ * does no simulation work of its own.
  */
 export class DetachedRenderSampler {
-  private lastTick = -1;
+  // Initialized below any real seq: seq is `writeGen * 2` truncated to Int32
+  // (always even, in [-2147483648, 2147483646]), so a fresh sampler booting
+  // after the wrap sees a negative first seq and must still render it — a
+  // -1 sentinel would misread `raw.seq - (-1)` as a stale frame.
+  private lastSeq = Number.MIN_SAFE_INTEGER;
 
   constructor(
     private readonly frame: RenderFrameInput,
     private readonly target: DetachedRenderTarget,
   ) { }
 
-  /** Sample the latest slot and render if its tick advanced. */
+  /** Sample the latest slot and render if a fresh write (seq) is present. */
   renderSlot(slotIndex: number, slotCount: number): SimSnapshot | null {
     const count = Math.max(1, Math.floor(slotCount));
     const scan = normalizeSlot(slotIndex, count);
@@ -67,8 +72,17 @@ export class DetachedRenderSampler {
     if (!raw) return null; // nothing coherent written yet
 
     // Never re-render a frame older than the last one (time-reversed guard).
-    if (raw.tick <= this.lastTick) return null;
-    this.lastTick = raw.tick;
+    // Key the guard on the seqlock write generation (`seq`), which is monotonic
+    // across episode resets. The sim tick is NOT monotonic across resets: every
+    // `BonkEnvironment.reset()` rebuilds the world and restarts ticks at 0, so a
+    // tick-keyed guard would suppress the entire next episode after a reset.
+    // `seq` is `writeGen * 2` truncated to Int32 and wraps negative after 2^31
+    // process-wide commits, so a delta beyond one Int32 cycle is a fresh write
+    // after the wrap, while a small negative delta is a genuinely stale frame.
+    if (raw.seq === this.lastSeq) return null;
+    const seqDelta = raw.seq - this.lastSeq;
+    if (seqDelta < 0 && seqDelta > -2147483648) return null;
+    this.lastSeq = raw.seq;
 
     const simSnap: SimSnapshot = {
       tick: raw.tick,

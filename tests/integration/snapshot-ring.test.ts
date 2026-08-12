@@ -200,7 +200,7 @@ describe('DetachedRenderSampler', () => {
     expect(() => sampler.renderSlot(-1, 4)).not.toThrow();
   });
 
-  it('does not render a time-reversed (older) frame after a newer one', () => {
+  it('skips a genuinely stale (lower-seq) frame after a newer one', () => {
     const ring = allocRing(4, 2);
     const cam = computeCamera(730, 500, 12);
     const calls: string[] = [];
@@ -208,17 +208,110 @@ describe('DetachedRenderSampler', () => {
       { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
       { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
     );
-    // Render a newer frame first.
-    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 20));
-    const newer = sampler.renderSlot(0, 4);
+    // Write an older frame to slot 0 first.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 12));
+    // Then a newer frame to slot 1.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 20));
+    const newer = sampler.renderSlot(1, 4);
     expect(newer).not.toBeNull();
     expect(newer!.tick).toBe(20);
     calls.length = 0;
-    // An older/equal frame must be rejected (no time reversal).
-    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 20));
+    // A genuinely stale ring position (slot 0 holds an older write with a lower
+    // seqlock seq) must still be rejected.
+    expect(sampler.renderSlot(0, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+    // Re-sampling the already-rendered slot is skipped (same seq).
     expect(sampler.renderSlot(1, 4)).toBeNull();
-    writeSnapshot(ring, 2, 2, makeReader([ALIVE0, DEAD1], 19));
-    expect(sampler.renderSlot(2, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+
+  it('keeps rendering across consecutive episode resets (tick restarts at 0)', () => {
+    const ring = allocRing(8, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+
+    const epTicks: Array<Array<number>> = [
+      [0, 5, 10, 15, 20, 25],       // episode 1
+      [0, 5, 10, 15, 20, 25, 30, 40], // episode 2: sim resets, ticks restart at 0
+    ];
+
+    for (const ep of epTicks) {
+      const rendered: number[] = [];
+      for (const t of ep) {
+        const slot = Math.floor(t / 5) % 8;
+        writeSnapshot(ring, 2, slot, makeReader([ALIVE0, DEAD1], t));
+        if (sampler.renderSlot(slot, 8)) rendered.push(t);
+      }
+      // Every frame of the brand-new episode must render, even though the ticks
+      // restarted at 0 (which the old tick-keyed guard suppressed entirely).
+      expect(rendered).toEqual(ep);
+    }
+  });
+
+  it('survives the Int32 seq wrap (writeGen * 2 truncation)', () => {
+    const ring = allocRing(4, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+    // Per-slot header ints: [seq, tick] followed by 2 discs * 5 Float32 fields.
+    const slotHeader = (slot: number) => new Int32Array(ring, slot * (2 + 2 * 5) * 4, 2);
+    // Plant the final positive seq before the wrap: writeGen * 2 with writeGen
+    // at 2^30 - 1 gives 2147483646, the largest even Int32.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 900));
+    slotHeader(0)[0] = 2147483646;
+    expect(sampler.renderSlot(0, 4)).not.toBeNull();
+    expect(sampler.renderSlot(0, 4)).toBeNull(); // same seq -> stale
+
+    calls.length = 0;
+    // A small negative delta within one seq cycle is a genuinely stale frame
+    // and must stay rejected.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 901));
+    slotHeader(1)[0] = 2147483644;
+    expect(sampler.renderSlot(1, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+
+    // After the wrap the stored seq is negative (writeGen * 2 = 2^31 truncates
+    // to Int32 min). The delta beyond one Int32 cycle is a fresh write and must
+    // render — the naive `seq <= lastSeq` guard would freeze the sampler here.
+    writeSnapshot(ring, 2, 2, makeReader([ALIVE0, DEAD1], 902));
+    slotHeader(2)[0] = -2147483648;
+    const afterWrap = sampler.renderSlot(2, 4);
+    expect(afterWrap).not.toBeNull();
+    expect(afterWrap!.tick).toBe(902);
+  });
+
+  it('boots after the Int32 seq wrap and renders the first post-wrap frame', () => {
+    const ring = allocRing(4, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+    // Per-slot header ints: [seq, tick] followed by 2 discs * 5 Float32 fields.
+    const slotHeader = (slot: number) => new Int32Array(ring, slot * (2 + 2 * 5) * 4, 2);
+    // A sampler created after the process-wide wrap sees a negative even seq as
+    // its very first frame. It must render — a `lastSeq = -1` sentinel would
+    // misread raw.seq - (-1) as stale and freeze the sampler until 2^31 more
+    // process-wide writes cycle seq back to >= 0.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 100));
+    slotHeader(0)[0] = -2147483646;
+    const first = sampler.renderSlot(0, 4);
+    expect(first).not.toBeNull();
+    expect(first!.tick).toBe(100);
+
+    calls.length = 0;
+    // A genuinely older wrapped frame (more negative seq) is still rejected.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 101));
+    slotHeader(1)[0] = -2147483648;
+    expect(sampler.renderSlot(1, 4)).toBeNull();
     expect(calls).toHaveLength(0);
   });
 });
