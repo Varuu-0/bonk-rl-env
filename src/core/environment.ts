@@ -267,17 +267,34 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number } 
         const w = (fixtureDef.radius || 0) * 2;
         return { w, h: w };
     }
-    if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices) && fixtureDef.vertices.length > 0) {
+    if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices)) {
+        // Match addBody()'s validation (physics-engine.ts:698): fewer than 3
+        // vertices is malformed and must take the loud warn path, and only
+        // the first 8 vertices build the actual Box2D shape — the AABB must
+        // cover the same vertex window.
+        if (fixtureDef.vertices.length < 3) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient vertices (need >= 3)`);
+            return { w: 0, h: 0 };
+        }
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (const v of fixtureDef.vertices) {
+        let finiteCount = 0;
+        const maxVertices = Math.min(fixtureDef.vertices.length, 8);
+        for (let i = 0; i < maxVertices; i++) {
+            const v = fixtureDef.vertices[i];
+            // Skip non-finite coordinates so a single NaN vertex cannot
+            // silently zero the extent.
+            if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
+            finiteCount++;
             if (v.x < minX) minX = v.x;
             if (v.x > maxX) maxX = v.x;
             if (v.y < minY) minY = v.y;
             if (v.y > maxY) maxY = v.y;
         }
-        const w = Number.isFinite(minX) ? maxX - minX : 0;
-        const h = Number.isFinite(minY) ? maxY - minY : 0;
-        return { w, h };
+        if (finiteCount === 0) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has no finite vertices — creating a zero-area sensor`);
+            return { w: 0, h: 0 };
+        }
+        return { w: maxX - minX, h: maxY - minY };
     }
     console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — creating a zero-area sensor`);
     return { w: 0, h: 0 };

@@ -584,10 +584,12 @@ describe('CapZoneScoring', () => {
                 expect(Math.max(...ys) - Math.min(...ys)).toBeGreaterThan(0);
 
                 let captureReward: number | null = null;
+                let captureStep: number | null = null;
                 for (let i = 0; i < 300; i++) {
                     const r = env.step(0);
                     if ((r.info.scoreBlue ?? 0) > 0) {
                         captureReward = r.reward;
+                        captureStep = i;
                         break;
                     }
                     if (r.done) break;
@@ -597,6 +599,7 @@ describe('CapZoneScoring', () => {
                 // rect control (step ~15), not silently never fire.
                 expect(captureReward).not.toBe(null);
                 expect(captureReward!).toBeCloseTo(0.999, 3);
+                expect(captureStep!).toBeLessThanOrEqual(20);
 
                 // reset() rebuilds the sensor from the same map data — it must
                 // stay non-degenerate, otherwise the next episode is dead.
