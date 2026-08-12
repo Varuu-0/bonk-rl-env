@@ -737,16 +737,22 @@ export class PhysicsEngine {
        dynamicDensity = 0.0001;
      }
      shapeDef.density = def.static ? 0 : dynamicDensity;
-     // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`, and when
-     // `f_p` (fricPolarity) is set the signed friction is negative. The native
-     // client mixes friction via `b2MixFriction = sqrt(f1*f2)`, so a negative
-     // authored value drives the mix to NaN, which disables the solver's friction
-     // clamp ("velocity-independent friction"). This port reproduces the SIGN
-     // only; the actual sliding behavior depends on the solver MixFriction and
-     // is validated differentially in P4, not unit-tested here.
-     shapeDef.friction = def.fricPolarity
-       ? -(def.friction ?? 0.3)
-       : (def.friction ?? 0.3);
+      // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`. Native
+      // line 3267 makes `f_p` (fricPolarity) surfaces NEGATIVE to get
+      // "velocity-independent friction" — but that trick only works because the
+      // native disc friction is 0 (b2MixFriction = sqrt(f1*f2) => sqrt(-f*0) =
+      // -0). This port's disc friction is positive (PLAYER_FRICTION =
+      // 0.001337), so a negative surface friction makes the mix NaN and
+      // poisons the contact impulse and then the disc position on the first
+      // contact tick (#276). Reproduce the native frictionless effect as
+      // friction 0, and clamp authored negative/non-finite friction up to 0 so
+      // the sqrt mix can never see a negative product (map-vs-map divergence
+      // from the native negative mix is documented in DEOBFUSCATION §33.4).
+      const authoredFriction = def.friction;
+      const baseFriction = authoredFriction === undefined
+        ? 0.3
+        : (Number.isFinite(authoredFriction) ? Math.max(authoredFriction, 0) : 0);
+      shapeDef.friction = def.fricPolarity ? 0 : baseFriction;
       const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
      shapeDef.restitution = restitutionValue;
 
@@ -1596,7 +1602,12 @@ export class PhysicsEngine {
         const pos = body.GetPosition();
         const dx = pos.x - this.oobCenterX;
         const dy = pos.y - this.oobCenterY;
-        if (dx * dx + dy * dy > this.oobRadiusSquared) {
+        const d2 = dx * dx + dy * dy;
+        // Fail-safe (#276): a non-finite position (NaN/Infinity from any
+        // solver corruption) must count as out-of-bounds. Without this guard,
+        // `NaN > threshold` is false, so a corrupted disc would be immortal
+        // and poison every observation for the rest of the episode.
+        if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
           this.playerAlive.set(id, false);
           this.playerDeathType.set(id, 4);
           globalProfiler.increment('death_out_of_bounds');

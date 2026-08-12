@@ -3280,6 +3280,25 @@ fd.shape = createdShapes[fix.sh];
 Fixtures with `np == true` are skipped entirely (7579–7581); a body whose fixtures
 are **all** `np` is forced static (7540–7547).
 
+> **Port divergence (#276): negative/`f_p` friction is clamped to 0.**
+> The engine (`src/core/physics-engine.ts`, `addBody`) clamps every authored
+> friction to ≥ 0 (negative and non-finite values become 0) and makes `f_p`
+> (fricPolarity) surfaces **frictionless (0)** instead of negative. This is
+> forced because the native "negative = velocity-independent friction" trick
+> (line 3267) only works with the native disc friction of 0:
+> `b2MixFriction = sqrt(f1*f2)` yields `-0` natively but `NaN` here, since this
+> port's disc friction is positive (`PLAYER_FRICTION = 0.001337`), and a NaN
+> contact mix corrupts the disc's position on the first contact tick (#276).
+>
+> For disc-vs-surface contacts `sqrt(0 · 0.001337) = 0` reproduces the native
+> frictionless effect. For **map-vs-map contacts** the clamp diverges: two
+> `friction: -1` fixtures now mix to `sqrt(0 · 0) = 0` instead of the native
+> `sqrt(-1 · -1) = 1`, so friction:-1 obstacles contacting each other lose all
+> friction relative to the reference client. Zeroing the surface is the only
+> finite option given the verified positive disc friction; the fidelity P1 test
+> (`tests/integration/physics-fidelity-p1.test.ts`) codifies friction 0 as the
+> `f_p` behavior.
+
 ### 33.5 Bodies (encoder 11593–11636; decoder 11860–11907)
 
 Order per body: `s.type` UTF (`"s"|"d"|"k"`), `s.n` UTF, `p[0]` `p[1]` doubles,
