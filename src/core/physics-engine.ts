@@ -1037,21 +1037,54 @@ export class PhysicsEngine {
     }
 
     const cd = def.collideConnected ?? false;
+    // §33.8 anchor parity: an anchor is honored only when BOTH coordinates are
+    // finite numbers — anything else (null/undefined, NaN, non-numeric strings)
+    // degrades the WHOLE anchor to (0,0), matching the rv branch's whole-anchor
+    // pivot guard. Per-coordinate coercion would pin e.g. `{x: 5, y: null}` at
+    // (5/SCALE, 0) in the d branch while the rv pivot degrades fully to (0,0).
+    // A bare `?? 0` does not coerce NaN (`NaN ?? 0` is still NaN). Returns the
+    // pair in world units (map px / this.scale).
+    const anchorPair = (a?: { x: number; y: number }): [number, number] =>
+      a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? [a.x / this.scale, a.y / this.scale]
+        : [0, 0];
     const makeAnchorA = (a?: { x: number; y: number }) =>
-      a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (bodyA.GetPosition().Copy());
-    const makeAnchorB = (a?: { x: number; y: number }, b?: any) =>
-      a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (b.GetPosition().Copy());
+      a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? new b2Vec2(a.x / this.scale, a.y / this.scale)
+        : (bodyA.GetPosition().Copy());
 
     const type = def.type;
     let created: any = null;
     if (type === 'distance' || type === 'd') {
       const jd = new b2DistanceJointDef();
-      // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
-      const a = makeAnchorA(def.anchorA);
-      const b = isGround
-        ? new b2Vec2((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale)
-        : makeAnchorB(def.anchorB, bodyB);
-      jd.Initialize(bodyA, bodyB, a, b);
+      if (isGround) {
+        // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
+        const [abx, aby] = anchorPair(def.anchorB);
+        jd.Initialize(
+          bodyA,
+          bodyB,
+          makeAnchorA(def.anchorA),
+          new b2Vec2(abx, aby),
+        );
+      } else {
+        // §33.8 d: aa/ab are body-relative local anchors, set directly in the
+        // connected bodies' frames (Initialize would subtract each body's
+        // position, pinning the joint ~one body-position away on any
+        // non-origin body).
+        const [ax, ay] = anchorPair(def.anchorA);
+        const [bx, by] = anchorPair(def.anchorB);
+        jd.body1 = bodyA;
+        jd.body2 = bodyB;
+        jd.localAnchor1.Set(ax, ay);
+        jd.localAnchor2.Set(bx, by);
+        if (!(typeof def.length === 'number' && Number.isFinite(def.length))) {
+          // No authored length: replicate Initialize's default — the distance
+          // between the anchor world points in the bodies' frames.
+          const wa = bodyA.GetWorldPoint(jd.localAnchor1);
+          const wb = bodyB.GetWorldPoint(jd.localAnchor2);
+          jd.length = Math.sqrt((wb.x - wa.x) * (wb.x - wa.x) + (wb.y - wa.y) * (wb.y - wa.y));
+        }
+      }
       // apply an explicit authored length after Initialize (Initialize sets
       // length from the anchor distance) (§33.7 d: len→0.01-floor).
       if (typeof def.length === 'number' && Number.isFinite(def.length)) {
@@ -1063,7 +1096,24 @@ export class PhysicsEngine {
       created = this.world.CreateJoint(jd);
     } else if (type === 'rv' || type === 'revolute') {
       const jd = new b2RevoluteJointDef();
-      jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA));
+      // §33.8 rv: aa is a body-relative offset; the pivot's world position is
+      // bodyA.p + R·(aa/ppm). Initialize converts it back via GetLocalPoint,
+      // so the joint's local anchor on bodyA lands exactly at aa/SCALE
+      // (GetPosition returns an internal reference — operate on a copy).
+      const pivot = bodyA.GetPosition().Copy();
+      // Only add the body-relative offset when the map authored a valid
+      // anchor: when `aa` is absent the exporter emits `anchorA: null`, and
+      // makeAnchorA then falls back to a WORLD position (bodyA.GetPosition()).
+      // Adding it again would produce p + R·p instead of p. Truthy-but-invalid
+      // and partially-valid anchors (e.g. `{}`, `{x: null}`, `{x: NaN}`, string
+      // coordinates, `{x: 5, y: null}`) must degrade the whole anchor to the
+      // body origin — makeAnchorA would compute a.x / scale = NaN, while the d
+      // branch's anchorPair applies the same whole-anchor finite check. The
+      // un-authored fallback pins the pivot at the body origin (local (0,0)).
+      if (def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y)) {
+        pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
+      }
+      jd.Initialize(bodyA, bodyB, pivot);
       jd.collideConnected = cd;
       jd.enableLimit = !!def.enableLimit;
       // Adapter forwards the exporter's lower/upperLimit (which map to the
