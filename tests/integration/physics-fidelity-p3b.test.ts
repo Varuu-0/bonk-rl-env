@@ -16,7 +16,7 @@
  *    ni=true; delete swing`, readable 8595-8606); cap-zone eliminations
  *    (death type 3) stay permanent (§alive rule, readable 8463).
  */
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { PhysicsEngine, MOVE_FORCE, MOVE_FORCE_FLIP_MULTIPLIER } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import type { MapDef } from '../../src/core/physics-engine';
@@ -97,6 +97,41 @@ describe('P3b: fl — flipped move-force base (DEOBFUSCATION §11)', () => {
             env.close();
         }
     });
+
+    it('explicit env config flipped overrides the map setting (asymmetric with nc)', () => {
+        const env = new BonkEnvironment({
+            numOpponents: 0,
+            seed: 7,
+            mapData: withSettings({ fl: false }),
+            flipped: true,
+            randomOpponent: false,
+        } as any);
+        try {
+            expect((env as any).physics.flipped).toBe(true);
+        } finally {
+            env.close();
+        }
+    });
+
+    it('setFlipped re-validates the #234 ascent invariant on the effective base', () => {
+        const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        try {
+            // gravity 20 vs base 18: broken at construction.
+            const engine = new PhysicsEngine({ gravityY: 20, moveForce: 18 });
+            expect(warn).toHaveBeenCalled();
+            warn.mockClear();
+            // Flipped base = 18 × 20/12 = 30: pure-up (30 > 20) AND up+heavy
+            // (30 × 0.7 = 21 > 20) both clear — flipping must not re-warn.
+            engine.setFlipped(true);
+            expect(warn).not.toHaveBeenCalled();
+            // Un-flipping re-breaks the invariant and must warn again.
+            engine.setFlipped(false);
+            expect(warn).toHaveBeenCalled();
+            engine.destroy();
+        } finally {
+            warn.mockRestore();
+        }
+    });
 });
 
 describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
@@ -148,8 +183,11 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
                 env.close();
             }
         };
+        // Overlapping discs: contact correction must push the control discs
+        // to (or past) the touching distance — 2 × 12 px radius = 24 px —
+        // while nc discs keep their initial ~3 px separation.
         expect(run(true)).toBeLessThan(5);
-        expect(run(false)).toBeGreaterThan(15);
+        expect(run(false)).toBeGreaterThan(20);
     });
 });
 
@@ -212,6 +250,37 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             expect(engine.getPlayerState(0).deathType).toBe(3);
         } finally {
             engine.destroy();
+        }
+    });
+
+    it('an OOB spawn point detaches instead of death→respawn churning every tick', () => {
+        // Spawn far outside the 850/scale death circle: with re on, a naive
+        // respawn would die again next tick forever. The fail-safe detaches.
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 1000, 0); // 1000 px >> 850 px OOB radius
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(4);
+            // No live body left to respawn: the world churn ended after one tick.
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('explicit env config respawnEnabled overrides the map setting', () => {
+        const env = new BonkEnvironment({
+            numOpponents: 0,
+            seed: 7,
+            mapData: withSettings({ re: false }),
+            respawnEnabled: true,
+            randomOpponent: false,
+        } as any);
+        try {
+            expect((env as any).physics.respawnEnabled).toBe(true);
+        } finally {
+            env.close();
         }
     });
 });

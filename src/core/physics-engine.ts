@@ -930,6 +930,10 @@ export class PhysicsEngine {
   /** Enable/disable the native flipped (`fl`) move-force base. */
   setFlipped(enabled: boolean): void {
     this.flipped = !!enabled;
+    // The #234 ascent invariant is checked against the EFFECTIVE base; a
+    // runtime flip can break it after construction, so re-validate here
+    // (the constructor-only warning would otherwise miss the regression).
+    this.warnAscentInvariantBreak();
   }
 
   /** Enable/disable the native respawning (`re`) mode. */
@@ -1645,6 +1649,17 @@ export class PhysicsEngine {
   private respawnPlayer(id: number, body: any): void {
     const spawn = this.playerSpawnPoints.get(id);
     if (!spawn) {
+      this.detachPlayer(id, body);
+      return;
+    }
+    // Fail-safe (malformed-map guard): a spawn point outside the OOB death
+    // circle would respawn a disc that dies again on the very next tick —
+    // unbounded death→respawn churn with telemetry/body work every tick.
+    // Native has no such escape (it would churn identically); the port
+    // detaches instead, matching its other corruption fail-safes (#271/#276).
+    const sx = spawn.x - this.oobCenterX;
+    const sy = spawn.y - this.oobCenterY;
+    if (sx * sx + sy * sy > this.oobRadiusSquared) {
       this.detachPlayer(id, body);
       return;
     }
