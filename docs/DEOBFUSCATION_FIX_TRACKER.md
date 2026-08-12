@@ -247,6 +247,42 @@ the maps.
 
 Chronological record of fixes applied. Append new entries here.
 
+### 2026-08-12 — P4: differential validation (capture harness + replay comparator + exact-match gates)
+
+- **Capture harness** — records per-tick native disc state into a versioned
+  `NativeTrace` JSON:
+  - `Webscripts/rl-trace-capture.user.js` — userscript/Playwright harness using
+    the same state anchor as capture-init (snapshots `__bonkExportState` on
+    tick boundaries, rebases the per-round tick via `rc`/`fig` per
+    LIVE_STATE_EXTRACTION §9.1).
+  - `src/core/differential/capture-recorder.ts` — the same mapping,
+    offline-testable: turns `state.discs[i]` (x,y,xv,yv,a,av,a1,a2,a1a,team,ds,
+    §9.4) into trace ticks with alive == presence (§9.2).
+- **Replay comparator** — `src/core/differential/replay-comparator.ts`:
+  rebuilds the traced world via the normal adapter→environment path, re-seeds
+  each player at its recorded spawn, replays the recorded Discrete(64) inputs
+  per tick, and diffs `getPlayerState()` against the recorded disc kinematics
+  per field (position px, velocity px/s, angle rad, angular velocity rad/s)
+  within configurable tolerances. Coordinate reconciliation (§9.5) makes the
+  units 1:1, so diffs are compared directly.
+- **Exact-match gates** — `src/core/differential/exact-match-gates.ts`:
+  verify engine-built fixtures reproduce the traced map's authored
+  density/friction/restitution (§33.4, incl. static→0, 0.0001 floor, `f_p`→0,
+  `-1`/unset→0.8) and that every authored joint was created with the authored
+  core params (§33.8 revolute/distance/prismatic/gear). Gates pass on the
+  bundled Simple 1v1 and WDB No-Mapshake maps.
+- Tests: `tests/integration/physics-fidelity-p4.test.ts` (7 tests) — trace
+  schema round-trip + wrong-version rejection; fixture gate; joint gate; a
+  recorded neutral run replays within tight tolerance (worst dx/dy < 1e-6 map
+  px, proving the comparator compares real engine output); a perturbed trace
+  fails the same run (gate discriminates); native-absent ticks surface as
+  engine-alive mismatches.
+- Docs: `docs/DIFFERENTIAL_VALIDATION.md` (new) — trace format, capture,
+  replay/compare, gates, and live-rerun workflow. `PHYSICS_FIDELITY_PLAN.md`
+  P4 section marked IMPLEMENTED.
+- Verification: `tsc --noEmit` clean; P0/P1/P2/P3/P4 + config-consumed all
+  green (6 files, 89 tests).
+
 ### 2026-08-11 — P3: per-map physics settings (`pq` solver iterations; `gd` re-classified)
 
 - `pq` (map `s.pq`) now gates solver iterations end-to-end:
