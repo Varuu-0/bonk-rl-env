@@ -24,11 +24,13 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
  *     [0, 63]; the out-of-range integer rejection is covered separately by
  *     issue #261, and finite non-integer numbers remain accepted for backward
  *     compatibility with the pinned input-validation behavior), or
- *   - a plain object whose present fields are booleans with at least one
- *     field set; missing fields default to false.
+ *   - a plain object whose own enumerable keys are exactly the six
+ *     PlayerInput fields, each present field boolean, with at least one field
+ *     set; missing fields default to false.
  *
- * Arrays, empty objects, non-boolean field values, non-objects, null,
- * undefined, and non-finite numbers (NaN, ±Infinity) are rejected.
+ * Arrays, empty objects, unknown/typo'd field names, non-boolean field
+ * values, non-objects, null, undefined, and non-finite numbers (NaN,
+ * ±Infinity) are rejected.
  */
 export function assertValidAction(action: unknown): asserts action is PlayerInput | number {
     if (typeof action === 'number') {
@@ -59,7 +61,15 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
             );
         }
     }
+    const unknownKey = Object.keys(record).find(
+        key => !PLAYER_INPUT_FIELDS.includes(key as keyof PlayerInput),
+    );
+    if (unknownKey !== undefined) {
+        throw new Error(
+            `Invalid action: unknown field "${unknownKey}" (expected only left, right, up, down, heavy, grapple)`,
+        );
+    }
     if (!hasField) {
-        throw new Error('Invalid action: expected a PlayerInput object with a boolean field, got an empty object');
+        throw new Error('Invalid action: expected a PlayerInput object, got no recognized boolean action fields');
     }
 }

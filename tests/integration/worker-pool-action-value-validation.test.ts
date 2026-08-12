@@ -29,9 +29,11 @@ describe('WorkerPool action value validation (issues #225/#278)', () => {
         [[null, 0], 'Invalid action: expected a PlayerInput object or an encoded number, got null'],
         [[NaN, 0], 'Invalid action: expected a finite encoded number, got NaN'],
         [[[2], 0], 'Invalid action: expected a PlayerInput object, got array'],
-        [[{}, 0], 'Invalid action: expected a PlayerInput object with a boolean field, got an empty object'],
+        [[{}, 0], 'Invalid action: expected a PlayerInput object, got no recognized boolean action fields'],
         [[{ left: 'true' }, 0], 'Invalid action: field "left" must be boolean, got string'],
         [[{ right: 1 }, 0], 'Invalid action: field "right" must be boolean, got number'],
+        [[{ left: true, graple: true }, 0], 'Invalid action: unknown field "graple"'],
+        [[{ right: true, attack: 'x' }, 0], 'Invalid action: unknown field "attack"'],
       ];
       for (const [actions, message] of invalidBatches) {
         await expect(pool.step(actions)).rejects.toThrow(message);

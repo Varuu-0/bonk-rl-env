@@ -666,6 +666,8 @@ describe('BonkEnvironment edge cases', () => {
         { right: 'x' },
         { left: 1 },
         { left: true, right: 'false' },
+        { left: true, graple: true },
+        { right: true, attack: 'x' },
       ];
       for (const bad of malformed) {
         env.reset();
