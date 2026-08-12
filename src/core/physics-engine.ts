@@ -1022,8 +1022,18 @@ export class PhysicsEngine {
     }
 
     const cd = def.collideConnected ?? false;
+    // §33.8 anchor coordinates: only finite numbers are honored — anything
+    // else (null/undefined, NaN, non-numeric strings) degrades to 0 so no
+    // joint branch can emit a NaN anchor. A bare `?? 0` does not coerce NaN
+    // (`NaN ?? 0` is still NaN), so the d-branch anchors must go through the
+    // same finite check as the rv pivot guard. Returns the value in world
+    // units (map px / this.scale).
+    const anchorCoord = (v: unknown): number =>
+      (typeof v === 'number' && Number.isFinite(v) ? v : 0) / this.scale;
     const makeAnchorA = (a?: { x: number; y: number }) =>
-      a ? new b2Vec2(a.x / this.scale, a.y / this.scale) : (bodyA.GetPosition().Copy());
+      a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? new b2Vec2(a.x / this.scale, a.y / this.scale)
+        : (bodyA.GetPosition().Copy());
 
     const type = def.type;
     let created: any = null;
@@ -1035,7 +1045,7 @@ export class PhysicsEngine {
           bodyA,
           bodyB,
           makeAnchorA(def.anchorA),
-          new b2Vec2((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale),
+          new b2Vec2(anchorCoord(def.anchorB?.x), anchorCoord(def.anchorB?.y)),
         );
       } else {
         // §33.8 d: aa/ab are body-relative local anchors, set directly in the
@@ -1044,8 +1054,8 @@ export class PhysicsEngine {
         // non-origin body).
         jd.body1 = bodyA;
         jd.body2 = bodyB;
-        jd.localAnchor1.Set((def.anchorA?.x ?? 0) / this.scale, (def.anchorA?.y ?? 0) / this.scale);
-        jd.localAnchor2.Set((def.anchorB?.x ?? 0) / this.scale, (def.anchorB?.y ?? 0) / this.scale);
+        jd.localAnchor1.Set(anchorCoord(def.anchorA?.x), anchorCoord(def.anchorA?.y));
+        jd.localAnchor2.Set(anchorCoord(def.anchorB?.x), anchorCoord(def.anchorB?.y));
         if (!(typeof def.length === 'number' && Number.isFinite(def.length))) {
           // No authored length: replicate Initialize's default — the distance
           // between the anchor world points in the bodies' frames.
@@ -1074,10 +1084,11 @@ export class PhysicsEngine {
       // anchor: when `aa` is absent the exporter emits `anchorA: null`, and
       // makeAnchorA then falls back to a WORLD position (bodyA.GetPosition()).
       // Adding it again would produce p + R·p instead of p. Truthy-but-invalid
-      // anchors (e.g. `{}`, `{x: null}`) must degrade to the same origin —
-      // makeAnchorA would compute a.x / scale = NaN, while the d-joint branch
-      // coerces the same input to 0 via `?.x ?? 0`. The un-authored fallback
-      // pins the pivot at the body origin (local anchor (0,0)).
+      // anchors (e.g. `{}`, `{x: null}`, `{x: NaN}`, string coordinates) must
+      // degrade to the same origin — makeAnchorA would compute a.x / scale =
+      // NaN, while the d branch's anchorCoord coerces the same input to 0.
+      // The un-authored fallback pins the pivot at the body origin (local
+      // anchor (0,0)).
       if (def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y)) {
         pivot.Add(bodyA.GetWorldVector(makeAnchorA(def.anchorA)));
       }

@@ -158,10 +158,12 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
 
   it('malformed truthy anchors degrade to the body origin, never a NaN pivot (#282)', () => {
     // The map adapter passes anchorA through verbatim (map-adapter.ts:318), so
-    // hand-authored maps can carry truthy-but-invalid anchors (`{}`, `{x: null}`).
-    // makeAnchorA would compute a.x / scale = NaN for these; the rv pivot must
-    // fall back to the body origin exactly like the d-joint branch does via
-    // `?.x ?? 0` — no NaN coordinates may reach the joint def.
+    // hand-authored maps can carry truthy-but-invalid anchors (`{}`, `{x: null}`,
+    // `{x: NaN}`, string coordinates). makeAnchorA would compute a.x / scale =
+    // NaN for these; both the rv pivot guard and the d branch's anchorCoord
+    // sanitizer must degrade them to the body origin — no NaN coordinates may
+    // reach the joint def. (`NaN ?? 0` stays NaN, so a bare `?? 0` would not
+    // be enough for the d branch.)
     const e = new PhysicsEngine({ gravityY: 0 });
     e.addBody({ name: 'bodyA', type: 'rect', x: 100, y: 0, width: 40, height: 10, static: false, density: 1, angularVelocity: 0.5 } as any);
     e.addBody({ name: 'bodyB', type: 'rect', x: 200, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
@@ -172,19 +174,23 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       ['j_empty', {}],
       ['j_nullx', { x: null, y: 0 }],
       ['j_nully', { x: 0, y: null }],
+      ['j_nanx', { x: NaN, y: 0 }],
+      ['j_nany', { x: 0, y: NaN }],
+      ['j_strx', { x: 'abc', y: 0 }],
+      ['j_stry', { x: 0, y: 'abc' }],
     ] as [string, any][]) {
       e.addJoint({ type: 'rv', name, bodyA: 'bodyA', bodyB: 'bodyB', anchorA: anchor, enableLimit: false }, bm);
       e.addJoint({ type: 'd', name: name + '_d', bodyA: 'bodyA', bodyB: 'bodyB', anchorA: anchor, anchorB: anchor }, bm);
     }
 
-    for (const name of ['j_empty', 'j_nullx', 'j_nully']) {
+    for (const name of ['j_empty', 'j_nullx', 'j_nully', 'j_nanx', 'j_nany', 'j_strx', 'j_stry']) {
       const rv = (e as any).createdJoints.get(name);
       const d = (e as any).createdJoints.get(name + '_d');
       expect(rv).toBeTruthy();
       expect(d).toBeTruthy();
       // Both branches degrade the malformed anchor to the body origin: the rv
       // pivot lands at local (0,0) instead of NaN, and the d joint pins its
-      // local anchors at (0,0) (the `?.x ?? 0` coerce path).
+      // local anchors at (0,0) via the shared anchorCoord finite check.
       for (const a of [rv.m_localAnchor1, d.m_localAnchor1, d.m_localAnchor2]) {
         expect(Number.isFinite(a.x)).toBe(true);
         expect(Number.isFinite(a.y)).toBe(true);
