@@ -352,3 +352,132 @@ def test_vec_env_proxy_methods_do_not_return_dummy_values(monkeypatch):
 
     socket.send_json.assert_not_called()
     env.close()
+
+
+def _obs(tick):
+    return {
+        "playerX": 0.0,
+        "playerY": 0.0,
+        "playerVelX": 0.0,
+        "playerVelY": 0.0,
+        "playerAngle": 0.0,
+        "playerAngularVel": 0.0,
+        "playerIsHeavy": False,
+        "opponents": [],
+        "tick": tick,
+    }
+
+
+def _step_result(tick, terminated, reward, terminal_obs=None):
+    return {
+        "observation": _obs(tick),
+        "reward": reward,
+        "terminated": terminated,
+        "truncated": False,
+        "info": {
+            "tick": tick,
+            "terminated": terminated,
+            **({"terminal_observation": terminal_obs} if terminal_obs is not None else {}),
+        },
+    }
+
+
+@pytest.mark.parametrize(
+    ("responses", "expected_dones", "expected_episodes"),
+    [
+        (
+            # Mid-cycle termination (death on tick 2 of a frame_skip=4 cycle):
+            # the backend serves the death step plus the rest of the hold
+            # window (2 hold steps) before auto-resetting, so only the death
+            # step is an episode boundary. The hold steps carry the raw
+            # backend terminal_observation too (applyStepAutoReset attaches it
+            # to every done step), which step_wait() must strip from the info.
+            [
+                {"status": "ok", "data": [_step_result(1, False, 1.0)]},
+                {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(1, False, 0.5)]},
+            ],
+            [False, True, False, False, False],
+            {1: {"r": 3.0, "l": 2}},
+        ),
+        (
+            # Death on tick 1 of every episode (full frame_skip=4 hold, no
+            # intervening non-done step): the fresh episode's own termination
+            # on step 5 must surface as a NEW boundary instead of being
+            # swallowed as a hold-tail continuation of the previous episode.
+            [
+                {"status": "ok", "data": [_step_result(1, True, 5.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 7.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+            ],
+            [True, False, False, False, True, False, False, False],
+            {0: {"r": 5.0, "l": 1}, 4: {"r": 7.0, "l": 1}},
+        ),
+        (
+            # Mid-cycle death followed by a spawn-in-death-circle episode:
+            # death at tick 2 (two hold steps), then the fresh episode dies on
+            # its very first tick — a DONE step arriving MID-window
+            # (_hold_steps < frame_skip) with a changed tick. The tick counter
+            # restarts after the auto-reset, so it regresses 2 -> 1; the guard
+            # is tick inequality, and that change, not the window elapsing,
+            # marks the step as a new boundary.
+            [
+                {"status": "ok", "data": [_step_result(1, False, 1.0)]},
+                {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2))]},
+                {"status": "ok", "data": [_step_result(1, True, 5.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+                {"status": "ok", "data": [_step_result(1, True, 0.0, terminal_obs=_obs(1))]},
+            ],
+            [False, True, False, False, True, False, False, False],
+            {1: {"r": 3.0, "l": 2}, 4: {"r": 5.0, "l": 1}},
+        ),
+    ],
+)
+def test_step_wait_coalesces_terminated_hold_tail(
+    monkeypatch, responses, expected_dones, expected_episodes
+):
+    """#260: an AI-death terminal hold must surface as a single episode
+    boundary from ``step_wait()`` — one ``dones`` hit, one ``episode`` record
+    with the true accumulated return, no ``TimeLimit.truncated``, and the
+    ``terminal_observation`` conversion on the boundary step only."""
+    env, _, socket = _make_mocked_env(
+        monkeypatch, num_envs=1, config={"frame_skip": 4}
+    )
+    socket.recv_json.side_effect = responses
+
+    results = []
+    try:
+        for _ in responses:
+            results.append(env.step_wait())
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()
+
+    for index, (_, _, dones, infos) in enumerate(results):
+        assert bool(dones[0]) is expected_dones[index]
+        info = infos[0]
+        # A termination never sets TimeLimit.truncated, and the coalesced
+        # _episode flags always agree with the dones array.
+        assert "TimeLimit.truncated" not in info
+        assert info["_episode"]["terminated"] is expected_dones[index]
+        assert info["_episode"]["truncated"] is False
+        if index in expected_episodes:
+            expected = expected_episodes[index]
+            assert info["episode"]["r"] == pytest.approx(expected["r"])
+            assert info["episode"]["l"] == expected["l"]
+            # The terminal observation conversion runs on the boundary step.
+            assert isinstance(info["terminal_observation"], np.ndarray)
+        else:
+            assert "episode" not in info
+            assert "terminal_observation" not in info

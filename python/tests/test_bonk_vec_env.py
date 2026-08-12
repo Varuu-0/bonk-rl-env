@@ -297,6 +297,56 @@ class TestBonkVecEnvFrameSkipConfig:
 
 
 @pytest.mark.slow
+class TestBonkVecEnvFrameSkipEpisodeBoundary:
+    """Regression tests for #260.
+
+    With ``frame_skip > 1`` the backend keeps serving ``done: true`` for the
+    whole terminal hold window after an episode ends (the worker defers the
+    auto-reset to the frame-skip cycle boundary, #228). ``step_wait()`` must
+    coalesce those hold-tail steps into the episode's first done step: a
+    single truncation must surface as exactly one ``dones`` boundary, exactly
+    one ``info["episode"]`` record carrying the true accumulated return, and
+    ``TimeLimit.truncated`` on only that boundary step.
+    """
+
+    def test_frame_skip_hold_reports_single_episode_boundary(self, bonk_vec_env_factory):
+        env = bonk_vec_env_factory(
+            num_envs=1,
+            config={"frame_skip": 4, "max_ticks": 5, "num_opponents": 0},
+        )
+        env.reset(seeds=[1])
+
+        done_steps = []
+        truncation_steps = []
+        episode_records = []
+        episode_return = 0.0
+
+        for step in range(1, 21):
+            env.step_async(np.array([0]))
+            _, rewards, dones, infos = env.step_wait()
+            if len(episode_records) == 0:
+                episode_return += float(rewards[0])
+            if dones[0]:
+                done_steps.append(step)
+            if infos[0].get("TimeLimit.truncated") is True:
+                truncation_steps.append(step)
+            if "episode" in infos[0]:
+                episode_records.append(infos[0]["episode"])
+            if done_steps and not dones[0]:
+                break
+
+        # The truncation is a single episode boundary: done once, then the
+        # hold-tail steps return done=False until the fresh episode begins.
+        assert done_steps == [5]
+        assert len(episode_records) == 1
+        # True episode length (max_ticks=5) and the summed step rewards.
+        assert episode_records[0]["l"] == 5
+        assert episode_records[0]["r"] == pytest.approx(episode_return)
+        # The truncation marker is set on exactly the boundary step.
+        assert truncation_steps == done_steps
+
+
+@pytest.mark.slow
 class TestBonkVecEnvPythonConfigKeys:
     """Regression tests for #204 review follow-up.
 
