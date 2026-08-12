@@ -240,24 +240,21 @@ export class IpcBridge {
         // re-bound (bind() throws "Socket is closed"). Recreate the transport
         // so a later start() after close() binds a fresh ROUTER and serves
         // again (issue #263): re-wrap the send function on the new socket.
-        let recreated = false;
         if (this.sock.closed) {
             this.sock = new zmq.Router();
             this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
-            recreated = true;
         }
         try {
             await this.sock.bind(addr);
         } catch (err) {
             this.markBindFailed(err);
-            // A socket recreated here is always a restart-after-close() (the
-            // original socket was destroyed by close(), which also left
-            // _closed true until a successful bind). Its bind never succeeded,
-            // so a later close() would early-return and leak the open handle;
-            // close it here so a failed restart is fully clean and a retry
-            // recreates from scratch.
-            if (recreated) {
+            // A bind that never succeeded leaves the ROUTER handle open. Close
+            // it for both first starts and restart attempts; a later start()
+            // recreates a closed socket before retrying (issue #326).
+            try {
                 this.sock.close();
+            } catch {
+                // Preserve the original bind error if socket cleanup fails.
             }
             throw err;
         }
