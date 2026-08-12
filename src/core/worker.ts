@@ -159,7 +159,14 @@ parentPort.on('message', (msg) => {
             globalOffset = msg.startId || 0;
             // Size the shared-memory observation buffer and manager for the
             // configured opponent count so all opponents are transported.
-            _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents);
+            // The documented snake_case num_opponents alias resolves here
+            // exactly as it does in BonkEnvironment, so a snake_case-only
+            // config sizes the buffer for every spawned opponent instead of
+            // the default 1, which would overflow the SAB record on the
+            // first non-terminal step (#262).
+            _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(
+                config.numOpponents ?? (config as any)?.num_opponents,
+            );
             _obsBuffer = new Float32Array(16 + 6 * Math.max(0, _obsNumOpponents - 1));
             envs = [];
             for (let i = 0; i < numEnvsParam; i++) {
