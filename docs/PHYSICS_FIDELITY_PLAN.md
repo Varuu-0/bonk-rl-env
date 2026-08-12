@@ -46,11 +46,34 @@ no ground joints.
   read only by the map decoder/sanitizer/serializer and the editor. P3
   therefore exposes `gd` on `MapDef.settings` (sanitized ≥ 2, per the native
   sanitizer) but does NOT apply it; the engine keeps config/default gravity.
-  Runtime gd application is deferred to the P4 differential gate, which can
-  confirm or refute live host-side behavior.
-- `re/nc/fl` gating — exposed via `MapDef.settings` in P3; runtime gating
-  (nc → no-collide, fl → flipped move-force base) is a follow-up (P3b).
 - Death circle = 850 map px from map center, ppm-independent (lines 1557-1563) — engine already correct.
+
+### Map settings runtime gating (P3b) — IMPLEMENTED (2026-08-12)
+The remaining per-map settings now gate runtime behavior, all read from
+`MapDef.settings` (the sanitized native `s` object) and cited to the readable
+2026-07-29 artifact:
+- `fl` (flipped) — the move-force base is native **12**, **20 when `fl`**
+  (`state.ms.fl ? 20 : 12`, §11 720-730/935/4055). The port keeps its tuned
+  base (`MOVE_FORCE` = 30, #234 ascent invariant) and applies the same ratio
+  (`MOVE_FORCE_FLIP_MULTIPLIER = 20/12`) as `flippedMoveForce`, preserving the
+  native proportion on any scale (P0 abstraction rule). Engine option
+  `flipped` / `flippedMoveForce`; env forwards `settings.fl`.
+- `nc` (no collision) — all disc-disc contacts disabled (`contact.SetEnabled
+  (false)` when `physics.nc`, readable 1300-1303; §Key Collision Rules 5).
+  The engine's existing `setNoCollide` disc-filter path is now wired from
+  `settings.nc` (previously the env read the nonexistent `physics?.nc` and
+  silently ignored the map setting).
+- `re` (respawning) — a disc that died respawns **immediately at its spawn
+  point** with cleared grapple and fresh velocity (`x=sx; y=sy; xv=sxv;
+  yv=syv; ni=true; delete swing`, readable 8595-8606); cap-zone eliminations
+  (death type 3) stay permanent (§alive rule, readable 8463). Engine option
+  `respawnEnabled` + `respawnPlayer`; env forwards `settings.re`. The port
+  does not model spawn velocity, so respawns re-spawn at rest; `a1a` is not
+  reset (the native branch does not touch it). Fail-safe: a spawn point
+  outside the OOB death circle detaches instead of churning every tick.
+- Config override symmetry: the `flipped` / `respawnEnabled` environment
+  config keys win over the map settings, mirroring `noCollide` vs
+  `settings.nc`.
 
 ### Differential validation (P4) — IMPLEMENTED (2026-08-12)
 - **Capture harness** (`Webscripts/rl-trace-capture.user.js` +
@@ -88,10 +111,11 @@ no ground joints.
 | **P1** | Fixture fidelity | density clamp ≥0.0001, friction polarity, restitution fallback, mask-bit spec | fixture-level unit tests asserting exact numbers from §33.4 |
 | **P2** | Joint model | implement `rv` limits/motor, `d` fh/len, `lpj/lsj/p` prismatic params, gear `g`, ground joints | joint invariant tests per §33.7 formulas |
 | **P3** | Map physics settings | per-map `pq`→solver iters (2/6 low, 15/15 high), `gd`→exposed on MapDef.settings (runtime application deferred: native enforces gravity 20, pretty 7238-7240) | engine-level tests: pq changes solver behavior; gd does NOT override gravity (enforcement parity) |
+| **P3b** | Settings runtime gating | `fl`→flipped move-force base (×20/12), `nc`→disc-disc no-collide, `re`→immediate respawn at spawn point (type-3 deaths permanent) | engine/env-level tests: flipped force magnitude; nc masks drop player bits + pass-through behavior; OOB death respawns vs stays dead; type-3 permanence |
 | **P4** | Differential validation | capture harness (record native snapshots) + replay comparator + fixture/joint exact-match gates | comparator diff ≤ tolerance (validated: neutral-run replay ≈ 0, perturbed trace fails); gates pass on bundled maps; live capture workflow documented |
 | **P5** | Docs + gating | update DEOBFUSCATION_FIX_TRACKER with ✅/❌/partial per item; every claim cited | PR review gate |
 
 ## Dependency order
-P0 → P1 → P4(capture harness) → P2 → P3 → P4(comparison) → P5.
+P0 → P1 → P4(capture harness) → P2 → P3 → P3b → P4(comparison) → P5.
 P4-capture must precede P2 so joint anchors are verified against real native
 state; P1 is independent and can proceed first.

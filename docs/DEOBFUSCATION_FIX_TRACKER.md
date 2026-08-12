@@ -247,6 +247,50 @@ the maps.
 
 Chronological record of fixes applied. Append new entries here.
 
+### 2026-08-12 — P3b: runtime gating of `fl` / `nc` / `re` map settings
+
+- **`fl` (flipped)** — the native move-force base is 12, or **20 when `fl`**
+  (`state.ms.fl ? 20 : 12`, DEOBFUSCATION §11 720-730/935/4055). The engine
+  gains `flipped` + `flippedMoveForce` options: while flipped, the per-tick
+  movement base is `flippedMoveForce` (default `MOVE_FORCE × 20/12` = 50,
+  preserving the native proportion on the port's tuned 30 base; P0
+  abstraction rule). `warnAscentInvariantBreak` now checks the effective
+  (flipped) base. `BonkEnvironment` forwards `mapData.settings.fl`.
+- **`nc` (no collision)** — all disc-disc contacts are disabled
+  (`contact.SetEnabled(false)` when `physics.nc`, readable 1300-1303; §Key
+  Collision Rules 5). The engine's existing `setNoCollide` disc-filter path is
+  now actually wired from the map: the environment previously read the
+  nonexistent `mapDef.physics?.nc` (the adapter's physics object carries only
+  ppm/bounds/deathCenter), silently ignoring the setting; it now resolves
+  `config.noCollide ?? mapDef.settings.nc`.
+- **`re` (respawning)** — a disc that died respawns immediately at its spawn
+  point with cleared grapple and fresh velocity (`x=sx; y=sy; xv=sxv; yv=syv;
+  ni=true; delete swing`, readable 8595-8606); cap-zone eliminations (death
+  type 3) stay permanent (§alive rule, readable 8463). The engine gains
+  `respawnEnabled` + `respawnPlayer` (SetXForm to the recorded spawn, zeroed
+  velocity, grapple released, alive/deathType reset) applied in the death
+  pass before detach; spawn points are recorded at addPlayer. `a1a` is not
+  reset (the native branch does not touch it); the port does not model spawn
+  velocity, so respawns are at rest. Fail-safe (malformed-map guard): a spawn
+  point outside the OOB death circle detaches instead of churning
+  death→respawn every tick (native would churn identically; the port follows
+  its #271/#276 corruption fail-safe policy).
+- Config symmetry: `flipped` / `respawnEnabled` environment config keys now
+  override the map settings exactly like `noCollide` vs `settings.nc`;
+  `setFlipped` re-runs the #234 ascent-invariant check on the effective base.
+- Tests: `tests/integration/physics-fidelity-p3b.test.ts` (13 tests) — flipped
+  force magnitude (default, flipped, explicit override, env forwarding,
+  config-override precedence, setFlipped re-warn); nc masks drop every player
+  bit while map geometry stays solid + overlapping discs pass through
+  (control separates to the 2×radius touching distance); OOB death respawns
+  at spawn next tick (alive, deathType 0, grapple cleared) vs stays dead
+  without `re`; type-3 deaths stay permanent with `re` on; OOB spawn point
+  detaches without churn.
+- Docs: `PHYSICS_FIDELITY_PLAN.md` P3b section + milestone row added.
+- Verification: `tsc --noEmit` clean; P0/P1/P2/P3/P3b/P4 + config-consumed +
+  map suites green (172 tests; the pre-existing unrelated
+  `env-ai-player-id` failure reproduces on unmodified main).
+
 ### 2026-08-12 — P4: differential validation (capture harness + replay comparator + exact-match gates)
 
 - **Capture harness** — records per-tick native disc state into a versioned
