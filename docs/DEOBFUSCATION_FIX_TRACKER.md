@@ -247,6 +247,45 @@ the maps.
 
 Chronological record of fixes applied. Append new entries here.
 
+### 2026-08-11 — P3: per-map physics settings (`pq` solver iterations; `gd` re-classified)
+
+- `pq` (map `s.pq`) now gates solver iterations end-to-end:
+  - `PhysicsEngineOptions` gained `positionIterations` and `physicsQuality`
+    (native `pq`); the constructor resolves low **2/6** (pq ≠ 2) vs high
+    **15/15** (pq == 2) — DEOBFUSCATION §Solver Iterations (pretty
+    8317-8319) — and explicit `velocityIterations` / `positionIterations`
+    override the pq defaults.
+  - `MapDef.settings` (native `s`: `re`, `nc`, `pq`, `gd`, `fl`) parsed by
+    `normalizeMap()` with the native sanitizer's guards (pq 1..2; gd ≥ 2;
+    bools only) — §33.1 and pretty 12279-12287.
+  - `BonkEnvironment` forwards `mapData.settings.pq` as `physicsQuality`
+    and exposes `positionIterations` on `PhysicsTuningConfig`. Note: this is
+    a programmatic-only engine option (reachable via deepMerge/programmatic
+    config, exactly like `physicsQuality`); it is not yet surfaced in
+    `PhysicsConfig`, the JSON/env/CLI loader, or `config.example.json`, and
+    it has no runtime effect in this port (see port note below). Wiring it
+    as a first-class config key is a follow-up, not part of P3.
+  - Port note: the bundled Box2D `Step(dt, iterations)` ignores the third
+    argument, so only the resolved velocity count reaches the solver; the
+    position count is resolved and asserted as the engine contract and
+    tracked for the P4 differential gate (docs line 2558).
+- `gd` **re-classified**: the 2026-07-29 runtime has **no gd application
+  site** — gravity is enforced to `(0, 20)` at every round start
+  (`if (GetGravity().y != 20) SetGravity(new b2Vec2(0, 20))`, pretty
+  7238-7240); gd is read only by the decoder (11747/11749), sanitizer
+  (12282), serializer (11503) and editor UI. P3 exposes `gd` on
+  `MapDef.settings` but deliberately does NOT apply it; the engine keeps
+  config/default gravity, matching the native enforcement. Runtime gd
+  application is deferred to the P4 differential gate.
+- Tests: `tests/integration/physics-fidelity-p3.test.ts` (14 tests) — pq
+  solver-iteration resolution + Step args, explicit-override precedence,
+  invalid-pq fallback, adapter settings sanitization, env end-to-end pq
+  application, and gd enforcement parity (gravity stays 20 with gd present).
+- Docs: `PHYSICS_FIDELITY_PLAN.md` P3 section updated (pq PROVEN, gd
+  RE-CLASSIFIED; `re/nc/fl` runtime gating tracked as P3b).
+- Verification: `tsc --noEmit` clean; P0/P1/P2/P3 + config-consumed + all
+  map suites green (11/11 files).
+
 ### 2026-08-04 — Player disc fixture parity (#180) and verified grapple model (#181); C1/C2 re-audit
 
 - `PhysicsEngine.addPlayer()` now uses the verified live 2026-07-29 disc

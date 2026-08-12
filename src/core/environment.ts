@@ -158,6 +158,9 @@ export interface EnvironmentConfig {
 export interface PhysicsTuningConfig {
     ticksPerSecond?: number;
     solverIterations?: number;
+    /** Position constraint solver iterations per tick. Defaults follow the map's
+     * native `pq` setting (6 low / 15 high); explicit values override it. */
+    positionIterations?: number;
     scale?: number;
     gravityX?: number;
     gravityY?: number;
@@ -496,6 +499,11 @@ export class BonkEnvironment {
         this.physics = new PhysicsEngine({
             ticksPerSecond: config.physics?.ticksPerSecond,
             velocityIterations: config.physics?.solverIterations,
+            positionIterations: config.physics?.positionIterations,
+            // Per-map native physics quality (pq): 2 → 15/15 solver iterations,
+            // anything else → 2/6 (DEOBFUSCATION §Solver Iterations). Explicit
+            // solverIterations/positionIterations config keys override it.
+            physicsQuality: this.config.mapData.settings?.pq,
             scale: config.physics?.scale,
             gravityX: config.physics?.gravityX,
             gravityY: config.physics?.gravityY,

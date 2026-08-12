@@ -224,6 +224,25 @@ export function normalizeMap(raw: unknown): MapDef {
 
     const map = (raw || {}) as ExportedMap;
 
+    // Native map settings (blank map: re:false, nc:false, pq:1, gd:25, fl:false
+    // — DEOBFUSCATION §33.1), validated against the native sanitizer
+    // (mergeIntoNewMap, .deobf/alpha2s.pretty.js 12279-12287):
+    //   - pq   kept when `1 <= pq <= 2`           (guard [326], line 12279)
+    //   - gd   kept when `gd >= 2 && pq <= 100`   (line 12282; since pq is
+    //         already validated to 1..2, the `pq <= 100` half is always true)
+    //   - re/nc/fl kept when booleans             (typeof === "boolean" guards)
+    const settings = (() => {
+        const s = (map as any).settings;
+        if (!s || typeof s !== 'object') return undefined;
+        const out: NonNullable<MapDef['settings']> = {};
+        if (typeof s.re === 'boolean') out.re = s.re;
+        if (typeof s.nc === 'boolean') out.nc = s.nc;
+        if (typeof s.fl === 'boolean') out.fl = s.fl;
+        if (typeof s.pq === 'number' && Number.isInteger(s.pq) && s.pq >= 1 && s.pq <= 2) out.pq = s.pq;
+        if (typeof s.gd === 'number' && Number.isFinite(s.gd) && s.gd >= 2) out.gd = s.gd;
+        return Object.keys(out).length > 0 ? out : undefined;
+    })();
+
     // Prefer the exporter's flat `bodies[]` (already flattened rect/circle/
     // polygon with x/y/width in map px). Only fall back to physicsBodies when
     // the flat list is absent, and guard against that placeholder format (which
@@ -470,5 +489,6 @@ export function normalizeMap(raw: unknown): MapDef {
         capZones: capZones.length > 0 ? capZones : undefined,
         joints: joints.length > 0 ? joints as any : undefined,
         physics,
+        settings,
     };
 }
