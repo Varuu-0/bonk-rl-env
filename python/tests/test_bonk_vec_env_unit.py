@@ -424,8 +424,10 @@ def _step_result(tick, terminated, reward, terminal_obs=None):
             # Mid-cycle death followed by a spawn-in-death-circle episode:
             # death at tick 2 (two hold steps), then the fresh episode dies on
             # its very first tick — a DONE step arriving MID-window
-            # (_hold_steps < frame_skip) with an ADVANCED tick. The tick
-            # change, not the window elapsing, marks it as a new boundary.
+            # (_hold_steps < frame_skip) with a changed tick. The tick counter
+            # restarts after the auto-reset, so it regresses 2 -> 1; the guard
+            # is tick inequality, and that change, not the window elapsing,
+            # marks the step as a new boundary.
             [
                 {"status": "ok", "data": [_step_result(1, False, 1.0)]},
                 {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2))]},
