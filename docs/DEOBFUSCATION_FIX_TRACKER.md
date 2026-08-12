@@ -116,13 +116,15 @@ and `tests/unit/config-example-sanity.test.ts`.
   physicsJoints/capZones` → engine `MapDef`), including the bundled
   native-export fixtures (`bonk_Simple_1v1_123.json`,
   `bonk_WDB__no_nothing__1232248.json`) exercised by the P4 fixture/joint
-  exact-match gates. Per-shape ppm scaling + rotation and fixture
-  inheritance/negated-friction/filter-bit math are applied on the EXPORTER
-  side (`Webscripts/mapexporter.js`, which emits the flat `bodies[]`); the
-  adapter prefers that flat list and falls back to `physicsBodies` — the raw
-  `physicsFixtures`/`physicsShapes` arrays are never read. The engine keeps
-  the flattened `MapDef` as its internal model by design (H2/H3 remain the
-  structural gaps).
+  exact-match gates. The flattening work is split across layers: rotation and
+  fixture inheritance are applied by the exporter (`Webscripts/mapexporter.js`
+  emits the flat `bodies[]`); `f_p` friction polarity and `collidesGroupN` →
+  `collides{g1..g4}` mapping are adapter-side (map-adapter.ts 182-200); ppm
+  scaling of body/shape coordinates is engine-side (`def.x / this.scale`,
+  physics-engine.ts 762/789). The raw `physicsFixtures`/`physicsShapes`
+  arrays are never read — the adapter prefers flat `bodies[]` and falls back
+  to `physicsBodies`. The engine keeps the flattened `MapDef` as its internal
+  model by design (H2/H3 remain the structural gaps).
 - **Remaining:** multi-fixture bodies (one body, several shapes) and
   kinematic body types (H2) are the structural gaps; `physicsFixtures`/
   `physicsShapes` parity would require a fixture-aware MapBodyDef.
@@ -160,10 +162,10 @@ and `tests/unit/config-example-sanity.test.ts`.
   (2→red, 3→blue, 4→green, 5→yellow), dynamic-body-only triggers, and
   elimination of non-owners. Verified by `capzone-scoring.test.ts`.
 
-### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` ⚠️ blocked)
+### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` spring bias ⚠️ blocked)
 
 - **Status:** 🔧 Implemented (verified 2026-08-12) — `addJoint` builds every
-  native joint type per §33.8 except `lsj`'s dedicated line-joint primitive:
+  native joint type per §33.8:
   - `d` (distance): fh/dr, authored `len` applied after Initialize (with
     ground `bodyB=-1` anchors in map-px `+365/250` coords),
   - `rv` (revolute): lower/upper limits (`lowerAngle ?? lowerLimit ?? 0`),
@@ -171,15 +173,21 @@ and `tests/unit/config-example-sanity.test.ts`.
   - `lpj`/`p` (prismatic): world axis from `angle`, `referenceAngle =
     -bodyA.angle` for lpj/lsj, #281 symmetric ±length limit fallback, motor
     force,
+  - `lsj` (springy prismatic): vertical axis (0,1), limits ±slen with
+    `enableLimit=false`, motor 300 — §33.8 3487-3506 constructs `lsj` with
+    `b2PrismaticJointDef` (NOT a line joint; the earlier `t$e[57]` line-joint
+    reading was corrected by the 2026-07-29 §33.8 audit),
   - `g` (gear): ratio + revolute/prismatic referent validation (other
     referent types silently produce NaN coordinates and are skipped loudly),
   - ground joints: `bodyB = -1` binds to the world with map-px anchors.
-- **`lsj` — ⚠️ Blocked (port limitation, per legend):** native `lsj` is a
-  `b2LineJointDef` (t$e[57]); the bundled Box2D port has no `b2LineJoint`.
-  `addJoint` routes `lsj` onto the prismatic branch per the §33.8 substitute
-  recipe (vertical axis, limits off, `maxMotorForce sf*|k|`, motorSpeed ±300
-  from initial-side computation), but a true line joint needs the ported
-  primitive from `reference/bonk1-box2d`.
+- **`lsj` spring bias — ⚠️ Blocked (port limitation):** the native
+  initial-side spring bias (`maxMotorForce = sf*|k|`, `motorSpeed ±300` from
+  the k factor, §33.8 3496-3505) is NOT implemented — the exporter emits a
+  static `motorSpeed = 300` / `maxMotorForce = sf` (mapexporter.js 622-623)
+  and the engine applies those statically. A faithful spring needs a JS port
+  of `b2LineJoint`/`b2LineJointDef` from the repo's `reference/bonk1-box2d`
+  (the AS3 source ships it); the §33.8 prismatic substitute with the static
+  motor stands in until then.
 - **Fix refs:** `src/core/physics-engine.ts addJoint`; verified by
   `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
   §33.7 formulas) and the P4 joint exact-match gate (`verifyJointGates` on the

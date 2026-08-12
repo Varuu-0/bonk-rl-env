@@ -32,10 +32,12 @@ normalization (`plen, pms ÷ ppm`, `mmf *= 17280`, `ms *= 12`,
 type: `d` (fh/dr, authored `len` applied after Initialize, ground-px anchors),
 `rv` (lower/upper limits, motor speed/torque), `lpj`/`lsj`/`p` (prismatic:
 world axis from `angle`, `referenceAngle = -bodyA.angle` for lpj/lsj, #281
-symmetric ±length fallback, motor force), `g` (gear ratio with revolute/
+symmetric ±length fallback, motor force — `lsj` is the §33.8 springy
+prismatic variant, motor 300), `g` (gear ratio with revolute/
 prismatic referent validation), and ground joints (`bodyB = -1`, map-px
-anchors). `lsj` runs on the prismatic branch per the §33.8 recipe — the
-bundled Box2D port has no dedicated `b2LineJoint`. Verified by
+anchors). The `lsj` initial-side spring bias (`maxMotorForce = sf*|k|`,
+motorSpeed ±300, §33.8 3496-3505) is blocked on a JS port of `b2LineJoint` —
+the repo's `reference/bonk1-box2d` ships the AS3 source. Verified by
 `physics-fidelity-p2.test.ts` and the P4 joint exact-match gate.
 
 ### Map physics settings (P3) — pq PROVEN, gd RE-CLASSIFIED
