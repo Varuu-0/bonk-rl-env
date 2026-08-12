@@ -286,4 +286,32 @@ describe('DetachedRenderSampler', () => {
     expect(afterWrap).not.toBeNull();
     expect(afterWrap!.tick).toBe(902);
   });
+
+  it('boots after the Int32 seq wrap and renders the first post-wrap frame', () => {
+    const ring = allocRing(4, 2);
+    const cam = computeCamera(730, 500, 12);
+    const calls: string[] = [];
+    const sampler = new DetachedRenderSampler(
+      { geometry: { bodies: [], fixtures: [], shapes: [] }, ring, maxPlayers: 2, cam },
+      { begin: () => calls.push('b'), geometry: () => {}, sim: () => {}, end: () => calls.push('e') },
+    );
+    // Per-slot header ints: [seq, tick] followed by 2 discs * 5 Float32 fields.
+    const slotHeader = (slot: number) => new Int32Array(ring, slot * (2 + 2 * 5) * 4, 2);
+    // A sampler created after the process-wide wrap sees a negative even seq as
+    // its very first frame. It must render — a `lastSeq = -1` sentinel would
+    // misread raw.seq - (-1) as stale and freeze the sampler until 2^31 more
+    // process-wide writes cycle seq back to >= 0.
+    writeSnapshot(ring, 2, 0, makeReader([ALIVE0, DEAD1], 100));
+    slotHeader(0)[0] = -2147483646;
+    const first = sampler.renderSlot(0, 4);
+    expect(first).not.toBeNull();
+    expect(first!.tick).toBe(100);
+
+    calls.length = 0;
+    // A genuinely older wrapped frame (more negative seq) is still rejected.
+    writeSnapshot(ring, 2, 1, makeReader([ALIVE0, DEAD1], 101));
+    slotHeader(1)[0] = -2147483648;
+    expect(sampler.renderSlot(1, 4)).toBeNull();
+    expect(calls).toHaveLength(0);
+  });
 });

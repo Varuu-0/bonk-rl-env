@@ -41,7 +41,11 @@ export interface RenderFrameInput {
  * does no simulation work of its own.
  */
 export class DetachedRenderSampler {
-  private lastSeq = -1;
+  // Initialized below any real seq: seq is `writeGen * 2` truncated to Int32
+  // (always even, in [-2147483648, 2147483646]), so a fresh sampler booting
+  // after the wrap sees a negative first seq and must still render it — a
+  // -1 sentinel would misread `raw.seq - (-1)` as a stale frame.
+  private lastSeq = Number.MIN_SAFE_INTEGER;
 
   constructor(
     private readonly frame: RenderFrameInput,
