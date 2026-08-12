@@ -221,20 +221,32 @@ export class IpcBridge {
 
     async start() {
         const addr = `tcp://${this.bindAddress}:${this.port}`;
+        // Re-arm `ready` on every serve cycle, not only when the socket is
+        // recreated: a failed bind rejects the current promise and nulls its
+        // handlers, so the next start() must install fresh ones or a
+        // successful retry bind could never resolve ready (issue #263).
+        this.rearmReady();
         // A closed ZMQ socket is permanently destroyed and can never be
         // re-bound (bind() throws "Socket is closed"). Recreate the transport
         // so a later start() after close() binds a fresh ROUTER and serves
-        // again (issue #263): re-wrap the send function on the new socket and
-        // re-arm `ready` so `await bridge.ready` reflects the new bind.
+        // again (issue #263): re-wrap the send function on the new socket.
+        let recreated = false;
         if (this.sock.closed) {
             this.sock = new zmq.Router();
             this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
-            this.rearmReady();
+            recreated = true;
         }
         try {
             await this.sock.bind(addr);
         } catch (err) {
             this.markBindFailed(err);
+            // The recreated socket was never bound, and _closed is still true
+            // (it is only reset after a successful bind), so a later close()
+            // would early-return and leak the open handle. Close it so a
+            // failed restart is fully clean and a retry recreates from scratch.
+            if (recreated && this._closed) {
+                this.sock.close();
+            }
             throw err;
         }
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
