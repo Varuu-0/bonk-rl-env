@@ -253,6 +253,87 @@ function pickRewardWeight(
     return fallback;
 }
 
+/**
+ * Derive the cap-zone sensor extent and placement for a fixture body. Rect
+ * fixtures use their width/height and circle fixtures their radius*2;
+ * polygon fixtures use the axis-aligned bounding box of their (angle-rotated,
+ * local-space) vertices centered on the AABB center — rect/circle fixtures
+ * are symmetric about their origin, so their center is the origin itself,
+ * but polygons need the AABB center offset. Returns null for malformed
+ * fixtures — fewer than 3 declared vertices, fewer than 3 finite vertices, a
+ * zero-area (collinear/coincident) vertex set, or an unsupported type — so
+ * the caller skips the sensor entirely instead of silently building a
+ * zero-area sensor that can never capture (#277).
+ */
+function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number } | null {
+    if (fixtureDef.type === 'rect') {
+        return { w: fixtureDef.width || 0, h: fixtureDef.height || 0, cx: 0, cy: 0 };
+    }
+    if (fixtureDef.type === 'circle') {
+        const w = (fixtureDef.radius || 0) * 2;
+        return { w, h: w, cx: 0, cy: 0 };
+    }
+    if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices)) {
+        // Match addBody()'s validation (physics-engine.ts:698): fewer than 3
+        // vertices is malformed and must take the loud warn path, and only
+        // the first 8 vertices build the actual Box2D shape — the AABB must
+        // cover the same vertex window.
+        if (fixtureDef.vertices.length < 3) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient vertices (need >= 3)`);
+            return null;
+        }
+        // addBody() rotates the fixture about its origin by def.angle
+        // (physics-engine.ts:682, radians), so the sensor AABB must cover
+        // the rotated vertices — an unrotated box would land in the wrong
+        // region for angle !== 0.
+        const angle = fixtureDef.angle || 0;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
+        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let area2 = 0;
+        let finiteCount = 0;
+        const maxVertices = Math.min(fixtureDef.vertices.length, 8);
+        const finite: { x: number; y: number }[] = [];
+        for (let i = 0; i < maxVertices; i++) {
+            const v = fixtureDef.vertices[i];
+            // Skip non-finite coordinates so a single NaN vertex cannot
+            // silently zero the extent.
+            if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
+            finiteCount++;
+            const rx = v.x * cosA - v.y * sinA;
+            const ry = v.x * sinA + v.y * cosA;
+            finite.push({ x: rx, y: ry });
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
+        }
+        // Mirror the >= 3 vertex guard: fewer than 3 usable vertices cannot
+        // describe an area, so stay loud instead of building a zero-size sensor.
+        if (finiteCount < 3) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient finite vertices`);
+            return null;
+        }
+        // Shoelace cross-product sum over the vertex window rejects any
+        // collinear or coincident set — axis-aligned or diagonal — which
+        // addBody does NOT validate (it only checks vertex count), yet Box2D
+        // would refuse to form a shape from it. Stay loud instead of building
+        // a degenerate sensor.
+        for (let i = 0; i < finite.length; i++) {
+            const a = finite[i];
+            const b = finite[(i + 1) % finite.length];
+            area2 += a.x * b.y - b.x * a.y;
+        }
+        if (Math.abs(area2) < 1e-9) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has a degenerate zero-area polygon`);
+            return null;
+        }
+        return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+    }
+    console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — skipping cap-zone sensor`);
+    return null;
+}
+
 export class BonkEnvironment {
     private physics: PhysicsEngine;
     /** Stored resolved config: flat reward keys are not stored — only the nested
@@ -459,18 +540,9 @@ export class BonkEnvironment {
             for (const zone of mapDef.capZones) {
                 const fixtureDef = mapDef.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    let cx = fixtureDef.x;
-                    let cy = fixtureDef.y;
-                    let w = 0, h = 0;
-                    if (fixtureDef.type === 'rect') {
-                        w = fixtureDef.width || 0;
-                        h = fixtureDef.height || 0;
-                    } else if (fixtureDef.type === 'circle') {
-                        w = (fixtureDef.radius || 0) * 2;
-                        h = w;
-                    }
-                    if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                    const size = getCapZoneSensorSize(fixtureDef);
+                    if (size && typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
                     }
                 } else {
                     console.warn(`CapZone fixture "${zone.fixture}" not found`);
@@ -535,18 +607,9 @@ export class BonkEnvironment {
             for (const zone of this.config.mapData.capZones) {
                 const fixtureDef = this.config.mapData.bodies.find(b => b.name === zone.fixture);
                 if (fixtureDef) {
-                    let cx = fixtureDef.x;
-                    let cy = fixtureDef.y;
-                    let w = 0, h = 0;
-                    if (fixtureDef.type === 'rect') {
-                        w = fixtureDef.width || 0;
-                        h = fixtureDef.height || 0;
-                    } else if (fixtureDef.type === 'circle') {
-                        w = (fixtureDef.radius || 0) * 2;
-                        h = w;
-                    }
-                    if (typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, cx, cy, w, h);
+                    const size = getCapZoneSensorSize(fixtureDef);
+                    if (size && typeof (this.physics as any).addCapZone === 'function') {
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
                     }
                 }
             }
