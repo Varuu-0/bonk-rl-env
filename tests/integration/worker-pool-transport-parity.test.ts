@@ -26,6 +26,16 @@ const OBS_FLOAT_FIELDS = [
 
 const OPP_FLOAT_FIELDS = ['x', 'y', 'velX', 'velY'];
 
+const EXPORTED_MAP_WITH_BOUNDS = {
+  metadata: { name: 'exported-explicit-bounds' },
+  spawns: [
+    { x: 0, y: 0, blue: true },
+    { x: 100, y: 0, red: true },
+  ],
+  bodies: [],
+  physics: { boundsWidth: 730, boundsHeight: 500 },
+};
+
 function assertObservationEqual(a: any, b: any): void {
   for (const field of OBS_FLOAT_FIELDS) {
     expect(a[field]).toBe(b[field]);
@@ -43,6 +53,36 @@ function assertObservationEqual(a: any, b: any): void {
 }
 
 describe('transport precision parity (issue #236)', () => {
+  it('reports exported map-pixel bounds in both transports (issue #319)', { timeout: 30000 }, async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const run = async (useSharedMemory: boolean) => {
+      const pool = new WorkerPool(1);
+      try {
+        await pool.init(1, {
+          mapData: EXPORTED_MAP_WITH_BOUNDS,
+          numOpponents: 0,
+          randomOpponent: false,
+          maxTicks: 10,
+          seed: 42,
+        }, useSharedMemory);
+        const resetObs = (await pool.reset([42]))[0];
+        const stepObs = (await pool.step([0]))[0].observation;
+        return { resetObs, stepObs };
+      } finally {
+        await pool.close();
+      }
+    };
+
+    for (const useSharedMemory of [true, false]) {
+      const { resetObs, stepObs } = await run(useSharedMemory);
+      for (const observation of [resetObs, stepObs]) {
+        expect(observation.arenaHalfWidth).toBeCloseTo(365, 5);
+        expect(observation.arenaHalfHeight).toBeCloseTo(250, 5);
+      }
+    }
+  });
+
   it('returns bit-identical reset/step observations and rewards in both transports', async () => {
     if (!WorkerPool.isSupported()) return;
 
