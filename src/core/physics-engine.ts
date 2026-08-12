@@ -1126,10 +1126,29 @@ export class PhysicsEngine {
       created = this.world.CreateJoint(jd);
     } else if (type === 'lpj' || type === 'lsj' || type === 'p' || type === 'prismatic') {
       const jd = new b2PrismaticJointDef();
-      const axis = def.axis ? new b2Vec2(def.axis.x, def.axis.y) : new b2Vec2(1, 0);
+      // Native §33.8: pa is a WORLD angle; the joint's local axis is
+      // (cos(pa - bodyA.angle), sin(pa - bodyA.angle)). Initialize() converts
+      // the passed axis into bodyA's local frame via GetLocalVector, so pass
+      // the world axis (cos pa, sin pa) and let Initialize apply bodyA's own
+      // rotation. mapexporter emits `angle` (pa), never `axis`.
+      const axis = def.axis
+        ? new b2Vec2(def.axis.x, def.axis.y)
+        : (typeof def.angle === 'number' && Number.isFinite(def.angle)
+            ? new b2Vec2(Math.cos(def.angle), Math.sin(def.angle))
+            : new b2Vec2(1, 0));
       jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA), axis);
       jd.collideConnected = cd;
-      if (def.referenceAngle !== undefined) jd.referenceAngle = def.referenceAngle;
+      // Native §33.8: lpj and lsj both set def.referenceAngle = -bodyA.GetAngle()
+      // unconditionally (DEOBFUSCATION.md:3457/3472) — regardless of whether the
+      // input carries the exported `angle` (pa) or not; Initialize() defaulted it
+      // to bodyB.angle - bodyA.angle. Native `p` leaves referenceAngle at the
+      // def-default, so this override is NOT blanket-applied to the branch.
+      const exportsAngle = typeof def.angle === 'number' && Number.isFinite(def.angle);
+      if (def.referenceAngle !== undefined) {
+        jd.referenceAngle = def.referenceAngle;
+      } else if (exportsAngle || type === 'lsj' || type === 'lpj') {
+        jd.referenceAngle = -bodyA.GetAngle();
+      }
       jd.enableLimit = !!def.enableLimit;
       // Issue #281: some maps/exporter shapes carry the native travel (±plen)
       // under `length`; honor it as the symmetric limit when no explicit
