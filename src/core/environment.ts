@@ -255,13 +255,13 @@ function pickRewardWeight(
 /**
  * Derive the cap-zone sensor extent and placement for a fixture body. Rect
  * fixtures use their width/height and circle fixtures their radius*2;
- * polygon fixtures use the bounding box of their vertices (local-space
- * extents, same convention as rect width/height) centered on the AABB center
- * — rect/circle fixtures are symmetric about their origin, so their center is
- * the origin itself, but asymmetric polygons need the AABB center offset.
- * Returns null for malformed fixtures — fewer than 3 declared vertices,
- * fewer than 3 finite vertices, a zero AABB extent, or an unsupported type —
- * so the caller skips the sensor entirely instead of silently building a
+ * polygon fixtures use the axis-aligned bounding box of their (angle-rotated,
+ * local-space) vertices centered on the AABB center — rect/circle fixtures
+ * are symmetric about their origin, so their center is the origin itself,
+ * but polygons need the AABB center offset. Returns null for malformed
+ * fixtures — fewer than 3 declared vertices, fewer than 3 finite vertices, a
+ * zero-area (collinear/coincident) vertex set, or an unsupported type — so
+ * the caller skips the sensor entirely instead of silently building a
  * zero-area sensor that can never capture (#277).
  */
 function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number } | null {
@@ -281,19 +281,31 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; c
             console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient vertices (need >= 3)`);
             return null;
         }
+        // addBody() rotates the fixture about its origin by def.angle
+        // (physics-engine.ts:682, radians), so the sensor AABB must cover
+        // the rotated vertices — an unrotated box would land in the wrong
+        // region for angle !== 0.
+        const angle = fixtureDef.angle || 0;
+        const cosA = Math.cos(angle);
+        const sinA = Math.sin(angle);
         let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+        let area2 = 0;
         let finiteCount = 0;
         const maxVertices = Math.min(fixtureDef.vertices.length, 8);
+        const finite: { x: number; y: number }[] = [];
         for (let i = 0; i < maxVertices; i++) {
             const v = fixtureDef.vertices[i];
             // Skip non-finite coordinates so a single NaN vertex cannot
             // silently zero the extent.
             if (!Number.isFinite(v.x) || !Number.isFinite(v.y)) continue;
             finiteCount++;
-            if (v.x < minX) minX = v.x;
-            if (v.x > maxX) maxX = v.x;
-            if (v.y < minY) minY = v.y;
-            if (v.y > maxY) maxY = v.y;
+            const rx = v.x * cosA - v.y * sinA;
+            const ry = v.x * sinA + v.y * cosA;
+            finite.push({ x: rx, y: ry });
+            if (rx < minX) minX = rx;
+            if (rx > maxX) maxX = rx;
+            if (ry < minY) minY = ry;
+            if (ry > maxY) maxY = ry;
         }
         // Mirror the >= 3 vertex guard: fewer than 3 usable vertices cannot
         // describe an area, so stay loud instead of building a zero-size sensor.
@@ -301,11 +313,18 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; c
             console.warn(`CapZone fixture "${fixtureDef.name}" has insufficient finite vertices`);
             return null;
         }
-        // Collinear finite vertices (e.g. all sharing an x or y) leave one
-        // AABB dimension at zero; addBody would reject such a degenerate
-        // polygon, so stay loud instead of calling SetAsBox(w/2, 0).
-        if (maxX - minX === 0 || maxY - minY === 0) {
-            console.warn(`CapZone fixture "${fixtureDef.name}" has a degenerate zero-area AABB`);
+        // Shoelace cross-product sum over the vertex window rejects any
+        // collinear or coincident set — axis-aligned or diagonal — which
+        // addBody does NOT validate (it only checks vertex count), yet Box2D
+        // would refuse to form a shape from it. Stay loud instead of building
+        // a degenerate sensor.
+        for (let i = 0; i < finite.length; i++) {
+            const a = finite[i];
+            const b = finite[(i + 1) % finite.length];
+            area2 += a.x * b.y - b.x * a.y;
+        }
+        if (Math.abs(area2) < 1e-9) {
+            console.warn(`CapZone fixture "${fixtureDef.name}" has a degenerate zero-area polygon`);
             return null;
         }
         return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };

@@ -698,7 +698,47 @@ describe('CapZoneScoring', () => {
             const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
             const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
             try {
-                expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('degenerate zero-area AABB'));
+                expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('degenerate zero-area polygon'));
+                expect((env as any).physics.capZoneSensors.length).toBe(0);
+
+                const preResetCalls = warnSpy.mock.calls.length;
+                env.reset();
+                expect(warnSpy.mock.calls.length).toBe(preResetCalls + 1);
+                expect((env as any).physics.capZoneSensors.length).toBe(0);
+            } finally {
+                warnSpy.mockRestore();
+                env.close();
+            }
+        });
+
+        it('capzone on a diagonally collinear polygon fixture warns and builds no sensor (#277)', () => {
+            // (0,0),(50,50),(100,100) has non-zero axis extents but zero
+            // signed area — a shoelace check, not an axis-aligned one, is
+            // required to reject it.
+            const polygonFixture = {
+                name: 'zone_fixture', type: 'polygon' as const, x: 0, y: 190,
+                vertices: [{ x: 0, y: 0 }, { x: 50, y: 50 }, { x: 100, y: 100 }],
+                static: true, noPhysics: true,
+            };
+            const mapData: MapDef = {
+                name: 'capzone-polygon-diagonal',
+                spawnPoints: {
+                    team_blue: { x: -300, y: -100 },
+                    team_red: { x: 300, y: -100 },
+                },
+                bodies: [
+                    { name: 'floor', type: 'rect', x: 0, y: 400, width: 800, height: 30, static: true },
+                    polygonFixture,
+                ],
+                capZones: [
+                    { index: 0, owner: 'neutral', type: 3, fixture: 'zone_fixture', shapeType: 'polygon' },
+                ],
+            };
+
+            const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
+            try {
+                expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('degenerate zero-area polygon'));
                 expect((env as any).physics.capZoneSensors.length).toBe(0);
 
                 const preResetCalls = warnSpy.mock.calls.length;
@@ -746,6 +786,47 @@ describe('CapZoneScoring', () => {
                 const scale = physics.scale;
                 expect(pos.x * scale).toBeCloseTo(50, 3);
                 expect(pos.y * scale).toBeCloseTo(215, 3);
+            } finally {
+                env.close();
+            }
+        });
+
+        it('capzone sensor on a rotated polygon covers the rotated AABB center (#277)', () => {
+            // Fixture at (0,190) with angle = PI/2 (radians, same convention
+            // addBody applies via bodyDef.angle): the local vertices
+            // (0,0),(100,0),(100,50),(0,50) rotate to an AABB of x in
+            // [-50,0], y in [0,100], centered at (-25,50). The sensor must
+            // land at (-25, 190+50) — an unrotated placement would be
+            // displaced to (50,215).
+            const polygonFixture = {
+                name: 'zone_fixture', type: 'polygon' as const, x: 0, y: 190,
+                angle: Math.PI / 2,
+                vertices: [{ x: 0, y: 0 }, { x: 100, y: 0 }, { x: 100, y: 50 }, { x: 0, y: 50 }],
+                static: true, noPhysics: true,
+            };
+            const mapData: MapDef = {
+                name: 'capzone-polygon-rotated',
+                spawnPoints: {
+                    team_blue: { x: -300, y: -100 },
+                    team_red: { x: 300, y: -100 },
+                },
+                bodies: [
+                    { name: 'floor', type: 'rect', x: 0, y: 400, width: 800, height: 30, static: true },
+                    polygonFixture,
+                ],
+                capZones: [
+                    { index: 0, owner: 'neutral', type: 3, fixture: 'zone_fixture', shapeType: 'polygon' },
+                ],
+            };
+
+            const env = new BonkEnvironment({ mapData, numOpponents: 1, randomOpponent: false, seed: 42, maxTicks: 900 });
+            try {
+                const physics = (env as any).physics;
+                const sensor = physics.capZoneSensors[0] as { GetPosition(): { x: number; y: number } };
+                const pos = sensor.GetPosition();
+                const scale = physics.scale;
+                expect(pos.x * scale).toBeCloseTo(-25, 3);
+                expect(pos.y * scale).toBeCloseTo(240, 3);
             } finally {
                 env.close();
             }
