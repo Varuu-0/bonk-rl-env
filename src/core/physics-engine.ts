@@ -38,6 +38,14 @@ const {
 export const TPS = 30;
 export const DT = 1 / TPS;
 
+/**
+ * Reserved body name for the synthetic static ground body (§33.8: `ba`/`bb`
+ * of `-1` mean the static ground body on either side of a joint). The adapter
+ * emits this name when a joint's bodyA/bodyB is ground-anchored, and addJoint
+ * resolves it to ensureGroundBody().
+ */
+export const GROUND_BODY_NAME = '__ground__';
+
 /** Bonk's default low-quality solver configuration. */
 export const VELOCITY_ITERATIONS = 2;
 export const POSITION_ITERATIONS = 6;
@@ -1000,7 +1008,13 @@ export class PhysicsEngine {
   }
 
   addJoint(def: Record<string, any>, bodyMap: Map<string, any>): void {
-    const bodyA = bodyMap.get(def.bodyA);
+    // GROUND_BODY_NAME is the adapter's reserved name for the static ground
+    // body (native ba/bb = -1) on EITHER side of a joint (§33.8). The real body
+    // map is consulted FIRST so a user-authored body that happens to be named
+    // `__ground__` still resolves; the synthetic ground body is only the
+    // fallback when that name is absent.
+    const bodyA = bodyMap.get(def.bodyA)
+      ?? (def.bodyA === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
     // A joint is ground-anchored ONLY when explicitly marked `isGround` (the
     // adapter sets it for bodyB = -1). `bodyB` being empty/undefined for any
     // OTHER reason is a malformed reference and must warn+skip, NOT silently
@@ -1010,7 +1024,8 @@ export class PhysicsEngine {
     if (isGround) {
       bodyB = this.ensureGroundBody();
     } else {
-      bodyB = bodyMap.get(def.bodyB);
+      bodyB = bodyMap.get(def.bodyB)
+        ?? (def.bodyB === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
       if (!bodyB) {
         console.warn(`Joint references unknown body "${def.bodyB}" (bodyA="${def.bodyA}")`);
         return;

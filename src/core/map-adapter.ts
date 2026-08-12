@@ -13,7 +13,7 @@
  * format into the engine's `MapDef` so shipped maps load faithfully.
  */
 
-import { MapDef } from './physics-engine';
+import { MapDef, GROUND_BODY_NAME } from './physics-engine';
 
 interface FlatBody {
     bodyIndex: number;
@@ -293,15 +293,21 @@ export function normalizeMap(raw: unknown): MapDef {
         if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
     const joints = (map.physicsJoints || []).map((j, jointIdx) => {
-        // bodyA must be a valid, non-negative body index; an out-of-range or
-        // negative bodyA is a malformed reference and cannot resolve.
+        // bodyA: -1 means the joint is anchored to the static ground body on the
+        // A side (§33.8: ba/bb of -1 = ground on either side). Emit the reserved
+        // ground name; addJoint resolves it to the synthetic ground body. Any
+        // other negative index is malformed and stays '' (warn+skip in engine).
         const bodyA = j.bodyA !== undefined && j.bodyA >= 0
             ? bodiesByName.get(j.bodyA)
-            : undefined;
+            : j.bodyA !== undefined && j.bodyA === -1
+                ? GROUND_BODY_NAME
+                : undefined;
         // bodyB: -1 means the joint is anchored to the ground (world). Forward
         // it as a ground joint (empty bodyB) rather than dropping it — P2
         // supports ground-anchored joints via a synthetic static ground body.
-        const isGround = j.bodyB !== undefined && j.bodyB < 0;
+        // Any other negative index is malformed and stays '' (warn+skip in
+        // engine), mirroring the bodyA policy above.
+        const isGround = j.bodyB !== undefined && j.bodyB === -1;
         const bodyB = j.bodyB !== undefined && j.bodyB >= 0
             ? bodiesByName.get(j.bodyB)
             : undefined;
@@ -348,6 +354,24 @@ export function normalizeMap(raw: unknown): MapDef {
             const jb = (j as any).jb !== undefined ? (j as any).jb : undefined;
             if (ja !== undefined && src[ja]) out.jointA = `joint_${ja}`;
             if (jb !== undefined && src[jb]) out.jointB = `joint_${jb}`;
+            // Native gear joints carry no ba/bb (§33.8 tag 5), so the exporter
+            // emits bodyA/bodyB as null. Derive them from the referent joints
+            // exactly like the native factory does (7836-7843: "bodyA/B from
+            // those joints") so the gear joint still resolves in the engine.
+            // A referent side of -1 (static ground) becomes the reserved ground
+            // name, which addJoint resolves to the synthetic ground body.
+            const refA = ja !== undefined ? src[ja] : undefined;
+            const refB = jb !== undefined ? src[jb] : undefined;
+            if (!out.bodyA && refA && refA.bodyA !== undefined) {
+                out.bodyA = refA.bodyA >= 0
+                    ? (bodiesByName.get(refA.bodyA) ?? '')
+                    : refA.bodyA === -1 ? GROUND_BODY_NAME : '';
+            }
+            if (!out.bodyB && refB && refB.bodyB !== undefined) {
+                out.bodyB = refB.bodyB >= 0
+                    ? (bodiesByName.get(refB.bodyB) ?? '')
+                    : refB.bodyB === -1 ? GROUND_BODY_NAME : '';
+            }
         }
         return out;
     });
