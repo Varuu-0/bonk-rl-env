@@ -207,6 +207,12 @@ export class WorkerPool {
         if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
             throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
         }
+        // A zero or negative numWorkers would otherwise silently produce a
+        // 'ready' pool with no workers: reset() returns [] and step() rejects
+        // every batch with a count error naming 0 environments (#269).
+        if (!Number.isInteger(this.numWorkers) || this.numWorkers < 1) {
+            throw new Error(`Invalid worker count: expected a positive integer, got ${this.numWorkers}`);
+        }
         await this.closeInternal(); // Clean up existing if re-initialized
         this.state = 'initializing';
         this.failure = null;

@@ -596,4 +596,66 @@ describe('WorkerPool failure state', () => {
       expect(results).toHaveLength(1);
     });
   });
+
+  describe('worker-count validation (#269)', () => {
+    it('rejects a zero-worker pool in message mode with a clear error and no workers', async () => {
+      pool = new WorkerPool(0);
+
+      await expect(pool.init(2, {}, false)).rejects.toThrow(
+        'Invalid worker count: expected a positive integer, got 0',
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects a zero-worker pool in shared-memory mode with the same error and no workers', async () => {
+      pool = new WorkerPool(0);
+
+      await expect(pool.init(2, {}, true)).rejects.toThrow(
+        'Invalid worker count: expected a positive integer, got 0',
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects a negative worker count in both transports (no RangeError)', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(-1);
+        await expect(p.init(2, {}, useShared)).rejects.toThrow(
+          'Invalid worker count: expected a positive integer, got -1',
+        );
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        expect((p as any).state).toBe('idle');
+        await p.close();
+      }
+    });
+
+    it('rejects a non-integer worker count in both transports', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(1.5);
+        await expect(p.init(2, {}, useShared)).rejects.toThrow(
+          'Invalid worker count: expected a positive integer, got 1.5',
+        );
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        await p.close();
+      }
+    });
+
+    it('keeps pools usable after a rejected worker-count init', async () => {
+      pool = new WorkerPool(0);
+      await expect(pool.init(2, {}, true)).rejects.toThrow('Invalid worker count');
+      expect((pool as any).state).toBe('idle');
+      await pool.close();
+
+      const valid = new WorkerPool(2);
+      await valid.init(2, {}, true);
+      expect((valid as any).state).toBe('ready');
+      const observations = await valid.reset();
+      expect(observations).toHaveLength(2);
+      await valid.close();
+    });
+  });
 });

@@ -1200,6 +1200,63 @@ describe('config-loader env vars and CLI', () => {
             const cfg = loadConfig(testDir);
             expect(cfg.workerPool.numWorkers).toBe(3);
         });
+
+        it('maxWorkers=0 cannot resolve the auto-detect to 0 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { maxWorkers: 0 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('maxWorkers=0 with numWorkers=0 resolves to at least 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: 0 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a negative maxWorkers cannot resolve the auto-detect to 0 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: -2 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a negative numWorkers in config.json is clamped to >= 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: -1 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a non-numeric maxWorkers cannot resolve the auto-detect to NaN (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 0, maxWorkers: 'abc' },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(Number.isInteger(cfg.workerPool.numWorkers)).toBe(true);
+            expect(cfg.workerPool.numWorkers).toBeGreaterThanOrEqual(1);
+        });
+
+        it('a fractional numWorkers in config.json is floored to a positive integer (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 1.5 },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBe(1);
+        });
+
+        it('a non-numeric numWorkers in config.json is clamped to 1 (#269)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({
+                workerPool: { numWorkers: 'abc' },
+            }));
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.numWorkers).toBe(1);
+        });
     });
 
     // ─── Priority Order ──────────────────────────────────────────────────
