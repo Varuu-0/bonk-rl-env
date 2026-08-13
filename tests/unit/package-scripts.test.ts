@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
-import { TEST_SUITES } from '../runner';
+import { TEST_SUITES, resolveVitestCli } from '../runner';
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')) as {
@@ -48,5 +48,14 @@ describe('npm test script mappings', () => {
     for (const suite of TEST_SUITES) {
       expect(fs.existsSync(path.join(repositoryRoot, suite.file))).toBe(true);
     }
+  });
+
+  it('resolves the local vitest CLI entry for the runner without a shell shim', () => {
+    const vitestPackage = JSON.parse(
+      fs.readFileSync(path.join(repositoryRoot, 'node_modules', 'vitest', 'package.json'), 'utf8'),
+    ) as { bin: string | Record<string, string> };
+    const bin = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin['vitest'];
+    expect(resolveVitestCli()).toBe(path.join(repositoryRoot, 'node_modules', 'vitest', bin));
+    expect(fs.existsSync(resolveVitestCli())).toBe(true);
   });
 });

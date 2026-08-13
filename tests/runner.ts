@@ -5,6 +5,7 @@
  * for users of test:runner, test:list, test:legacy, and the old numeric CLI.
  */
 import { spawnSync } from 'node:child_process';
+import * as fs from 'node:fs';
 import * as path from 'node:path';
 import * as readline from 'node:readline';
 
@@ -25,16 +26,30 @@ export const TEST_SUITES = [
   { key: '12', file: 'tests/integration/map-integration.test.ts', description: 'Real map loading and integration' },
 ] as const;
 
+export function resolveVitestCli(): string {
+  const vitestPackagePath = path.join(repositoryRoot, 'node_modules', 'vitest', 'package.json');
+  const vitestPackage = JSON.parse(fs.readFileSync(vitestPackagePath, 'utf8')) as {
+    bin: string | Record<string, string>;
+  };
+  const bin = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin['vitest'];
+  return path.join(path.dirname(vitestPackagePath), bin);
+}
+
 function runVitest(testFile?: string): number {
-  const isWindows = process.platform === 'win32';
-  const command = path.join(repositoryRoot, 'node_modules', '.bin', isWindows ? 'vitest.cmd' : 'vitest');
-  const args = ['run'];
+  let vitestCli: string;
+  try {
+    vitestCli = resolveVitestCli();
+  } catch (error) {
+    console.error(`Unable to start Vitest: ${(error as Error).message}`);
+    return 1;
+  }
+
+  const args = [vitestCli, 'run'];
   if (testFile) args.push(testFile);
 
-  const result = spawnSync(command, args, {
+  const result = spawnSync(process.execPath, args, {
     cwd: repositoryRoot,
     stdio: 'inherit',
-    shell: isWindows,
   });
 
   if (result.error) {
