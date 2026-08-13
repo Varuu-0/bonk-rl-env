@@ -582,7 +582,7 @@ export class PhysicsEngine {
 
     // Reused scratch object — the listener callbacks are sequential and
     // synchronous within a Step, so a single allocation serves every contact.
-    const scratch = { ud1: null as any, ud2: null as any };
+    const scratch = { ud1: null as any, ud2: null as any, sud1: null as any, sud2: null as any };
     const extractContact = (contact: any): { ud1: any; ud2: any; sud1: any; sud2: any } | null => {
       const shape1 = contact.shape1 || (contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.());
       const shape2 = contact.shape2 || (contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.());
@@ -592,12 +592,9 @@ export class PhysicsEngine {
       if (!body1 || !body2) return null;
       scratch.ud1 = body1.GetUserData() || {};
       scratch.ud2 = body2.GetUserData() || {};
-      return {
-        ud1: scratch.ud1,
-        ud2: scratch.ud2,
-        sud1: typeof shape1.GetUserData === 'function' ? shape1.GetUserData() || {} : scratch.ud1,
-        sud2: typeof shape2.GetUserData === 'function' ? shape2.GetUserData() || {} : scratch.ud2,
-      };
+      scratch.sud1 = typeof shape1.GetUserData === 'function' ? shape1.GetUserData() || {} : scratch.ud1;
+      scratch.sud2 = typeof shape2.GetUserData === 'function' ? shape2.GetUserData() || {} : scratch.ud2;
+      return scratch;
     };
 
     listener.Add = (contact: any) => {
@@ -798,19 +795,89 @@ export class PhysicsEngine {
     // flat legacy MapDefs still create one body per entry.
     const body = existingNativeBody ?? this.world.CreateBody(bodyDef);
 
+    // A native body may arrive paired with an unresolvable structured fixture
+    // (null placeholder in physicsFixtures, a flat body whose fixture entry is
+    // missing, or a resolved fixture that carries no shape geometry). Deriving
+    // the fixture-local placement from the flat (world) coordinates keeps the
+    // two conventions consistent instead of silently mixing the native body
+    // position with flat geometry — the shape lands at exactly def.x/def.y
+    // like the legacy flat path.
+    const fixture = (nativeFixture && nativeFixture.type)
+      ? nativeFixture
+      : (nativeBody && (def.type === 'rect' || def.type === 'circle' || def.type === 'polygon')
+        ? (() => {
+            const cosA = Math.cos(-nativeBody.angle);
+            const sinA = Math.sin(-nativeBody.angle);
+            const offX = (def.x ?? 0) - nativeBody.x;
+            const offY = (def.y ?? 0) - nativeBody.y;
+            return {
+              type: def.type,
+              center: { x: offX * cosA - offY * sinA, y: offX * sinA + offY * cosA },
+              angle: (def.angle ?? 0) - nativeBody.angle,
+              width: def.width,
+              height: def.height,
+              radius: def.radius,
+              scale: 1,
+              vertices: def.vertices,
+            };
+          })()
+        : undefined);
+
+    // A fixture that cannot produce a shape (invalid polygon, or a missing /
+    // unsupported shape type) must NOT destroy a native grouped body: the
+    // alias stays registered so later fixtures of the same bodyIndex still
+    // group onto it and joints / cap zones on this alias keep resolving.
+    // Flat legacy bodies keep the prior destroy-and-skip behavior.
+    const skipBody = (reason: string): void => {
+      console.warn(reason);
+      if (nativeBody) {
+        if (isNewNativeBody) {
+          this.nativeBodyMap.set(nativeBody.index, body);
+          this.platformBodies.push(body);
+        }
+        if (def.name) this.platformBodyMap.set(def.name, body);
+        setBodyUserData();
+      } else {
+        this.world.DestroyBody(body);
+      }
+    };
+
+    // Native bodies keep one merged user-data record across all their fixture
+    // aliases: the FIRST alias owns the identity/geometry and only isLethal is
+    // OR-accumulated, so a later alias cannot silently overwrite name, static,
+    // or position fields that name-based consumers may rely on.
+    const setBodyUserData = (): void => {
+      if (!nativeBody) {
+        // Preserve the existing direct-MapDef contract: callers may mutate the
+        // definition after addBody(), and body user data intentionally observes
+        // that same object (cap-zone tests rely on this).
+        body.SetUserData(def);
+        return;
+      }
+      const previousUserData = typeof body.GetUserData === 'function' ? body.GetUserData() : undefined;
+      if (isNewNativeBody || !previousUserData) {
+        body.SetUserData({ ...def, isLethal: !!def.isLethal, static: def.static });
+      } else {
+        body.SetUserData({
+          ...previousUserData,
+          isLethal: !!(previousUserData.isLethal || def.isLethal),
+        });
+      }
+    };
+
     let shapeDef: any;
-    const shapeType = nativeFixture?.type ?? def.type;
+    const shapeType = fixture?.type ?? def.type;
     if (shapeType === 'rect') {
       shapeDef = new b2PolygonDef();
       const hw = (def.width || 0) / 2;
       const hh = (def.height || 0) / 2;
-      if (nativeFixture) {
-        const center = nativeFixture.center ?? { x: 0, y: 0 };
+      if (fixture) {
+        const center = fixture.center ?? { x: 0, y: 0 };
         shapeDef.SetAsOrientedBox(
           hw / this.scale,
           hh / this.scale,
           new b2Vec2(center.x / this.scale, center.y / this.scale),
-          nativeFixture.angle ?? 0,
+          fixture.angle ?? 0,
         );
       } else {
         shapeDef.SetAsBox(hw / this.scale, hh / this.scale);
@@ -818,24 +885,23 @@ export class PhysicsEngine {
      } else if (shapeType === 'circle') {
        shapeDef = new b2CircleDef();
        shapeDef.radius = (def.radius || 0) / this.scale;
-       if (nativeFixture) {
-         const center = nativeFixture.center ?? { x: 0, y: 0 };
+       if (fixture) {
+         const center = fixture.center ?? { x: 0, y: 0 };
          shapeDef.localPosition.Set(center.x / this.scale, center.y / this.scale);
        }
      } else if (shapeType === 'polygon') {
-        const polygonVertices = nativeFixture?.vertices ?? def.vertices;
+        const polygonVertices = fixture?.vertices ?? def.vertices;
         if (!polygonVertices || polygonVertices.length < 3) {
-          console.warn(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
-          if (isNewNativeBody || !nativeBody) this.world.DestroyBody(body);
+          skipBody(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
           return; // Skip invalid polygon
         }
         shapeDef = new b2PolygonDef();
         // Box2D supports max 8 vertices for convex polygons
         const maxVertices = Math.min(polygonVertices.length, 8);
-        if (nativeFixture) {
-          const center = nativeFixture.center ?? { x: 0, y: 0 };
-          const angle = nativeFixture.angle ?? 0;
-          const vertexScale = nativeFixture.scale ?? 1;
+        if (fixture) {
+          const center = fixture.center ?? { x: 0, y: 0 };
+          const angle = fixture.angle ?? 0;
+          const vertexScale = fixture.scale ?? 1;
           for (let i = 0; i < maxVertices; i++) {
             const v = polygonVertices[i];
            const rotated = new b2Vec2(
@@ -855,10 +921,10 @@ export class PhysicsEngine {
        }
        shapeDef.vertexCount = maxVertices;
       } else {
-        // Normalization currently maps unsupported shapes to rect, but keep a
-        // loud guard here for direct callers that bypass the adapter.
-        console.warn(`Unsupported body shape type "${shapeType}" for "${def.name}"`);
-        if (isNewNativeBody || !nativeBody) this.world.DestroyBody(body);
+        // Normalization skips unknown shape types with a warning (no more
+        // silent 0×0 rects); keep the loud guard here for direct callers that
+        // bypass the adapter.
+        skipBody(`Unsupported body shape type "${shapeType}" for "${def.name}"`);
         return;
       }
 
@@ -937,20 +1003,7 @@ export class PhysicsEngine {
     const shape = body.CreateShape(shapeDef);
     if (shape && typeof shape.SetUserData === 'function') shape.SetUserData(def);
     body.SetMassFromShapes();
-    if (!nativeBody) {
-      // Preserve the existing direct-MapDef contract: callers may mutate the
-      // definition after addBody(), and body user data intentionally observes
-      // that same object (cap-zone tests rely on this).
-      body.SetUserData(def);
-    } else {
-      const previousUserData = typeof body.GetUserData === 'function' ? body.GetUserData() : undefined;
-      body.SetUserData({
-        ...(previousUserData || {}),
-        ...def,
-        isLethal: !!(previousUserData?.isLethal || def.isLethal),
-        static: def.static,
-      });
-    }
+    setBodyUserData();
 
     // Set initial velocity for dynamic bodies
     if (!def.static && (!nativeBody || isNewNativeBody)) {

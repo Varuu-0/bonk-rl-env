@@ -324,6 +324,176 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     }
   });
 
+  it('keeps a native grouped body when its first fixture is invalid, preserving the alias and joint (#307 review)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: -50, y: 0, vertices: [{ x: -10, y: 0 }, { x: 10, y: 0 }], static: false, density: 1 },
+        { bodyIndex: 0, fixtureIndex: 1, name: 'Unnamed Shape', type: 'rect', x: 50, y: 0, width: 20, height: 10, static: false, density: 1 },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'compound',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 0 },
+          fixtureIndices: [0, 1],
+          fixtures: [
+            { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'po', typeName: 'polygon', center: { x: -50, y: 0 }, angle: 0, scale: 1, vertices: [{ x: -10, y: 0 }, { x: 10, y: 0 }] } },
+            { fixtureIndex: 1, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 50, y: 0 }, angle: 0, width: 20, height: 10 } },
+          ],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      physicsJoints: [{ type: 'lpj', bodyA: 0, bodyB: -1, anchorA: { x: 0, y: 0 }, axis: { x: 0, y: 1 } }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    for (const joint of md.joints) e.addJoint(joint, bodyMap);
+
+    // The invalid first fixture must NOT have destroyed the native body before
+    // alias registration: the first alias resolves to the grouped body and the
+    // joint still attaches to it.
+    const grouped = bodyMap.get(md.joints[0].bodyA);
+    expect(grouped).toBeTruthy();
+    let shapeCount = 0;
+    for (let shape = grouped.GetShapeList(); shape !== null; shape = shape.GetNext()) shapeCount++;
+    const created = (e as any).createdJoints.get('joint_0');
+    expect(shapeCount).toBe(1);
+    expect(created).toBeTruthy();
+    expect(created.m_body1).toBe(grouped);
+    expect(grouped.GetPosition().x).toBeCloseTo(0, 5);
+    expect(grouped.GetPosition().y).toBeCloseTo(0, 5);
+  });
+
+  it('places a native body\'s unresolvable fixture at the flat def coordinates, not the native origin (#307 review)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        // Fixture 0 has no entry in physicsFixtures or body.fixtures → its
+        // nativeFixture is unresolvable; fixture 2 resolves to a fixture that
+        // carries no shape geometry. Either way the engine must derive
+        // placement from the flat (world) x/y instead of mixing native
+        // position + flat geometry at the origin.
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'rect', x: 120, y: 40, width: 20, height: 10, static: false, density: 1 },
+        { bodyIndex: 0, fixtureIndex: 1, name: 'Unnamed Shape', type: 'rect', x: 0, y: 40, width: 20, height: 10, static: false, density: 1 },
+        { bodyIndex: 0, fixtureIndex: 2, name: 'Unnamed Shape', type: 'rect', x: 240, y: 40, width: 20, height: 10, static: false, density: 1 },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'body',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 40 },
+          fixtureIndices: [0, 1, 2],
+          fixtures: [
+            { fixtureIndex: 1, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 20, height: 10 } },
+            { fixtureIndex: 2, name: 'Unnamed Shape', shape: null },
+          ],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    const grouped = bodyMap.get(md.bodies[0].name);
+    expect(grouped).toBeTruthy();
+
+    const box2d = require('box2d');
+    const aabb = new box2d.b2AABB();
+    const scale = (e as any).scale as number;
+    const centers = [] as { x: number; y: number }[];
+    for (let shape = grouped.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+      shape.ComputeAABB(aabb, grouped.GetXForm());
+      centers.push({
+        x: ((aabb.lowerBound.x + aabb.upperBound.x) / 2) * scale,
+        y: ((aabb.lowerBound.y + aabb.upperBound.y) / 2) * scale,
+      });
+    }
+    centers.sort((a, b) => a.x - b.x);
+    expect(centers).toEqual([
+      { x: 0, y: 40 },
+      { x: 120, y: 40 },
+      { x: 240, y: 40 },
+    ]);
+  });
+
+  it('places native-fixture shapes at the adapter\'s world-space center for rotated/off-center fixtures (#307 review)', () => {
+    const angle = Math.PI / 4;
+    const e = makeEngine();
+    const md = normalizeMap({
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'rot',
+          type: 's',
+          typeName: 'static',
+          position: { x: 100, y: 50 },
+          angle,
+          fixtureIndices: [0],
+          fixtures: [
+            { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 100, y: 0 }, angle: 0, width: 20, height: 10 } },
+          ],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    const grouped = bodyMap.get(md.bodies[0].name);
+    expect(grouped).toBeTruthy();
+
+    const box2d = require('box2d');
+    const aabb = new box2d.b2AABB();
+    const shape = grouped.GetShapeList();
+    shape.ComputeAABB(aabb, grouped.GetXForm());
+    const scale = (e as any).scale as number;
+    const cx = ((aabb.lowerBound.x + aabb.upperBound.x) / 2) * scale;
+    const cy = ((aabb.lowerBound.y + aabb.upperBound.y) / 2) * scale;
+    // Cap-zone sensors are placed at fixtureDef.x + cx, so the shape's world
+    // center must equal the adapter-emitted x/y (sensor alignment).
+    expect(cx).toBeCloseTo(md.bodies[0].x, 4);
+    expect(cy).toBeCloseTo(md.bodies[0].y, 4);
+  });
+
+  it('keeps the first native fixture alias as the grouped body user data (#307 review)', () => {
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'rect', x: -50, y: 0, width: 20, height: 10, static: false, density: 1, isLethal: false },
+        { bodyIndex: 0, fixtureIndex: 1, name: 'Unnamed Shape', type: 'rect', x: 50, y: 0, width: 20, height: 10, static: false, density: 1, isLethal: true },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'compound',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 0 },
+          fixtureIndices: [0, 1],
+          fixtures: [
+            { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: -50, y: 0 }, angle: 0, width: 20, height: 10 } },
+            { fixtureIndex: 1, name: 'Unnamed Shape', shape: { type: 'bx', typeName: 'rect', center: { x: 50, y: 0 }, angle: 0, width: 20, height: 10 } },
+          ],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    const grouped = bodyMap.get(md.bodies[0].name);
+    const ud = grouped.GetUserData();
+    expect(ud.isLethal).toBe(true);           // OR-accumulated across aliases
+    expect(ud.name).toBe(md.bodies[0].name);  // first-alias identity
+    expect(ud.x).toBe(-50);                   // no last-alias-wins geometry copy
+  });
+
   it('a prismatic joint constrains a dynamic body to its axis', () => {
     const e = makeEngine();
     const bm = makeBodyMap(e);
