@@ -1254,6 +1254,53 @@ export class PhysicsEngine {
       jd.enableMotor = !!def.enableMotor;
       jd.motorSpeed = def.motorSpeed ?? 0;
       jd.maxMotorForce = def.maxMotorForce ?? 0;
+
+      // §33.8 lsj initial-side spring bias (readable 7600-7630):
+      //   θ = bodyA.GetAngle() − π/2
+      //   anchorWorld = (sax + safeCos(θ)·(−slen), say + safeSin(θ)·(−slen))
+      //   rel = bodyA.GetPosition() − anchorWorld;  len = |rel|
+      //   φ = safeATan2(rel.y, rel.x) − bodyA.GetAngle();  φ %= 2π
+      //   len = −len unless φ ∈ [−π, 0) ∪ (π, 2π]
+      //   k = (len/(2·slen) − 0.5)·2
+      //   maxMotorForce = sf·|k|;  if (k > 0) motorSpeed = −300
+      // Native input pipeline: the map decoder overwrites sax/say with the
+      // body's decoded position and scales slen /= ppm, sf /= ppm² (readable
+      // 6448-6453), and the world build creates each body at that exact
+      // position (readable 7449). For such decoder-normalized maps the formula
+      // collapses to rel = R(θ)·slen, len = slen, φ ≡ −π/2, hence k ≡ 0 —
+      // maxMotorForce = sf·|k| = 0 and motorSpeed stays at the hardcoded 300
+      // (the native computes the same result). The nonzero-k branch engages
+      // only when an authored anchor differs from the connected body's build
+      // position. `k` is dimensionless, so the formula is evaluated in engine
+      // world units. Degenerate inputs (absent/zero slen, invalid anchor) keep
+      // the static 300/sf defaults — the native would divide by zero into
+      // NaN/Infinity (corrupt-map guard, consistent with #271/#276).
+      if (type === 'lsj') {
+        const sf = Number.isFinite(def.maxMotorForce) ? def.maxMotorForce : 0;
+        const slen = lenLimit ? def.length / this.scale : 0;
+        const anchorValid = def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y);
+        let motor = 300; // native hardcodes 300, then signs it when k > 0
+        let force = sf;
+        if (slen > 0 && anchorValid) {
+          const anchor = makeAnchorA(def.anchorA);
+          const theta = bodyA.GetAngle() - Math.PI / 2;
+          const ax = anchor.x + Math.cos(theta) * -slen;
+          const ay = anchor.y + Math.sin(theta) * -slen;
+          const pos = bodyA.GetPosition();
+          const relX = pos.x - ax;
+          const relY = pos.y - ay;
+          let len = Math.sqrt(relX * relX + relY * relY);
+          let phi = Math.atan2(relY, relX) - bodyA.GetAngle();
+          phi = phi % (2 * Math.PI);
+          if (!((phi < 0 && phi >= -Math.PI) || phi > Math.PI)) len = -len;
+          const k = (len / (slen * 2) - 0.5) * 2;
+          force = sf * Math.abs(k);
+          if (k > 0) motor = -300;
+        }
+        jd.motorSpeed = motor;
+        jd.maxMotorForce = force;
+      }
+
       created = this.world.CreateJoint(jd);
     } else if (type === 'g' || type === 'gear') {
       const j1 = def.jointA ? (this.createdJoints.get(def.jointA) ?? null) : null;
