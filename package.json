@@ -38,10 +38,10 @@
     "bench:layer6": "npx tsx benchmarks/layer6-stability.ts",
     "bench:layer7": "python python/benchmarks/layer7-ipc-throughput.py",
     "bench:ipc-profile": "python python/benchmarks/layer7-ipc-latency.py",
-"bench:ipc-stress": "python python/benchmarks/layer7-ipc-stress.py",
-  "preview": "tsx src/render/preview.ts",
-  "preview:live": "tsx src/render/preview-server.ts",
-  "start": "tsx src/main.ts",
+    "bench:ipc-stress": "python python/benchmarks/layer7-ipc-stress.py",
+    "preview": "tsx src/render/preview.ts",
+    "preview:live": "tsx src/render/preview-server.ts",
+    "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit"
   },
   "keywords": [

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseIntArg, parseArgs } from '../../src/render/preview-shared';
+import { parseIntArg, parsePositiveIntArg, parseArgs } from '../../src/render/preview-shared';
 
 describe('render-preview CLI arg parsing', () => {
   it('parseArgs maps pairwise --key value pairs and strips the dashes', () => {
@@ -19,5 +19,11 @@ describe('render-preview CLI arg parsing', () => {
   it('parseIntArg rejects negative or non-numeric values', () => {
     expect(() => parseIntArg('-1', 7, 'ticks')).toThrow(/expected a non-negative number/);
     expect(() => parseIntArg('abc', 7, 'ticks')).toThrow(/expected a non-negative number/);
+  });
+
+  it('parsePositiveIntArg rejects zero after integer normalization', () => {
+    expect(() => parsePositiveIntArg('0', 30, 'fps')).toThrow(/expected a positive number/);
+    expect(() => parsePositiveIntArg('0.9', 30, 'fps')).toThrow(/expected a positive number/);
+    expect(parsePositiveIntArg('30.9', 30, 'fps')).toBe(30);
   });
 });

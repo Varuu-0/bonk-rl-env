@@ -283,7 +283,10 @@ export function geometryFromMapDefBody(map: any, capZones?: CapZoneGeom[]): MapG
   const fixtures: FixtureGeom[] = [];
   const shapes: ShapeGeom[] = [];
   let bodyRenderOrder: number[] | undefined;
-  (map.bodies || []).forEach((b: any, i: number) => {
+  const mapBodies = map.bodies || [];
+  const hasNativeRenderOrder = Array.isArray(map.bodyRenderOrder) && map.bodyRenderOrder.length > 0;
+  const bodiesByRenderIndex = hasNativeRenderOrder ? new Map<number, number[]>() : undefined;
+  mapBodies.forEach((b: any, i: number) => {
     const renderShape = b.renderShape;
     const st = shapeTypeOf(renderShape?.type ?? b.type);
     const radius = st === 'ci' ? (renderShape?.radius ?? b.radius) : undefined;
@@ -315,28 +318,31 @@ export function geometryFromMapDefBody(map: any, capZones?: CapZoneGeom[]): MapG
       scale: renderShape?.scale ?? 1,
     });
     fixtures.push({ index: i, shapeIndex: i, color: b.color ?? 0xaaaaaa, noPhysics: b.noPhysics, death: b.isLethal });
+    if (bodiesByRenderIndex && typeof b.renderBodyIndex === 'number') {
+      const fixtureBodies = bodiesByRenderIndex.get(b.renderBodyIndex);
+      if (fixtureBodies) fixtureBodies.push(i);
+      else bodiesByRenderIndex.set(b.renderBodyIndex, [i]);
+    }
   });
 
-  if (Array.isArray(map.bodyRenderOrder) && map.bodyRenderOrder.length > 0) {
+  if (bodiesByRenderIndex) {
     // A normalized MapDef flattens each source body fixture into one body.
     // Expand the native front-to-back order onto those fixture bodies. Any body
     // missing from the source order is retained behind the ordered set.
     const ordered = new Set<number>();
     bodyRenderOrder = [];
     for (const sourceBodyIndex of map.bodyRenderOrder) {
-      const fixtureBodies: number[] = [];
-      (map.bodies || []).forEach((b: any, i: number) => {
-        if (b.renderBodyIndex === sourceBodyIndex) fixtureBodies.push(i);
-      });
+      const fixtureBodies = bodiesByRenderIndex.get(sourceBodyIndex) ?? [];
       // buildGeometry reverses native front-to-back body order for SVG paint.
       // Reverse the flattened fixture entries here so that reversal does not
       // also invert their native order within a single source body.
-      for (const i of fixtureBodies.reverse()) {
+      for (let fixtureIndex = fixtureBodies.length - 1; fixtureIndex >= 0; fixtureIndex -= 1) {
+        const i = fixtureBodies[fixtureIndex];
         bodyRenderOrder.push(i);
         ordered.add(i);
       }
     }
-    (map.bodies || []).forEach((_: any, i: number) => {
+    mapBodies.forEach((_: any, i: number) => {
       if (!ordered.has(i)) bodyRenderOrder!.push(i);
     });
   }
@@ -346,7 +352,7 @@ export function geometryFromMapDefBody(map: any, capZones?: CapZoneGeom[]): MapG
   // to the body's array index and treat that fixture as the cap-zone fixture —
   // otherwise cap-zone outlines never render on the env load path (#review).
   const nameToBodyIndex = new Map<string, number>();
-  ((map.bodies || []) as any[]).forEach((b, i) => {
+  (mapBodies as any[]).forEach((b, i) => {
     if (b && typeof b.name === 'string') nameToBodyIndex.set(b.name, i);
   });
   const resolvedCapZones = (capZones || []).map((cz) => {

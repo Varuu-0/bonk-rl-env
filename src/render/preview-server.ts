@@ -17,7 +17,7 @@
 import * as http from 'http';
 import { BonkEnvironment } from '../core/environment';
 import { renderEnvFrameSvg } from './render-wiring';
-import { parseArgs, parseIntArg, resolvePreviewMap } from './preview-shared';
+import { parseArgs, parseIntArg, parsePositiveIntArg, resolvePreviewMap } from './preview-shared';
 
 /** One streamed frame. The server keeps only the latest for late joins. */
 interface SseFrame {
@@ -53,7 +53,6 @@ const HTML_PAGE = `<!doctype html>
   let es = null;
   const stage = document.getElementById('stage');
   const tickEl = document.getElementById('tick');
-  const stateEl = document.getElementById('state');
   const pauseBtn = document.getElementById('pause');
   let paused = false;
 
@@ -66,11 +65,14 @@ const HTML_PAGE = `<!doctype html>
     });
     es.addEventListener('frame', (e) => {
       const f = JSON.parse(e.data);
-      stateEl.remove();
       stage.innerHTML = f.svg;
       tickEl.textContent = String(f.tick);
     });
-    es.addEventListener('done', () => { if (es) es.close(); stateEl.textContent = 'stream finished'; });
+    es.addEventListener('done', () => {
+      if (es) es.close();
+      es = null;
+      stage.innerHTML = '<div id="state">stream finished</div>';
+    });
     es.onerror = () => { if (es) es.close(); es = null; setTimeout(connect, 1500); };
   }
 
@@ -78,7 +80,7 @@ const HTML_PAGE = `<!doctype html>
     paused = !paused;
     pauseBtn.textContent = paused ? 'resume' : 'pause';
     if (paused) { if (es) es.close(); es = null; }
-    else { if (stateEl.parentNode === stage) stateEl.textContent = 'reconnecting…'; connect(); }
+    else { stage.innerHTML = '<div id="state">reconnecting...</div>'; connect(); }
   });
   window.addEventListener('beforeunload', () => { if (es) es.close(); });
   connect();
@@ -99,6 +101,7 @@ function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): v
   for (const res of sseClients) res.end();
   sseClients.clear();
   server.close(() => process.exit(code));
+  server.closeAllConnections();
 }
 
 function handleRequest(
@@ -145,7 +148,7 @@ async function main(): Promise<void> {
   const width = parseIntArg(args.width, 730, 'width');
   const height = parseIntArg(args.height, 500, 'height');
   const port = parseIntArg(args.port, 8080, 'port');
-  const fps = parseIntArg(args.fps, 30, 'fps'); // native sim tps is 30 → real time
+  const fps = parsePositiveIntArg(args.fps, 30, 'fps'); // native sim tps is 30 → real time
   const tickCap = parseIntArg(args.ticks, 0, 'ticks'); // 0 = stream until stopped
 
   const env = new BonkEnvironment({ mapPath: map, numOpponents: 1, randomOpponent: false, seed: 42 });

@@ -168,6 +168,44 @@ describe('normalizeMap', () => {
             });
         });
 
+        it('retains render shapes when fallback physicsBodies has null placeholders', () => {
+            const out = normalizeMap({
+                physicsBodies: [
+                    null,
+                    {
+                        fixtureIndex: 0,
+                        shapeIndex: 0,
+                        name: 'Signature',
+                        type: 'polygon',
+                        x: 0,
+                        y: 0,
+                        position: { x: 30, y: -500 },
+                        angle: 0.25,
+                    },
+                ],
+                physicsShapes: [
+                    {
+                        type: 'po',
+                        center: { x: 4, y: -2 },
+                        angle: 0.5,
+                        scale: 1.5,
+                        vertices: [{ x: -2, y: 1 }, { x: 2, y: 1 }, { x: 0, y: -3 }],
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies).toHaveLength(1);
+            expect(out.bodies[0].renderShape).toMatchObject({
+                type: 'polygon',
+                bodyPosition: { x: 30, y: -500 },
+                bodyAngle: 0.25,
+                center: { x: 4, y: -2 },
+                angle: 0.5,
+                scale: 1.5,
+            });
+        });
+
         it('still detects flat bodies via collidesGroup1 markers', () => {
             const out = normalizeMap({
                 bodies: [

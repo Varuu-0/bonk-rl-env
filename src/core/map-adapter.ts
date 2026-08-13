@@ -16,7 +16,7 @@
 import { MapDef, GROUND_BODY_NAME } from './physics-engine';
 
 interface FlatBody {
-    bodyIndex: number;
+    bodyIndex?: number;
     fixtureIndex: number;
     name?: string;
     type?: string;
@@ -128,10 +128,9 @@ interface ExportedMap {
     spawns?: FlatSpawn[];
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
-    physicsBodies?: FlatBody[];
-    // The exporter (Webscripts/mapexporter.js) pushes a literal `null` for any
-    // joint it cannot export to keep raw-array indices stable, so entries may
-    // be null as well as FlatJoint.
+    // The exporter (Webscripts/mapexporter.js) preserves raw-array indices with
+    // literal null placeholders for unsupported bodies and joints.
+    physicsBodies?: (FlatBody | null)[];
     physicsJoints?: (FlatJoint | null)[];
     physicsFixtures?: unknown[];
     physicsShapes?: unknown[];
@@ -271,10 +270,15 @@ export function normalizeMap(raw: unknown): MapDef {
     const flatSource = (flatBodies || map.physicsBodies || [])
         .filter((b): b is FlatBody => b !== null && b !== undefined);
     const sourceBodies: any[] = Array.isArray(map.physicsBodies) ? map.physicsBodies : [];
+    const sourceBodiesByFlatPosition = sourceBodies.filter((body) => body !== null && body !== undefined);
     const sourceShapes: any[] = Array.isArray(map.physicsShapes) ? map.physicsShapes : [];
     const withRenderShape = (body: FlatBody, index: number): FlatBody => {
         const shapeIndex = body.shapeIndex;
-        const sourceBody = sourceBodies[body.bodyIndex ?? index];
+        // bodyIndex references raw physicsBodies positions. Positional fallback
+        // must follow flatSource, which excludes raw null placeholders.
+        const sourceBody = typeof body.bodyIndex === 'number'
+            ? sourceBodies[body.bodyIndex]
+            : sourceBodiesByFlatPosition[index];
         const sourceShape = typeof shapeIndex === 'number' ? sourceShapes[shapeIndex] : undefined;
         if (!sourceBody || !sourceBody.position || !sourceShape || !sourceShape.center) return body;
         const type = sourceShape.type === 'bx' ? 'rect'

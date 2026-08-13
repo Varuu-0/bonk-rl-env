@@ -40,6 +40,15 @@ export function parseIntArg(value: string | undefined, fallback: number, name: s
   return Math.floor(n);
 }
 
+/** Parse a positive integer CLI option such as the live preview frame rate. */
+export function parsePositiveIntArg(value: string | undefined, fallback: number, name: string): number {
+  const n = parseIntArg(value, fallback, name);
+  if (n < 1) {
+    throw new Error(`Invalid --${name}: expected a positive number, got "${value}"`);
+  }
+  return n;
+}
+
 /** Pairwise `--key value` → record; unknown keys are passed through. */
 export function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
