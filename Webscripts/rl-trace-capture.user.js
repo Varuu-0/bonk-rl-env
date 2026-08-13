@@ -127,20 +127,25 @@
         alive: true,
       } : null);
     }
-    // Capture the map/spawns once from the first state (state.physics holds the
-    // serialized map; mapexporter is the richer source, this is a fallback).
-    if (S.map === null && state.physics) {
+    // Prefer the full game-settings map because it carries authored spawns.
+    // If it is unavailable, keep the tick-state map and leave spawns empty so
+    // the comparator can use its map-spawn fallback instead of fake (0, 0)s.
+    const gameMap = window.__bonkExportGameSettings?.map;
+    if (gameMap?.physics?.bodies) {
+      S.map = gameMap;
+      S.settings = gameMap.s || state.ms || state.s || null;
+    } else if (S.map === null && state.physics) {
       S.map = state.physics;
       S.settings = state.ms || state.s || null;
+    }
+    if (S.players.length === 0) {
       S.tps = 30;
       const players = [];
-      const spawns = [];
       if (state.players) {
         for (let i = 0; i < state.players.length; i++) {
           const p = state.players[i];
           if (p) {
             players.push({ id: i, team: p.team });
-            spawns.push({ id: i, x: p.sx ?? 0, y: p.sy ?? 0 });
           }
         }
       }
@@ -148,12 +153,10 @@
         for (let i = 0; i < state.discs.length; i++) {
           if (state.discs[i]) {
             players.push({ id: i, team: state.discs[i].team });
-            spawns.push({ id: i, x: state.discs[i].sx ?? 0, y: state.discs[i].sy ?? 0 });
           }
         }
       }
       S.players = players;
-      S.spawns = spawns;
     }
     S.ticks.push({ t, discs });
   }
