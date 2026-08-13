@@ -42,9 +42,9 @@ describe('render-wiring (M5) env-path cap zones', () => {
   });
 
   it('paints the WDB opaque background beneath gameplay geometry', () => {
-    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__No_Mapshake__716916.json', numOpponents: 0, randomOpponent: false });
+    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__no_nothing__1232248.json', numOpponents: 0, randomOpponent: false });
     const mapDef = (env as any).config.mapData;
-    const backgroundIndex = mapDef.bodies.findIndex((body: any) => body.name === 'Main Background');
+    const backgroundIndex = mapDef.bodies.findIndex((body: any) => body.renderBodyIndex === 7);
     expect(backgroundIndex).toBeGreaterThanOrEqual(0);
 
     const { geometry } = envMapRender(env);
@@ -55,19 +55,28 @@ describe('render-wiring (M5) env-path cap zones', () => {
     expect(commands.some(command => command.primitive.fill !== backgroundColor)).toBe(true);
   });
 
-  it('keeps WDB Signature fixture paint order while reversing native body order', () => {
-    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__No_Mapshake__716916.json', numOpponents: 0, randomOpponent: false });
+  it('keeps WDB fixture paint order while reversing native body order', () => {
+    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__no_nothing__1232248.json', numOpponents: 0, randomOpponent: false });
     const mapDef = (env as any).config.mapData;
     const { geometry } = envMapRender(env);
-    const signatureNames = mapDef.bodies
-      .filter((body: any) => body.renderBodyIndex === 5)
-      .map((body: any) => body.name);
-    const renderedNames = (geometry.bodyRenderOrder ?? [])
+    const sourceBodyIndex = 12;
+    const sourceFixtureGeometry = mapDef.bodies
+      .filter((body: any) => body.renderBodyIndex === sourceBodyIndex)
+      .map((body: any) => ({
+        color: body.color,
+        center: body.renderShape?.center,
+        angle: body.renderShape?.angle,
+      }));
+    const renderedFixtureGeometry = (geometry.bodyRenderOrder ?? [])
       .map(index => mapDef.bodies[index])
-      .filter((body: any) => body?.renderBodyIndex === 5)
-      .map((body: any) => body.name)
+      .filter((body: any) => body?.renderBodyIndex === sourceBodyIndex)
+      .map((body: any) => ({
+        color: body.color,
+        center: body.renderShape?.center,
+        angle: body.renderShape?.angle,
+      }))
       .reverse();
 
-    expect(renderedNames).toEqual(signatureNames);
+    expect(renderedFixtureGeometry).toEqual(sourceFixtureGeometry);
   });
 });

@@ -78,13 +78,13 @@ describe('map-geometry (M2)', () => {
   });
 
   it('preserves raw WDB geometry through normalized render metadata', () => {
-    const map = load('bonk_WDB__No_Mapshake__716916.json');
+    const map = load('bonk_WDB__no_nothing__1232248.json');
     const rawCommands = buildGeometry(geometryFromExport(map), cam);
     const normalizedCommands = buildGeometry(geometryFromMapDefBody(normalizeMap(map)), cam);
 
-    // The Signature body combines polygon-local transforms with overlapping
-    // fixtures. Rendered SVG equality covers coordinates and paint order while
-    // allowing normalized fixtures to retain their own z metadata.
+    // This WDB map combines shape-local transforms with overlapping fixtures.
+    // Rendered SVG equality covers coordinates and paint order while allowing
+    // normalized fixtures to retain their own z metadata.
     expect(renderFrameSvg(normalizedCommands, [], { width: 730, height: 500 }))
       .toEqual(renderFrameSvg(rawCommands, [], { width: 730, height: 500 }));
   });
