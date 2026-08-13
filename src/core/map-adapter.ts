@@ -49,6 +49,12 @@ interface FlatBody {
     radius?: number;
     scale?: number;
     vertices?: { x: number; y: number }[];
+    // Declared vertex frame for flat polygon bodies. The exporter emits
+    // 'absolute' world map-px vertices (`bx + cx + v`); 'local' marks already
+    // body-local input that must not be shifted again. An absent marker
+    // defaults to 'absolute' so maps exported before the marker existed keep
+    // loading unchanged (#344 review).
+    vertexFrame?: 'absolute' | 'local';
 }
 
 interface FlatSpawn {
@@ -164,10 +170,25 @@ function toBodyDef(body: FlatBody, index: number): any {
     const y = body.y ?? 0;
     // The exporter's flat polygon view stores vertices in map/world pixels
     // (`bx + cx + v`), while MapBodyDef vertices are body-local for Box2D and
-    // the normalized renderer/cap-zone consumers. Convert only polygons here;
-    // rects and circles already express their extent around x/y.
-    const vertices = body.type === 'polygon' && body.vertices
-        ? body.vertices.map(v => ({ x: v.x - x, y: v.y - y }))
+    // the normalized renderer/cap-zone consumers. The flat format declares its
+    // vertex frame explicitly via `vertexFrame`: 'absolute' (exporter output,
+    // and the backward-compatible default when the marker is absent) or
+    // 'local' (already body-local input, which must NOT be shifted a second
+    // time). The absolute→local conversion inverts the body transform exactly
+    // (pos + R(angle) · local reproduces the authored absolute vertex), so
+    // rotated polygons also land where the exporter authored them. Only
+    // polygons are converted; rects and circles already express their extent
+    // around x/y.
+    const vertices = body.type === 'polygon' && body.vertices && body.vertexFrame !== 'local'
+        ? body.vertices.map(v => {
+            const dx = v.x - x;
+            const dy = v.y - y;
+            const angle = body.angle ?? 0;
+            const cosA = Math.cos(angle);
+            const sinA = Math.sin(angle);
+            // R(-angle) · (v - pos): the inverse of the engine's body transform.
+            return { x: dx * cosA + dy * sinA, y: -dx * sinA + dy * cosA };
+        })
         : body.vertices;
     return {
         name: body.name ?? body.bodyType ?? `body_${index}`,
