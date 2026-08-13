@@ -6,7 +6,7 @@ import { SharedMemoryManager } from '../ipc/shared-memory';
 import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
-import { assertValidAction } from './action-validation';
+import { assertValidAction, encodePlayerInput } from './action-validation';
 
 /**
  * Observation data structure extracted from shared memory
@@ -911,14 +911,7 @@ export class WorkerPool {
         if (typeof action === 'number') {
             return action; // Already encoded
         }
-        let encoded = 0;
-        if (action.left) encoded |= 1;
-        if (action.right) encoded |= 2;
-        if (action.up) encoded |= 4;
-        if (action.down) encoded |= 8;
-        if (action.heavy) encoded |= 16;
-        if (action.grapple) encoded |= 32;
-        return encoded;
+        return encodePlayerInput(action);
     }
 
     /**
