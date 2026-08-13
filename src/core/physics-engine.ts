@@ -810,6 +810,25 @@ export class PhysicsEngine {
             const sinA = Math.sin(-nativeBody.angle);
             const offX = (def.x ?? 0) - nativeBody.x;
             const offY = (def.y ?? 0) - nativeBody.y;
+            if (def.type === 'polygon') {
+              // MapDef polygon vertices are authored about def.x/def.y and
+              // rotated by def.angle about that point. Bake the world → body
+              // local transform into the vertices themselves (center 0 /
+              // angle 0) so the polygon builder places the shape at
+              // def.x + R(def.angle)·v without re-translating/rotating
+              // vertices that already carry world placement.
+              const cosD = Math.cos(def.angle ?? 0);
+              const sinD = Math.sin(def.angle ?? 0);
+              const vertices = (def.vertices ?? []).map((v) => {
+                const wx = (def.x ?? 0) + v.x * cosD - v.y * sinD;
+                const wy = (def.y ?? 0) + v.x * sinD + v.y * cosD;
+                return {
+                  x: (wx - nativeBody.x) * cosA - (wy - nativeBody.y) * sinA,
+                  y: (wx - nativeBody.x) * sinA + (wy - nativeBody.y) * cosA,
+                };
+              });
+              return { type: def.type, center: { x: 0, y: 0 }, angle: 0, scale: 1, vertices };
+            }
             return {
               type: def.type,
               center: { x: offX * cosA - offY * sinA, y: offX * sinA + offY * cosA },

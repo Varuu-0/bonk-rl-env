@@ -23,6 +23,8 @@ interface FlatBody {
     bodyType?: string;
     x?: number;
     y?: number;
+    /** Position-keyed flat bodies use this instead of (or in addition to) x/y. */
+    position?: { x?: number; y?: number } | null;
     angle?: number;
     linearVelocity?: { x: number; y: number };
     angularVelocity?: number;
@@ -221,11 +223,11 @@ interface NativeFixtureRef {
 function isNativeBody(value: unknown): value is NativeBody {
     return !!value
         && typeof value === 'object'
-        // Native markers win over an incidental flat `x` key so merged
-        // programmatic exports (native + flat fields on one object) are not
-        // misclassified as flat bodies (which would drop the structured
-        // hierarchy this adapter needs to group fixtures).
-        && ('fixtureIndices' in value || 'fixtures' in value || 'position' in value);
+        // A native body is defined by its structured fixture hierarchy, not by
+        // a `position` key: programmatic/exporter flat bodies may also carry a
+        // `position` (position-keyed flat bodies), and treating them as native
+        // would silently drop them (they flatten to nothing without fixtures).
+        && ('fixtures' in value || 'fixtureIndices' in value);
 }
 
 function isFlatBody(value: unknown): value is FlatBody {
@@ -233,9 +235,10 @@ function isFlatBody(value: unknown): value is FlatBody {
         && typeof value === 'object'
         && !isNativeBody(value)
         // Require a positive flat marker; the complement of isNativeBody is
-        // too broad for arbitrary objects riding along in physicsBodies.
+        // too broad for arbitrary objects riding along in physicsBodies. A
+        // `position` key is a valid flat marker for position-keyed bodies.
         && ('x' in value || 'width' in value || 'vertices' in value
-            || 'radius' in value || 'collidesGroup1' in value);
+            || 'radius' in value || 'collidesGroup1' in value || 'position' in value);
 }
 
 function nativeShapeType(shape: NativeShape | null | undefined): string | undefined {
@@ -305,13 +308,14 @@ function flattenNativeBodies(map: ExportedMap, nativeBodies: NativeBody[]): Flat
         // empty `[]` shadow a populated `fixtures` array (an omitted or
         // placeholder list must not silently drop every fixture). When the
         // index list is absent, derive indices from the fixtures themselves:
-        // null placeholder entries are filtered first so an array-position
-        // fallback cannot misalign with a null slot.
+        // index-less fixtures fall back to their RAW array position — the
+        // physicsFixtures index convention — so a null placeholder cannot
+        // shift the derived index into a different fixture slot.
         const fixtureIndexes = (nativeBody.fixtureIndices && nativeBody.fixtureIndices.length > 0)
             ? nativeBody.fixtureIndices
             : (nativeBody.fixtures ?? [])
-                .filter((fixture): fixture is NativeFixture => fixture !== null && fixture !== undefined)
-                .map((fixture, i) => fixture.fixtureIndex ?? i);
+                .map((fixture, i) => (fixture === null || fixture === undefined ? null : (fixture.fixtureIndex ?? i)))
+                .filter((idx): idx is number => idx !== null);
 
         fixtureIndexes.forEach((fixtureIndex) => {
             const fixture = nativeFixtureFor(nativeBody, fixtureIndex, map);
@@ -370,19 +374,17 @@ function flattenNativeBodies(map: ExportedMap, nativeBodies: NativeBody[]): Flat
                 flatBody.radius = shape?.radius;
             } else if (type === 'polygon') {
                 flatBody.scale = shape?.scale;
-                // The flat facade treats polygon vertices as WORLD coordinates
-                // (the exporter's flat view emits bodyPos + center + vertex),
-                // and deathCenter / cap-zone sizing consume them that way.
-                // Emit the true world vertices so a structured-only export
-                // yields the same geometry-facing values the exporter's flat
-                // view would have produced.
-                flatBody.vertices = (shape?.vertices ?? []).map((vertex) => {
-                    const rotated = rotatePoint(vertex.x, vertex.y, bodyAngle + (shape?.angle ?? 0));
-                    return {
-                        x: bodyPosition.x + worldCenter.x + rotated.x,
-                        y: bodyPosition.y + worldCenter.y + rotated.y,
-                    };
-                });
+                // The flat facade's polygon vertices feed getCapZoneSensorSize,
+                // which rotates them by fixtureDef.angle about fixtureDef.x —
+                // i.e. they must stay the shape's raw local vertices (scaled),
+                // NOT world-transformed, or the sensor picks up an extra
+                // translation and a second rotation. deathCenter (below) adds
+                // the body offset back when the source was flattened.
+                const vertexScale = shape?.scale ?? 1;
+                flatBody.vertices = (shape?.vertices ?? []).map((vertex) => ({
+                    x: vertex.x * vertexScale,
+                    y: vertex.y * vertexScale,
+                }));
             }
             flat.push(flatBody);
         });
@@ -417,8 +419,8 @@ function toBodyDef(
     return {
         name,
         type,
-        x: worldCenter && nativeBody ? (nativeBody.position?.x ?? 0) + worldCenter.x : body.x ?? 0,
-        y: worldCenter && nativeBody ? (nativeBody.position?.y ?? 0) + worldCenter.y : body.y ?? 0,
+        x: worldCenter && nativeBody ? (nativeBody.position?.x ?? 0) + worldCenter.x : body.x ?? body.position?.x ?? 0,
+        y: worldCenter && nativeBody ? (nativeBody.position?.y ?? 0) + worldCenter.y : body.y ?? body.position?.y ?? 0,
         vertices: body.vertices ?? shape?.vertices,
         static: body.static ?? (body.bodyType === 'static' || bodyType === 'static'),
         density: body.density,
@@ -551,6 +553,12 @@ export function normalizeMap(raw: unknown): MapDef {
     const source = flatSource.length > 0
         ? flatSource
         : flattenNativeBodies(map, nativeBodies);
+    // Whether the facade bodies came from flattenNativeBodies: those emit
+    // shape-LOCAL polygon vertices (the getCapZoneSensorSize convention),
+    // while the exporter's flat view bakes bodyPos + center into the
+    // vertices. Consumers that treat vertices as world coordinates must add
+    // the body offset back only for flattened bodies.
+    const fromFlattened = flatSource.length === 0;
 
     // Exported fixtures frequently use the shared default name "Unnamed Shape"
     // even when their structured parent body has a meaningful name. Use the
@@ -776,7 +784,11 @@ export function normalizeMap(raw: unknown): MapDef {
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
             else if (b.vertices && b.vertices.length) {
-                for (const v of b.vertices) { if (v.x < bx0) bx0 = v.x; if (v.x > bx1) bx1 = v.x; if (v.y < by0) by0 = v.y; if (v.y > by1) by1 = v.y; }
+                for (const v of b.vertices) {
+                    const vx = fromFlattened ? (b.x ?? 0) + v.x : v.x;
+                    const vy = fromFlattened ? (b.y ?? 0) + v.y : v.y;
+                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx; if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
+                }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
             if (by0 < minY) minY = by0; if (by1 > maxY) maxY = by1;

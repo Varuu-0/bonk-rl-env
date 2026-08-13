@@ -422,6 +422,63 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     ]);
   });
 
+  it('places an unresolvable polygon fixture at def.x + R(def.angle)·v on a rotated native body (#307 review)', () => {
+    // The native body is rotated AND the flat polygon is off-center with its
+    // own authored angle; the synthetic (derived) fixture must reproduce the
+    // legacy flat placement def.x + R(def.angle)·v in world space exactly —
+    // no double transform from feeding the vertices through center+rotation.
+    const bodyAngle = Math.PI / 6;
+    const defAngle = Math.PI / 6;
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 100, y: 40, angle: defAngle, vertices: [{ x: -30, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }], static: false, density: 1 },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'body',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 40 },
+          angle: bodyAngle,
+          fixtureIndices: [0],
+          fixtures: [],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any) as any;
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    const grouped = bodyMap.get(md.bodies[0].name);
+    expect(grouped).toBeTruthy();
+
+    const shape = grouped.GetShapeList();
+    const scale = (e as any).scale as number;
+    const rotate = (v: { x: number; y: number }, a: number) => ({
+      x: v.x * Math.cos(a) - v.y * Math.sin(a),
+      y: v.x * Math.sin(a) + v.y * Math.cos(a),
+    });
+    const authored = md.bodies[0].vertices as { x: number; y: number }[];
+    const expectedWorld = authored.map((v) => ({
+      x: md.bodies[0].x + rotate(v, defAngle).x,
+      y: md.bodies[0].y + rotate(v, defAngle).y,
+    })).sort((a, b) => a.x - b.x);
+    const actualWorld = [] as { x: number; y: number }[];
+    for (let i = 0; i < shape.m_vertexCount; i++) {
+      const local = shape.m_vertices[i];
+      const world = rotate({ x: local.x, y: local.y }, bodyAngle);
+      actualWorld.push({ x: world.x * scale, y: world.y * scale + 40 });
+    }
+    actualWorld.sort((a, b) => a.x - b.x);
+    expect(actualWorld.length).toBe(3);
+    for (let i = 0; i < actualWorld.length; i++) {
+      expect(actualWorld[i].x).toBeCloseTo(expectedWorld[i].x, 4);
+      expect(actualWorld[i].y).toBeCloseTo(expectedWorld[i].y, 4);
+    }
+  });
+
   it('places native-fixture shapes at the adapter\'s world-space center for rotated/off-center fixtures (#307 review)', () => {
     const angle = Math.PI / 4;
     const e = makeEngine();

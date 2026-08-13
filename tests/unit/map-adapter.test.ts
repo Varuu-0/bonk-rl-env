@@ -246,6 +246,54 @@ describe('normalizeMap', () => {
             expect(out.bodies[0].width).toBe(10);
         });
 
+        it('falls back to the raw fixture array position for index-less fixtures after null slots', () => {
+            // The index-less fixture at raw position 1 must resolve
+            // physicsFixtures[1] — the physicsFixtures index convention — not
+            // position 0, which a filtered-array fallback would select.
+            const out = normalizeMap({
+                physicsBodies: [
+                    {
+                        index: 0,
+                        name: 'b',
+                        type: 's',
+                        typeName: 'static',
+                        position: { x: 0, y: 0 },
+                        fixtures: [
+                            null,
+                            { name: 'Unnamed Shape' },
+                        ],
+                    },
+                ],
+                physicsFixtures: [
+                    { index: 0, name: 'Unnamed Shape', shapeIndex: 0, collidesGroup1: true },
+                    { index: 1, name: 'Unnamed Shape', shapeIndex: 1, collidesGroup1: true },
+                ],
+                physicsShapes: [
+                    { index: 0, type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 10, height: 10 },
+                    { index: 1, type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 30, height: 10 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies).toHaveLength(1);
+            expect(out.bodies[0].nativeBody?.index).toBe(0);
+            expect(out.bodies[0].width).toBe(30);
+        });
+
+        it('treats position-keyed bodies without fixtures as flat instead of silently dropping them', () => {
+            const out = normalizeMap({
+                physicsBodies: [
+                    { index: 0, name: 'wall', type: 'rect', bodyType: 'static', position: { x: 100, y: 200 }, width: 40, height: 10 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies).toHaveLength(1);
+            expect(out.bodies[0].name).toBe('wall');
+            expect(out.bodies[0].x).toBe(100);
+            expect(out.bodies[0].y).toBe(200);
+        });
+
         it('keeps unknown-shape fixtures as aliases but never degrades them to a 0x0 rect', () => {
             const warnings: string[] = [];
             const origWarn = console.warn;
@@ -299,7 +347,7 @@ describe('normalizeMap', () => {
             expect(out.capZones[0].fixture).toBe('cap platform');
         });
 
-        it('flattens polygon vertices into world space so deathCenter matches the geometry', () => {
+        it('keeps flattened polygon vertices shape-local (scaled) while deathCenter stays world-correct', () => {
             const out = normalizeMap({
                 physicsBodies: [
                     {
@@ -315,7 +363,7 @@ describe('normalizeMap', () => {
                                 fixtureIndex: 0,
                                 name: 'Unnamed Shape',
                                 shape: {
-                                    type: 'po', typeName: 'polygon', center: { x: 0, y: 0 }, angle: 0.25, scale: 1,
+                                    type: 'po', typeName: 'polygon', center: { x: 0, y: 0 }, angle: 0.25, scale: 2,
                                     vertices: [{ x: -20, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 30 }],
                                 },
                             },
@@ -327,19 +375,17 @@ describe('normalizeMap', () => {
 
             const vertices = out.bodies[0].vertices as { x: number; y: number }[];
             expect(vertices).toHaveLength(3);
-            // Vertices must carry the body position (world coords), not be
-            // shape-local — a local vertex set would sit far left of x=100.
-            expect(Math.min(...vertices.map((v) => v.x))).toBeGreaterThan(50);
-            expect(Math.min(...vertices.map((v) => v.y))).toBeGreaterThan(20);
-            // deathCenter is the AABB midpoint of the world-space vertices.
-            const minX = Math.min(...vertices.map((v) => v.x));
-            const maxX = Math.max(...vertices.map((v) => v.x));
-            const minY = Math.min(...vertices.map((v) => v.y));
-            const maxY = Math.max(...vertices.map((v) => v.y));
-            expect(out.physics.deathCenter).toEqual({
-                x: (minX + maxX) / 2,
-                y: (minY + maxY) / 2,
-            });
+            // Vertices stay shape-local so getCapZoneSensorSize can rotate them
+            // about fixtureDef.x without an extra translation/rotation — and
+            // the authored shape.scale (2) is baked into the vertices, not
+            // dropped.
+            expect(vertices[0]).toEqual({ x: -40, y: 0 });
+            expect(vertices[1]).toEqual({ x: 40, y: 0 });
+            expect(vertices[2]).toEqual({ x: 0, y: 60 });
+            expect(out.bodies[0].x).toBe(100);
+            expect(out.bodies[0].y).toBe(50);
+            // deathCenter adds the body offset back: AABB of (x + local v).
+            expect(out.physics.deathCenter).toEqual({ x: 100, y: 80 });
         });
 
         it('emits the rotated world center for native-fixture bodies so sensors align', () => {
