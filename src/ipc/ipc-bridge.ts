@@ -240,6 +240,13 @@ export class IpcBridge {
             const previousClose = this.closePromise;
             try {
                 await previousClose;
+            } catch (error) {
+                // A rejected close was already surfaced to that close()
+                // caller. Never re-throw it here: a restart must still attempt
+                // its fresh bind so the re-armed ready promise settles, instead
+                // of hanging every bridge.ready awaiter forever and wedging
+                // same-instance restarts on a stale rejection (#316).
+                console.error('[IPC] Prior close failed; proceeding with restart:', error);
             } finally {
                 if (this.closePromise === previousClose) {
                     this.closePromise = null;
@@ -820,6 +827,15 @@ export class IpcBridge {
         return this._closed;
     }
 
+    /**
+     * Close the IPC server: unbind the advertised endpoint first so the port
+     * is released before the socket is destroyed (libzmq tears its TCP
+     * listener down asynchronously on close), then close every owned pool.
+     * Single-flight: concurrent close() calls share the same in-flight
+     * promise, and the retained reference is dropped the moment the teardown
+     * settles so a rejected close can never wedge later close()/start()
+     * attempts on a stale rejection (#316).
+     */
     close(): Promise<void> {
         if (this.closePromise) {
             return this.closePromise;
@@ -852,15 +868,21 @@ export class IpcBridge {
         // libzmq closes its TCP listener asynchronously when the socket is
         // destroyed. Unbind the endpoint explicitly and await that operation
         // before closing the socket so callers do not release/reuse a port
-        // while the old listener is still alive (#316).
+        // while the old listener is still alive (#316). boundEndpoint is only
+        // cleared once the unbind actually succeeds: a failed unbind leaves
+        // the port possibly bound, and discarding that state here would
+        // re-introduce the very race this await prevents.
         const endpoint = this.boundEndpoint;
-        this.boundEndpoint = null;
-        this.closePromise = (async () => {
+
+        const teardown = (async () => {
             let failure: { error: unknown } | null = null;
 
             if (endpoint) {
                 try {
                     await this.sock.unbind(endpoint);
+                    if (this.boundEndpoint === endpoint) {
+                        this.boundEndpoint = null;
+                    }
                 } catch (error) {
                     failure = { error };
                 }
@@ -887,6 +909,13 @@ export class IpcBridge {
                 throw failure.error;
             }
         })();
+
+        // Retain the in-flight promise only until it settles: a settled
+        // (including rejected) close must not stay referenced and wedge every
+        // later close()/start() on the same stale outcome.
+        this.closePromise = teardown.finally(() => {
+            this.closePromise = null;
+        });
 
         return this.closePromise;
     }
