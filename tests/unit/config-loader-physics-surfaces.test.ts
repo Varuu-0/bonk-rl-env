@@ -301,6 +301,34 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
             expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
         });
 
+        it('preserves a config.json snake_case solver_iterations as explicit (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solver_iterations: 7 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(7);
+        });
+
+        it('preserves a config.json snake_case solver_iterations equal to the default (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solver_iterations: 2 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+        });
+
+        it('re-derives provenance per load instead of carrying load history (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+
+            // A subsequent load without a solver key must omit it again: the
+            // provenance is scoped to the resolved config, not the module.
+            resetConfig();
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { gravityY: 3 } }));
+            loadConfig(testDir);
+            expect(mergeEngineSections({}).physics.solverIterations).toBeUndefined();
+            expect(mergeEngineSections({}).physics.gravityY).toBe(3);
+        });
+
         it('preserves authored environment and CLI solverIterations in the merged sections (#325)', () => {
             process.env.SOLVER_ITERATIONS = '12';
             expect(mergeEngineSections({}).physics.solverIterations).toBe(12);
