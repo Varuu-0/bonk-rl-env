@@ -135,6 +135,10 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     }
     const seenIds = new Set<number>();
     for (const p of t.players) {
+      if (p === null || typeof p !== 'object' || Array.isArray(p)) {
+        errors.push('player entries must be objects');
+        continue;
+      }
       if (typeof p.id !== 'number' || p.id < 0) errors.push('player id must be a non-negative number');
       if (seenIds.has(p.id)) errors.push(`duplicate player id ${p.id}`);
       seenIds.add(p.id);
@@ -149,6 +153,10 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
       if (typeof s.y !== 'number' || !Number.isFinite(s.y)) errors.push(`spawn ${s.id} y must be a finite number`);
     }
     for (const tick of t.ticks) {
+      if (tick === null || typeof tick !== 'object' || Array.isArray(tick)) {
+        errors.push('tick entries must be objects');
+        continue;
+      }
       if (typeof tick.t !== 'number' || tick.t < 0) errors.push(`tick index invalid: ${String(tick.t)}`);
       if (!Array.isArray(tick.discs)) errors.push(`tick ${tick.t} has no discs array`);
     }

@@ -125,6 +125,45 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     const v2 = parseNativeTrace({ schema: 'bonk.rl.env.native-trace', version: 99, tps: 30, players: [], spawns: [], ticks: [] });
     expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
   });
+
+  it('returns a validation error instead of throwing for null player entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [null],
+      spawns: [],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual(['player entries must be objects']);
+  });
+
+  it('returns a validation error instead of throwing for null spawn entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [null],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual(['spawn entries must be objects']);
+  });
+
+  it('returns a validation error instead of throwing for null tick entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [],
+      ticks: [null],
+    });
+    expect(parsed.errors).toEqual(['tick entries must be objects']);
+  });
 });
 
 describe('P4: differential validation — fixture/joint exact-match gates', () => {
