@@ -1,3 +1,4 @@
+import os
 import signal
 import subprocess
 
@@ -205,3 +206,54 @@ def test_process_creation_times_filters_pids(monkeypatch):
     assert conftest._process_creation_times({10, 99}) == {
         10: "20260804120000.123456-300"
     }
+
+
+def test_tail_stderr_log_reads_last_lines(tmp_path):
+    log = tmp_path / "stderr.log"
+    log.write_text("\n".join(f"line {i}" for i in range(50)), encoding="utf-8")
+
+    assert conftest._tail_stderr_log(str(log), max_lines=5) == "\n".join(
+        f"line {i}" for i in range(45, 50)
+    )
+
+
+def test_tail_stderr_log_missing_file_is_actionable():
+    assert "unavailable" in conftest._tail_stderr_log(
+        os.path.join("definitely", "missing", "stderr.log")
+    )
+
+
+def test_listener_belongs_to_windows_confirms_own_tree(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 400})
+    monkeypatch.setattr(conftest, "_windows_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300, 400}
+    )
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_windows_rejects_foreign_listener(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 9999})
+    monkeypatch.setattr(conftest, "_windows_process_table", lambda: {})
+    monkeypatch.setattr(conftest, "_process_tree_pids", lambda table, pid: {200, 300})
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_windows_no_listener_or_dead_proc(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: set())
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300})
+    assert not conftest._listener_belongs_to(5556, _FakeProc(poll_result=0))
+
+
+def test_listener_belongs_to_skips_check_on_posix(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())

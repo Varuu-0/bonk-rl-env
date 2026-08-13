@@ -556,3 +556,123 @@ def test_step_wait_uses_server_config_frame_skip_for_empty_client_config(monkeyp
         assert "TimeLimit.truncated" not in info_list[0]
         assert "terminal_observation" not in info_list[0]
         assert info_list[0]["_episode"] == {"terminated": False, "truncated": False}
+
+
+def test_client_frame_skip_config_accepts_integral_float(monkeypatch):
+    """#328 follow-up: an integral float client frame_skip config is kept."""
+    env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": 4.0})
+    try:
+        assert env._frame_skip == 4
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("bad_value", [4.5, 0, -1, 1000, True])
+def test_client_frame_skip_config_rejects_non_integral_or_out_of_range(monkeypatch, bad_value):
+    """#328 follow-up: invalid client frame_skip config falls back to 1."""
+    env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": bad_value})
+    try:
+        assert env._frame_skip == 1
+    finally:
+        env.close()
+
+
+def test_step_wait_accepts_integral_float_frame_skip(monkeypatch):
+    """#328 follow-up: an integral float frameSkip (JSON 4.0) must drive
+    coalescing exactly like the integer form instead of silently dropping
+    the window back to 1."""
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config={})
+    responses = [
+        {"status": "ok", "data": [_step_result(1, False, 1.0, frame_skip=4.0)]},
+        {"status": "ok", "data": [_step_result(2, True, 2.0, terminal_obs=_obs(2), frame_skip=4.0)]},
+        {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2), frame_skip=4.0)]},
+        {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2), frame_skip=4.0)]},
+        {"status": "ok", "data": [_step_result(2, True, 0.0, terminal_obs=_obs(2), frame_skip=4.0)]},
+        {"status": "ok", "data": [_step_result(1, False, 0.5, frame_skip=4.0)]},
+    ]
+    socket.recv_json.side_effect = responses
+
+    results = []
+    try:
+        for _ in responses:
+            results.append(env.step_wait())
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()
+
+    assert int(env._effective_frame_skip[0]) == 4
+    assert [bool(result[2][0]) for result in results] == [
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    boundary_info = results[1][3][0]
+    assert boundary_info["episode"] == {"r": 3.0, "l": 2}
+
+
+@pytest.mark.parametrize("bad_value", [4.5, 0, -1, 1000, True])
+def test_step_wait_rejects_invalid_frame_skip_keeping_client_window(
+    monkeypatch, bad_value
+):
+    """#328 follow-up: fractional, non-positive, or oversized frameSkip reports
+    must not reset the window (to 1 or anything else); the current effective
+    window is preserved."""
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": 2})
+    socket.recv_json.side_effect = [
+        {"status": "ok", "data": [_step_result(1, False, 1.0, frame_skip=bad_value)]},
+        {"status": "ok", "data": [_step_result(2, False, 1.0, frame_skip=bad_value)]},
+    ]
+    try:
+        env.step_wait()
+        env.step_wait()
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()
+
+    assert int(env._effective_frame_skip[0]) == 2
+
+
+def test_step_wait_valid_frame_skip_refreshes_after_a_rejected_report(monkeypatch):
+    """#328 follow-up: a valid frameSkip report still updates the window even
+    when an earlier step carried a rejected value."""
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config={})
+    socket.recv_json.side_effect = [
+        {"status": "ok", "data": [_step_result(1, False, 1.0, frame_skip=4.5)]},
+        {"status": "ok", "data": [_step_result(2, False, 1.0, frame_skip=4)]},
+    ]
+    try:
+        env.step_wait()
+        assert int(env._effective_frame_skip[0]) == 1
+        env.step_wait()
+        assert int(env._effective_frame_skip[0]) == 4
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()
+
+
+def test_reset_clears_server_frame_skip_restoring_client_fallback(monkeypatch):
+    """#328 follow-up: reset() clears a server-learned window so a stale value
+    from a previous server config cannot persist across episodes."""
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": 2})
+    socket.recv_json.side_effect = [
+        {"status": "ok", "data": [_step_result(1, False, 1.0, frame_skip=4)]},
+    ]
+    try:
+        env.step_wait()
+        assert int(env._effective_frame_skip[0]) == 4
+
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok", "data": {"observation": [_obs(1)]}}
+        socket.send_json.reset_mock()
+        env.reset(seeds=[1])
+        assert int(env._effective_frame_skip[0]) == 2
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()

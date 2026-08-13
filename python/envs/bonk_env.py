@@ -12,6 +12,32 @@ DEFAULT_REQUEST_TIMEOUT_MS = 30_000
 DEFAULT_CLOSE_TIMEOUT_MS = 1_000
 DEFAULT_LINGER_MS = 1_000
 MAX_RESET_SEED = 0xFFFFFFFE
+# Sanity cap for the effective frame-skip window. Real configs use values
+# far below this (default 1, tests 4); the cap only rejects malformed or
+# hostile values so a bogus server report cannot inflate the hold window.
+MAX_FRAME_SKIP = 100
+
+
+def _frame_skip_window(value):
+    """Coerce a ``frameSkip``/``frame_skip`` value to a bounded window.
+
+    Accepts positive integers and integral floats (both IPC transports can
+    report a window of 4 as ``4.0``) up to ``MAX_FRAME_SKIP``; returns
+    ``None`` for booleans, fractional or non-finite values, and anything
+    outside ``[1, MAX_FRAME_SKIP]`` so callers can keep the previous window
+    instead of silently falling back to 1 (which would re-introduce #328).
+    """
+    if isinstance(value, (bool, np.bool_)) or not isinstance(
+        value, (Integral, float, np.floating)
+    ):
+        return None
+    try:
+        window = int(value)
+    except (ValueError, OverflowError):
+        return None
+    if window != value or not 1 <= window <= MAX_FRAME_SKIP:
+        return None
+    return window
 
 
 class BonkVecEnv(VecEnv):
@@ -118,7 +144,7 @@ class BonkVecEnv(VecEnv):
         # Keep the client setting as a fallback for older servers, but prefer
         # the effective per-environment value reported by the backend. The
         # server may get frame_skip from config.json rather than this client.
-        self._frame_skip = int((config or {}).get("frame_skip", 1))
+        self._frame_skip = _frame_skip_window((config or {}).get("frame_skip", 1)) or 1
         self._effective_frame_skip = np.full(
             num_envs, self._frame_skip, dtype=np.int64
         )
@@ -253,6 +279,11 @@ class BonkVecEnv(VecEnv):
         self._episode_lengths[:] = 0
         self._hold_steps[:] = 0
         self._hold_tick[:] = 0
+        # Restore the client-config fallback: a window learned from a
+        # previous server's step results must not survive across episodes,
+        # because the server config can change between episodes and the next
+        # step refreshes the window from the live frameSkip report anyway.
+        self._effective_frame_skip[:] = self._frame_skip
 
         obs_data = message["data"]["observation"]
         obs_array = np.array([self._convert_obs(o) for o in obs_data])
@@ -334,17 +365,15 @@ class BonkVecEnv(VecEnv):
             # `frameSkip` is static per environment but is already carried by
             # every step result in both transports. Refresh the hold window
             # before classifying this step so a server-only config.json value
-            # takes effect on the boundary step itself (#328).
+            # takes effect on the boundary step itself (#328). Integral floats
+            # are accepted and out-of-range/fractional values are rejected so
+            # a bogus report can never silently drop the window back to 1.
             info = d.get("info")
             if not isinstance(info, dict):
                 info = {}
-            reported_frame_skip = info.get("frameSkip")
-            if (
-                isinstance(reported_frame_skip, Integral)
-                and not isinstance(reported_frame_skip, (bool, np.bool_))
-                and reported_frame_skip > 0
-            ):
-                self._effective_frame_skip[idx] = int(reported_frame_skip)
+            window = _frame_skip_window(info.get("frameSkip"))
+            if window is not None:
+                self._effective_frame_skip[idx] = window
             frame_skip = int(self._effective_frame_skip[idx])
             
             # Parse done status - support multiple formats:
