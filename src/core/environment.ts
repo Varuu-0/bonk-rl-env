@@ -265,7 +265,8 @@ function pickRewardWeight(
 
 /**
  * Derive the cap-zone sensor extent and placement for a fixture body. Rect
- * fixtures use their width/height and circle fixtures their radius*2;
+ * fixtures use the AABB of their angle-rotated width/height and circle
+ * fixtures their radius*2;
  * polygon fixtures use the axis-aligned bounding box of their (angle-rotated,
  * local-space) vertices centered on the AABB center — rect/circle fixtures
  * are symmetric about their origin, so their center is the origin itself,
@@ -277,7 +278,19 @@ function pickRewardWeight(
  */
 function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number } | null {
     if (fixtureDef.type === 'rect') {
-        return { w: fixtureDef.width || 0, h: fixtureDef.height || 0, cx: 0, cy: 0 };
+        // addBody() rotates rectangles about their origin, so the sensor must
+        // cover the rotated rectangle's world-space AABB.
+        const angle = fixtureDef.angle || 0;
+        const width = fixtureDef.width || 0;
+        const height = fixtureDef.height || 0;
+        const cosA = Math.abs(Math.cos(angle));
+        const sinA = Math.abs(Math.sin(angle));
+        return {
+            w: width * cosA + height * sinA,
+            h: width * sinA + height * cosA,
+            cx: 0,
+            cy: 0,
+        };
     }
     if (fixtureDef.type === 'circle') {
         const w = (fixtureDef.radius || 0) * 2;

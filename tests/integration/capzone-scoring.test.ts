@@ -832,6 +832,91 @@ describe('CapZoneScoring', () => {
             }
         });
 
+        it('capzone on a rotated rect matches unrotated capture behavior (#334)', () => {
+            const makeMap = (angle: number): MapDef => ({
+                name: 'capzone-rotated-rect',
+                spawnPoints: {
+                    team_blue: { x: 40, y: -350 },
+                    team_red: { x: 300, y: -350 },
+                },
+                bodies: [{
+                    name: 'platform',
+                    type: 'rect',
+                    x: 40,
+                    y: 120,
+                    width: 200,
+                    height: 20,
+                    static: true,
+                    angle,
+                    restitution: 0,
+                    collides: { g1: true, g2: true, g3: true, g4: true },
+                }],
+                capZones: [{
+                    index: 0,
+                    owner: 'neutral',
+                    type: 1,
+                    fixture: 'platform',
+                    shapeType: 'rect',
+                    l: 0.5,
+                }],
+            });
+
+            const readSensor = (physics: any): { x: number; y: number; width: number; height: number } => {
+                const sensor = physics.capZoneSensors[0];
+                const shape = sensor.GetShapeList();
+                const xs: number[] = [];
+                const ys: number[] = [];
+                for (let i = 0; i < shape.m_vertexCount; i++) {
+                    xs.push(shape.m_vertices[i].x);
+                    ys.push(shape.m_vertices[i].y);
+                }
+                const scale = physics.scale;
+                const position = sensor.GetPosition();
+                return {
+                    x: position.x * scale,
+                    y: position.y * scale,
+                    width: (Math.max(...xs) - Math.min(...xs)) * scale,
+                    height: (Math.max(...ys) - Math.min(...ys)) * scale,
+                };
+            };
+
+            const run = (angle: number): { sensor: ReturnType<typeof readSensor>; maxProgress: number } => {
+                const env = new BonkEnvironment({
+                    mapData: makeMap(angle),
+                    numOpponents: 0,
+                    randomOpponent: false,
+                    seed: 1,
+                    maxTicks: 4000,
+                });
+                try {
+                    const physics = (env as any).physics;
+                    const sensor = readSensor(physics);
+                    let maxProgress = 0;
+                    for (let i = 0; i < 3000; i++) {
+                        env.step(0);
+                        maxProgress = Math.max(maxProgress, physics.capZoneState.get(0)?.p ?? 0);
+                    }
+                    return { sensor, maxProgress };
+                } finally {
+                    env.close();
+                }
+            };
+
+            const unrotated = run(0);
+            const rotated = run(Math.PI / 2);
+
+            expect(unrotated.sensor.x).toBeCloseTo(40, 10);
+            expect(unrotated.sensor.y).toBeCloseTo(120, 10);
+            expect(unrotated.sensor.width).toBeCloseTo(200, 10);
+            expect(unrotated.sensor.height).toBeCloseTo(20, 10);
+            expect(rotated.sensor.x).toBeCloseTo(40, 10);
+            expect(rotated.sensor.y).toBeCloseTo(120, 10);
+            expect(rotated.sensor.width).toBeCloseTo(20, 10);
+            expect(rotated.sensor.height).toBeCloseTo(200, 10);
+            expect(rotated.maxProgress).toBe(unrotated.maxProgress);
+            expect(unrotated.maxProgress).toBe(15);
+        });
+
         it('BonkEnvironment with capZones map includes capZones in step info', () => {
             const mapData: MapDef = {
                 name: 'capzone-test',
