@@ -107,6 +107,16 @@ describe('snapshot-ring (M4)', () => {
     expect(readSnapshotCoherent(buf, 1, 0)).toBeNull();
   });
 
+  it('readSnapshotCoherent rejects a wrapped negative odd seq', () => {
+    const buf = allocRing(4, 1);
+    writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
+    // Int32 seqlock markers become negative after the sequence wraps. The
+    // marker remains odd and must still be treated as an in-progress write.
+    const headerView = new Int32Array(buf, 0, 2);
+    headerView[0] = -2147483647;
+    expect(readSnapshotCoherent(buf, 1, 0)).toBeNull();
+  });
+
   it('readSnapshotCoherent accepts a stable committed (even) slot', () => {
     const buf = allocRing(4, 1);
     writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
