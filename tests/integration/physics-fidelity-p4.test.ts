@@ -125,6 +125,26 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     const v2 = parseNativeTrace({ schema: 'bonk.rl.env.native-trace', version: 99, tps: 30, players: [], spawns: [], ticks: [] });
     expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
   });
+
+  it('reports malformed disc entries while preserving null absent discs', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [null, 5, { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0 }],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 1 is malformed',
+      'tick 0 disc 2 is malformed',
+    ]);
+    expect(parsed.trace.ticks[0].discs[0]).toBeNull();
+  });
 });
 
 describe('P4: differential validation — fixture/joint exact-match gates', () => {
@@ -215,6 +235,19 @@ describe('P4: differential validation — replay comparator', () => {
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
     expect(verdict.pass).toBe(false);
+  });
+
+  it('rejects malformed disc entries and keeps failed verdict metrics finite', () => {
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    bad.ticks[0].discs[0] = 5 as any;
+    const parsed = parseNativeTrace(bad);
+    expect(parsed.errors).toContain('tick 0 disc 0 is malformed');
+
+    const verdict = compareTrace(bad, { seed: 0 });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
+    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed disc entry' });
+    for (const value of Object.values(verdict.worst)) expect(Number.isFinite(value)).toBe(true);
   });
 
   it('trace settings drive the engine through the map-settings path (pq high → 15 solver iterations)', () => {

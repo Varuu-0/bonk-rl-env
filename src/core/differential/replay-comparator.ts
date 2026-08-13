@@ -22,6 +22,7 @@
 import { BonkEnvironment } from '../environment';
 import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
+import { isNativeTraceDisc } from './native-trace';
 import type { NativeTrace } from './native-trace';
 
 // Same port the engine binds (physics-engine.ts:15): b2Vec2 for re-seeding.
@@ -176,7 +177,9 @@ export function compareTrace(
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (recorded.discs[id]) physics.applyInput(id, decodeInput(inputs[id]));
+        if (recorded.discs[id] !== null && recorded.discs[id] !== undefined) {
+          physics.applyInput(id, decodeInput(inputs[id]));
+        }
       }
       // Neutral input for any traced player without a record so the world still
       // advances (matches the no-data fallback path).
@@ -188,7 +191,7 @@ export function compareTrace(
 
       // The discs array is index-aligned by player id: entries[i] is player i.
       recorded.discs.forEach((rec, id) => {
-        if (!rec) {
+        if (rec === null || rec === undefined) {
           // Native says the disc is absent this tick. It must be absent in the
           // engine too — a living engine disc here is a mismatch that fails
           // the tick (and therefore the verdict): death agreement is part of
@@ -198,6 +201,11 @@ export function compareTrace(
             mismatches.push({ id, reason: 'native absent but engine alive' });
             withinTolerance = false;
           }
+          return;
+        }
+        if (!isNativeTraceDisc(rec)) {
+          mismatches.push({ id, reason: 'malformed disc entry' });
+          withinTolerance = false;
           return;
         }
         const st = physics.getPlayerState(id);
@@ -215,6 +223,15 @@ export function compareTrace(
           da: Math.abs(st.angle - rec.a),
           dav: Math.abs(st.angularVel - rec.av),
         };
+        if (
+          !Number.isFinite(row.dx) || !Number.isFinite(row.dy) ||
+          !Number.isFinite(row.dvx) || !Number.isFinite(row.dvy) ||
+          !Number.isFinite(row.da) || !Number.isFinite(row.dav)
+        ) {
+          mismatches.push({ id, reason: 'non-finite disc diff' });
+          withinTolerance = false;
+          return;
+        }
         compared.push(row);
         worst.dx = Math.max(worst.dx, row.dx);
         worst.dy = Math.max(worst.dy, row.dy);
