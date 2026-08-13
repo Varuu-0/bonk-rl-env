@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as path from 'node:path';
+import { TEST_SUITES } from '../runner';
 
 const repositoryRoot = path.resolve(__dirname, '..', '..');
 const packageJson = JSON.parse(fs.readFileSync(path.join(repositoryRoot, 'package.json'), 'utf8')) as {
@@ -37,5 +38,15 @@ describe('npm test script mappings', () => {
     expect(packageJson.scripts['test:legacy']).toBe('npx tsx tests/runner.ts all');
     expect(packageJson.scripts['test:runner']).toBe('npx tsx tests/runner.ts');
     expect(packageJson.scripts['test:list']).toBe('npx tsx tests/runner.ts list');
+  });
+
+  it('maps numeric TEST_SUITES keys to existing suites consistent with the per-suite scripts', () => {
+    const scriptFiles = Object.values(focusedSuiteScripts);
+    const numericFiles = [...scriptFiles, 'tests/integration/map-integration.test.ts'];
+    expect(TEST_SUITES.map((suite) => suite.key)).toEqual(numericFiles.map((_, index) => String(index + 1)));
+    expect(TEST_SUITES.map((suite) => suite.file)).toEqual(numericFiles);
+    for (const suite of TEST_SUITES) {
+      expect(fs.existsSync(path.join(repositoryRoot, suite.file))).toBe(true);
+    }
   });
 });

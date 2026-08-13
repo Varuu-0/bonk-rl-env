@@ -26,14 +26,15 @@ export const TEST_SUITES = [
 ] as const;
 
 function runVitest(testFile?: string): number {
-  const command = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-  const args = ['--no-install', 'vitest', 'run'];
+  const isWindows = process.platform === 'win32';
+  const command = path.join(repositoryRoot, 'node_modules', '.bin', isWindows ? 'vitest.cmd' : 'vitest');
+  const args = ['run'];
   if (testFile) args.push(testFile);
 
   const result = spawnSync(command, args, {
     cwd: repositoryRoot,
     stdio: 'inherit',
-    shell: process.platform === 'win32',
+    shell: isWindows,
   });
 
   if (result.error) {
@@ -58,25 +59,41 @@ async function runInteractive(): Promise<number> {
 
   const input = readline.createInterface({ input: process.stdin, output: process.stdout });
   return new Promise((resolve) => {
-    input.question('Select a suite: ', (answer) => {
+    let settled = false;
+    const finish = (code: number): void => {
+      if (settled) return;
+      settled = true;
       input.close();
+      resolve(code);
+    };
+
+    input.on('close', () => {
+      if (!settled) console.error('Input closed before a suite was selected.');
+      finish(1);
+    });
+    input.on('error', (error) => {
+      if (!settled) console.error(`Error reading input: ${error.message}`);
+      finish(1);
+    });
+
+    input.question('Select a suite: ', (answer) => {
       const choice = answer.trim().toLowerCase();
       if (choice === 'q' || choice === 'quit') {
-        resolve(0);
+        finish(0);
         return;
       }
       if (choice === 'a' || choice === 'all' || choice === '') {
-        resolve(runVitest());
+        finish(runVitest());
         return;
       }
 
       const suite = TEST_SUITES.find((candidate) => candidate.key === choice);
       if (!suite) {
         console.error(`Unknown test suite: ${choice}`);
-        resolve(1);
+        finish(1);
         return;
       }
-      resolve(runVitest(suite.file));
+      finish(runVitest(suite.file));
     });
   });
 }
