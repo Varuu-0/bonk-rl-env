@@ -115,9 +115,9 @@
   "ipc": {
     "_doc_ipc": "ZeroMQ socket tuning and serialization options",
     "socketType": "ROUTER",
-    "_doc_socketType": "ZMQ socket pattern. Type: string. IpcBridge currently serves ROUTER; DEALER, REP, and REQ are parsed but rejected by the current wire contract. Default: ROUTER. Env: SOCKET_TYPE. CLI: --socket-type",
+    "_doc_socketType": "ZMQ socket pattern. Type: string. IpcBridge currently serves ROUTER; DEALER, REP, and REQ are parsed but ignored by the current wire contract. Default: ROUTER. Env: SOCKET_TYPE. CLI: --socket-type",
     "serialization": "json",
-    "_doc_serialization": "Message wire format. Type: string. IpcBridge currently serves json; msgpack is parsed but rejected by the current wire contract. Default: json. Env: SERIALIZATION. CLI: --serialization",
+    "_doc_serialization": "Message wire format. Type: string. IpcBridge currently serves json; msgpack is parsed but ignored by the current wire contract. Default: json. Env: SERIALIZATION. CLI: --serialization",
     "tcpKeepalive": 0,
     "_doc_tcpKeepalive": "TCP keepalive toggle (0=off, 1=on). Type: int. Enum: 0, 1. Default: 0. Env: TCP_KEEPALIVE. CLI: --tcp-keepalive",
     "sndHwm": 1000,

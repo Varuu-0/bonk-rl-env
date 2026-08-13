@@ -37,13 +37,12 @@ describe('IpcBridge consumes IPC socket configuration (#317)', () => {
         expect(socket.backlog).toBe(250);
     });
 
-    it('rejects unsupported protocol variants instead of silently changing the wire contract', () => {
-        expect(() => new IpcBridge({ ipc: { socketType: 'DEALER' } } as any)).toThrow(
-            'Unsupported ipc.socketType',
-        );
-        expect(() => new IpcBridge({ ipc: { serialization: 'msgpack' } } as any)).toThrow(
-            'Unsupported ipc.serialization',
-        );
+    it('ignores unsupported protocol variants without throwing or changing the wire contract', () => {
+        const dealerBridge = new IpcBridge({ ipc: { socketType: 'DEALER' } } as any);
+        const socket: any = (dealerBridge as any).sock;
+        expect(socket.constructor.name).toBe('Router');
+        expect(socket.sendHighWaterMark).toBe(1000);
+        expect(() => new IpcBridge({ ipc: { serialization: 'msgpack' } } as any)).not.toThrow();
     });
 
     it('rejects values outside the native ZeroMQ integer range', () => {

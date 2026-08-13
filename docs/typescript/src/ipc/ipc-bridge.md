@@ -35,8 +35,8 @@ The loader exposes the same IPC tuning values through `config.json`,
 `ZMQ_BACKLOG`, `TCP_KEEPALIVE`, `SND_HWM`, `RCV_HWM`, `LINGER_MS`, and the
 corresponding CLI flags. The precedence order is config file, environment,
 then CLI. The current bridge wire contract is ROUTER plus JSON; other
-`socketType` and `serialization` values are reserved and are rejected rather
-than silently changing the Python protocol.
+`socketType` and `serialization` values are parsed and reserved, then ignored
+rather than silently changing the Python protocol.
 
 #### Methods
 

@@ -519,8 +519,7 @@ function parseFiniteFloat(rawValue: string): number | null {
 }
 
 /**
- * Strictly parse an integer from a CLI/env string. The existing loader keeps
- * its historical parseInt behavior for older surfaces; newly wired numeric
+ * Strictly parse an integer from a CLI/env string. Newly wired numeric
  * surfaces use this helper so values such as "32abc" cannot silently change
  * runtime configuration.
  */
@@ -529,6 +528,18 @@ function parseInteger(rawValue: string): number | null {
     if (!INTEGER_NUMERIC_RE.test(trimmed)) return null;
     const value = Number(trimmed);
     return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * Parse a CLI/env integer exactly as the loader historically did with
+ * `parseInt(value, 10)`: the leading integer portion is taken and any trailing
+ * garbage is ignored. Pre-existing surfaces (NUM_WORKERS, --workers/-w) keep
+ * this lenient contract so documented values such as "2abc" or "2.5" keep
+ * parsing instead of silently falling back to defaults.
+ */
+function parseLegacyInteger(rawValue: string): number | null {
+    const value = parseInt(rawValue.trim(), 10);
+    return Number.isNaN(value) ? null : value;
 }
 
 function isPowerOfTwo(value: number): boolean {
@@ -568,6 +579,7 @@ function normalizeResolvedConfig(config: AppConfig): AppConfig {
         config.workerPool.maxWorkers,
         DEFAULTS.workerPool.maxWorkers,
         1,
+        MAX_ZMQ_OPTION,
     );
     const ringBufferSize = normalizeIntegerConfigValue(
         config.workerPool.ringBufferSize,
@@ -686,7 +698,7 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
 
     // Worker pool
     if (env.NUM_WORKERS !== undefined) {
-        const v = parseInteger(env.NUM_WORKERS);
+        const v = parseLegacyInteger(env.NUM_WORKERS);
         if (v !== null && v >= 0) config.workerPool.numWorkers = v;
     }
     if (env.USE_SHARED_MEMORY !== undefined) {
@@ -695,7 +707,7 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     }
     if (env.MAX_WORKERS !== undefined) {
         const v = parseInteger(env.MAX_WORKERS);
-        if (v !== null && v >= 1) config.workerPool.maxWorkers = v;
+        if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) config.workerPool.maxWorkers = v;
     }
     if (env.RING_BUFFER_SIZE !== undefined) {
         const v = parseInteger(env.RING_BUFFER_SIZE);
@@ -960,7 +972,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
             case '--num-workers':
             case '-w':
                 if (next) {
-                    const v = parseInteger(next);
+                    const v = parseLegacyInteger(next);
                     if (v !== null && v >= 0) {
                         config.workerPool.numWorkers = v;
                         i++;
@@ -971,7 +983,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
             case '--max-workers':
                 if (next) {
                     const v = parseInteger(next);
-                    if (v !== null && v >= 1) {
+                    if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) {
                         config.workerPool.maxWorkers = v;
                         i++;
                     }

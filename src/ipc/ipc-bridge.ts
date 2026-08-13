@@ -146,15 +146,11 @@ export class IpcBridge {
             : DEFAULT_MAX_CLIENT_SESSIONS;
 
         const loadedIpc: Partial<AppConfig['ipc']> = (loadedConfig as Partial<AppConfig>).ipc ?? {};
-        const socketType = config?.ipc?.socketType ?? loadedIpc.socketType ?? 'ROUTER';
-        if (socketType !== 'ROUTER') {
-            throw new Error(`Unsupported ipc.socketType "${socketType}": IpcBridge requires ROUTER`);
-        }
-        const serialization = config?.ipc?.serialization ?? loadedIpc.serialization ?? 'json';
-        if (serialization !== 'json') {
-            throw new Error(`Unsupported ipc.serialization "${serialization}": IpcBridge requires json`);
-        }
-
+        // socketType/serialization are loader-validated and documented, but the
+        // wire contract IpcBridge serves is fixed at ROUTER + json. Alternate
+        // values are parsed for forward compatibility and ignored here rather
+        // than throwing during server.ts / bonk-env.ts initialization (which
+        // would turn previously-ignored documented values into a startup crash).
         this.socketOptions = {
             sendHighWaterMark: IpcBridge.normalizeSocketOption(
                 config?.ipc?.sndHwm ?? loadedIpc.sndHwm,

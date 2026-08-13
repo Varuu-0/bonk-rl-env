@@ -79,9 +79,33 @@ describe('config-loader worker pool and IPC surfaces (#317)', () => {
         expect(config.workerPool.numWorkers).toBe(1);
     });
 
+    it('preserves legacy parseInt parsing for NUM_WORKERS and --workers/-w', () => {
+        process.env.NUM_WORKERS = '2abc';
+        expect(loadConfig(testDir).workerPool.numWorkers).toBe(2);
+        resetConfig();
+        process.env.NUM_WORKERS = '2.5';
+        expect(loadConfig(testDir).workerPool.numWorkers).toBe(2);
+        resetConfig();
+        delete (process.env as any).NUM_WORKERS;
+        process.argv = ['node', 'script.js', '--workers', '3abc'];
+        expect(loadConfig(testDir).workerPool.numWorkers).toBe(3);
+        resetConfig();
+        process.argv = ['node', 'script.js', '-w', '2.5'];
+        expect(loadConfig(testDir).workerPool.numWorkers).toBe(2);
+    });
+
+    it('rejects MAX_WORKERS above the native ZMQ integer range from env and CLI', () => {
+        process.env.MAX_WORKERS = '2147483648';
+        expect(loadConfig(testDir).workerPool.maxWorkers).toBe(8);
+        resetConfig();
+        delete (process.env as any).MAX_WORKERS;
+        process.argv = ['node', 'script.js', '--max-workers', '2147483648'];
+        expect(loadConfig(testDir).workerPool.maxWorkers).toBe(8);
+    });
+
     it('ignores invalid worker-pool and IPC environment values', () => {
         Object.assign(process.env, {
-            NUM_WORKERS: '2abc',
+            NUM_WORKERS: 'abc',
             MAX_WORKERS: '0',
             RING_BUFFER_SIZE: '15',
             MESSAGE_TIMEOUT_MS: '99',
@@ -244,6 +268,7 @@ describe('config-loader worker pool and IPC surfaces (#317)', () => {
         fs.writeFileSync(configPath, JSON.stringify({
             server: { zmqBacklog: 2147483648 },
             workerPool: {
+                maxWorkers: 2147483648,
                 ringBufferSize: 15,
                 messageTimeoutMs: 99,
                 stepTimeoutMs: 2147483648,
@@ -259,6 +284,7 @@ describe('config-loader worker pool and IPC surfaces (#317)', () => {
 
         const config = loadConfig(testDir);
         expect(config.server.zmqBacklog).toBe(100);
+        expect(config.workerPool.maxWorkers).toBe(8);
         expect(config.workerPool.ringBufferSize).toBe(16);
         expect(config.workerPool.messageTimeoutMs).toBe(30000);
         expect(config.workerPool.stepTimeoutMs).toBe(5000);
