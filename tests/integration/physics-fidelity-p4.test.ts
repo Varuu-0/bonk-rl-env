@@ -217,6 +217,30 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.pass).toBe(false);
   });
 
+  it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
+    const noData: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: loadMap(SIMPLE_1V1),
+      players: [{ id: 0, team: 1 }, { id: 1, team: 2 }],
+      // Both discs are outside the engine's OOB death circle before the first
+      // replay tick, so every native-absent entry agrees with a dead engine disc.
+      spawns: [
+        { id: 0, x: 5000, y: 0 },
+        { id: 1, x: 5000, y: 50 },
+      ],
+      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] })),
+    };
+
+    const verdict = compareTrace(noData, { seed: 7 });
+    expect(verdict.skippedNoData).toBe(noData.ticks.length);
+    expect(verdict.ticksCompared).toBe(noData.ticks.length);
+    expect(verdict.ticksOutsideTolerance).toBe(0);
+    expect(verdict.worst).toEqual({ dx: 0, dy: 0, dvx: 0, dvy: 0, da: 0, dav: 0 });
+    expect(verdict.pass).toBe(false);
+  });
+
   it('trace settings drive the engine through the map-settings path (pq high → 15 solver iterations)', () => {
     // Settings must reach PhysicsEngine via mapData.settings (the only path
     // BonkEnvironment reads pq from); both the trace and explicit overrides
