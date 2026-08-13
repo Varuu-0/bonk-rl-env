@@ -287,6 +287,64 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
         }
     });
 
+    it('a lethal respawn point detaches instead of becoming immune to a persistent contact', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addBody({
+                name: 'lethal_spawn',
+                type: 'rect',
+                x: 0,
+                y: 0,
+                width: 120,
+                height: 120,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 0, 0);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+
+            // The detached player must stay dead; a naive Persist-only fix
+            // would otherwise create an unbounded death/respawn loop here.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('a valid respawn outside lethal fixtures remains alive', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addBody({
+                name: 'lethal_elsewhere',
+                type: 'rect',
+                x: 300,
+                y: 0,
+                width: 120,
+                height: 120,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 0, 0);
+            (engine as any).playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(0).deathType).toBe(0);
+            expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            expect(engine.getPlayerState(0).y).toBeCloseTo(0, 4);
+            expect((engine as any).playerBodies.has(0)).toBe(true);
+        } finally {
+            engine.destroy();
+        }
+    });
+
     it('explicit env config respawnEnabled overrides the map setting', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,

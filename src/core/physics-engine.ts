@@ -1667,6 +1667,21 @@ export class PhysicsEngine {
       this.detachPlayer(id, body);
       return;
     }
+    // A persistent contact does not re-fire BeginContact after SetXForm. Do
+    // not restore a disc inside a lethal fixture, or it would become immune
+    // to that fixture once the respawn clears its death state.
+    const spawnPoint = new b2Vec2(spawn.x, spawn.y);
+    for (const platformBody of this.platformBodies) {
+      const userData = platformBody.GetUserData() || {};
+      if (!userData.isLethal) continue;
+      const transform = platformBody.GetXForm();
+      for (let shape = platformBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        if (shape.TestPoint(transform, spawnPoint)) {
+          this.detachPlayer(id, body);
+          return;
+        }
+      }
+    }
     this.releaseGrapple(id);
     this.pendingSwingDestroy.delete(id);
     body.SetXForm(new b2Vec2(spawn.x, spawn.y), 0);
