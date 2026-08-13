@@ -468,7 +468,7 @@ export class BonkEnvironment {
             randomOppHeavyProb: oppHeavyProb,
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
-            noCollide: config.noCollide ?? (mapDef as any).settings?.nc ?? false,
+            noCollide: config.noCollide ?? mapDef.settings?.nc ?? false,
             // Symmetric with noCollide: explicit config overrides the map's
             // per-map settings (P3b fl/re gating).
             flipped: config.flipped ?? !!((mapDef as any).settings?.fl),
