@@ -87,6 +87,30 @@ const env = await init({
 
 If SharedArrayBuffer is not available (or headers not set), the system automatically falls back to standard `postMessage` communication.
 
+### Worker and IPC Tuning
+
+Worker-pool and ZeroMQ tuning can be supplied in `config.json`, through the
+documented environment variables, or through CLI flags. Resolution order is
+config file, environment, then CLI, with the highest-priority value winning.
+
+| Setting | Environment | CLI | Default |
+|:--------|:------------|:----|:--------|
+| Worker count | `NUM_WORKERS` | `--num-workers` | auto-detect |
+| Worker cap | `MAX_WORKERS` | `--max-workers` | `8` |
+| Ring buffer | `RING_BUFFER_SIZE` | `--ring-buffer-size` | `16` |
+| Message timeout | `MESSAGE_TIMEOUT_MS` | `--message-timeout-ms` | `30000` ms |
+| Step timeout | `STEP_TIMEOUT_MS` | `--step-timeout-ms` | `5000` ms |
+| ZMQ backlog | `ZMQ_BACKLOG` | `--zmq-backlog` | `100` |
+| ZMQ send HWM | `SND_HWM` | `--snd-hwm` | `1000` |
+| ZMQ receive HWM | `RCV_HWM` | `--rcv-hwm` | `1000` |
+| ZMQ linger | `LINGER_MS` | `--linger-ms` | `1000` ms |
+| TCP keepalive | `TCP_KEEPALIVE` | `--tcp-keepalive` | `0` |
+
+`IpcBridge` applies the numeric ZeroMQ settings before binding its ROUTER
+socket and reapplies them after a restart. The wire contract remains ROUTER
+plus JSON; alternate `socketType` and `serialization` values are reserved
+until a matching client protocol is available.
+
 ### Result Ownership
 
 SharedArrayBuffer transport still uses pooled internal buffers, but public

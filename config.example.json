@@ -7,7 +7,7 @@
     "bindAddress": "127.0.0.1",
     "_doc_bindAddress": "Network interface to bind ZMQ socket. Type: string. Default: 127.0.0.1. Env: BIND_ADDRESS. CLI: --bind-address",
     "zmqBacklog": 100,
-    "_doc_zmqBacklog": "Max pending ZMQ connections in queue. Type: int. Range: 1+. Default: 100. Env: ZMQ_BACKLOG. CLI: --zmq-backlog",
+    "_doc_zmqBacklog": "Max pending ZMQ connections in queue. Type: int. Range: 1-2147483647. Default: 100. Env: ZMQ_BACKLOG. CLI: --zmq-backlog",
     "maxRuntimeSeconds": 0,
     "_doc_maxRuntimeSeconds": "Auto-shutdown after N seconds; 0 disables. Type: int. Range: 0+. Default: 0. Env: MAX_RUNTIME_SECONDS. CLI: --max-runtime-seconds",
     "shutdownTimeoutMs": 10000,
@@ -106,26 +106,26 @@
     "useSharedMemory": true,
     "_doc_useSharedMemory": "Use shared memory buffers for observation transfer. Type: bool. Default: true. Env: USE_SHARED_MEMORY. CLI: --use-shared-memory",
     "ringBufferSize": 16,
-    "_doc_ringBufferSize": "Slots in the shared memory ring buffer. Type: int. Range: 2+. Default: 16. Env: RING_BUFFER_SIZE. CLI: --ring-buffer-size",
+    "_doc_ringBufferSize": "Slots in the shared memory ring buffer. Type: int. Power of 2, range: 2-1048576. Default: 16. Env: RING_BUFFER_SIZE. CLI: --ring-buffer-size",
     "messageTimeoutMs": 30000,
-    "_doc_messageTimeoutMs": "Timeout for inter-process message replies. Type: int. Range: 100+. Default: 30000. Env: MESSAGE_TIMEOUT_MS. CLI: --message-timeout-ms",
+    "_doc_messageTimeoutMs": "Timeout for inter-process message replies. Type: int. Range: 100-2147483647. Default: 30000. Env: MESSAGE_TIMEOUT_MS. CLI: --message-timeout-ms",
     "stepTimeoutMs": 5000,
-    "_doc_stepTimeoutMs": "Timeout for a single environment step. Type: int. Range: 100+. Default: 5000. Env: STEP_TIMEOUT_MS. CLI: --step-timeout-ms"
+    "_doc_stepTimeoutMs": "Timeout for a single environment step. Type: int. Range: 100-2147483647. Default: 5000. Env: STEP_TIMEOUT_MS. CLI: --step-timeout-ms"
   },
   "ipc": {
     "_doc_ipc": "ZeroMQ socket tuning and serialization options",
     "socketType": "ROUTER",
-    "_doc_socketType": "ZMQ socket pattern. Type: string. Enum: ROUTER, DEALER, REP, REQ. Default: ROUTER. Env: SOCKET_TYPE. CLI: --socket-type",
+    "_doc_socketType": "ZMQ socket pattern. Type: string. IpcBridge currently serves ROUTER; DEALER, REP, and REQ are parsed but rejected by the current wire contract. Default: ROUTER. Env: SOCKET_TYPE. CLI: --socket-type",
     "serialization": "json",
-    "_doc_serialization": "Message wire format. Type: string. Enum: json, msgpack. Default: json. Env: SERIALIZATION. CLI: --serialization",
+    "_doc_serialization": "Message wire format. Type: string. IpcBridge currently serves json; msgpack is parsed but rejected by the current wire contract. Default: json. Env: SERIALIZATION. CLI: --serialization",
     "tcpKeepalive": 0,
     "_doc_tcpKeepalive": "TCP keepalive toggle (0=off, 1=on). Type: int. Enum: 0, 1. Default: 0. Env: TCP_KEEPALIVE. CLI: --tcp-keepalive",
     "sndHwm": 1000,
-    "_doc_sndHwm": "Outbound message high-water mark. Type: int. Range: 0+. Default: 1000. Env: SND_HWM. CLI: --snd-hwm",
+    "_doc_sndHwm": "Outbound message high-water mark. Type: int. Range: 0-2147483647. Default: 1000. Env: SND_HWM. CLI: --snd-hwm",
     "rcvHwm": 1000,
-    "_doc_rcvHwm": "Inbound message high-water mark. Type: int. Range: 0+. Default: 1000. Env: RCV_HWM. CLI: --rcv-hwm",
+    "_doc_rcvHwm": "Inbound message high-water mark. Type: int. Range: 0-2147483647. Default: 1000. Env: RCV_HWM. CLI: --rcv-hwm",
     "lingerMs": 1000,
-    "_doc_lingerMs": "Socket linger time after close. Type: int. Range: 0+. Default: 1000. Env: LINGER_MS. CLI: --linger-ms"
+    "_doc_lingerMs": "Socket linger time after close. Type: int. Range: 0-2147483647. Default: 1000. Env: LINGER_MS. CLI: --linger-ms"
   },
   "telemetry": {
     "_doc_telemetry": "Performance profiling, debug tracing, and dashboard reporting",

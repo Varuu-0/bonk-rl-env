@@ -29,6 +29,17 @@ interface PoolSession {
     activeRequests: number;
 }
 
+interface IpcSocketOptions {
+    sendHighWaterMark: number;
+    receiveHighWaterMark: number;
+    tcpKeepalive: number;
+    linger: number;
+    backlog: number;
+}
+
+const MAX_ZMQ_OPTION = 0x7fffffff;
+const INTEGER_NUMERIC_RE = /^[+-]?\d+$/;
+
 export class IpcBridge {
     private sock: zmq.Router;
     private port: number;
@@ -37,6 +48,7 @@ export class IpcBridge {
     private _closed: boolean = false;
     private _shouldClose: boolean = false;
     private readonly maxClientSessions: number;
+    private readonly socketOptions: IpcSocketOptions;
     private sessionReapTimer?: ReturnType<typeof setInterval>;
     private sessionReapInProgress?: Promise<void>;
 
@@ -113,8 +125,9 @@ export class IpcBridge {
     private telemetryInFlight: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
-        this.port = config?.server?.port ?? getConfig().server.port;
-        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
+        const loadedConfig = getConfig();
+        this.port = config?.server?.port ?? loadedConfig.server.port;
+        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? loadedConfig.server.bindAddress);
         // A cap below 1 is meaningless: clamp so a bad config loudly enforces
         // a single concurrent session instead of rejecting every init. A
         // missing/non-finite value (e.g. a partial mock config, or empty
@@ -124,14 +137,58 @@ export class IpcBridge {
         // integer count of concurrent sessions, so a fractional value is
         // floored (1.5 → 1, 2.5 → 2) rather than silently relaxing the bound
         // by Math.ceil (issue #259).
-        const rawCap: unknown = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
+        const rawCap: unknown = config?.server?.maxClientSessions ?? loadedConfig.server.maxClientSessions;
         const parsedCap = typeof rawCap === 'string'
             ? (rawCap.trim() === '' ? NaN : Number(rawCap))
             : rawCap;
         this.maxClientSessions = Number.isFinite(parsedCap as number)
             ? Math.floor(Math.max(1, parsedCap as number))
             : DEFAULT_MAX_CLIENT_SESSIONS;
-        this.sock = new zmq.Router();
+
+        const loadedIpc: Partial<AppConfig['ipc']> = (loadedConfig as Partial<AppConfig>).ipc ?? {};
+        const socketType = config?.ipc?.socketType ?? loadedIpc.socketType ?? 'ROUTER';
+        if (socketType !== 'ROUTER') {
+            throw new Error(`Unsupported ipc.socketType "${socketType}": IpcBridge requires ROUTER`);
+        }
+        const serialization = config?.ipc?.serialization ?? loadedIpc.serialization ?? 'json';
+        if (serialization !== 'json') {
+            throw new Error(`Unsupported ipc.serialization "${serialization}": IpcBridge requires json`);
+        }
+
+        this.socketOptions = {
+            sendHighWaterMark: IpcBridge.normalizeSocketOption(
+                config?.ipc?.sndHwm ?? loadedIpc.sndHwm,
+                1000,
+                0,
+                'ipc.sndHwm',
+            ),
+            receiveHighWaterMark: IpcBridge.normalizeSocketOption(
+                config?.ipc?.rcvHwm ?? loadedIpc.rcvHwm,
+                1000,
+                0,
+                'ipc.rcvHwm',
+            ),
+            tcpKeepalive: IpcBridge.normalizeSocketOption(
+                config?.ipc?.tcpKeepalive ?? loadedIpc.tcpKeepalive,
+                0,
+                0,
+                'ipc.tcpKeepalive',
+                value => value === 0 || value === 1,
+            ),
+            linger: IpcBridge.normalizeSocketOption(
+                config?.ipc?.lingerMs ?? loadedIpc.lingerMs,
+                1000,
+                0,
+                'ipc.lingerMs',
+            ),
+            backlog: IpcBridge.normalizeSocketOption(
+                config?.server?.zmqBacklog ?? loadedConfig.server.zmqBacklog,
+                100,
+                1,
+                'server.zmqBacklog',
+            ),
+        };
+        this.sock = this.createSocket();
         this.localSession = {
             pool: new WorkerPool(),
             initialized: false,
@@ -148,6 +205,27 @@ export class IpcBridge {
         // as handled so it cannot surface as an unhandled-rejection crash for
         // consumers (such as src/server.ts) that never await ready.
         this._ready.catch(() => {});
+    }
+
+    private static normalizeSocketOption(
+        raw: unknown,
+        fallback: number,
+        minimum: number,
+        name: string,
+        predicate: (value: number) => boolean = value => value >= minimum,
+    ): number {
+        const value = typeof raw === 'string'
+            ? (INTEGER_NUMERIC_RE.test(raw.trim()) ? Number(raw.trim()) : NaN)
+            : raw;
+        if (value === undefined) return fallback;
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value > MAX_ZMQ_OPTION || !predicate(value)) {
+            throw new Error(`Invalid ${name}: expected a safe integer in the documented range`);
+        }
+        return value;
+    }
+
+    private createSocket(): zmq.Router {
+        return new zmq.Router(this.socketOptions);
     }
 
     private markBound(): void {
@@ -242,7 +320,7 @@ export class IpcBridge {
         // again (issue #263): re-wrap the send function on the new socket.
         let recreated = false;
         if (this.sock.closed) {
-            this.sock = new zmq.Router();
+            this.sock = this.createSocket();
             this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
             recreated = true;
         }

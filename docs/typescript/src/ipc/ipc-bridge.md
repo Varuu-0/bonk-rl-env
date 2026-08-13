@@ -19,11 +19,24 @@ ZeroMQ ROUTER/DEALER bridge for Python communication.
 #### Constructor
 
 ```typescript
-constructor(port?: number)
+constructor(config?: DeepPartial<AppConfig>)
 ```
 
 **Parameters**:
-- `port`: ZMQ port number (default: 5555)
+- `config.server.port`: ZMQ port number (default: 5555)
+- `config.server.bindAddress`: interface or host to bind (default: `127.0.0.1`)
+- `config.server.zmqBacklog`: pending connection backlog
+- `config.ipc.tcpKeepalive`: TCP keepalive toggle (`0` or `1`)
+- `config.ipc.sndHwm`: outbound high-water mark
+- `config.ipc.rcvHwm`: inbound high-water mark
+- `config.ipc.lingerMs`: socket linger time after close
+
+The loader exposes the same IPC tuning values through `config.json`,
+`ZMQ_BACKLOG`, `TCP_KEEPALIVE`, `SND_HWM`, `RCV_HWM`, `LINGER_MS`, and the
+corresponding CLI flags. The precedence order is config file, environment,
+then CLI. The current bridge wire contract is ROUTER plus JSON; other
+`socketType` and `serialization` values are reserved and are rejected rather
+than silently changing the Python protocol.
 
 #### Methods
 
@@ -176,7 +189,7 @@ redirecting to another client's pool.
 ```typescript
 import { IpcBridge } from './ipc-bridge';
 
-const bridge = new IpcBridge(5555);
+const bridge = new IpcBridge({ server: { port: 5555 } });
 
 console.log('Starting IPC bridge...');
 await bridge.start();
