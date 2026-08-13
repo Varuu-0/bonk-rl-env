@@ -771,6 +771,7 @@ export class BonkEnvironment {
                     scoreBlue: this.scoreBlue,
                     scoreRed: this.scoreRed,
                     aiTeam: this.aiTeam,
+                    terminal_observation: observation,
                 },
             };
         }
@@ -852,6 +853,7 @@ export class BonkEnvironment {
                 scoreBlue: this.scoreBlue,
                 scoreRed: this.scoreRed,
                 aiTeam: this.aiTeam,
+                ...(terminated || truncated ? { terminal_observation: observation } : {}),
             },
         };
     }
