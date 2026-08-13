@@ -60,8 +60,12 @@ export const GRAVITY_Y = 20;
 /** Default player circle radius in metres */
 export const DEFAULT_PPM = 12;
 
-/** Native minimum rest length for an exported distance joint (map px / ppm). */
-const NATIVE_DISTANCE_JOINT_MIN_LENGTH = 0.01;
+/**
+ * Native minimum rest length for an exported distance joint (native world
+ * units = map px / ppm; §33.8 d: `len→0.01` if 0). Consumed as
+ * `* ppm / SCALE` port units like the rest of the d-joint geometry.
+ */
+export const NATIVE_DISTANCE_JOINT_MIN_LENGTH = 0.01;
 
 /**
  * Verified native player-disc fixture (DEOBFUSCATION §35.4 / §38.6, live
@@ -1148,18 +1152,37 @@ export class PhysicsEngine {
       a && Number.isFinite(a.x) && Number.isFinite(a.y)
         ? new b2Vec2(a.x / this.scale, a.y / this.scale)
         : (bodyA.GetPosition().Copy());
+    // §33.8 d normalization divides the exported aa/ab anchors by ppm exactly
+    // like the length (`aa, ab /= ppm`), so the distance branch converts them
+    // with `* ppm / scale` (native world units → this port's map-px / scale
+    // world) instead of the map-px `/ scale` used by the other joint families.
+    // The whole-anchor finite guard mirrors anchorPair: malformed input
+    // degrades the WHOLE anchor to the body origin rather than pinning a
+    // partially-coerced point.
+    const dAnchorPair = (a?: { x: number; y: number }): [number, number] =>
+      a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? [(a.x * this.ppm) / this.scale, (a.y * this.ppm) / this.scale]
+        : [0, 0];
+    const dMakeAnchorA = (a?: { x: number; y: number }) => {
+      const [x, y] = dAnchorPair(a);
+      return a && Number.isFinite(a.x) && Number.isFinite(a.y)
+        ? new b2Vec2(x, y)
+        : (bodyA.GetPosition().Copy());
+    };
 
     const type = def.type;
     let created: any = null;
     if (type === 'distance' || type === 'd') {
       const jd = new b2DistanceJointDef();
       if (isGround) {
-        // Ground anchors use native map-px coords (ab += [365/ppm, 250/ppm]).
-        const [abx, aby] = anchorPair(def.anchorB);
+        // Ground anchors are native world units (map px / ppm) with the
+        // natively applied `ab += [365/ppm, 250/ppm]` canvas-center offset
+        // already baked into the exported value (§33.8 d).
+        const [abx, aby] = dAnchorPair(def.anchorB);
         jd.Initialize(
           bodyA,
           bodyB,
-          makeAnchorA(def.anchorA),
+          dMakeAnchorA(def.anchorA),
           new b2Vec2(abx, aby),
         );
       } else {
@@ -1167,8 +1190,8 @@ export class PhysicsEngine {
         // connected bodies' frames (Initialize would subtract each body's
         // position, pinning the joint ~one body-position away on any
         // non-origin body).
-        const [ax, ay] = anchorPair(def.anchorA);
-        const [bx, by] = anchorPair(def.anchorB);
+        const [ax, ay] = dAnchorPair(def.anchorA);
+        const [bx, by] = dAnchorPair(def.anchorB);
         jd.body1 = bodyA;
         jd.body2 = bodyB;
         jd.localAnchor1.Set(ax, ay);

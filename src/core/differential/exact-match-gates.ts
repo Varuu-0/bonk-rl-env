@@ -18,6 +18,7 @@
  * length/spring, prismatic limits/motor, gear ratio/referents).
  */
 import type { BonkEnvironment } from '../environment';
+import { NATIVE_DISTANCE_JOINT_MIN_LENGTH } from '../physics-engine';
 import { normalizeMap } from '../map-adapter';
 import type { NativeTrace } from './native-trace';
 
@@ -158,7 +159,11 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
       // b2DistanceJointDef.Initialize's anchor-distance default and there is
       // no authored value to diff against.
       if (typeof j.length === 'number' && Number.isFinite(j.length)) {
-        const nativeLength = j.length === 0 ? 0.01 : j.length;
+        // Share the engine's native zero-length floor so the gate cannot
+        // silently diverge from the construction formula it verifies.
+        const nativeLength = j.length === 0
+          ? NATIVE_DISTANCE_JOINT_MIN_LENGTH
+          : j.length;
         if (Math.abs((built as any).m_length - (nativeLength * ppm) / scale) > 1e-9) {
           mismatches.push(`joint "${name}" d length mismatch`);
         }
