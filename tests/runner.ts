@@ -26,13 +26,31 @@ export const TEST_SUITES = [
   { key: '12', file: 'tests/integration/map-integration.test.ts', description: 'Real map loading and integration' },
 ] as const;
 
-export function resolveVitestCli(): string {
-  const vitestPackagePath = path.join(repositoryRoot, 'node_modules', 'vitest', 'package.json');
-  const vitestPackage = JSON.parse(fs.readFileSync(vitestPackagePath, 'utf8')) as {
-    bin: string | Record<string, string>;
-  };
-  const bin = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin['vitest'];
-  return path.join(path.dirname(vitestPackagePath), bin);
+export function resolveVitestCli(
+  vitestPackageRoot: string = path.join(repositoryRoot, 'node_modules', 'vitest'),
+): string {
+  const vitestPackagePath = path.join(vitestPackageRoot, 'package.json');
+  let vitestPackage: { bin?: string | Record<string, string> };
+  try {
+    vitestPackage = JSON.parse(fs.readFileSync(vitestPackagePath, 'utf8')) as {
+      bin?: string | Record<string, string>;
+    };
+  } catch (error) {
+    throw new Error(
+      `Unable to read the vitest package manifest at ${vitestPackagePath}: ${(error as Error).message}. ` +
+        `Reinstall dependencies with 'npm ci'.`,
+    );
+  }
+
+  const binEntry = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin?.['vitest'];
+  if (typeof binEntry !== 'string' || binEntry.length === 0) {
+    throw new Error(
+      `The vitest package manifest at ${vitestPackagePath} has no valid 'bin.vitest' entry. ` +
+        `Reinstall dependencies with 'npm ci'.`,
+    );
+  }
+
+  return path.join(vitestPackageRoot, binEntry);
 }
 
 function runVitest(testFile?: string): number {

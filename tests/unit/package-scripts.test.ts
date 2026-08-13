@@ -1,5 +1,7 @@
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
+import * as os from 'node:os';
 import * as path from 'node:path';
 import { TEST_SUITES, resolveVitestCli } from '../runner';
 
@@ -50,12 +52,34 @@ describe('npm test script mappings', () => {
     }
   });
 
-  it('resolves the local vitest CLI entry for the runner without a shell shim', () => {
-    const vitestPackage = JSON.parse(
-      fs.readFileSync(path.join(repositoryRoot, 'node_modules', 'vitest', 'package.json'), 'utf8'),
-    ) as { bin: string | Record<string, string> };
-    const bin = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin['vitest'];
-    expect(resolveVitestCli()).toBe(path.join(repositoryRoot, 'node_modules', 'vitest', bin));
-    expect(fs.existsSync(resolveVitestCli())).toBe(true);
+  it('resolves the local vitest CLI entry to a runnable subprocess', () => {
+    const cli = resolveVitestCli();
+    expect(fs.existsSync(cli)).toBe(true);
+    const result = spawnSync(process.execPath, [cli, '--version'], {
+      cwd: repositoryRoot,
+      encoding: 'utf8',
+    });
+    expect(result.error).toBeUndefined();
+    expect(result.status).toBe(0);
+    expect(`${result.stdout}${result.stderr}`).toMatch(/vitest\/\d+/);
+  });
+
+  it('reports a clear error for a missing or malformed vitest bin entry', () => {
+    const fixture = fs.mkdtempSync(path.join(os.tmpdir(), 'vitest-bin-fixture-'));
+    try {
+      fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ name: 'vitest' }));
+      expect(() => resolveVitestCli(fixture)).toThrow(/bin\.vitest/);
+
+      fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ bin: {} }));
+      expect(() => resolveVitestCli(fixture)).toThrow(/bin\.vitest/);
+
+      fs.writeFileSync(path.join(fixture, 'package.json'), '{ not json');
+      expect(() => resolveVitestCli(fixture)).toThrow(/vitest package manifest/);
+
+      fs.rmSync(path.join(fixture, 'package.json'));
+      expect(() => resolveVitestCli(fixture)).toThrow(/vitest package manifest/);
+    } finally {
+      fs.rmSync(fixture, { recursive: true, force: true });
+    }
   });
 });
