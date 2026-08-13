@@ -368,17 +368,21 @@ def _obs(tick):
     }
 
 
-def _step_result(tick, terminated, reward, terminal_obs=None):
+def _step_result(
+    tick, terminated, reward, terminal_obs=None, truncated=False, frame_skip=None
+):
+    info = {
+        "tick": tick,
+        "terminated": terminated,
+        **({"frameSkip": frame_skip} if frame_skip is not None else {}),
+        **({"terminal_observation": terminal_obs} if terminal_obs is not None else {}),
+    }
     return {
         "observation": _obs(tick),
         "reward": reward,
         "terminated": terminated,
-        "truncated": False,
-        "info": {
-            "tick": tick,
-            "terminated": terminated,
-            **({"terminal_observation": terminal_obs} if terminal_obs is not None else {}),
-        },
+        "truncated": truncated,
+        "info": info,
     }
 
 
@@ -481,3 +485,74 @@ def test_step_wait_coalesces_terminated_hold_tail(
         else:
             assert "episode" not in info
             assert "terminal_observation" not in info
+
+
+def test_step_wait_uses_server_config_frame_skip_for_empty_client_config(monkeypatch):
+    """#328: config.json's effective frame_skip must drive coalescing."""
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config={})
+    responses = [
+        {"status": "ok", "data": [_step_result(1, False, 1.0, frame_skip=4)]},
+        {"status": "ok", "data": [_step_result(2, False, 1.0, frame_skip=4)]},
+        {"status": "ok", "data": [_step_result(3, False, 1.0, frame_skip=4)]},
+        {"status": "ok", "data": [_step_result(4, False, 1.0, frame_skip=4)]},
+        {
+            "status": "ok",
+            "data": [
+                _step_result(
+                    5,
+                    False,
+                    2.0,
+                    terminal_obs=_obs(5),
+                    truncated=True,
+                    frame_skip=4,
+                )
+            ],
+        },
+        {
+            "status": "ok",
+            "data": [_step_result(5, False, 0.0, truncated=True, frame_skip=4)],
+        },
+        {
+            "status": "ok",
+            "data": [_step_result(5, False, 0.0, truncated=True, frame_skip=4)],
+        },
+        {
+            "status": "ok",
+            "data": [_step_result(5, False, 0.0, truncated=True, frame_skip=4)],
+        },
+        {"status": "ok", "data": [_step_result(1, False, 0.5, frame_skip=4)]},
+    ]
+    socket.recv_json.side_effect = responses
+
+    results = []
+    try:
+        for _ in responses:
+            results.append(env.step_wait())
+    finally:
+        socket.recv_json.side_effect = None
+        socket.recv_json.return_value = {"status": "ok"}
+        env.close()
+
+    assert [bool(result[2][0]) for result in results] == [
+        False,
+        False,
+        False,
+        False,
+        True,
+        False,
+        False,
+        False,
+        False,
+    ]
+    boundary_info = results[4][3][0]
+    assert boundary_info["frameSkip"] == 4
+    assert boundary_info["episode"] == {"r": 6.0, "l": 5}
+    assert boundary_info["TimeLimit.truncated"] is True
+    assert isinstance(boundary_info["terminal_observation"], np.ndarray)
+
+    for _, _, dones, info_list in results[5:8]:
+        assert bool(dones[0]) is False
+        assert "episode" not in info_list[0]
+        assert "TimeLimit.truncated" not in info_list[0]
+        assert "terminal_observation" not in info_list[0]
+        assert info_list[0]["_episode"] == {"terminated": False, "truncated": False}

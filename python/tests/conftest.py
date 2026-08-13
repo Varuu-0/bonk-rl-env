@@ -192,6 +192,26 @@ def _kill_process_tree(proc):
                 pass
 
 
+def _find_tsx_cli(project_root):
+    """Find tsx in the workspace or an ancestor dependency directory."""
+    candidate_root = os.path.abspath(project_root)
+    while True:
+        candidate = os.path.join(candidate_root, "node_modules", "tsx", "dist", "cli.mjs")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(candidate_root)
+        if parent == candidate_root:
+            return None
+        candidate_root = parent
+
+
+def _free_tcp_port():
+    """Return a currently unused loopback TCP port."""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
 @pytest.fixture(scope="session")
 def bonk_server():
     """Start and stop the TypeScript bonk server for the test session.
@@ -304,6 +324,72 @@ def bonk_server():
                 probe_time = probe_creation_times.get(pid)
                 if probe_time is not None and current_times.get(pid) == probe_time:
                     _taskkill(pid, tree=False)
+
+
+@pytest.fixture
+def bonk_server_config(tmp_path):
+    """Start a server from a temporary config.json for config-file regressions."""
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    server_script = os.path.join(project_root, "src", "main.ts")
+    if not os.path.isfile(server_script):
+        pytest.skip("src/main.ts not found")
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not found")
+    tsx_cli = _find_tsx_cli(project_root)
+    if tsx_cli is None:
+        pytest.skip("tsx CLI not found (run npm install)")
+
+    port = _free_tcp_port()
+    config = {
+        "server": {"port": port},
+        "environment": {
+            "frame_skip": 4,
+            "max_ticks": 5,
+            "num_opponents": 0,
+            "random_opponent": False,
+        },
+        "workerPool": {"numWorkers": 1, "useSharedMemory": True},
+    }
+    with open(os.path.join(tmp_path, "config.json"), "w", encoding="utf-8") as config_file:
+        json.dump(config, config_file)
+
+    spawn_kwargs = {}
+    if os.name == "nt":
+        spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        spawn_kwargs["start_new_session"] = True
+
+    proc = subprocess.Popen(
+        [node, tsx_cli, server_script],
+        cwd=tmp_path,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        **spawn_kwargs,
+    )
+
+    connected = False
+    for _ in range(100):
+        if proc.poll() is not None:
+            break
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                connected = True
+                break
+        except (ConnectionRefusedError, OSError):
+            time.sleep(0.1)
+
+    if not connected:
+        _kill_process_tree(proc)
+        pytest.skip("config-file bonk server did not start within 10s")
+
+    try:
+        yield port
+    finally:
+        _kill_process_tree(proc)
 
 
 @pytest.fixture

@@ -347,6 +347,49 @@ class TestBonkVecEnvFrameSkipEpisodeBoundary:
 
 
 @pytest.mark.slow
+@pytest.mark.e2e
+class TestBonkVecEnvServerConfigFrameSkip:
+    """Regression coverage for #328's config.json-only frame_skip path."""
+
+    def test_server_config_frame_skip_coalesces_terminal_hold(
+        self, bonk_server_config
+    ):
+        from envs.bonk_env import BonkVecEnv
+
+        env = BonkVecEnv(num_envs=1, port=bonk_server_config, config={})
+        try:
+            env.reset(seeds=[1])
+            done_steps = []
+            episode_records = []
+            truncation_steps = []
+            frame_skips = []
+            episode_return = 0.0
+
+            for step in range(1, 10):
+                env.step_async(np.array([0]))
+                _, rewards, dones, infos = env.step_wait()
+                info = infos[0]
+                frame_skips.append(info["frameSkip"])
+                if len(episode_records) == 0:
+                    episode_return += float(rewards[0])
+                if dones[0]:
+                    done_steps.append(step)
+                if "episode" in info:
+                    episode_records.append(info["episode"])
+                if info.get("TimeLimit.truncated") is True:
+                    truncation_steps.append(step)
+
+            assert frame_skips == [4] * 9
+            assert done_steps == [5]
+            assert len(episode_records) == 1
+            assert episode_records[0]["l"] == 5
+            assert episode_records[0]["r"] == pytest.approx(episode_return)
+            assert truncation_steps == [5]
+        finally:
+            env.close()
+
+
+@pytest.mark.slow
 class TestBonkVecEnvPythonConfigKeys:
     """Regression tests for #204 review follow-up.
 

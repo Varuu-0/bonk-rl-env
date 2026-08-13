@@ -115,7 +115,13 @@ class BonkVecEnv(VecEnv):
         # and the observation is unchanged from the boundary.
         self._hold_steps = np.zeros(num_envs, dtype=np.int64)
         self._hold_tick = np.zeros(num_envs, dtype=np.int64)
+        # Keep the client setting as a fallback for older servers, but prefer
+        # the effective per-environment value reported by the backend. The
+        # server may get frame_skip from config.json rather than this client.
         self._frame_skip = int((config or {}).get("frame_skip", 1))
+        self._effective_frame_skip = np.full(
+            num_envs, self._frame_skip, dtype=np.int64
+        )
 
     def _send_json(self, message, timeout_ms=None):
         command = message["command"]
@@ -324,6 +330,22 @@ class BonkVecEnv(VecEnv):
         for idx, d in enumerate(data):
             obs_list.append(self._convert_obs(d["observation"]))
             rewards.append(float(d["reward"]))
+
+            # `frameSkip` is static per environment but is already carried by
+            # every step result in both transports. Refresh the hold window
+            # before classifying this step so a server-only config.json value
+            # takes effect on the boundary step itself (#328).
+            info = d.get("info")
+            if not isinstance(info, dict):
+                info = {}
+            reported_frame_skip = info.get("frameSkip")
+            if (
+                isinstance(reported_frame_skip, Integral)
+                and not isinstance(reported_frame_skip, (bool, np.bool_))
+                and reported_frame_skip > 0
+            ):
+                self._effective_frame_skip[idx] = int(reported_frame_skip)
+            frame_skip = int(self._effective_frame_skip[idx])
             
             # Parse done status - support multiple formats:
             # Format 1 (new): {"terminated": bool, "truncated": bool}
@@ -369,7 +391,7 @@ class BonkVecEnv(VecEnv):
             is_hold_tail = (
                 is_done
                 and self._hold_steps[idx] > 0
-                and self._hold_steps[idx] < self._frame_skip
+                and self._hold_steps[idx] < frame_skip
                 and obs_tick == self._hold_tick[idx]
             )
             if is_done:
@@ -383,9 +405,6 @@ class BonkVecEnv(VecEnv):
 
             terminated.append(is_terminated and not is_hold_tail)
             truncated.append(is_truncated and not is_hold_tail)
-            
-            # Build info dict
-            info = d.get("info", {})
             
             if not is_hold_tail:
                 # Handle terminal observation for done episodes only (SB3 uses
