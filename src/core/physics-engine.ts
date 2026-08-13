@@ -1251,7 +1251,7 @@ export class PhysicsEngine {
       const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length) && def.length > 0;
       jd.lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : (lenLimit ? -def.length : 0);
       jd.upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : (lenLimit ? +def.length : 0);
-      jd.enableMotor = !!def.enableMotor;
+jd.enableMotor = !!def.enableMotor;
       jd.motorSpeed = def.motorSpeed ?? 0;
       jd.maxMotorForce = def.maxMotorForce ?? 0;
 
@@ -1260,21 +1260,26 @@ export class PhysicsEngine {
       //   anchorWorld = (sax + safeCos(θ)·(−slen), say + safeSin(θ)·(−slen))
       //   rel = bodyA.GetPosition() − anchorWorld;  len = |rel|
       //   φ = safeATan2(rel.y, rel.x) − bodyA.GetAngle();  φ %= 2π
-      //   len = −len unless φ ∈ [−π, 0) ∪ (π, 2π)
+      //   len = −len unless φ ∈ [−π, 0) ∪ (π, 2π]
       //   k = (len/(2·slen) − 0.5)·2
       //   maxMotorForce = sf·|k|;  if (k > 0) motorSpeed = −300
-      // The map decoder sets sax/say to the body's position and scales
-      // slen /= ppm, sf /= ppm² (readable 6448-6453); the assembled anchor
-      // (sax, say) arrives on def.anchorA and slen on def.length, so the same
-      // inputs feed the formula in engine world units (k is dimensionless).
-      // A non-positive/absent slen or invalid anchor keeps the static 300/sf
-      // defaults — the native would divide by zero into NaN/Infinity there
-      // (corrupt-map guard, consistent with the engine's #271/#276 policy).
+      // Native input pipeline: the map decoder overwrites sax/say with the
+      // body's decoded position and scales slen /= ppm, sf /= ppm² (readable
+      // 6448-6453), and the world build creates each body at that exact
+      // position (readable 7449). For such decoder-normalized maps the formula
+      // collapses to rel = R(θ)·slen, len = slen, φ ≡ −π/2, hence k ≡ 0 —
+      // maxMotorForce = sf·|k| = 0 and motorSpeed stays at the hardcoded 300
+      // (the native computes the same result). The nonzero-k branch engages
+      // only when an authored anchor differs from the connected body's build
+      // position. `k` is dimensionless, so the formula is evaluated in engine
+      // world units. Degenerate inputs (absent/zero slen, invalid anchor) keep
+      // the static 300/sf defaults — the native would divide by zero into
+      // NaN/Infinity (corrupt-map guard, consistent with #271/#276).
       if (type === 'lsj') {
-        const sf = Number.isFinite(def.maxMotorForce) ? (def.maxMotorForce ?? 0) : 0;
+        const sf = Number.isFinite(def.maxMotorForce) ? def.maxMotorForce : 0;
         const slen = lenLimit ? def.length / this.scale : 0;
         const anchorValid = def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y);
-        let motor = def.motorSpeed ?? 300; // native hardcodes 300, then signs it
+        let motor = 300; // native hardcodes 300, then signs it when k > 0
         let force = sf;
         if (slen > 0 && anchorValid) {
           const anchor = makeAnchorA(def.anchorA);

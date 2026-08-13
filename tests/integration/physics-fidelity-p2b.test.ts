@@ -19,6 +19,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { PhysicsEngine } from '../../src/core/physics-engine';
+import { normalizeMap } from '../../src/core/map-adapter';
 
 /** Fresh engine with a fixed test bodyA/B pair. */
 function makeEngine(): { engine: PhysicsEngine; close: () => void } {
@@ -154,6 +155,72 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
             expect(j.m_motorSpeed).toBe(300);
         } finally {
             close();
+        }
+    });
+
+    it('decoder-canonical exporter map (anchorA == body position) yields k ≡ 0: force 0, motor +300', () => {
+        // The map decoder overwrites sax/say with the body's decoded position
+        // (readable 6448-6449) and the build creates the body at exactly that
+        // position (7449), so the exporter's anchorA lands on the body — the
+        // formula collapses to len == slen, φ ≡ −π/2, k ≡ 0. The native
+        // computes sf·|k| = 0 and keeps motorSpeed 300; the engine must too.
+        const engine = new PhysicsEngine({});
+        try {
+            const md = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+                    { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+                physicsJoints: [{
+                    index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+                    anchorA: { x: 0, y: 0 }, // == body 'anchor' position
+                    axis: { x: 0, y: 1 },
+                    lowerTranslation: -40, upperTranslation: 40,
+                    length: 40, enableLimit: false, enableMotor: true,
+                    motorSpeed: 300, maxMotorForce: 25,
+                }],
+            } as any) as any;
+            const bm = new Map<string, any>();
+            for (const b of md.bodies) { engine.addBody(b); bm.set(b.name, engine.getBodyMap().get(b.name)); }
+            engine.addJoint(md.joints[0], bm);
+            const j = (engine as any).createdJoints.get('joint_0');
+            expect(j.m_maxMotorForce).toBeCloseTo(0, 5);
+            expect(j.m_motorSpeed).toBeCloseTo(300, 5);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('authored offset anchor engages the bias through the adapter path (k = +1: force sf, motor −300)', () => {
+        // Same exporter shape but the anchor deliberately offsets the body by
+        // +slen along the axis — the branch the native formula reaches when
+        // sax/say differ from the build position.
+        const engine = new PhysicsEngine({});
+        try {
+            const md = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+                    { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+                physicsJoints: [{
+                    index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+                    anchorA: { x: 0, y: 40 }, // +slen above the body
+                    axis: { x: 0, y: 1 },
+                    lowerTranslation: -40, upperTranslation: 40,
+                    length: 40, enableLimit: false, enableMotor: true,
+                    motorSpeed: 300, maxMotorForce: 25,
+                }],
+            } as any) as any;
+            const bm = new Map<string, any>();
+            for (const b of md.bodies) { engine.addBody(b); bm.set(b.name, engine.getBodyMap().get(b.name)); }
+            engine.addJoint(md.joints[0], bm);
+            const j = (engine as any).createdJoints.get('joint_0');
+            expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
+            expect(j.m_motorSpeed).toBeCloseTo(-300, 5);
+        } finally {
+            engine.destroy();
         }
     });
 });

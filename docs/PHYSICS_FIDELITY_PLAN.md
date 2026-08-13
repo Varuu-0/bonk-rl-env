@@ -38,9 +38,15 @@ validation), and ground joints (`bodyB = -1`, map-px anchors). **P2b (2026-08-12
 adds the lsj initial-side spring bias** (`maxMotorForce = sf*|k|`, signed
 motorSpeed ±300; readable 7600-7630) exactly as §33.9 3522-3527 prescribes —
 an emulation on the existing prismatic branch, no `b2LineJoint` port needed.
+Note (readable 6448-6449/7449): the map decoder overwrites `sax/say` with the
+body's decoded position and the build creates the body at exactly that
+position, so decoder-normalized maps collapse to `k ≡ 0` — `maxMotorForce =
+0`, motor 300, identical to the native computation; the biased branch engages
+only when an authored anchor differs from the connected body's build position.
 Degenerate inputs (absent/zero `slen`, invalid anchor) keep the static 300/sf
 fallback (corrupt-map guard). Verified by `physics-fidelity-p2.test.ts` (joint
-invariants), `physics-fidelity-p2b.test.ts` (deterministic ±k cases), and the
+invariants), `physics-fidelity-p2b.test.ts` (deterministic ±k cases + an
+end-to-end adapter-path test through the exporter emission shape), and the
 P4 joint exact-match gate.
 
 ### Map physics settings (P3) — pq PROVEN, gd RE-CLASSIFIED
@@ -153,5 +159,6 @@ Final docs pass over `DEOBFUSCATION_FIX_TRACKER.md` and this plan:
   the chronological record with test counts and verification commands.
 
 The PR review gate is the remaining verification for this documentation
-milestone. The P2b lsj spring-bias follow-up flagged here was implemented and
-merged on 2026-08-12, closing the last physics-fidelity implementation gap.
+milestone. The P2b lsj spring-bias follow-up flagged here is implemented on
+2026-08-12 (PR #353, pending review/merge), closing the last
+physics-fidelity implementation gap.

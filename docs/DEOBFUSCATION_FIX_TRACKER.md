@@ -179,9 +179,14 @@ and `tests/unit/config-example-sanity.test.ts`.
     reading was corrected by the 2026-07-29 §33.8 audit). **P2b (2026-08-12)
     implements the initial-side spring bias** (`maxMotorForce = sf*|k|`,
     signed motorSpeed ±300, readable 7600-7630) on this branch per the §33.9
-    3522-3527 emulation recipe — no `b2LineJoint` port is required. Degenerate
-    inputs (absent/zero `slen`, invalid anchor) keep the static 300/sf
-    fallback (corrupt-map guard).
+    3522-3527 emulation recipe — no `b2LineJoint` port is required. Native
+    input pipeline note: the decoder overwrites `sax/say` with the body's
+    decoded position (readable 6448-6449) and the build creates each body at
+    that exact position (7449), so decoder-normalized maps collapse to
+    `k ≡ 0` (maxMotorForce = 0, motor 300 — identical to native); the biased
+    branch engages only for authored anchors that differ from the build
+    position. Degenerate inputs (absent/zero `slen`, invalid anchor) keep the
+    static 300/sf fallback (corrupt-map guard).
   - `g` (gear): ratio + revolute/prismatic referent validation (other
     referent types silently produce NaN coordinates and are skipped loudly),
   - ground joints: `bodyB = -1` binds to the world with map-px anchors.
@@ -189,9 +194,10 @@ and `tests/unit/config-example-sanity.test.ts`.
   `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
   §33.7 formulas), `tests/integration/physics-fidelity-p2b.test.ts`
   (deterministic ±k spring-bias cases: k=+1→sf/−300, k=−2→sf·2/+300, rotated
-  side-aware k, k=0 degenerate, invalid-input fallback, lpj unaffected), and
-  the P4 joint exact-match gate (`verifyJointGates` on the bundled WDB
-  ground-prismatic map).
+  side-aware k, k=0 degenerate, invalid-input fallback, lpj unaffected, plus
+  a decoder-canonical k≡0 case and an authored-offset k=+1 case end-to-end
+  through `normalizeMap`/`addJoint`), and the P4 joint exact-match gate
+  (`verifyJointGates` on the bundled WDB ground-prismatic map).
 
 ---
 
@@ -307,21 +313,30 @@ Chronological record of fixes applied. Append new entries here.
   the engine's `addJoint` prismatic branch in world units (`k` is
   dimensionless). This is the §33.9 3522-3527 emulation recipe — no
   `b2LineJoint` port is involved.
+- Decoder-canonical note: because the build creates each body at the decoded
+  `p` (readable 7449) and the overwrite copies that same `p` into `sax/say`,
+  real decoder-normalized maps collapse to `k ≡ 0` (`maxMotorForce = sf·0 =
+  0`, motor 300) — the same degenerate result the native computes; the biased
+  branch engages only for authored anchors that differ from the build
+  position.
 - Degenerate inputs (absent/zero `slen`, invalid `anchorA`) keep the static
   300/`sf` defaults — a corrupt-map guard (native would divide by zero into
   NaN/Infinity), consistent with #271/#276.
-- Tests: `tests/integration/physics-fidelity-p2b.test.ts` (6 tests) —
+- Tests: `tests/integration/physics-fidelity-p2b.test.ts` (8 tests) —
   deterministic hand-computed oracle cases: k=+1 (force sf, motor −300),
   k=−2 (force sf·2, motor +300; φ=0 flips len), rotated body (angle π/4,
   side-aware k ≈ 0.8477 → force ≈ 423.87, motor −300), k=0 degenerate
   (anchor at body center → force 0, motor +300), invalid-input static
-  fallbacks, and lpj unaffected by the lsj-only bias. The existing P2 lsj
-  exporter test's motorSpeed assertion was updated to the biased −300
+  fallbacks, and lpj unaffected by the lsj-only bias — plus two end-to-end
+  tests through `normalizeMap`/`addJoint` on the mapexporter emission shape:
+  decoder-canonical `anchorA == body position` → k≡0 (force 0, motor +300)
+  and an authored offset anchor → k=+1 (force sf, motor −300). The existing
+  P2 lsj exporter test's motorSpeed assertion was updated to the biased −300
   (its geometry yields k=+1).
 - Docs: `PHYSICS_FIDELITY_PLAN.md` P2→P2+P2b IMPLEMENTED; tracker H5 → ✅
   with the bias cited.
 - Verification: `tsc --noEmit` clean; P0/P1/P2/P2b/P3/P3b/P4 + config-consumed
-  + map suites green (179 tests; the pre-existing unrelated
+  + map suites green (181 tests; the pre-existing unrelated
   `env-ai-player-id` failure reproduces on unmodified main).
 
 ### 2026-08-12 — P3b: runtime gating of `fl` / `nc` / `re` map settings
