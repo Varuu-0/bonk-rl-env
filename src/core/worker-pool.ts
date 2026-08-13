@@ -898,13 +898,13 @@ export class WorkerPool {
      * Encodes a PlayerInput action to a number for shared memory storage
      * Uses bit flags: left=1, right=2, up=4, down=8, heavy=16, grapple=32
      *
-      * `assertValidAction()` rejects malformed values and encoded numbers
-      * outside the six-bit [0, 63] action space before either transport is
-      * touched, so direct and pooled callers share the same error contract.
-      * Null/undefined, arrays, empty objects, non-boolean field values, and
-      * non-finite numbers (NaN, ±Infinity) throw a labeled error instead of
-      * being silently encoded as a different (usually no-op) action, so
-      * callers can tell a bad request apart from a pool failure (#278).
+     * `assertValidAction()` rejects malformed values and encoded numbers
+     * outside the six-bit [0, 63] action space before either transport is
+     * touched, so direct and pooled callers share the same error contract.
+     * Null/undefined, arrays, empty objects, non-boolean field values, and
+     * non-finite numbers (NaN, ±Infinity) throw a labeled error instead of
+     * being silently encoded as a different (usually no-op) action, so
+     * callers can tell a bad request apart from a pool failure (#278).
      */
     private encodeAction(action: PlayerInput | number): number {
         assertValidAction(action);

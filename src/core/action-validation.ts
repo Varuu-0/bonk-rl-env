@@ -12,7 +12,16 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
     'grapple',
 ];
 
-const MAX_ENCODED_ACTION = (1 << PLAYER_INPUT_FIELDS.length) - 1;
+/**
+ * The number of bits used by the action encoders/decoders
+ * (left=1, right=2, up=4, down=8, heavy=16, grapple=32), which caps the
+ * encoded action space at [0, 63]. Kept in lockstep with the bit flags the
+ * encoders/decoders apply so the validation range cannot drift from the
+ * transport encoding (issue #330).
+ */
+export const ACTION_ENCODING_BITS = 6;
+
+const MAX_ENCODED_ACTION = (1 << ACTION_ENCODING_BITS) - 1;
 
 /**
  * Validates an `Action` (PlayerInput | number) and throws a labeled
