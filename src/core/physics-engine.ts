@@ -1251,7 +1251,7 @@ export class PhysicsEngine {
       const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length) && def.length > 0;
       jd.lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : (lenLimit ? -def.length : 0);
       jd.upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : (lenLimit ? +def.length : 0);
-jd.enableMotor = !!def.enableMotor;
+      jd.enableMotor = !!def.enableMotor;
       jd.motorSpeed = def.motorSpeed ?? 0;
       jd.maxMotorForce = def.maxMotorForce ?? 0;
 
