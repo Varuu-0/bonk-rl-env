@@ -106,8 +106,11 @@ export interface ParsedTrace {
 /**
  * Parse and validate a native trace object (from JSON). Returns the typed trace
  * plus a list of validation errors. Throws on a structurally-unsound input
- * (non-object, missing schema marker, non-array fields). The embedded map is
- * normalized by the replay comparator (which owns the normalizeMap import).
+ * (non-object, missing schema marker, non-array fields). Null/non-object
+ * entries inside players, spawns, and ticks are reported as errors and omitted
+ * from the returned trace, so downstream iteration stays safe even when a
+ * caller ignores the errors. The embedded map is normalized by the replay
+ * comparator (which owns the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -168,9 +171,15 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     tps: t.tps,
     map: t.map,
     settings: t.settings,
-    players: Array.isArray(t.players) ? t.players : [],
-    spawns: Array.isArray(t.spawns) ? t.spawns : [],
-    ticks: Array.isArray(t.ticks) ? t.ticks : [],
+    players: Array.isArray(t.players)
+      ? t.players.filter((p): p is NativeTracePlayer => p !== null && typeof p === 'object' && !Array.isArray(p))
+      : [],
+    spawns: Array.isArray(t.spawns)
+      ? t.spawns.filter((s): s is NativeTraceSpawn => s !== null && typeof s === 'object' && !Array.isArray(s))
+      : [],
+    ticks: Array.isArray(t.ticks)
+      ? t.ticks.filter((tk): tk is NativeTraceTick => tk !== null && typeof tk === 'object' && !Array.isArray(tk))
+      : [],
   };
 
   return { trace, errors };
