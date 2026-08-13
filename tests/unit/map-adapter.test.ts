@@ -113,6 +113,61 @@ describe('normalizeMap', () => {
             expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
         });
 
+        it('preserves native body render order as render-only provenance', () => {
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 4, name: 'background', type: 'rect', x: 0, y: 0, width: 100, height: 100, static: true },
+                    { bodyIndex: 0, name: 'wall', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+                ],
+                bodyRenderOrder: [0, 4],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+            expect(out.bodyRenderOrder).toEqual([0, 4]);
+            expect(out.bodies.map((body: any) => body.renderBodyIndex)).toEqual([4, 0]);
+        });
+
+        it('retains native shape transforms for rendering flattened fixtures', () => {
+            const out = normalizeMap({
+                physicsBodies: [
+                    { position: { x: 30, y: -500 }, angle: 0.25 },
+                ],
+                physicsShapes: [
+                    {
+                        type: 'po',
+                        center: { x: 4, y: -2 },
+                        angle: 0.5,
+                        scale: 1.5,
+                        vertices: [{ x: -2, y: 1 }, { x: 2, y: 1 }, { x: 0, y: -3 }],
+                    },
+                ],
+                bodies: [
+                    {
+                        bodyIndex: 0,
+                        fixtureIndex: 0,
+                        shapeIndex: 0,
+                        name: 'Signature',
+                        type: 'polygon',
+                        x: 0,
+                        y: 0,
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].renderShape).toEqual({
+                type: 'polygon',
+                bodyPosition: { x: 30, y: -500 },
+                bodyAngle: 0.25,
+                center: { x: 4, y: -2 },
+                angle: 0.5,
+                width: undefined,
+                height: undefined,
+                radius: undefined,
+                vertices: [{ x: -2, y: 1 }, { x: 2, y: 1 }, { x: 0, y: -3 }],
+                scale: 1.5,
+            });
+        });
+
         it('still detects flat bodies via collidesGroup1 markers', () => {
             const out = normalizeMap({
                 bodies: [

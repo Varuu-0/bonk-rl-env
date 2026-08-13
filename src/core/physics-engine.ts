@@ -217,6 +217,23 @@ export interface MapBodyDef {
   };
   color?: number;                // Visual color (RGB as integer)
   surfaceName?: string;          // Surface type name
+  /** Original `physics.bodies` index from an exported Bonk map. Render-only
+   * provenance used with MapDef.bodyRenderOrder; ignored by physics. */
+  renderBodyIndex?: number;
+  /** Native fixture geometry retained for rendering after the physics-facing
+   * flattened body representation has been normalized. */
+  renderShape?: {
+    type: 'rect' | 'circle' | 'polygon';
+    bodyPosition: { x: number; y: number };
+    bodyAngle: number;
+    center: { x: number; y: number };
+    angle: number;
+    width?: number;
+    height?: number;
+    radius?: number;
+    vertices?: { x: number; y: number }[];
+    scale?: number;
+  };
   linearDamping?: number;        // Body linear velocity drag
   angularDamping?: number;       // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
@@ -232,6 +249,9 @@ export interface MapDef {
   name: string;
   spawnPoints: MapSpawnPoints;
   bodies: MapBodyDef[];
+  /** Native `physics.bro` order, front-to-back by original body index. This is
+   * render-only metadata; physics consumes the flattened `bodies` array. */
+  bodyRenderOrder?: number[];
   capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
   joints?: Array<{
     type: string; bodyA: string; bodyB: string;

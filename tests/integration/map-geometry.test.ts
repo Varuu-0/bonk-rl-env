@@ -1,8 +1,10 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { buildGeometry, geometryFromExport, MapGeometryInput } from '../../src/render/map-geometry';
+import { buildGeometry, geometryFromExport, geometryFromMapDefBody, MapGeometryInput } from '../../src/render/map-geometry';
 import { computeCamera } from '../../src/render/render-math';
+import { renderFrameSvg } from '../../src/render/svg-rasterizer';
+import { normalizeMap } from '../../src/core/map-adapter';
 
 const MAPS = path.join(process.cwd(), 'maps');
 const load = (f: string): any => JSON.parse(fs.readFileSync(path.join(MAPS, f), 'utf8'));
@@ -67,12 +69,24 @@ describe('map-geometry (M2)', () => {
     }
   });
 
-  it('marks noPhysics fixtures as sensors (faded fill)', () => {
+  it('marks noPhysics fixtures as sensors without fading artwork', () => {
     const map = load('bonk_WeiRd_DeAth_BalL__80622.json');
     const input = geometryFromExport(map);
     const cmds = buildGeometry(input, cam);
     const sensors = cmds.filter(c => c.isSensor);
     expect(sensors.length).toBeGreaterThan(0);
+  });
+
+  it('preserves raw WDB geometry through normalized render metadata', () => {
+    const map = load('bonk_WDB__No_Mapshake__716916.json');
+    const rawCommands = buildGeometry(geometryFromExport(map), cam);
+    const normalizedCommands = buildGeometry(geometryFromMapDefBody(normalizeMap(map)), cam);
+
+    // The Signature body combines polygon-local transforms with overlapping
+    // fixtures. Rendered SVG equality covers coordinates and paint order while
+    // allowing normalized fixtures to retain their own z metadata.
+    expect(renderFrameSvg(normalizedCommands, [], { width: 730, height: 500 }))
+      .toEqual(renderFrameSvg(rawCommands, [], { width: 730, height: 500 }));
   });
 
   it('can tint lethal fixtures with a red stroke', () => {
