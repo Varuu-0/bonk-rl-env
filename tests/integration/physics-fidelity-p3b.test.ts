@@ -22,6 +22,8 @@ import { BonkEnvironment } from '../../src/core/environment';
 import { normalizeMap } from '../../src/core/map-adapter';
 import type { MapDef } from '../../src/core/physics-engine';
 
+const path = require('path');
+
 /** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
 const TEST_MAP: MapDef = {
     name: 'p3b-test-map',
@@ -160,11 +162,38 @@ describe('P3b: fl — flipped move-force base (DEOBFUSCATION §11)', () => {
 });
 
 describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
-    it.each([true, false])('normalizes exported settings.nc:%s without moving it into physics', (nc) => {
+    it.each([true, false])('normalized exported settings.nc:%s drives player collision masks', (nc) => {
+        // normalizeMap is the choke point every map surface (mapData, mapPath,
+        // bundled maps) converges on. Its settings.nc output must drive the
+        // disc filters directly: nc drops every player category bit, nc:false
+        // keeps them — direct mask coverage, not inferred via separation.
         const rawMap = exportedMap(nc);
         const normalized = normalizeMap(rawMap);
         expect(normalized.settings?.nc).toBe(nc);
-        expect((normalized.physics as any)?.nc).toBeUndefined();
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: normalized,
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(nc);
+            for (const id of [0, 1]) {
+                const shape = physics.playerBodies.get(id).GetShapeList();
+                const mask = shape.GetFilterData().maskBits;
+                if (nc) {
+                    expect(mask & PLAYER_BITS).toBe(0);
+                } else {
+                    expect(mask & PLAYER_BITS).not.toBe(0);
+                }
+                // Map geometry (category 1) stays solid either way.
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
     });
 
     it('exported settings.nc:true applies to player fixtures', () => {
@@ -270,6 +299,31 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
         } finally {
             mapTrueConfigFalse.close();
             mapFalseConfigTrue.close();
+        }
+    });
+
+    it('the mapPath file-loading surface applies bundled settings.nc:false to player masks', () => {
+        // Simple 1v1 ships settings.nc:false; the env's file-loading path
+        // (mapPath → JSON parse → normalizeMap) must carry it through so the
+        // disc masks keep every player category bit.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapPath: path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json'),
+            randomOpponent: false,
+        });
+        try {
+            expect((env as any).config.mapData.settings?.nc).toBe(false);
+            expect((env as any).config.noCollide).toBe(false);
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
         }
     });
 });

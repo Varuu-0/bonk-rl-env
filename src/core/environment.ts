@@ -471,8 +471,8 @@ export class BonkEnvironment {
             noCollide: config.noCollide ?? mapDef.settings?.nc ?? false,
             // Symmetric with noCollide: explicit config overrides the map's
             // per-map settings (P3b fl/re gating).
-            flipped: config.flipped ?? !!((mapDef as any).settings?.fl),
-            respawnEnabled: config.respawnEnabled ?? !!((mapDef as any).settings?.re),
+            flipped: config.flipped ?? !!mapDef.settings?.fl,
+            respawnEnabled: config.respawnEnabled ?? !!mapDef.settings?.re,
             physics: config.physics ?? {},
             arena: config.arena ?? {},
             player: config.player ?? {},
