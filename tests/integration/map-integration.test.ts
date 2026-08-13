@@ -10,6 +10,7 @@ import {
     SCALE
 } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
+import { normalizeMap } from '../../src/core/map-adapter';
 import { safeDestroy } from '../utils/test-helpers';
 import { loadMap, addAllBodies, getSpawnXY, getMapFiles } from '../utils/map-loader';
 
@@ -722,6 +723,62 @@ describe('MapIntegration', () => {
                         done = r.done;
                     }
                     expect(done).toBe(false);
+                } finally {
+                    env.close();
+                }
+            },
+        );
+
+        it.each([
+            ['polygon', {
+                bodyIndex: 0,
+                name: 'offset-polygon',
+                type: 'polygon',
+                x: 400,
+                y: 0,
+                // Polygon vertices are body-local coordinates, matching the
+                // MapBodyDef/PhysicsEngine contract.
+                vertices: [
+                    { x: -100, y: -20 },
+                    { x: 100, y: -20 },
+                    { x: 100, y: 20 },
+                    { x: -100, y: 20 },
+                ],
+                static: true,
+            }],
+            ['rect control', {
+                bodyIndex: 0,
+                name: 'offset-rect',
+                type: 'rect',
+                x: 400,
+                y: 0,
+                width: 200,
+                height: 40,
+                static: true,
+            }],
+        ] as const)(
+            '%s keeps the 850-unit OOB boundary centered on the authored geometry (#332)',
+            (_name, body) => {
+                const rawMap = {
+                    bodies: [body],
+                    spawns: [{ x: 0, y: -150, blue: true, red: true, ffa: true }],
+                };
+                const normalized = normalizeMap(rawMap as any);
+                expect(normalized.physics?.deathCenter).toEqual({ x: 400, y: 0 });
+
+                const env = new BonkEnvironment({
+                    mapData: rawMap as any,
+                    numOpponents: 0,
+                    randomOpponent: false,
+                    seed: 1,
+                });
+                try {
+                    const physics: any = (env as any).physics;
+                    physics.playerBodies.get(0).SetXForm({ x: -500 / SCALE, y: -100 / SCALE }, 0);
+                    env.step(0);
+                    const state = physics.getPlayerState(0);
+                    expect(state.alive).toBe(false);
+                    expect(state.deathType).toBe(4);
                 } finally {
                     env.close();
                 }

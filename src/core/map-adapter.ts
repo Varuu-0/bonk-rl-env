@@ -464,7 +464,12 @@ export function normalizeMap(raw: unknown): MapDef {
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
             else if (b.vertices && b.vertices.length) {
-                for (const v of b.vertices) { if (v.x < bx0) bx0 = v.x; if (v.x > bx1) bx1 = v.x; if (v.y < by0) by0 = v.y; if (v.y > by1) by1 = v.y; }
+                for (const v of b.vertices) {
+                    const vx = b.x + v.x;
+                    const vy = b.y + v.y;
+                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx;
+                    if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
+                }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
             if (by0 < minY) minY = by0; if (by1 > maxY) maxY = by1;
