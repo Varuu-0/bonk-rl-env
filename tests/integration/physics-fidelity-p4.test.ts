@@ -36,6 +36,7 @@ import {
   verifyFixtureGates,
   verifyJointGates,
 } from '../../src/core/differential/exact-match-gates';
+import { OUT_OF_BOUNDS_DISTANCE } from '../../src/core/physics-engine';
 import type { NativeTrace } from '../../src/core/differential/native-trace';
 
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
@@ -223,19 +224,25 @@ describe('P4: differential validation — replay comparator', () => {
       version: TRACE_SCHEMA_VERSION,
       tps: 30,
       map: loadMap(SIMPLE_1V1),
+      // Pin respawning off: with `re` on, an OOB death would respawn the disc
+      // back at its spawn point, and a disc that never leaves the death circle
+      // would come back alive — breaking the all-skipped premise.
+      settings: { re: false },
       players: [{ id: 0, team: 1 }, { id: 1, team: 2 }],
-      // Both discs are outside the engine's OOB death circle before the first
-      // replay tick, so every native-absent entry agrees with a dead engine disc.
+      // Both discs are placed one unit beyond the engine's OOB death circle
+      // (OUT_OF_BOUNDS_DISTANCE map units from the origin death center) before
+      // the first replay tick, so every native-absent entry agrees with a dead
+      // engine disc.
       spawns: [
-        { id: 0, x: 5000, y: 0 },
-        { id: 1, x: 5000, y: 50 },
+        { id: 0, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 0 },
+        { id: 1, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 50 },
       ],
       ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] })),
     };
 
     const verdict = compareTrace(noData, { seed: 7 });
     expect(verdict.skippedNoData).toBe(noData.ticks.length);
-    expect(verdict.ticksCompared).toBe(noData.ticks.length);
+    expect(verdict.ticksCompared).toBe(0);
     expect(verdict.ticksOutsideTolerance).toBe(0);
     expect(verdict.worst).toEqual({ dx: 0, dy: 0, dvx: 0, dvy: 0, da: 0, dav: 0 });
     expect(verdict.pass).toBe(false);

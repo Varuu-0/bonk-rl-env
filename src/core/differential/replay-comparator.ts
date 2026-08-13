@@ -242,7 +242,8 @@ export function compareTrace(
     return {
       // A trace with no comparable ticks cannot establish a differential pass.
       pass: ticksOutsideTolerance === 0 && comparedTicks > 0,
-      ticksCompared: perTick.length,
+      // Actual compared ticks: skips the no-data ticks that contributed nothing.
+      ticksCompared: comparedTicks,
       ticksOutsideTolerance,
       worst,
       perTick,
