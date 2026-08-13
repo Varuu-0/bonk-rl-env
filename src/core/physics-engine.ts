@@ -171,6 +171,17 @@ export interface PlayerState {
   deathType: number;
 }
 
+/**
+ * A death resolved during the most recent physics tick. The state is captured
+ * before an immediate `re` respawn so environment consumers can observe the
+ * death without changing the native-style body lifecycle.
+ */
+export interface DeathEvent {
+  playerId: number;
+  deathType: number;
+  state: PlayerState;
+}
+
 export interface PlayerInput {
   left: boolean;
   right: boolean;
@@ -425,6 +436,10 @@ export class PhysicsEngine {
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
+  /** Death causes collected during the current tick, before respawn. */
+  private tickDeathCauses: Map<number, number> = new Map();
+  /** Deaths from the most recent tick, consumed by the environment. */
+  private deathEvents: DeathEvent[] = [];
   private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> = new Map();
   private capZoneTouches: Array<{ zoneIndex: number; playerId: number; team: string }> = [];
   /** True when the game has teams enabled (native game setting `tea`). */
@@ -701,9 +716,32 @@ export class PhysicsEngine {
 
   private checkLethalCollision(playerData: any, staticData: any): void {
     if (playerData.playerId !== undefined && staticData.isLethal) {
-      this.playerAlive.set(playerData.playerId, false);
-      this.playerDeathType.set(playerData.playerId, 1);
+      this.markPlayerDead(playerData.playerId, 1);
       globalProfiler.increment('collision_lethal');
+    }
+  }
+
+  /**
+   * Record one death cause for the current tick. Physical causes outrank the
+   * round-wide cap elimination so a lethal/OOB death cannot be reclassified as
+   * type 3 merely because cap completion is processed later in the tick.
+   */
+  private markPlayerDead(playerId: number, deathType: number): void {
+    this.playerAlive.set(playerId, false);
+
+    const previous = this.tickDeathCauses.get(playerId);
+    if (previous !== undefined && PhysicsEngine.deathCausePriority(previous) >= PhysicsEngine.deathCausePriority(deathType)) {
+      return;
+    }
+    this.tickDeathCauses.set(playerId, deathType);
+  }
+
+  private static deathCausePriority(deathType: number): number {
+    switch (deathType) {
+      case 1: return 3; // lethal surface
+      case 4: return 2; // out of bounds
+      case 3: return 1; // cap-zone elimination
+      default: return 0;
     }
   }
 
@@ -747,9 +785,10 @@ export class PhysicsEngine {
     this.instantGoalResolved = true;
     this.lastScoredTeam = winnerTeam;
     for (const [id, team] of this.playerTeams) {
-      if (team !== winnerTeam) {
-        this.playerAlive.set(id, false);
-        this.playerDeathType.set(id, 3);
+      // A disc already dead this tick (or on an earlier tick) keeps its
+      // physical death cause; cap completion only eliminates survivors.
+      if (team !== winnerTeam && this.playerAlive.get(id)) {
+        this.markPlayerDead(id, 3);
       }
     }
   }
@@ -1759,6 +1798,25 @@ export class PhysicsEngine {
         this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
+    // Detect OOB before cap completion can eliminate survivors. Include a
+    // player already marked dead by this tick's contact/goal handling so a
+    // same-tick cap event cannot hide an OOB cause.
+    for (const [id, body] of Array.from(this.playerBodies)) {
+      if (this.playerAlive.get(id) || this.tickDeathCauses.has(id)) {
+        const pos = body.GetPosition();
+        const dx = pos.x - this.oobCenterX;
+        const dy = pos.y - this.oobCenterY;
+        const d2 = dx * dx + dy * dy;
+        if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
+          const previousCause = this.tickDeathCauses.get(id);
+          this.markPlayerDead(id, 4);
+          if (previousCause === undefined || PhysicsEngine.deathCausePriority(previousCause) < PhysicsEngine.deathCausePriority(4)) {
+            globalProfiler.increment('death_out_of_bounds');
+          }
+        }
+      }
+    }
+
     // Process cap-zone completion countdowns (before this tick's touches)
     this.processCapZoneCountdowns();
 
@@ -1777,32 +1835,13 @@ export class PhysicsEngine {
       this.pendingSwingDestroy.clear();
     }
 
-    // One pass over a snapshot of the player map: detect OOB deaths, then detach
-    // every dead disc. Iterating a copy (instead of the live map, which
-    // detachPlayer deletes from) keeps the pass robust if a future cleanup ever
-    // removes a not-yet-visited id, which a Map iterator would silently skip.
-    // The common no-death tick stays a single walk instead of two full passes.
-    for (const [id, body] of Array.from(this.playerBodies)) {
-      if (this.playerAlive.get(id)) {
-        // Squared comparison avoids a per-player Math.sqrt; threshold identical.
-        // Distance is measured from the OOB death-circle center (defaults to
-        // the world origin; setDeathCircleCenter moves it to the map center).
-        const pos = body.GetPosition();
-        const dx = pos.x - this.oobCenterX;
-        const dy = pos.y - this.oobCenterY;
-        const d2 = dx * dx + dy * dy;
-        // Fail-safe (#271, #276): a non-finite position/distance (NaN/Infinity
-        // from any solver corruption) must count as out-of-bounds. Without this
-        // guard, `NaN > threshold` is false, so a corrupted disc would be
-        // immortal (the death circle silently disabled) and poison every
-        // observation for the rest of the episode.
-        if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
-          this.playerAlive.set(id, false);
-          this.playerDeathType.set(id, 4);
-          globalProfiler.increment('death_out_of_bounds');
-        }
-      }
+    // Resolve and snapshot this tick's deaths before immediate respawn/detach.
+    // The environment consumes these events after tick() returns.
+    this.resolveTickDeaths();
 
+    // One pass over a snapshot of the player map: detach or respawn every dead
+    // disc. Iterating a copy keeps the pass robust if cleanup deletes entries.
+    for (const [id, body] of Array.from(this.playerBodies)) {
       if (!this.playerAlive.get(id)) {
         // Native `re` respawning: a disc that died (any type except the
         // permanent cap-zone elimination, type 3) comes back immediately at
@@ -1822,6 +1861,32 @@ export class PhysicsEngine {
     }
   }
 
+  /** Snapshot and publish deaths collected during the current tick. */
+  private resolveTickDeaths(): void {
+    const ids = Array.from(this.tickDeathCauses.keys()).sort((a, b) => a - b);
+    this.deathEvents = ids.map((id) => {
+      const deathType = this.tickDeathCauses.get(id)!;
+      this.playerDeathType.set(id, deathType);
+      return {
+        playerId: id,
+        deathType,
+        state: this.getPlayerState(id),
+      };
+    });
+    this.tickDeathCauses.clear();
+  }
+
+  /**
+   * Consume deaths from the most recent tick. This is intentionally separate
+   * from getPlayerState(): immediate respawn restores the live physics state,
+   * while the event preserves the dying-step observation/reward contract.
+   */
+  getDeathEvents(): DeathEvent[] {
+    const events = this.deathEvents;
+    this.deathEvents = [];
+    return events;
+  }
+
   /**
    * Timed cap-zone (type 1) completion countdown, gated on the native
    * `while (p >= l)` rule (DEOBFUSCATION §34.6, lines 3698-3703): the f
@@ -1836,9 +1901,10 @@ export class PhysicsEngine {
         if (state.f === 0) {
           const ownerTeam = state.ot;
           for (const [id, team] of this.playerTeams) {
-            if (team !== ownerTeam) {
-              this.playerAlive.set(id, false);
-              this.playerDeathType.set(id, 3);
+            // Do not overwrite an OOB/lethal death recorded earlier in this
+            // tick, or a dead disc's cause from an earlier tick.
+            if (team !== ownerTeam && this.playerAlive.get(id)) {
+              this.markPlayerDead(id, 3);
             }
           }
           this.lastScoredTeam = ownerTeam || null;
@@ -2004,6 +2070,8 @@ export class PhysicsEngine {
     this.capZoneTouches = [];
     this.lastScoredTeam = null;
     this.instantGoalResolved = false;
+    this.tickDeathCauses.clear();
+    this.deathEvents = [];
     this.pendingSwingDestroy.clear();
     this.lastHitBy.clear();
     this.lastHitTicks.clear();

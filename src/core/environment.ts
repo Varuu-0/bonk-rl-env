@@ -19,6 +19,7 @@ import {
     PhysicsEngine,
     PlayerInput,
     PlayerState,
+    DeathEvent,
     MapDef,
     MapBodyDef,
     TPS,
@@ -137,7 +138,9 @@ export interface EnvironmentConfig {
      *  `noCollide` vs `settings.nc`). */
     flipped?: boolean;
     /** Native respawning mode (`re`): dead discs respawn at their spawn point
-     *  (default false). Explicit config wins over the map's `settings.re`. */
+     *  (default false). Explicit config wins over the map's `settings.re`.
+     *  Transient lethal/OOB deaths remain observable and rewarded but do not
+     *  terminate; permanent cap-zone eliminations still terminate. */
     respawnEnabled?: boolean;
     /** Documented physics.* tuning forwarded to the PhysicsEngine (issue #217).
      *  Absent keys keep the engine's sanity defaults, so an env built without a
@@ -354,7 +357,8 @@ export class BonkEnvironment {
     private aiTeam: string = 'blue';
     private scoreBlue: number = 0;
     private scoreRed: number = 0;
-    private previousAliveState: Map<number, boolean> = new Map();
+    /** Pre-respawn states exposed for the step in which a death occurs. */
+    private visibleDeathStates: Map<number, PlayerState> = new Map();
     private rng: PRNG;
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
@@ -693,13 +697,6 @@ export class BonkEnvironment {
             }
         }
 
-        // Track initial alive states
-        this.previousAliveState.clear();
-        this.previousAliveState.set(this.aiPlayerId, true);
-        for (const id of this.opponentIds) {
-            this.previousAliveState.set(id, true);
-        }
-
         // Re-apply explicit map bounds last — body re-adds above recomputed
         // dynamic bounds and would otherwise clobber the override every reset.
         if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
@@ -717,6 +714,7 @@ export class BonkEnvironment {
         this.terminalReached = false;
         this.terminalTruncated = false;
         this.terminalTerminated = false;
+        this.visibleDeathStates.clear();
         this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
 
         return this.getObservation();
@@ -761,9 +759,9 @@ export class BonkEnvironment {
                 truncated: this.terminalTruncated,
                 info: {
                     tick: this.physics.getTickCount(),
-                    aiAlive: this.physics.getPlayerState(this.aiPlayerId).alive,
+                    aiAlive: this.getVisiblePlayerState(this.aiPlayerId).alive,
                     opponentsAlive: this.opponentIds.filter(
-                        id => this.physics.getPlayerState(id).alive,
+                        id => this.getVisiblePlayerState(id).alive,
                     ).length,
                     terminated: this.terminalTerminated,
                     frameSkip: this.config.frameSkip,
@@ -780,6 +778,11 @@ export class BonkEnvironment {
             this.lastAction = this.decodeAction(action);
         }
 
+        // A transient respawn death is visible for exactly the step that
+        // produced it. Keep the overlay through terminal holds, but clear it
+        // before the next live physics tick so the respawned body is visible.
+        this.visibleDeathStates.clear();
+
         const aiInput = this.lastAction;
 
         // Apply AI input
@@ -794,24 +797,32 @@ export class BonkEnvironment {
         // Step physics by exactly 1 tick
         this.physics.tick();
 
-        // Cache player states to avoid repeated lookups
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
-        const opponentStates = this.opponentIds.map(id => this.physics.getPlayerState(id));
-
-        // Calculate reward
-        const reward = this.calculateReward(aiState, opponentStates);
-
-        // Update previous alive state for next reward calculation
-        this.previousAliveState.set(this.aiPlayerId, aiState.alive);
-        for (let i = 0; i < this.opponentIds.length; i++) {
-            this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
+        // Drain deaths before sampling the visible state. Physics may already
+        // have respawned a transient death, so the event carries the
+        // pre-respawn state needed by rewards, info, and observations.
+        const deathEvents = this.physics.getDeathEvents();
+        for (const event of deathEvents) {
+            this.visibleDeathStates.set(event.playerId, event.state);
         }
 
-        // Check for terminal state (death or maxTicks). With zero opponents
-        // the empty-state check must not be vacuously true: an episode with
-        // no opponents can only end via the AI's death or truncation.
-        const allOpponentsDead = opponentStates.length > 0 && opponentStates.every(s => !s.alive);
-        const terminated = !aiState.alive || allOpponentsDead;
+        // Cache both the physical post-tick state (termination policy) and the
+        // event-overlaid state (the public dying-step observation contract).
+        const aiPhysicsState = this.physics.getPlayerState(this.aiPlayerId);
+        const opponentPhysicsStates = this.opponentIds.map(id => this.physics.getPlayerState(id));
+        const aiState = this.getVisiblePlayerState(this.aiPlayerId);
+        const opponentStates = this.opponentIds.map(id => this.getVisiblePlayerState(id));
+
+        // Calculate reward
+        const reward = this.calculateReward(deathEvents);
+
+        // Check for terminal state (permanent death or maxTicks). Respawnable
+        // lethal/OOB deaths are observable on this step but the post-tick
+        // respawn keeps the episode alive, matching native `re` semantics.
+        // With zero opponents the empty-state check must not be vacuously
+        // true: an episode with no opponents can only end via permanent AI
+        // death or truncation.
+        const allOpponentsDead = opponentPhysicsStates.length > 0 && opponentPhysicsStates.every(s => !s.alive);
+        const terminated = !aiPhysicsState.alive || allOpponentsDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 
         // If terminal reached, set flag to report done immediately on subsequent ticks.
@@ -915,28 +926,26 @@ export class BonkEnvironment {
      * rewards elimination, negative discourages it); deathPenalty and
      * timePenalty are enforced non-positive so a "penalty" always reduces
      * reward and can never reward the event it names:
-     *   +killReward   — opponent knocked off the map (killed)
-     *   +deathPenalty — AI player knocked off the map (death; default -1.0)
+     *   +killReward   — opponent death event (including each transient
+     *                   respawn death)
+     *   +deathPenalty — AI death event (including each transient respawn
+     *                   death; default -1.0)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
      *           count as kills)
      *   +timePenalty — per-tick penalty (encourages action; default -0.001)
      */
-    private calculateReward(aiState: PlayerState, opponentStates: PlayerState[]): number {
+    private calculateReward(deathEvents: readonly DeathEvent[]): number {
         let reward = 0;
 
-        // Check if AI just died this tick (cap-zone eliminations score via the
-        // capture branch below instead of double-counting as a death)
-        const aiWasAlive = this.previousAliveState.get(this.aiPlayerId) ?? true;
-        if (aiWasAlive && !aiState.alive && aiState.deathType !== 3) {
-            reward += this.config.reward.deathPenalty;
-        }
-
-        // Check if any opponent just died this tick
-        for (let i = 0; i < this.opponentIds.length; i++) {
-            const opState = opponentStates[i];
-            const opWasAlive = this.previousAliveState.get(this.opponentIds[i]) ?? true;
-            if (opWasAlive && !opState.alive && opState.deathType !== 3) {
+        // Events are the transition source because a respawn-enabled death is
+        // already alive again in the post-tick physics state. Cap-zone deaths
+        // remain priced only by the capture branch below.
+        for (const event of deathEvents) {
+            if (event.deathType === 3) continue;
+            if (event.playerId === this.aiPlayerId) {
+                reward += this.config.reward.deathPenalty;
+            } else if (this.opponentIds.includes(event.playerId)) {
                 reward += this.config.reward.killReward;
             }
         }
@@ -967,10 +976,10 @@ export class BonkEnvironment {
      * Build the observation object from current physics state.
      */
     private getObservation(): Observation {
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+        const aiState = this.getVisiblePlayerState(this.aiPlayerId);
 
         const opponents = this.opponentIds.map(id => {
-            const s = this.physics.getPlayerState(id);
+            const s = this.getVisiblePlayerState(id);
             return {
                 x: s.x,
                 y: s.y,
@@ -998,6 +1007,11 @@ export class BonkEnvironment {
         };
     }
 
+    /** Return the dying-step snapshot when one exists, otherwise live state. */
+    private getVisiblePlayerState(playerId: number): PlayerState {
+        return this.visibleDeathStates.get(playerId) ?? this.physics.getPlayerState(playerId);
+    }
+
     /**
      * Fast observation extraction — returns a pre-allocated Float32Array
      * directly from physics state, skipping intermediate object creation.
@@ -1006,7 +1020,7 @@ export class BonkEnvironment {
      * the tick at 16+), 2 arena floats at 13-14, tick at 15.
      */
     getObservationFast(): Float32Array {
-        const aiState = this.physics.getPlayerState(this.aiPlayerId);
+        const aiState = this.getVisiblePlayerState(this.aiPlayerId);
 
         this._obsBuffer[0] = aiState.x;
         this._obsBuffer[1] = aiState.y;
@@ -1022,7 +1036,7 @@ export class BonkEnvironment {
         // values written into them).
         const numOpponents = Math.min(this.opponentIds.length, this.config.numOpponents);
         for (let i = 0; i < numOpponents; i++) {
-            const state = this.physics.getPlayerState(this.opponentIds[i]);
+            const state = this.getVisiblePlayerState(this.opponentIds[i]);
             const base = i === 0 ? 7 : 16 + 6 * (i - 1);
             this._obsBuffer[base] = state.x;
             this._obsBuffer[base + 1] = state.y;

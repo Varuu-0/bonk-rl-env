@@ -770,6 +770,44 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.reward).toBeCloseTo(10, 6);
     });
 
+    it('respawn-enabled opponent OOB death remains visible and rewarded before continuation', async () => {
+      const mapData: MapDef = {
+        name: 'respawn-opponent-death',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+
+      const death = env.step(0);
+      expect(death.reward).toBeCloseTo(10, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.opponentsAlive).toBe(0);
+      expect(death.observation.opponents[0].alive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.done).toBe(false);
+      expect(continuation.info.opponentsAlive).toBe(1);
+      expect(continuation.observation.opponents[0].alive).toBe(true);
+      expect(continuation.observation.opponents[0].x).toBeCloseTo(200, 4);
+    });
+
     it('configurable deathPenalty: AI death pays the configured -5', async () => {
       const mapData: MapDef = {
         name: 'death-config',
@@ -792,6 +830,42 @@ describe('BonkEnvironment edge cases', () => {
       const result = env.step(0);
       expect(result.info.aiAlive).toBe(false);
       expect(result.reward).toBeCloseTo(-5, 6);
+    });
+
+    it('respawn-enabled AI OOB death pays the penalty and continues next step', async () => {
+      const mapData: MapDef = {
+        name: 'respawn-ai-death',
+        spawnPoints: {
+          team_blue: { x: 0, y: 0 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 0,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        deathPenalty: -5,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+
+      const death = env.step(0);
+      expect(death.reward).toBeCloseTo(-5, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.aiAlive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.done).toBe(false);
+      expect(continuation.info.aiAlive).toBe(true);
+      expect(continuation.observation.playerX).toBeCloseTo(0, 4);
     });
 
     it('configurable timePenalty applies on every non-terminal tick', async () => {
