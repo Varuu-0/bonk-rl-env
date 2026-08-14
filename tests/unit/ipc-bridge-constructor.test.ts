@@ -392,8 +392,11 @@ describe('IpcBridge close() (lines 159-173)', () => {
     // start()'s catch closes the ROUTER handle when a bind fails. A later
     // close() (server.ts rolls back a failed start via serverBridge.close())
     // must not close the already-closed socket a redundant second time.
-    (mockSock as any).closed = true;
     const bridge = new IpcBridge({ server: { port: 12354 } });
+    // Model the failed-start path: construction yields an open ROUTER (like
+    // production `new zmq.Router()`), then start()'s failed-bind catch
+    // closes this bridge's socket handle before close() runs.
+    (bridge as any).sock.closed = true;
     closeSpy.mockClear();
     await bridge.close();
     expect(closeSpy).not.toHaveBeenCalled();
