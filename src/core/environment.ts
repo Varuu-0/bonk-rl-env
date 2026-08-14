@@ -706,16 +706,20 @@ export class BonkEnvironment {
 
         // Re-apply explicit map bounds last — body re-adds above recomputed
         // dynamic bounds and would otherwise clobber the override every reset.
-// MapDef physics.bounds are map pixels, while setMapBounds consumes
+        // MapDef physics.bounds are map pixels, while setMapBounds consumes
         // internal world metres; convert with the engine's resolved scale so
         // custom physics.scale values preserve the observation's map-pixel unit.
         // Both methods are duck-checked: an engine exposing setMapBounds but not
-        // getScale skips the override instead of throwing in reset().
+        // getScale skips the override instead of throwing in reset(). The
+        // returned scale itself is also validated — a partial engine reporting
+        // 0/NaN would otherwise silently store Infinity/NaN bounds.
         if (this.mapBounds
             && typeof (this.physics as any).setMapBounds === 'function'
             && typeof (this.physics as any).getScale === 'function') {
             const scale = (this.physics as any).getScale();
-            this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
+            if (typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
+                this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
+            }
         }
 
         // Re-apply the map's OOB death-circle center — like mapBounds it is a

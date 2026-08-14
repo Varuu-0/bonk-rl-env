@@ -117,6 +117,30 @@ describe('BonkEnvironment edge cases', () => {
       expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
     });
 
+    it('skips the map-bounds override when getScale reports an unusable scale', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      // A partial engine whose getScale() returns 0/NaN must not feed
+      // Infinity/NaN bounds into setMapBounds; the override is skipped so
+      // observations keep the engine's dynamic bounds.
+      for (const badScale of [0, NaN, Infinity, -30]) {
+        setMapBoundsSpy.mockClear();
+        physics.getScale = () => badScale;
+        expect(() => env!.reset(2)).not.toThrow();
+        expect(setMapBoundsSpy).not.toHaveBeenCalled();
+      }
+
+      physics.getScale = () => 30;
+      setMapBoundsSpy.mockClear();
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).toHaveBeenCalledWith(2, 4 / 3);
+    });
+
     it('capZones empty array when no capZones in map', async () => {
       const mapData: MapDef = makeMap({});
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
