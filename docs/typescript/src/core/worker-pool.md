@@ -193,8 +193,18 @@ pool.close();
 | Option | Type | Description |
 |:-------|:-----|:------------|
 | `numWorkers` | `number` | Number of worker threads |
+| `maxWorkers` | `number` | Upper bound used when `numWorkers` is auto-detected |
 | `useSharedMemory` | `boolean` | Enable SharedArrayBuffer mode |
-| `ringSize` | `number` | Ring buffer size for shared memory |
+| `ringBufferSize` | `number` | Power-of-two shared-memory ring size, from 2 through 1048576 |
+| `messageTimeoutMs` | `number` | Worker message timeout in milliseconds, minimum 100 |
+| `stepTimeoutMs` | `number` | Shared-memory step timeout in milliseconds, minimum 100 |
+
+The loader resolves these values in the order `config.json`, environment
+variables (`NUM_WORKERS`, `MAX_WORKERS`, `RING_BUFFER_SIZE`,
+`MESSAGE_TIMEOUT_MS`, `STEP_TIMEOUT_MS`), then CLI flags
+(`--num-workers`, `--max-workers`, `--ring-buffer-size`,
+`--message-timeout-ms`, `--step-timeout-ms`). CLI values take precedence over
+environment values, which take precedence over the config file.
 
 ---
 

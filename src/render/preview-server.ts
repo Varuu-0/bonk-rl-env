@@ -11,13 +11,16 @@
  *   npx tsx src/render/preview-server.ts [--map path] [--ticks N] [--port P] [--fps N] [--width W] [--height H]
  * then open http://localhost:<port> in a browser.
  *
+ * Without --map, an interactive terminal lists maps/*.json and prompts for a
+ * selection; piped stdin (CI, smoke tests) falls back to the default map.
+ *
  * `--ticks 0` (the default) streams until the process is stopped; a positive
  * value broadcasts that many frames and exits (useful for smoke tests).
  */
 import * as http from 'http';
 import { BonkEnvironment } from '../core/environment';
 import { renderEnvFrameSvg } from './render-wiring';
-import { parseArgs, parseIntArg, parsePositiveIntArg, resolvePreviewMap } from './preview-shared';
+import { parseArgs, parseIntArg, parsePositiveIntArg, selectPreviewMap } from './preview-shared';
 
 /** One streamed frame. The server keeps only the latest for late joins. */
 interface SseFrame {
@@ -147,7 +150,7 @@ function handleRequest(
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
-  const map = resolvePreviewMap(args.map);
+  const map = await selectPreviewMap(args.map);
   const width = parseIntArg(args.width, 730, 'width');
   const height = parseIntArg(args.height, 500, 'height');
   const port = parseIntArg(args.port, 8080, 'port');

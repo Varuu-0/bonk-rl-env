@@ -29,6 +29,17 @@ interface PoolSession {
     activeRequests: number;
 }
 
+interface IpcSocketOptions {
+    sendHighWaterMark: number;
+    receiveHighWaterMark: number;
+    tcpKeepalive: number;
+    linger: number;
+    backlog: number;
+}
+
+const MAX_ZMQ_OPTION = 0x7fffffff;
+const INTEGER_NUMERIC_RE = /^[+-]?\d+$/;
+
 export class IpcBridge {
     private sock: zmq.Router;
     private port: number;
@@ -37,6 +48,7 @@ export class IpcBridge {
     private _closed: boolean = false;
     private _shouldClose: boolean = false;
     private readonly maxClientSessions: number;
+    private readonly socketOptions: IpcSocketOptions;
     private sessionReapTimer?: ReturnType<typeof setInterval>;
     private sessionReapInProgress?: Promise<void>;
 
@@ -69,6 +81,8 @@ export class IpcBridge {
     private _hostUseSharedMemory: boolean | undefined = undefined;
     private _boundResolve: (() => void) | null = null;
     private _boundReject: ((reason?: any) => void) | null = null;
+    private boundEndpoint: string | null = null;
+    private closePromise: Promise<void> | null = null;
 
     // Current bind signal for this serve cycle. Replaced on every start()
     // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -113,8 +127,9 @@ export class IpcBridge {
     private telemetryInFlight: boolean = false;
 
     constructor(config?: DeepPartial<AppConfig>) {
-        this.port = config?.server?.port ?? getConfig().server.port;
-        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? getConfig().server.bindAddress);
+        const loadedConfig = getConfig();
+        this.port = config?.server?.port ?? loadedConfig.server.port;
+        this.bindAddress = IpcBridge.normalizeBindAddress(config?.server?.bindAddress ?? loadedConfig.server.bindAddress);
         // A cap below 1 is meaningless: clamp so a bad config loudly enforces
         // a single concurrent session instead of rejecting every init. A
         // missing/non-finite value (e.g. a partial mock config, or empty
@@ -124,14 +139,54 @@ export class IpcBridge {
         // integer count of concurrent sessions, so a fractional value is
         // floored (1.5 → 1, 2.5 → 2) rather than silently relaxing the bound
         // by Math.ceil (issue #259).
-        const rawCap: unknown = config?.server?.maxClientSessions ?? getConfig().server.maxClientSessions;
+        const rawCap: unknown = config?.server?.maxClientSessions ?? loadedConfig.server.maxClientSessions;
         const parsedCap = typeof rawCap === 'string'
             ? (rawCap.trim() === '' ? NaN : Number(rawCap))
             : rawCap;
         this.maxClientSessions = Number.isFinite(parsedCap as number)
             ? Math.floor(Math.max(1, parsedCap as number))
             : DEFAULT_MAX_CLIENT_SESSIONS;
-        this.sock = new zmq.Router();
+
+        const loadedIpc: Partial<AppConfig['ipc']> = (loadedConfig as Partial<AppConfig>).ipc ?? {};
+        // socketType/serialization are loader-validated and documented, but the
+        // wire contract IpcBridge serves is fixed at ROUTER + json. Alternate
+        // values are parsed for forward compatibility and ignored here rather
+        // than throwing during server.ts / bonk-env.ts initialization (which
+        // would turn previously-ignored documented values into a startup crash).
+        this.socketOptions = {
+            sendHighWaterMark: IpcBridge.normalizeSocketOption(
+                config?.ipc?.sndHwm ?? loadedIpc.sndHwm,
+                1000,
+                0,
+                'ipc.sndHwm',
+            ),
+            receiveHighWaterMark: IpcBridge.normalizeSocketOption(
+                config?.ipc?.rcvHwm ?? loadedIpc.rcvHwm,
+                1000,
+                0,
+                'ipc.rcvHwm',
+            ),
+            tcpKeepalive: IpcBridge.normalizeSocketOption(
+                config?.ipc?.tcpKeepalive ?? loadedIpc.tcpKeepalive,
+                0,
+                0,
+                'ipc.tcpKeepalive',
+                value => value === 0 || value === 1,
+            ),
+            linger: IpcBridge.normalizeSocketOption(
+                config?.ipc?.lingerMs ?? loadedIpc.lingerMs,
+                1000,
+                0,
+                'ipc.lingerMs',
+            ),
+            backlog: IpcBridge.normalizeSocketOption(
+                config?.server?.zmqBacklog ?? loadedConfig.server.zmqBacklog,
+                100,
+                1,
+                'server.zmqBacklog',
+            ),
+        };
+        this.sock = this.createSocket();
         this.localSession = {
             pool: new WorkerPool(),
             initialized: false,
@@ -148,6 +203,27 @@ export class IpcBridge {
         // as handled so it cannot surface as an unhandled-rejection crash for
         // consumers (such as src/server.ts) that never await ready.
         this._ready.catch(() => {});
+    }
+
+    private static normalizeSocketOption(
+        raw: unknown,
+        fallback: number,
+        minimum: number,
+        name: string,
+        predicate: (value: number) => boolean = value => value >= minimum,
+    ): number {
+        const value = typeof raw === 'string'
+            ? (INTEGER_NUMERIC_RE.test(raw.trim()) ? Number(raw.trim()) : NaN)
+            : raw;
+        if (value === undefined) return fallback;
+        if (typeof value !== 'number' || !Number.isSafeInteger(value) || value > MAX_ZMQ_OPTION || !predicate(value)) {
+            throw new Error(`Invalid ${name}: expected a safe integer in the documented range`);
+        }
+        return value;
+    }
+
+    private createSocket(): zmq.Router {
+        return new zmq.Router(this.socketOptions);
     }
 
     private markBound(): void {
@@ -230,18 +306,35 @@ export class IpcBridge {
     private _wrappedSend: Function;
 
     async start() {
-        const addr = `tcp://${this.bindAddress}:${this.port}`;
-        // Re-arm `ready` on every serve cycle, not only when the socket is
-        // recreated: a failed bind rejects the current promise and nulls its
-        // handlers, so the next start() must install fresh ones or a
-        // successful retry bind could never resolve ready (issue #263).
+        // Re-arm `ready` before waiting for a prior close to finish. Callers
+        // can read the new readiness promise immediately after invoking
+        // start(), even while the previous socket is still unbinding.
         this.rearmReady();
+        if (this.closePromise) {
+            const previousClose = this.closePromise;
+            try {
+                await previousClose;
+            } catch (error) {
+                // A rejected close was already surfaced to that close()
+                // caller. Never re-throw it here: a restart must still attempt
+                // its fresh bind so the re-armed ready promise settles, instead
+                // of hanging every bridge.ready awaiter forever and wedging
+                // same-instance restarts on a stale rejection (#316).
+                console.error('[IPC] Prior close failed; proceeding with restart:', error);
+            } finally {
+                if (this.closePromise === previousClose) {
+                    this.closePromise = null;
+                }
+            }
+        }
+
+        const addr = `tcp://${this.bindAddress}:${this.port}`;
         // A closed ZMQ socket is permanently destroyed and can never be
         // re-bound (bind() throws "Socket is closed"). Recreate the transport
         // so a later start() after close() binds a fresh ROUTER and serves
         // again (issue #263): re-wrap the send function on the new socket.
         if (this.sock.closed) {
-            this.sock = new zmq.Router();
+            this.sock = this.createSocket();
             this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
         }
         try {
@@ -258,6 +351,11 @@ export class IpcBridge {
             }
             throw err;
         }
+        // libzmq resolves wildcard binds to a concrete endpoint (for example,
+        // tcp://0.0.0.0:<port>). Keep that resolved value because unbind()
+        // requires the endpoint returned by lastEndpoint, not the original
+        // tcp://*:<port> request.
+        this.boundEndpoint = this.sock.lastEndpoint ?? addr;
         console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
         this._closed = false;
         if (!this._hostPool) {
@@ -800,9 +898,21 @@ export class IpcBridge {
         return this._closed;
     }
 
-    async close() {
+    /**
+     * Close the IPC server: unbind the advertised endpoint first so the port
+     * is released before the socket is destroyed (libzmq tears its TCP
+     * listener down asynchronously on close), then close every owned pool.
+     * Single-flight: concurrent close() calls share the same in-flight
+     * promise, and the retained reference is dropped the moment the teardown
+     * settles so a rejected close can never wedge later close()/start()
+     * attempts on a stale rejection (#316).
+     */
+    close(): Promise<void> {
+        if (this.closePromise) {
+            return this.closePromise;
+        }
         if (this._closed) {
-            return;
+            return Promise.resolve();
         }
         this._closed = true;
         if (this.sessionReapTimer) {
@@ -826,19 +936,64 @@ export class IpcBridge {
         }
         this.sessions.clear();
 
-        // Close the socket to break out of the for await loop. A bind that
-        // failed in start() already closed the ROUTER handle, so skip the
-        // redundant second close when this shutdown follows a failed start
-        // (server.ts calls close() to roll back, and start()'s catch already
-        // released the socket; the double-close was a swallowed no-op).
-        if (!this.sock.closed) {
-            try {
-                this.sock.close();
-            } catch (e) {
-                // Ignore close errors
-            }
-        }
+// libzmq closes its TCP listener asynchronously when the socket is
+        // destroyed. Unbind the endpoint explicitly and await that operation
+        // before closing the socket so callers do not release/reuse a port
+        // while the old listener is still alive (#316). boundEndpoint is only
+        // cleared once the unbind actually succeeds: a failed unbind leaves
+        // the port possibly bound, and discarding that state here would
+        // re-introduce the very race this await prevents.
+        const endpoint = this.boundEndpoint;
 
-        await Promise.all(pools.map(pool => pool.close()));
+        const teardown = (async () => {
+            let failure: { error: unknown } | null = null;
+
+            if (endpoint) {
+                try {
+                    await this.sock.unbind(endpoint);
+                    if (this.boundEndpoint === endpoint) {
+                        this.boundEndpoint = null;
+                    }
+                } catch (error) {
+                    failure = { error };
+                }
+            }
+
+            // Close the socket to break out of the for await loop. A bind that
+            // failed in start() already closed the ROUTER handle, so skip the
+            // redundant second close when this shutdown follows a failed start
+            // (#326; server.ts calls close() to roll back, and start()'s catch
+            // already released the socket). Preserve the existing best-effort
+            // handling for socket close errors, but do not hide an unbind or
+            // worker-pool failure from the caller.
+            if (!this.sock.closed) {
+                try {
+                    this.sock.close();
+                } catch (error) {
+                    // Ignore close errors.
+                }
+            }
+
+            try {
+                await Promise.all(pools.map(pool => pool.close()));
+            } catch (error) {
+                if (!failure) {
+                    failure = { error };
+                }
+            }
+
+            if (failure) {
+                throw failure.error;
+            }
+        })();
+
+        // Retain the in-flight promise only until it settles: a settled
+        // (including rejected) close must not stay referenced and wedge every
+        // later close()/start() on the same stale outcome.
+        this.closePromise = teardown.finally(() => {
+            this.closePromise = null;
+        });
+
+        return this.closePromise;
     }
 }
