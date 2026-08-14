@@ -264,37 +264,39 @@ function pickRewardWeight(
 }
 
 /**
- * Derive the cap-zone sensor extent and placement for a fixture body. Rect
- * fixtures use the AABB of their angle-rotated width/height and circle
- * fixtures their radius*2;
- * polygon fixtures use the axis-aligned bounding box of their (angle-rotated,
- * local-space) vertices centered on the AABB center — rect/circle fixtures
- * are symmetric about their origin, so their center is the origin itself,
- * but polygons need the AABB center offset. Returns null for malformed
- * fixtures — fewer than 3 declared vertices, fewer than 3 finite vertices, a
- * zero-area (collinear/coincident) vertex set, or an unsupported type — so
- * the caller skips the sensor entirely instead of silently building a
- * zero-area sensor that can never capture (#277).
+ * Derive the cap-zone sensor extent, placement, and rotation for a fixture
+ * body. Rect fixtures are covered exactly: the sensor is the rect's own
+ * width/height rotated by the fixture angle — not the rotated rect's
+ * axis-aligned AABB, which over-covers the corners at non-orthogonal angles.
+ * Circle fixtures use radius*2; polygon fixtures use the axis-aligned bounding
+ * box of their (angle-rotated, local-space) vertices centered on the AABB
+ * center — rect/circle fixtures are symmetric about their origin, so their
+ * center is the origin itself, but polygons need the AABB center offset.
+ * Returns null for malformed fixtures — fewer than 3 declared vertices, fewer
+ * than 3 finite vertices, a zero-area (collinear/coincident) vertex set, or an
+ * unsupported type — so the caller skips the sensor entirely instead of
+ * silently building a zero-area sensor that can never capture (#277).
  */
-function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number } | null {
+function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; cx: number; cy: number; angle: number } | null {
     if (fixtureDef.type === 'rect') {
-        // addBody() rotates rectangles about their origin, so the sensor must
-        // cover the rotated rectangle's world-space AABB.
-        const angle = fixtureDef.angle || 0;
+        // addBody() rotates rectangles about their origin (physics-engine.ts:
+        // 763), so the sensor must be the same rect rotated by the same angle
+        // — exact fidelity with the fixture. An axis-aligned AABB would
+        // over-cover the rect's corners at non-orthogonal angles and trigger
+        // captures outside the fixture.
         const width = fixtureDef.width || 0;
         const height = fixtureDef.height || 0;
-        const cosA = Math.abs(Math.cos(angle));
-        const sinA = Math.abs(Math.sin(angle));
         return {
-            w: width * cosA + height * sinA,
-            h: width * sinA + height * cosA,
+            w: width,
+            h: height,
             cx: 0,
             cy: 0,
+            angle: fixtureDef.angle || 0,
         };
     }
     if (fixtureDef.type === 'circle') {
         const w = (fixtureDef.radius || 0) * 2;
-        return { w, h: w, cx: 0, cy: 0 };
+        return { w, h: w, cx: 0, cy: 0, angle: 0 };
     }
     if (fixtureDef.type === 'polygon' && Array.isArray(fixtureDef.vertices)) {
         // Match addBody()'s validation (physics-engine.ts:698): fewer than 3
@@ -351,7 +353,7 @@ function getCapZoneSensorSize(fixtureDef: MapBodyDef): { w: number; h: number; c
             console.warn(`CapZone fixture "${fixtureDef.name}" has a degenerate zero-area polygon`);
             return null;
         }
-        return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2 };
+        return { w: maxX - minX, h: maxY - minY, cx: (minX + maxX) / 2, cy: (minY + maxY) / 2, angle: 0 };
     }
     console.warn(`CapZone fixture "${fixtureDef.name}" has unsupported type "${fixtureDef.type}" — skipping cap-zone sensor`);
     return null;
@@ -592,7 +594,7 @@ export class BonkEnvironment {
                 if (fixtureDef) {
                     const size = getCapZoneSensorSize(fixtureDef);
                     if (size && typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h, size.angle);
                     }
                 } else {
                     console.warn(`CapZone fixture "${zone.fixture}" not found`);
@@ -659,7 +661,7 @@ export class BonkEnvironment {
                 if (fixtureDef) {
                     const size = getCapZoneSensorSize(fixtureDef);
                     if (size && typeof (this.physics as any).addCapZone === 'function') {
-                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h);
+                        (this.physics as any).addCapZone(zone, fixtureDef.x + size.cx, fixtureDef.y + size.cy, size.w, size.h, size.angle);
                     }
                 }
             }

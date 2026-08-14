@@ -861,22 +861,28 @@ describe('CapZoneScoring', () => {
                 }],
             });
 
-            const readSensor = (physics: any): { x: number; y: number; width: number; height: number } => {
+            const readSensor = (physics: any): { x: number; y: number; width: number; height: number; angle: number } => {
                 const sensor = physics.capZoneSensors[0];
                 const shape = sensor.GetShapeList();
-                const xs: number[] = [];
-                const ys: number[] = [];
+                const bodyAngle = sensor.GetAngle();
+                const cosA = Math.cos(bodyAngle);
+                const sinA = Math.sin(bodyAngle);
+                const ws: { x: number; y: number }[] = [];
                 for (let i = 0; i < shape.m_vertexCount; i++) {
-                    xs.push(shape.m_vertices[i].x);
-                    ys.push(shape.m_vertices[i].y);
+                    const lx = shape.m_vertices[i].x;
+                    const ly = shape.m_vertices[i].y;
+                    // Shape vertices are in local space; rotate by the body
+                    // angle to get the sensor's world-space AABB.
+                    ws.push({ x: lx * cosA - ly * sinA, y: lx * sinA + ly * cosA });
                 }
                 const scale = physics.scale;
                 const position = sensor.GetPosition();
                 return {
                     x: position.x * scale,
                     y: position.y * scale,
-                    width: (Math.max(...xs) - Math.min(...xs)) * scale,
-                    height: (Math.max(...ys) - Math.min(...ys)) * scale,
+                    width: (Math.max(...ws.map(v => v.x)) - Math.min(...ws.map(v => v.x))) * scale,
+                    height: (Math.max(...ws.map(v => v.y)) - Math.min(...ws.map(v => v.y))) * scale,
+                    angle: bodyAngle,
                 };
             };
 
@@ -909,12 +915,93 @@ describe('CapZoneScoring', () => {
             expect(unrotated.sensor.y).toBeCloseTo(120, 10);
             expect(unrotated.sensor.width).toBeCloseTo(200, 10);
             expect(unrotated.sensor.height).toBeCloseTo(20, 10);
+            expect(unrotated.sensor.angle).toBeCloseTo(0, 10);
             expect(rotated.sensor.x).toBeCloseTo(40, 10);
             expect(rotated.sensor.y).toBeCloseTo(120, 10);
             expect(rotated.sensor.width).toBeCloseTo(20, 10);
             expect(rotated.sensor.height).toBeCloseTo(200, 10);
+            expect(rotated.sensor.angle).toBeCloseTo(Math.PI / 2, 10);
             expect(rotated.maxProgress).toBe(unrotated.maxProgress);
             expect(unrotated.maxProgress).toBe(15);
+        });
+
+        it('capzone on a rect at a non-orthogonal angle rotates the sensor with the fixture (#334)', () => {
+            // At 45° the old AABB sizing returned w = h = 200*cos45 + 20*sin45
+            // ≈ 155.56 — an enlarged axis-aligned box that over-covered the
+            // rotated rect's corners. Exact fidelity: the sensor must be the
+            // rect's own 200x20 box rotated by the fixture angle.
+            const angle = Math.PI / 4;
+            const mapData: MapDef = {
+                name: 'capzone-rotated-rect-45deg',
+                spawnPoints: {
+                    team_blue: { x: 40, y: -350 },
+                    team_red: { x: 300, y: -350 },
+                },
+                bodies: [{
+                    name: 'platform',
+                    type: 'rect',
+                    x: 40,
+                    y: 120,
+                    width: 200,
+                    height: 20,
+                    static: true,
+                    angle,
+                    restitution: 0,
+                    collides: { g1: true, g2: true, g3: true, g4: true },
+                }],
+                capZones: [{
+                    index: 0,
+                    owner: 'neutral',
+                    type: 1,
+                    fixture: 'platform',
+                    shapeType: 'rect',
+                    l: 0.5,
+                }],
+            };
+
+            const env = new BonkEnvironment({ mapData, numOpponents: 0, randomOpponent: false, seed: 1, maxTicks: 4000 });
+            try {
+                const physics = (env as any).physics;
+                const sensor = physics.capZoneSensors[0];
+                const shape = sensor.GetShapeList();
+                const scale = physics.scale;
+
+                // The sensor body must carry the fixture's rotation...
+                expect(sensor.GetAngle()).toBeCloseTo(angle, 10);
+
+                // ...and its local box must be the rect's own 200x20, NOT
+                // the enlarged 155.56 AABB the pre-fix code built.
+                const xs: number[] = [];
+                const ys: number[] = [];
+                for (let i = 0; i < shape.m_vertexCount; i++) {
+                    xs.push(shape.m_vertices[i].x);
+                    ys.push(shape.m_vertices[i].y);
+                }
+                expect((Math.max(...xs) - Math.min(...xs)) * scale).toBeCloseTo(200, 10);
+                expect((Math.max(...ys) - Math.min(...ys)) * scale).toBeCloseTo(20, 10);
+
+                // World-space AABB still covers the rotated rect's extent.
+                const bodyAngle = sensor.GetAngle();
+                const cosA = Math.cos(bodyAngle);
+                const sinA = Math.sin(bodyAngle);
+                const ws: { x: number; y: number }[] = [];
+                for (let i = 0; i < shape.m_vertexCount; i++) {
+                    const lx = shape.m_vertices[i].x;
+                    const ly = shape.m_vertices[i].y;
+                    ws.push({ x: lx * cosA - ly * sinA, y: lx * sinA + ly * cosA });
+                }
+                const position = sensor.GetPosition();
+                const worldWidth = (Math.max(...ws.map(v => v.x)) - Math.min(...ws.map(v => v.x))) * scale;
+                const worldHeight = (Math.max(...ws.map(v => v.y)) - Math.min(...ws.map(v => v.y))) * scale;
+                const c = Math.abs(Math.cos(angle));
+                const s = Math.abs(Math.sin(angle));
+                expect(worldWidth).toBeCloseTo(200 * c + 20 * s, 6);
+                expect(worldHeight).toBeCloseTo(200 * s + 20 * c, 6);
+                expect(position.x * scale).toBeCloseTo(40, 10);
+                expect(position.y * scale).toBeCloseTo(120, 10);
+            } finally {
+                env.close();
+            }
         });
 
         it('BonkEnvironment with capZones map includes capZones in step info', () => {
