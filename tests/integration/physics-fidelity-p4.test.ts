@@ -48,6 +48,43 @@ function loadMap(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+/** The WDB joints-only map has no floor, so a neutral recording falls through
+ *  to the 850-px OOB death circle at tick 43 (death type 4) and the remaining
+ *  recorded ticks carry null discs. Append a wide static ground platform so
+ *  spawn-capture replays keep both discs alive for the full recorded run and
+ *  the comparator reports ticksCompared === ticks (#378). */
+function withReplayGround(mapRaw: any): any {
+  const raw = JSON.parse(JSON.stringify(mapRaw));
+  raw.bodies.push({
+    bodyIndex: raw.bodies.length,
+    name: 'spawn-replay-floor',
+    type: 'rect',
+    bodyType: 'static',
+    x: 0,
+    y: 690,
+    angle: 0,
+    width: 2000,
+    height: 40,
+    static: true,
+    isLethal: false,
+    noPhysics: false,
+    noGrapple: false,
+    innerGrapple: false,
+    friction: 0.5,
+    restitution: 0.3,
+    density: 0.3,
+    fricPlayers: false,
+    collisionGroup: 1,
+    collidesGroup1: true,
+    collidesGroup2: true,
+    collidesGroup3: true,
+    collidesGroup4: true,
+    collidesPlayers: true,
+    ppm: 12,
+  });
+  return raw;
+}
+
 /** Deterministic sim recording: step an engine N ticks with neutral (zero)
  *  inputs and capture recorder ticks, yielding a trace the comparator replays.
  *  Player 0 is the AI slot; extra players are the opponent slots. */
@@ -374,7 +411,7 @@ describe('P4: differential validation — replay comparator', () => {
   });
 
   it('captures moving-disc spawns before the first tick and replays the WDB fixture', () => {
-    const raw = loadMap(WDB_GROUND_JOINTS);
+    const raw = withReplayGround(loadMap(WDB_GROUND_JOINTS));
     const rec = recordSimTrace(raw, 60, 1, 7);
     try {
       expect(rec.trace.spawns).toEqual([
@@ -406,7 +443,7 @@ describe('P4: differential validation — replay comparator', () => {
     // fields are absent, so the comparator must derive the round-start
     // positions from the traced map's authored spawns (spawnTeamInfo selection)
     // and still reproduce the recording exactly.
-    const raw = loadMap(WDB_GROUND_JOINTS);
+    const raw = withReplayGround(loadMap(WDB_GROUND_JOINTS));
     const rec = recordSimTrace(raw, 60, 1, 7);
     try {
       const emptySpawns: NativeTrace = JSON.parse(JSON.stringify(rec.trace));
