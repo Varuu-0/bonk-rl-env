@@ -137,7 +137,9 @@ export interface EnvironmentConfig {
      *  `noCollide` vs `settings.nc`). */
     flipped?: boolean;
     /** Native respawning mode (`re`): dead discs respawn at their spawn point
-     *  (default false). Explicit config wins over the map's `settings.re`. */
+     *  (default false). Explicit config wins over the map's `settings.re`.
+     *  Transient lethal/OOB deaths remain observable and rewarded but do not
+     *  terminate; permanent cap-zone eliminations (type 3) still terminate. */
     respawnEnabled?: boolean;
     /** Documented physics.* tuning forwarded to the PhysicsEngine (issue #217).
      *  Absent keys keep the engine's sanity defaults, so an env built without a
@@ -820,11 +822,22 @@ export class BonkEnvironment {
             this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
         }
 
-        // Check for terminal state (death or maxTicks). With zero opponents
-        // the empty-state check must not be vacuously true: an episode with
-        // no opponents can only end via the AI's death or truncation.
-        const allOpponentsDead = opponentStates.length > 0 && opponentStates.every(s => !s.alive);
-        const terminated = !aiState.alive || allOpponentsDead;
+        // Check for terminal state (permanent death or maxTicks). On a respawn
+        // map a lethal/OOB death is observable this step (aiAlive false,
+        // deathPenalty/killReward fire) but the engine queues the disc for its
+        // deferred respawn, so the death does NOT terminate the episode — the
+        // round continues with the respawned disc, matching native `re`
+        // semantics (issue #339, coordinated with the #341/#371 death
+        // contract). Only a permanent death terminates: cap-zone elimination
+        // (type 3), respawning disabled, or an invalid spawn point that
+        // detached immediately. With zero opponents the empty-state check
+        // must not be vacuously true: an episode with no opponents can only
+        // end via the AI's permanent death or truncation.
+        const aiPendingRespawn = this.physics.isPendingRespawn(this.aiPlayerId);
+        const allOpponentsPermanentlyDead = opponentStates.length > 0 && opponentStates.every((s, i) =>
+            !s.alive && !this.physics.isPendingRespawn(this.opponentIds[i]),
+        );
+        const terminated = (!aiState.alive && !aiPendingRespawn) || allOpponentsPermanentlyDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 
         // If terminal reached, set flag to report done immediately on subsequent ticks.
@@ -922,8 +935,11 @@ export class BonkEnvironment {
      * rewards elimination, negative discourages it); deathPenalty and
      * timePenalty are enforced non-positive so a "penalty" always reduces
      * reward and can never reward the event it names:
-     *   +killReward   — opponent knocked off the map (killed)
-     *   +deathPenalty — AI player knocked off the map (death; default -1.0)
+     *   +killReward   — opponent knocked off the map (killed; on respawn maps
+     *                   every transient respawn death is rewarded too)
+     *   +deathPenalty — AI player knocked off the map (death; default -1.0;
+     *                   on respawn maps every transient respawn death is
+     *                   penalized too)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
      *           count as kills)
