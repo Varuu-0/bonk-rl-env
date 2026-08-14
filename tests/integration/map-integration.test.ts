@@ -764,6 +764,28 @@ describe('MapIntegration', () => {
                 const normalized = normalizeMap(rawMap);
                 expect(normalized.physics?.deathCenter).toEqual({ x: 400, y: 0 });
 
+                // The adapter normalizes the exporter's world-space polygon
+                // vertices to body-local so the ENGINE places the shape at the
+                // authored world position (300..500), not double-translated.
+                // Verify the actual engine placement agrees with the death
+                // center (#318, #332 review).
+                const e = new PhysicsEngine();
+                try {
+                    addAllBodies(e, normalized);
+                    const plat = e.getBodyMap().get('plat') as any;
+                    expect(plat).toBeTruthy();
+                    const shape = plat.GetShapeList();
+                    const verts = shape.m_vertices || [];
+                    const worldXs = [];
+                    for (let i = 0; i < shape.m_vertexCount; i++) {
+                        worldXs.push(plat.GetWorldPoint(verts[i]).x * SCALE);
+                    }
+                    expect(Math.min(...worldXs)).toBeCloseTo(300, 1);
+                    expect(Math.max(...worldXs)).toBeCloseTo(500, 1);
+                } finally {
+                    safeDestroy(e);
+                }
+
                 const env = new BonkEnvironment({
                     mapData: rawMap as any,
                     numOpponents: 0,

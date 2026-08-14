@@ -160,16 +160,28 @@ function isInternalMapDef(raw: any): raw is MapDef {
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
 function toBodyDef(body: FlatBody, index: number): any {
+    const ox = body.x ?? 0;
+    const oy = body.y ?? 0;
+    // The exporter emits flat polygon vertices as WORLD coordinates
+    // (mapexporter.js:518-521: `x: bx + cx + v[0]`), but PhysicsEngine.addBody
+    // consumes MapBodyDef.vertices as BODY-LOCAL while also placing the body at
+    // def.x/def.y — treating the absolute vertices as local double-translates
+    // every exported polygon by its own position (#318). Normalize the
+    // exporter's absolute vertices to body-local here so the engine, renderer,
+    // cap-zone sensors and the death-center all agree on one convention.
+    const vertices = body.type === 'polygon' && body.vertices
+        ? body.vertices.map(v => ({ x: v.x - ox, y: v.y - oy }))
+        : body.vertices;
     return {
         name: body.name ?? body.bodyType ?? `body_${index}`,
         type: (body.type === 'rect' || body.type === 'circle'
             || body.type === 'polygon') ? body.type : 'rect',
-        x: body.x ?? 0,
-        y: body.y ?? 0,
+        x: ox,
+        y: oy,
         width: body.width,
         height: body.height,
         radius: body.radius,
-        vertices: body.vertices,
+        vertices,
         static: body.static ?? body.bodyType === 'static',
         density: body.density,
         restitution: body.restitution,
@@ -464,16 +476,16 @@ export function normalizeMap(raw: unknown): MapDef {
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
             else if (b.vertices && b.vertices.length) {
-                // Exported flat polygon vertices are already WORLD coordinates:
-                // mapexporter.js:518-521 emits `x: bx + cx + v[0]` (body
-                // position + shape center + local vertex), so the vertex span
-                // IS the polygon's world extent. Do NOT add the body offset
-                // again — b.x already equals bx + cx, and translating twice
-                // would displace the death circle by the polygon's own position
-                // on every exported polygon map (#332).
+                // MapBodyDef polygon vertices are BODY-LOCAL (toBodyDef above
+                // normalizes the exporter's world-space emission), and addBody
+                // places the body at def.x/def.y with the shape at the body
+                // origin — so the polygon's world extent is b.x + v.x, exactly
+                // where the engine builds the fixture (#332, #318).
                 for (const v of b.vertices) {
-                    if (v.x < bx0) bx0 = v.x; if (v.x > bx1) bx1 = v.x;
-                    if (v.y < by0) by0 = v.y; if (v.y > by1) by1 = v.y;
+                    const vx = b.x + v.x;
+                    const vy = b.y + v.y;
+                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx;
+                    if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
                 }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
