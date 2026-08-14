@@ -553,9 +553,13 @@ export class BonkEnvironment {
         this.physics.setTeamsEnabled(this.config.teamsEnabled);
         this.physics.setNoCollide(this.config.noCollide);
 
-        // Set PPM before adding bodies
+        // Set PPM before adding bodies. setPpm is the canonical setter; the
+        // legacy setScale alias (same PPM semantics) is accepted too so an
+        // engine exposing only the pre-#319 API still receives its PPM config.
         if (typeof (this.physics as any).setPpm === 'function') {
             (this.physics as any).setPpm(this.ppm);
+        } else if (typeof (this.physics as any).setScale === 'function') {
+            (this.physics as any).setScale(this.ppm);
         }
 
         for (const body of this.config.mapData.bodies) {

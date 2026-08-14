@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BonkEnvironment, Observation } from '../../src/core/environment';
-import { MapDef } from '../../src/core/physics-engine';
+import { MapDef, PhysicsEngine } from '../../src/core/physics-engine';
 import { safeDestroy, encodeAction, EMPTY_INPUT, GRAPPLE_INPUT, HEAVY_INPUT, RIGHT_INPUT, LEFT_INPUT, UP_INPUT, DOWN_INPUT } from '../utils/test-helpers';
 
 describe('BonkEnvironment edge cases', () => {
@@ -139,6 +139,31 @@ describe('BonkEnvironment edge cases', () => {
       setMapBoundsSpy.mockClear();
       expect(() => env!.reset(2)).not.toThrow();
       expect(setMapBoundsSpy).toHaveBeenCalledWith(2, 4 / 3);
+    });
+
+    it('applies PPM via the legacy setScale alias when setPpm is absent', async () => {
+      const proto: any = PhysicsEngine.prototype;
+      const origSetPpm = proto.setPpm;
+      const origSetScale = proto.setScale;
+      try {
+        // Simulate a legacy engine: no setPpm, and setScale sets this.ppm
+        // directly. The environment must forward its configured PPM through
+        // the alias instead of silently dropping the config.
+        proto.setPpm = undefined;
+        proto.setScale = function (this: any, ppm: number) { this.ppm = ppm; };
+
+        const mapData: MapDef = makeMap({});
+        env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10, ppm: 18 });
+        env.reset(2);
+        const physics: any = (env as any).physics;
+        expect(physics.ppm).toBe(18);
+        // Player disc radius reflects the PPM: radius = ppm / scale = 18/30.
+        const body = physics.playerBodies?.get(0);
+        expect(body.GetShapeList().GetRadius()).toBeCloseTo(18 / 30, 12);
+      } finally {
+        proto.setPpm = origSetPpm;
+        proto.setScale = origSetScale;
+      }
     });
 
     it('capZones empty array when no capZones in map', async () => {
