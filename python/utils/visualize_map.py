@@ -1,7 +1,6 @@
 import json
 import os
 import argparse
-import time
 import pandas as pd
 import matplotlib
 matplotlib.use('Agg') # Headless backend for saving
@@ -48,7 +47,7 @@ def draw_map(ax, map_data):
     # Draw spawn points
     spawns = map_data.get("spawnPoints", {})
     for team, pos in spawns.items():
-        sc = ax.scatter(pos['x'], pos['y'], marker='x', color='yellow', s=100, zorder=5)
+        ax.scatter(pos['x'], pos['y'], marker='x', color='yellow', s=100, zorder=5)
         ax.annotate(team, (pos['x']+10, pos['y']-10), color='white')
 
 def main():

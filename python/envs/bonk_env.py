@@ -2,7 +2,6 @@ from collections.abc import Mapping
 from numbers import Integral
 import warnings
 
-import gymnasium as gym
 from gymnasium import spaces
 import numpy as np
 import zmq

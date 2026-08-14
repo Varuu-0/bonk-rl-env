@@ -379,6 +379,46 @@ npm run typecheck
 
 **Total: 284 test cases across 12 test suites (99.3% passing)**
 
+## Local CI/CD Pipeline
+
+The repository ships an exhaustive local CI/CD engine (`scripts/local-ci.ts`) that verifies every layer of the project — static quality, physics fidelity, worker pool IPC, the Python RL stack, the detached renderer, security/property fuzzing, and benchmark SLAs — before code is committed or pushed. Git hooks run the pipeline automatically (`pre-commit` → Tier 1, `pre-push` → Tier 2).
+
+| Command | Tier | What it runs |
+|---------|------|--------------|
+| `npm run ci:quick` | 1 — pre-commit | Staged-file prettier check, webscript DOM ID validation, ruff, `tsc --noEmit`, unit tests |
+| `npm run ci` | 2 — pre-push | Full prettier check (changed vs `origin/main`), all Vitest suites (unit + integration + perf + security + property), pytest, typecheck, differential fidelity gates |
+| `npm run ci:full` | 3 — E2E | Tier 2 + live ZeroMQ E2E server/client integration suite |
+| `npm run ci:bench` | 4 — benchmarks | Layer 1–6 benchmarks with SLA regression enforcement (`--layer7` adds the Python IPC roundtrip check) |
+| `npm run format:check` | — | Prettier check on changed files (vs `origin/main`; `--staged` for staged-only) |
+| `npm run format:fix` | — | Auto-format changed files with prettier |
+
+### Flags
+
+```
+npm run ci -- --fix          # auto-format + ruff --fix instead of checking
+npm run ci -- --verbose      # stream raw child output
+npm run ci -- --no-python    # skip ruff/pytest (e.g. CI without Python)
+npm run ci:bench -- --layer7 # include the Python IPC roundtrip benchmark
+```
+
+PowerShell and bash entry points forward the same flags: `./scripts/Invoke-LocalCI.ps1 --quick`, `./scripts/local-ci.sh --standard`.
+
+The benchmark tier enforces the SLA regression table: raw physics ≥ 18,000 TPS, environment ≥ 22,000 SPS, 16-env worker pool ≥ 32,000 env-SPS, ≤ 10 MB heap growth over 50K steps, ≤ 3 MB over 200 resets, and < 15% long-run throughput variance. Any regression exits non-zero with actionable diffs.
+
+The fail limits are authored against reference hardware (the April 2026 benchmark table above). Machines with materially different threading primitives — notably Windows, where `Atomics.wait`/`notify` round-trips cost several times more than on Linux — can tune the regression boundary via environment variables without touching the defaults:
+
+| Variable | Default | Check |
+|----------|---------|-------|
+| `CI_BENCH_L1_FAIL_LATENCY_MS` | `0.005` | Atomics read/write latency |
+| `CI_BENCH_L2_FAIL_TPS` | `18000` | Raw physics throughput |
+| `CI_BENCH_L3_FAIL_SPS` | `22000` | Environment step throughput |
+| `CI_BENCH_L4_FAIL_ENV_SPS` | `32000` | 16-env worker pool aggregate |
+| `CI_BENCH_L5_FAIL_HEAP_MB` | `10` | 50K-step heap growth |
+| `CI_BENCH_L5_RESET_FAIL_MB` | `3` | 200-reset heap growth |
+| `CI_BENCH_L6_FAIL_CV_PCT` | `15` | Long-run throughput variance |
+
+Hooks can be bypassed with `git commit --no-verify` / `git push --no-verify` or `LOCAL_CI_SKIP=1`.
+
 ## Performance Benchmarks
 
 Measured on a standard development machine (April 2026). All benchmarks use 2000 steps with warmup.

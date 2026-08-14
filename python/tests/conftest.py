@@ -11,6 +11,15 @@ import socket
 
 import numpy as np
 
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from reward.reward_functions import (
+    NavigationReward,
+    CuriosityReward,
+    CountBasedExplorationReward,
+    ConstraintPenaltyReward,
+)
+
 
 def _listener_pids(netstat_output, port):
     """Parse ``netstat -ano -p tcp`` output for PIDs listening on ``port``."""
@@ -646,17 +655,6 @@ def bonk_vec_env_factory(bonk_server):
 
     for env in envs:
         env.close()
-
-
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
-
-from reward.reward_functions import (
-    NavigationReward,
-    CompositeReward,
-    CuriosityReward,
-    CountBasedExplorationReward,
-    ConstraintPenaltyReward,
-)
 
 
 @pytest.fixture

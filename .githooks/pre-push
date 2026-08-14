@@ -1,11 +1,15 @@
 #!/usr/bin/env bash
 # DSP pre-push hook — full graph integrity check
+# + Local CI/CD Engine Tier 2 (standard CI: prettier vs merge-base, webscript
+#   IDs, ruff, tsc --noEmit, all Vitest suites, pytest).
 set -euo pipefail
 
 DSP_ROOT="$(git rev-parse --show-toplevel)"
 
+DSP_CLI=""
 for candidate in \
   "$DSP_ROOT/dsp-cli.py" \
+  "$DSP_ROOT/scripts/dsp-cli.py" \
   "$DSP_ROOT/.cursor/skills/data-structure-protocol/scripts/dsp-cli.py" \
   "$DSP_ROOT/.claude/skills/data-structure-protocol/scripts/dsp-cli.py" \
   "$DSP_ROOT/.codex/skills/data-structure-protocol/scripts/dsp-cli.py" \
@@ -16,44 +20,53 @@ for candidate in \
   fi
 done
 
-DSP_CLI="${DSP_CLI:-}"
-if [[ -z "$DSP_CLI" || ! -d "$DSP_ROOT/.dsp" ]]; then
+if [[ -n "$DSP_CLI" && -d "$DSP_ROOT/.dsp" ]]; then
+  echo "[DSP] Running full graph integrity check before push..."
+
+  orphans=$($DSP_CLI --root "$DSP_ROOT" get-orphans 2>/dev/null || true)
+  if [[ -n "$orphans" && "$orphans" != *"No orphans"* && "$orphans" != *"0 orphan"* ]]; then
+    echo "[DSP] WARNING: Orphaned entities found:"
+    echo "$orphans"
+  fi
+
+  cycles=$($DSP_CLI --root "$DSP_ROOT" detect-cycles 2>/dev/null || true)
+  if [[ -n "$cycles" && "$cycles" != *"No cycles"* && "$cycles" != *"0 cycle"* ]]; then
+    echo "[DSP] WARNING: Circular dependencies detected:"
+    echo "$cycles"
+  fi
+
+  stats=$($DSP_CLI --root "$DSP_ROOT" get-stats 2>/dev/null || true)
+  echo "[DSP] Graph stats:"
+  echo "$stats"
+  echo ""
+fi
+
+# ─── Local CI/CD Engine — Tier 2 (standard CI) ──────────────────────────────
+# Prettier check of the branch's own changes, webscript IDs, ruff,
+# tsc --noEmit, all Vitest suites, and the pytest suite. Bypass with
+# --no-verify or LOCAL_CI_SKIP=1.
+if [[ "${LOCAL_CI_SKIP:-0}" == "1" ]]; then
+  echo "[LocalCI] LOCAL_CI_SKIP=1 — skipping Tier 2 standard CI."
   exit 0
 fi
 
-echo "[DSP] Running full graph integrity check before push..."
-
-orphans=$($DSP_CLI --root "$DSP_ROOT" get-orphans 2>/dev/null || true)
-if [[ -n "$orphans" && "$orphans" != *"No orphans"* && "$orphans" != *"0 orphan"* ]]; then
-  echo "[DSP] WARNING: Orphaned entities found:"
-  echo "$orphans"
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[LocalCI] npm not found on PATH — skipping Tier 2 standard CI."
+  exit 0
 fi
 
-cycles=$($DSP_CLI --root "$DSP_ROOT" detect-cycles 2>/dev/null || true)
-if [[ -n "$cycles" && "$cycles" != *"No cycles"* && "$cycles" != *"0 cycle"* ]]; then
-  echo "[DSP] WARNING: Circular dependencies detected:"
-  echo "$cycles"
+if [[ ! -f "$DSP_ROOT/package.json" ]]; then
+  exit 0
 fi
 
-stats=$($DSP_CLI --root "$DSP_ROOT" get-stats 2>/dev/null || true)
-echo "[DSP] Graph stats:"
-echo "$stats"
 echo ""
-
-# Run full test suite
-echo "Running full test suite..."
-npx vitest run 2>/dev/null
+echo "[LocalCI] Running Tier 2 (standard) CI..."
+npm run ci
 if [ $? -ne 0 ]; then
-  echo "ERROR: Tests failed. Push rejected."
+  echo ""
+  echo "[LocalCI] ERROR: Tier 2 CI failed. Push rejected (bypass with 'git push --no-verify')."
   exit 1
 fi
 
-# Run type check
-echo "Running type check..."
-npm run typecheck 2>/dev/null
-if [ $? -ne 0 ]; then
-  echo "ERROR: Type check failed. Push rejected."
-  exit 1
-fi
-
+echo "[LocalCI] Tier 2 CI passed."
 exit 0

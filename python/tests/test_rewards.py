@@ -7,7 +7,6 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from reward.reward_functions import (
-    BaseRewardFunction,
     NavigationReward,
     CompositeReward,
     CuriosityReward,
