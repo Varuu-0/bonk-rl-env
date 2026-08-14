@@ -131,6 +131,23 @@ export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
 }
 
 /**
+ * The single disc acceptance predicate for the parsed output: a disc is
+ * comparable only when it is a fully-valid native disc AND its `id` matches
+ * its array slot (the index-alignment invariant). Returns the message suffix
+ * describing why the disc is rejected (malformed fields, or slot mismatch), or
+ * null when it passes. Both the parse error loop and the output nulling pass
+ * share this one predicate, so the reported errors and the typed output cannot
+ * silently diverge.
+ */
+function discOutputError(value: unknown, slot: number): string | null {
+  const reason = discValidationError(value);
+  if (reason !== null) return `is malformed: ${reason}`;
+  const disc = value as NativeTraceDisc;
+  if (disc.id !== slot) return `id mismatch: disc.id=${disc.id} does not match slot ${slot}`;
+  return null;
+}
+
+/**
  * Parse and validate a native trace object (from JSON). Returns the typed trace
  * plus a list of validation errors. Throws on a structurally-unsound input
  * (non-object, missing schema marker, non-array fields). Entries that fail the
@@ -197,11 +214,9 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
       }
       tick.discs.forEach((disc, id) => {
         if (disc === null || disc === undefined) return;
-        const reason = discValidationError(disc);
-        if (reason !== null) {
-          errors.push(`tick ${tick.t} disc ${id} is malformed: ${reason}`);
-        } else if (disc.id !== id) {
-          errors.push(`tick ${tick.t} disc ${id} id mismatch: disc.id=${disc.id} does not match slot ${id}`);
+        const err = discOutputError(disc, id);
+        if (err !== null) {
+          errors.push(`tick ${tick.t} disc ${id} ${err}`);
         }
       });
     }
@@ -237,11 +252,12 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
             // `alive: true` literal type forbids) and slot-misaligned discs
             // (id != slot) never leak into the typed output: they are replaced
             // with null, keeping the array index-aligned by player id
-            // (§9.2 alive == presence).
+            // (§9.2 alive == presence). discOutputError is the same predicate
+            // the error loop above used, so errors and output cannot diverge.
             discs: tk.discs.map((disc, id) =>
               disc === null || disc === undefined
                 ? null
-                : discValidationError(disc) === null && disc.id === id
+                : discOutputError(disc, id) === null
                   ? disc
                   : null),
           }))
