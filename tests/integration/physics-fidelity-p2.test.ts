@@ -229,36 +229,45 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
   });
 
   it('scales authored map-pixel translation limits for lpj, lsj, and p joints (#322)', () => {
-    const e = makeEngine();
     const cases = [
       { type: 'lpj', lower: -50, upper: 50 },
       { type: 'lsj', lower: -40, upper: 40 },
       { type: 'p', lower: -25, upper: 75 },
     ];
 
-    for (const { type, lower, upper } of cases) {
-      const suffix = type;
-      e.addBody({ name: `${suffix}_anchor`, type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true } as any);
-      e.addBody({ name: `${suffix}_slider`, type: 'rect', x: 0, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
-      const bm = e.getBodyMap() as Map<string, any>;
+    // Default-scale and custom-scale engines: the stored limits must divide by
+    // THIS engine's scale (this.scale), not the SCALE constant — a hardcoded
+    // SCALE would pass at the default but fail at the custom scale below.
+    const engines = [
+      { e: makeEngine(), divisor: SCALE },
+      { e: new PhysicsEngine({ scale: 15 }), divisor: 15 },
+    ];
 
-      e.addJoint({
-        type,
-        name: `${suffix}_joint`,
-        bodyA: `${suffix}_anchor`,
-        bodyB: `${suffix}_slider`,
-        anchorA: { x: 0, y: 0 },
-        axis: { x: 1, y: 0 },
-        enableLimit: true,
-        lowerTranslation: lower,
-        upperTranslation: upper,
-      }, bm);
+    for (const { e, divisor } of engines) {
+      for (const { type, lower, upper } of cases) {
+        const suffix = type;
+        e.addBody({ name: `${suffix}_anchor`, type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true } as any);
+        e.addBody({ name: `${suffix}_slider`, type: 'rect', x: 0, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+        const bm = e.getBodyMap() as Map<string, any>;
 
-      const joint: any = (e as any).createdJoints.get(`${suffix}_joint`);
-      expect(joint).toBeTruthy();
-      expect(joint.m_enableLimit).toBe(true);
-      expect(joint.m_lowerTranslation).toBeCloseTo(lower / SCALE, 5);
-      expect(joint.m_upperTranslation).toBeCloseTo(upper / SCALE, 5);
+        e.addJoint({
+          type,
+          name: `${suffix}_joint`,
+          bodyA: `${suffix}_anchor`,
+          bodyB: `${suffix}_slider`,
+          anchorA: { x: 0, y: 0 },
+          axis: { x: 1, y: 0 },
+          enableLimit: true,
+          lowerTranslation: lower,
+          upperTranslation: upper,
+        }, bm);
+
+        const joint: any = (e as any).createdJoints.get(`${suffix}_joint`);
+        expect(joint).toBeTruthy();
+        expect(joint.m_enableLimit).toBe(true);
+        expect(joint.m_lowerTranslation).toBeCloseTo(lower / divisor, 5);
+        expect(joint.m_upperTranslation).toBeCloseTo(upper / divisor, 5);
+      }
     }
   });
 
