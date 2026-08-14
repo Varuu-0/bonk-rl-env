@@ -244,6 +244,46 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
         }
     });
 
+    it('legacy physics.nc on a hand-authored MapDef still enables no-collide (issue #329)', () => {
+        // Before P3b, hand-authored MapDefs carried nc under `physics`; the
+        // exporter emits it under `settings`, but the legacy key must keep
+        // working so old authored maps do not silently flip back to colliding.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: { ...TEST_MAP, physics: { nc: true } },
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(true);
+            expect(physics.noCollide).toBe(true);
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('settings.nc (parsed) wins over a conflicting legacy physics.nc', () => {
+        // The parsed settings section is the authoritative map source; a
+        // conflicting legacy physics.nc on the same map must not override it.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: { ...TEST_MAP, settings: { nc: false }, physics: { nc: true } },
+            randomOpponent: false,
+        } as any);
+        try {
+            expect((env as any).config.noCollide).toBe(false);
+        } finally {
+            env.close();
+        }
+    });
+
     it('nc discs pass through each other; explicit nc:false discs separate on contact', () => {
         const run = (mapData: MapDef | Record<string, unknown>): number => {
             const env = new BonkEnvironment({

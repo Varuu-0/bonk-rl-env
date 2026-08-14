@@ -258,6 +258,11 @@ export interface MapDef {
      * the engine keeps the world origin, which is correct for maps authored
      * around the origin (see setDeathCircleCenter). */
     deathCenter?: { x: number; y: number };
+    /** Legacy hand-authored no-collision flag. The exporter emits `nc` under
+     * the map's `settings` section, so normalized maps read `settings.nc`; this
+     * key is honored as a fallback for pre-P3b hand-authored MapDefs that
+     * carried `physics.nc` (issue #329). */
+    nc?: boolean;
   };
   /** Native map settings (`s` in the bonk map format; blank-map defaults
    * re:false, nc:false, pq:1, gd:25, fl:false — DEOBFUSCATION §33). `pq` gates

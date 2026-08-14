@@ -714,7 +714,8 @@ BeginContact case 6:
 - **No-collision mode (`nc`)**: `setNoCollide(true)` removes all four player
   bits from every disc mask. `EnvironmentConfig.noCollide` and
   `EnvironmentConfig.teamsEnabled` wire both flags; map `physics.teams` and
-  `settings.nc` are honoured as map-level defaults (explicit config wins).
+  `settings.nc` are honoured as map-level defaults (explicit config wins),
+  with the legacy hand-authored `physics.nc` key as a fallback (issue #329).
 - **Swing destroy (`swingCollideDestroyEvents`)**: a disc-disc contact while a
   grapple joint is active queues the disc for grapple destruction after the
   step (`pendingSwingDestroy` processed post-Step, matching native ordering).
