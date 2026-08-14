@@ -175,14 +175,15 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
     } else {
       // prismatic (lpj/lsj/p): translation limits + motor force, mirroring the
       // engine's #281 symmetric ±length fallback exactly — a positive authored
-      // length with no explicit translations becomes a symmetric limit.
+      // length with no explicit translations becomes a symmetric limit. The
+      // engine stores these authored map-pixel values in world units.
       const lenLimit = typeof j.length === 'number' && Number.isFinite(j.length) && j.length > 0;
       const lt = j.lowerTranslation !== undefined ? j.lowerTranslation : (lenLimit ? -j.length : 0);
       const ut = j.upperTranslation !== undefined ? j.upperTranslation : (lenLimit ? +j.length : 0);
-      if (Math.abs((built as any).m_lowerTranslation - lt) > 1e-9) {
+      if (Math.abs((built as any).m_lowerTranslation - lt / scale) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic lowerTranslation mismatch`);
       }
-      if (Math.abs((built as any).m_upperTranslation - ut) > 1e-9) {
+      if (Math.abs((built as any).m_upperTranslation - ut / scale) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic upperTranslation mismatch`);
       }
       if (Math.abs((built as any).m_maxMotorForce - (j.maxMotorForce ?? 0)) > 1e-9) {

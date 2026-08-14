@@ -169,6 +169,65 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       env.close();
     }
   });
+
+  it('joint gate enforces the prismatic translation scale conversion (#322)', () => {
+    // The WDB fixture joints above are all 0/0, so a gate that lagged behind
+    // the engine's map-px → world-unit conversion (e.g. comparing the raw
+    // authored translation, or dividing by the wrong scale) would pass
+    // silently. Pin the gate-side `lt / scale` with a non-zero prismatic limit
+    // built at a NON-default engine scale: the gate must match the engine's
+    // stored world-unit value (authored px / this.scale), and a tampered
+    // unscaled value must be flagged.
+    const raw: any = {
+      metadata: { name: 'gate-scale-probe' },
+      spawns: [
+        { index: 0, name: 'blue', x: -100, y: 0, blue: true },
+        { index: 1, name: 'red', x: 100, y: 0, red: true },
+      ],
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', bodyType: 'static', static: true, x: 0, y: 0, width: 40, height: 10, density: 0, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
+        { bodyIndex: 1, name: 'slider', type: 'rect', bodyType: 'dynamic', static: false, x: 0, y: 0, width: 20, height: 20, density: 1, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
+      ],
+      physicsJoints: [
+        { index: 0, type: 'lpj', bodyA: 0, bodyB: 1, data: { cc: false, bf: 0, dl: false }, length: 0, collideConnected: false, breakForce: 0, deleteOnBreak: false, anchorA: { x: 0, y: 0 }, angle: 0, lowerTranslation: -50, upperTranslation: 50, enableLimit: true, maxMotorForce: 0 },
+      ],
+    };
+    const trace: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: raw,
+      players: [{ id: 0, team: 1 }],
+      spawns: [{ id: 0, x: -100, y: 0 }],
+      ticks: [],
+    };
+    const mapDef: any = normalizeMap(raw);
+    const env = new BonkEnvironment({
+      numOpponents: 0,
+      seed: 1,
+      mapData: mapDef,
+      randomOpponent: false,
+      maxTicks: 8,
+      physics: { scale: 15 },
+    } as any);
+    try {
+      const gates = verifyJointGates(env, trace);
+      expect(gates.ok).toBe(true);
+      expect(gates.mismatches).toEqual([]);
+
+      // The gate must discriminate on the conversion: an unscaled authored
+      // value left in the engine joint (as a hypothetical gate lag would
+      // compare) must be flagged as a lowerTranslation mismatch.
+      const joint: any = (env as any).physics.createdJoints.get('joint_0');
+      expect(joint).toBeTruthy();
+      joint.m_lowerTranslation = -50;
+      const lagged = verifyJointGates(env, trace);
+      expect(lagged.ok).toBe(false);
+      expect(lagged.mismatches.some(m => /prismatic lowerTranslation mismatch/.test(m))).toBe(true);
+    } finally {
+      env.close();
+    }
+  });
 });
 
 describe('P4: differential validation — replay comparator', () => {
