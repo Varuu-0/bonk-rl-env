@@ -23,6 +23,7 @@ import { BonkEnvironment } from '../environment';
 import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
 import type { NativeTrace } from './native-trace';
+import { decodeEncodedAction } from '../action-validation';
 
 // Same port the engine binds (physics-engine.ts:15): b2Vec2 for re-seeding.
 const box2d = require('box2d');
@@ -144,15 +145,7 @@ export function buildTraceEnvironment(
 }
 
 function decodeInput(bits: number | undefined): PlayerInput {
-  const b = bits ?? 0;
-  return {
-    left: !!(b & 1),
-    right: !!(b & 2),
-    up: !!(b & 4),
-    down: !!(b & 8),
-    heavy: !!(b & 16),
-    grapple: !!(b & 32),
-  };
+  return decodeEncodedAction(bits ?? 0);
 }
 
 /**

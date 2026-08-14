@@ -26,7 +26,7 @@ import {
 import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
-import { assertValidAction } from './action-validation';
+import { assertValidAction, decodeEncodedAction } from './action-validation';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -886,14 +886,7 @@ export class BonkEnvironment {
      */
     private decodeAction(action: Action): PlayerInput {
         if (typeof action === 'number') {
-            return {
-                left: !!(action & 1),
-                right: !!(action & 2),
-                up: !!(action & 4),
-                down: !!(action & 8),
-                heavy: !!(action & 16),
-                grapple: !!(action & 32),
-            };
+            return decodeEncodedAction(action);
         }
         return action;
     }

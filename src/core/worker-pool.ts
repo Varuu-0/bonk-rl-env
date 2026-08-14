@@ -6,7 +6,7 @@ import { SharedMemoryManager } from '../ipc/shared-memory';
 import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
-import { assertValidAction } from './action-validation';
+import { assertValidAction, encodePlayerInput } from './action-validation';
 
 /**
  * Observation data structure extracted from shared memory
@@ -53,15 +53,6 @@ const SYNC_STATUS_OFFSET = 1;
 // the two cannot drift (#226).
 const MAX_SUPPORTED_RESET_SEED = 0xFFFFFFFE;
 
-// Encoded actions are six binary flags packed into one integer, so the valid
-// space is [0, 63] (mirrors the Python client's Discrete(64)). The bound is
-// derived from the six-bit flag layout in encodeAction()/decodeAction(), not
-// hardcoded, so the two transports' action-space contract cannot silently
-// diverge from the bit flags if a flag is ever added. Values outside the
-// range are rejected in BOTH transports: they carry bits `decodeAction()`
-// never reads, so they would silently execute a different action than the
-// caller requested (#261).
-const MAX_ENCODED_ACTION = (1 << 6) - 1;
 const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
@@ -907,32 +898,20 @@ export class WorkerPool {
      * Encodes a PlayerInput action to a number for shared memory storage
      * Uses bit flags: left=1, right=2, up=4, down=8, heavy=16, grapple=32
      *
-* Null/undefined, arrays, empty objects, non-boolean field values, and
+     * `assertValidAction()` rejects malformed values and encoded numbers
+     * outside the six-bit [0, 63] action space before either transport is
+     * touched, so direct and pooled callers share the same error contract.
+     * Null/undefined, arrays, empty objects, non-boolean field values, and
      * non-finite numbers (NaN, ±Infinity) throw a labeled error instead of
      * being silently encoded as a different (usually no-op) action, so
-     * callers can tell a bad request apart from a pool failure (#278). An
-     * encoded number outside [0, 63] is likewise rejected: `decodeAction()`
-     * reads only the low six bits, so such a value would silently run a
-     * different action (#261).
+     * callers can tell a bad request apart from a pool failure (#278).
      */
     private encodeAction(action: PlayerInput | number): number {
         assertValidAction(action);
         if (typeof action === 'number') {
-            if (!Number.isInteger(action) || action < 0 || action > MAX_ENCODED_ACTION) {
-                throw new Error(
-                    `Invalid action: expected an encoded action in [0, ${MAX_ENCODED_ACTION}], got ${action}`,
-                );
-            }
             return action; // Already encoded
         }
-        let encoded = 0;
-        if (action.left) encoded |= 1;
-        if (action.right) encoded |= 2;
-        if (action.up) encoded |= 4;
-        if (action.down) encoded |= 8;
-        if (action.heavy) encoded |= 16;
-        if (action.grapple) encoded |= 32;
-        return encoded;
+        return encodePlayerInput(action);
     }
 
     /**
