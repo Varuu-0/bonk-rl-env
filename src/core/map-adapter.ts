@@ -16,7 +16,7 @@
 import { MapDef, GROUND_BODY_NAME } from './physics-engine';
 
 interface FlatBody {
-    bodyIndex: number;
+    bodyIndex?: number;
     fixtureIndex: number;
     name?: string;
     type?: string;
@@ -44,11 +44,24 @@ interface FlatBody {
     collidesPlayers?: boolean;
     color?: number;
     ppm?: number;
+    shapeIndex?: number;
     width?: number;
     height?: number;
     radius?: number;
     scale?: number;
     vertices?: { x: number; y: number }[];
+    renderShape?: {
+        type: 'rect' | 'circle' | 'polygon';
+        bodyPosition: { x: number; y: number };
+        bodyAngle: number;
+        center: { x: number; y: number };
+        angle: number;
+        width?: number;
+        height?: number;
+        radius?: number;
+        vertices?: { x: number; y: number }[];
+        scale?: number;
+    };
 }
 
 interface FlatSpawn {
@@ -115,10 +128,9 @@ interface ExportedMap {
     spawns?: FlatSpawn[];
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
-    physicsBodies?: FlatBody[];
-    // The exporter (Webscripts/mapexporter.js) pushes a literal `null` for any
-    // joint it cannot export to keep raw-array indices stable, so entries may
-    // be null as well as FlatJoint.
+    // The exporter (Webscripts/mapexporter.js) preserves raw-array indices with
+    // literal null placeholders for unsupported bodies and joints.
+    physicsBodies?: (FlatBody | null)[];
     physicsJoints?: (FlatJoint | null)[];
     physicsFixtures?: unknown[];
     physicsShapes?: unknown[];
@@ -202,6 +214,8 @@ function toBodyDef(body: FlatBody, index: number): any {
         linearVelocity: body.linearVelocity,
         angularVelocity: body.angularVelocity,
         surfaceName: body.bodyType,
+        renderBodyIndex: body.bodyIndex ?? index,
+        renderShape: body.renderShape,
     };
 }
 
@@ -255,7 +269,41 @@ export function normalizeMap(raw: unknown): MapDef {
     // `bodies` downstream (#273).
     const flatSource = (flatBodies || map.physicsBodies || [])
         .filter((b): b is FlatBody => b !== null && b !== undefined);
-    const bodies = flatSource.map(toBodyDef);
+    const sourceBodies: any[] = Array.isArray(map.physicsBodies) ? map.physicsBodies : [];
+    const sourceBodiesByFlatPosition = sourceBodies.filter((body) => body !== null && body !== undefined);
+    const sourceShapes: any[] = Array.isArray(map.physicsShapes) ? map.physicsShapes : [];
+    const withRenderShape = (body: FlatBody, index: number): FlatBody => {
+        const shapeIndex = body.shapeIndex;
+        // bodyIndex references raw physicsBodies positions. Positional fallback
+        // must follow flatSource, which excludes raw null placeholders.
+        const sourceBody = typeof body.bodyIndex === 'number'
+            ? sourceBodies[body.bodyIndex]
+            : sourceBodiesByFlatPosition[index];
+        const sourceShape = typeof shapeIndex === 'number' ? sourceShapes[shapeIndex] : undefined;
+        if (!sourceBody || !sourceBody.position || !sourceShape || !sourceShape.center) return body;
+        const type = sourceShape.type === 'bx' ? 'rect'
+            : sourceShape.type === 'ci' ? 'circle'
+            : sourceShape.type === 'po' ? 'polygon'
+            : undefined;
+        if (!type) return body;
+        return {
+            ...body,
+            renderShape: {
+                type,
+                bodyPosition: { x: sourceBody.position.x ?? 0, y: sourceBody.position.y ?? 0 },
+                bodyAngle: sourceBody.angle ?? 0,
+                center: { x: sourceShape.center.x ?? 0, y: sourceShape.center.y ?? 0 },
+                angle: sourceShape.angle ?? 0,
+                width: sourceShape.width,
+                height: sourceShape.height,
+                radius: sourceShape.radius,
+                vertices: sourceShape.vertices,
+                scale: sourceShape.scale,
+            },
+        };
+    };
+    const renderSource = flatSource.map(withRenderShape);
+    const bodies = renderSource.map(toBodyDef);
 
     // Build a fixture-index -> body-name map so cap zones can resolve their
     // platform body. Export fixtures all share the name "Unnamed Shape", so a
@@ -265,7 +313,7 @@ export function normalizeMap(raw: unknown): MapDef {
     // actual platform rather than the first "Unnamed Shape."
     const nameByFixture = new Map<number, string>();
     const capFriendlyNames = new Map<number, string>();
-    flatSource.forEach((b, i) => {
+    renderSource.forEach((b, i) => {
         if (b && b.fixtureIndex !== undefined) {
             nameByFixture.set(b.fixtureIndex, b.name ?? `body_${i}`);
         }
@@ -278,7 +326,7 @@ export function normalizeMap(raw: unknown): MapDef {
         (map.capZones || []).map(z => z.fixtureIndex).filter((x): x is number => typeof x === 'number'),
     );
     bodies.forEach((b, i) => {
-        const fxIdx = flatSource[i]?.fixtureIndex;
+        const fxIdx = renderSource[i]?.fixtureIndex;
         if (fxIdx !== undefined && capFixtureIndexes.has(fxIdx)) {
             const uniqueName = `${b.name ?? `body_${i}`}#${fxIdx}`;
             b.name = uniqueName;
@@ -341,7 +389,7 @@ export function normalizeMap(raw: unknown): MapDef {
     // index -> name using the derived bodies[] (which carries the unique
     // cap-zone names), keyed by the flat body's bodyIndex or array position.
     const bodiesByName = new Map<number, string>();
-    flatSource.forEach((b, i) => {
+    renderSource.forEach((b, i) => {
         if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
     });
     // The exporter (Webscripts/mapexporter.js) emits a literal `null` for any
@@ -486,6 +534,11 @@ export function normalizeMap(raw: unknown): MapDef {
         name: map.metadata?.name ?? 'Untitled Map',
         spawnPoints,
         bodies,
+        // `physics.bro` is front-to-back. Preserve it only for renderers; the
+        // physics engine intentionally continues to consume flattened bodies.
+        bodyRenderOrder: Array.isArray((map as any).bodyRenderOrder)
+            ? (map as any).bodyRenderOrder.filter((index: unknown): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0)
+            : undefined,
         capZones: capZones.length > 0 ? capZones : undefined,
         joints: joints.length > 0 ? joints as any : undefined,
         physics,

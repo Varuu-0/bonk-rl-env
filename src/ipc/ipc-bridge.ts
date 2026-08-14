@@ -259,24 +259,21 @@ export class IpcBridge {
         // re-bound (bind() throws "Socket is closed"). Recreate the transport
         // so a later start() after close() binds a fresh ROUTER and serves
         // again (issue #263): re-wrap the send function on the new socket.
-        let recreated = false;
         if (this.sock.closed) {
             this.sock = new zmq.Router();
             this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
-            recreated = true;
         }
         try {
             await this.sock.bind(addr);
         } catch (err) {
             this.markBindFailed(err);
-            // A socket recreated here is always a restart-after-close() (the
-            // original socket was destroyed by close(), which also left
-            // _closed true until a successful bind). Its bind never succeeded,
-            // so a later close() would early-return and leak the open handle;
-            // close it here so a failed restart is fully clean and a retry
-            // recreates from scratch.
-            if (recreated) {
+            // A bind that never succeeded leaves the ROUTER handle open. Close
+            // it for both first starts and restart attempts; a later start()
+            // recreates a closed socket before retrying (issue #326).
+            try {
                 this.sock.close();
+            } catch {
+                // Preserve the original bind error if socket cleanup fails.
             }
             throw err;
         }
@@ -865,7 +862,7 @@ export class IpcBridge {
         }
         this.sessions.clear();
 
-        // libzmq closes its TCP listener asynchronously when the socket is
+// libzmq closes its TCP listener asynchronously when the socket is
         // destroyed. Unbind the endpoint explicitly and await that operation
         // before closing the socket so callers do not release/reuse a port
         // while the old listener is still alive (#316). boundEndpoint is only
@@ -888,13 +885,19 @@ export class IpcBridge {
                 }
             }
 
-            // Close the socket to break out of the for await loop. Preserve
-            // the existing best-effort handling for socket close errors, but
-            // do not hide an unbind or worker-pool failure from the caller.
-            try {
-                this.sock.close();
-            } catch (error) {
-                // Ignore close errors.
+            // Close the socket to break out of the for await loop. A bind that
+            // failed in start() already closed the ROUTER handle, so skip the
+            // redundant second close when this shutdown follows a failed start
+            // (#326; server.ts calls close() to roll back, and start()'s catch
+            // already released the socket). Preserve the existing best-effort
+            // handling for socket close errors, but do not hide an unbind or
+            // worker-pool failure from the caller.
+            if (!this.sock.closed) {
+                try {
+                    this.sock.close();
+                } catch (error) {
+                    // Ignore close errors.
+                }
             }
 
             try {
