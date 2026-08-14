@@ -477,7 +477,15 @@ describe('P4: differential validation — replay comparator', () => {
         tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
       });
       expect(verdict.pass).toBe(true);
-      expect(verdict.ticksCompared).toBe(60);
+      // The WDB arena has no floor under the spawns and `re` is off, so both
+      // discs free-fall off the arena and die OOB partway through the trace.
+      // Ticks with recorded disc data — not the full tick count — are the
+      // comparable set the replay must reproduce exactly (comparator #366:
+      // ticksCompared excludes no-data ticks).
+      const dataTicks = rec.trace.ticks.filter(t => t.discs.some(d => d != null)).length;
+      expect(verdict.ticksCompared).toBe(dataTicks);
+      expect(verdict.ticksCompared).toBeGreaterThan(0);
+      expect(verdict.skippedNoData).toBe(rec.trace.ticks.length - dataTicks);
       expect(verdict.ticksOutsideTolerance).toBe(0);
       expect(verdict.worst.dx).toBeLessThan(1e-6);
       expect(verdict.worst.dy).toBeLessThan(1e-6);
@@ -501,7 +509,11 @@ describe('P4: differential validation — replay comparator', () => {
         tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
       });
       expect(verdict.pass).toBe(true);
-      expect(verdict.ticksCompared).toBe(60);
+      // Same dead-tail accounting as the sibling WDB replay test above: the
+      // comparable set is the ticks that carry recorded disc data.
+      const dataTicks = rec.trace.ticks.filter(t => t.discs.some(d => d != null)).length;
+      expect(verdict.ticksCompared).toBe(dataTicks);
+      expect(verdict.ticksCompared).toBeGreaterThan(0);
       expect(verdict.ticksOutsideTolerance).toBe(0);
       expect(verdict.worst.dx).toBeLessThan(1e-6);
       expect(verdict.worst.dy).toBeLessThan(1e-6);

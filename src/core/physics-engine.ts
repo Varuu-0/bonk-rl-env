@@ -31,6 +31,8 @@ const {
   b2GearJointDef,
   b2ContactListener,
   b2FilterData,
+  b2XForm,
+  b2Distance,
 } = box2d;
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -1840,6 +1842,36 @@ export class PhysicsEngine {
     if (!Number.isFinite(sd2) || sd2 > this.oobRadiusSquared) {
       this.detachPlayer(id, body);
       return;
+    }
+    // A persistent contact does not re-fire BeginContact after SetXForm. Do
+    // not restore a disc on or inside a lethal fixture, or it would become
+    // immune to that fixture once the respawn clears its death state. The
+    // disc has a real radius (ppm/SCALE), so testing only the spawn center
+    // would let a disc whose circle overlaps a lethal fixture edge respawn
+    // immune to it: test the full disc circle against each lethal shape via
+    // b2Distance (distance <= 0 means contact/overlap; DistancePC clamps
+    // penetration to 0, and the toiSlop radius shrink covers a center that
+    // sits just outside the edge).
+    const spawnPoint = new b2Vec2(spawn.x, spawn.y);
+    const discShape = body.GetShapeList();
+    const spawnXForm = new b2XForm();
+    spawnXForm.position.Set(spawn.x, spawn.y);
+    spawnXForm.R.SetIdentity();
+    const witnessA = new b2Vec2();
+    const witnessB = new b2Vec2();
+    for (const platformBody of this.platformBodies) {
+      const userData = platformBody.GetUserData() || {};
+      if (!userData.isLethal) continue;
+      const transform = platformBody.GetXForm();
+      for (let shape = platformBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        const overlapping = discShape
+          ? b2Distance.Distance(witnessA, witnessB, shape, transform, discShape, spawnXForm) <= 0
+          : shape.TestPoint(transform, spawnPoint);
+        if (overlapping) {
+          this.detachPlayer(id, body);
+          return;
+        }
+      }
     }
     this.releaseGrapple(id);
     this.pendingSwingDestroy.delete(id);
