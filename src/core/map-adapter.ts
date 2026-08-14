@@ -221,7 +221,6 @@ function isInternalMapDef(raw: any): raw is MapDef {
                 || (typeof b === 'object' && !('collidesGroup1' in b))));
 }
 
-<<<<<<< HEAD
 interface NativeBodyRef {
     index: number;
     x: number;
@@ -632,6 +631,11 @@ if (body.fixtureIndex !== undefined) {
             || body.collidesGroup4 !== undefined;
         for (const b of flatSource) {
             if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
+            // #344/#318: a polygon whose vertices are DECLARED body-local
+            // (`vertexFrame: 'local'`) must never be shifted again — it is
+            // already in the shape-local frame every consumer expects, so the
+            // world-baked rebase would silently move it by -placement·scale.
+            if (b.vertexFrame === 'local') continue;
             // Resolve the bake center exactly like toBodyDef resolves the
             // placement (b.x ?? b.position?.x ?? 0), so a position-keyed flat
             // polygon is rebased about the point it will actually be placed
@@ -652,10 +656,31 @@ if (body.fixtureIndex !== undefined) {
             // rebasing it would silently shift the shape.
             if (!hasStructured && !fromExporterFlatView(b)) continue;
             const vertexScale = b.scale ?? 1;
-            b.vertices = b.vertices.map((v) => ({
-                x: (v.x - cx) * vertexScale,
-                y: (v.y - cy) * vertexScale,
-            }));
+            if (b.vertexFrame === 'absolute') {
+                // #344/#318: `vertexFrame: 'absolute'` declares the exporter's
+                // world map-px frame (`bx + cx + v`), so the absolute→local
+                // conversion must invert the body transform exactly — bake the
+                // scale in and rotate by -angle (R(-angle)·((v - pos)·scale)),
+                // the inverse of the engine's def.x + R(def.angle)·v placement.
+                // Rotated exporter polygons then land where the exporter
+                // authored them instead of being re-rotated on top.
+                const angle = b.angle ?? 0;
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
+                b.vertices = b.vertices.map((v) => {
+                    const dx = (v.x - cx) * vertexScale;
+                    const dy = (v.y - cy) * vertexScale;
+                    return { x: dx * cosA + dy * sinA, y: -dx * sinA + dy * cosA };
+                });
+            } else {
+                // No vertexFrame marker (maps exported before #344): the
+                // legacy exporter baked `pos + rawLocal` WITHOUT rotation, so
+                // keep the existing rebase (subtract placement, bake scale).
+                b.vertices = b.vertices.map((v) => ({
+                    x: (v.x - cx) * vertexScale,
+                    y: (v.y - cy) * vertexScale,
+                }));
+            }
         }
     }
     // Render enrichment (renderShape/renderBodyIndex) resolves the structured

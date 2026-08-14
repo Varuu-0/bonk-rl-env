@@ -377,6 +377,84 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
             expect(out.physics.deathCenter).toEqual({ x: 325, y: 200 });
         });
 
+        it('combines the absolute-frame rotation inverse with the exporter scale bake (#344 review)', () => {
+            // vertexFrame: 'absolute' + angle + scale must convert in ONE step:
+            // R(-angle)·((v - pos)·scale). Baking scale without the rotation
+            // inverse would leave rotated polygons double-rotated; rotating
+            // without baking scale would drop the exporter's shape scale.
+            const out = normalizeMap({
+                bodies: [
+                    {
+                        bodyIndex: 0,
+                        fixtureIndex: 0,
+                        name: 'rot-scaled-triangle',
+                        type: 'polygon',
+                        x: 100,
+                        y: 50,
+                        angle: Math.PI / 2,
+                        vertexFrame: 'absolute',
+                        scale: 2,
+                        vertices: [
+                            { x: 100, y: 25 },
+                            { x: 150, y: 50 },
+                            { x: 100, y: 75 },
+                        ],
+                        static: true,
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            // abs - pos = [{0,-25},{50,0},{0,25}]; ×2 = [{0,-50},{100,0},{0,50}];
+            // R(-90°)·(dx,dy) = (dy,-dx).
+            const local = out.bodies[0].vertices;
+            const expectedLocal = [
+                { x: -50, y: 0 },
+                { x: 0, y: -100 },
+                { x: 50, y: 0 },
+            ];
+            expect(local).toHaveLength(expectedLocal.length);
+            expectedLocal.forEach((e, i) => {
+                expect(local[i].x).toBeCloseTo(e.x, 10);
+                expect(local[i].y).toBeCloseTo(e.y, 10);
+            });
+            // Reconstructing world bounds as pos + R(90°)·local reproduces the
+            // SCALED authored absolute vertices: (v - pos) × scale, rotated
+            // back to world = [100..200, 0..100] → (150, 50).
+            expect(out.physics.deathCenter).toEqual({ x: 150, y: 50 });
+        });
+
+        it('does not rebase exporter-absolute vertices a second time after normalizeMap (#344 review)', () => {
+            // Re-normalizing an already-normalized output must be a no-op for
+            // polygon vertices: the first pass converted absolute→body-local,
+            // so the second pass must recognize the shape-local frame and
+            // leave the vertices untouched (no -placement·scale double shift).
+            const raw = {
+                bodies: [
+                    {
+                        bodyIndex: 0,
+                        fixtureIndex: 0,
+                        name: 'local-poly',
+                        type: 'polygon',
+                        x: 300,
+                        y: 200,
+                        angle: 0.5,
+                        vertexFrame: 'absolute',
+                        vertices: [
+                            { x: 300, y: 150 },
+                            { x: 350, y: 200 },
+                            { x: 300, y: 250 },
+                        ],
+                        static: true,
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any;
+            const once = normalizeMap(raw);
+            const twice = normalizeMap(once as any);
+            expect(twice.bodies[0].vertices).toEqual(once.bodies[0].vertices);
+        });
+
 it('keeps fixture aliases unique and resolves joints to the first fixture of each native body (#307)', () => {
             const out = normalizeMap({
                 bodies: [
