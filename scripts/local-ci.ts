@@ -146,8 +146,8 @@ function printHelp(): void {
   console.log('Modes:');
   console.log('  ci:quick    Tier 1 — pre-commit: staged-file format check, typecheck,');
   console.log('              unit tests, webscript ID validation');
-  console.log('  ci          Tier 2 — pre-push: full format check vs origin/main,');
-  console.log('              typecheck, all Vitest suites, pytest, fidelity gates');
+  console.log('  ci          Tier 2 — pre-push: branch-scoped format check (merge-base');
+  console.log('              diff), typecheck, all Vitest suites, pytest, fidelity gates');
   console.log('  ci:full     Tier 3 — Tier 2 + live ZeroMQ E2E integration suite');
   console.log('  ci:bench    Tier 4 — Layer 1–6 (optional 7) benchmarks + SLA checks');
   console.log('');

@@ -1,5 +1,64 @@
 import { describe, it, expect } from 'vitest';
-import { evaluate, parseSuiteFromOutput, parseLayer7, toMillis } from '../../scripts/ci-bench-check';
+import { evaluate, parseSuiteFromOutput, parseLayer7, toMillis, applyEnvOverrides } from '../../scripts/ci-bench-check';
+
+describe('ci-bench-check: applyEnvOverrides', () => {
+  const checks = [
+    {
+      layer: 2,
+      description: 'Box2D tick() throughput',
+      benchMatch: /PhysicsEngine\.tick\(\)/,
+      metricLabel: 'TPS',
+      unit: 'steps/sec',
+      baseline: 22_600,
+      failLimit: 18_000,
+      direction: 'higher-better' as const,
+    },
+    {
+      layer: 5,
+      description: '50K-step heap growth',
+      benchMatch: /Memory stability/,
+      metricLabel: 'Heap growth',
+      unit: 'MB',
+      baseline: 2.5,
+      failLimit: 10.0,
+      direction: 'lower-better' as const,
+    },
+    {
+      layer: 5,
+      description: '200-reset-cycle heap growth',
+      benchMatch: /Reset cycles/,
+      metricLabel: 'Heap growth',
+      unit: 'MB',
+      baseline: 0.5,
+      failLimit: 3.0,
+      direction: 'lower-better' as const,
+    },
+  ];
+
+  it('overrides only the matching fail limit and never the baseline', () => {
+    process.env.CI_BENCH_L5_RESET_FAIL_MB = '6';
+    try {
+      const applied = applyEnvOverrides(checks.map((check) => ({ ...check })));
+      expect(applied[0].failLimit).toBe(18_000);
+      expect(applied[0].baseline).toBe(22_600);
+      expect(applied[1].failLimit).toBe(10.0);
+      expect(applied[2].failLimit).toBe(6);
+      expect(applied[2].baseline).toBe(0.5);
+    } finally {
+      delete process.env.CI_BENCH_L5_RESET_FAIL_MB;
+    }
+  });
+
+  it('ignores missing, non-numeric, and non-positive values', () => {
+    const original = checks.map((check) => ({ ...check }));
+    delete process.env.CI_BENCH_L2_FAIL_TPS;
+    process.env.CI_BENCH_L2_FAIL_TPS = 'not-a-number';
+    expect(applyEnvOverrides(original).map((check) => check.failLimit)).toEqual([18_000, 10.0, 3.0]);
+    process.env.CI_BENCH_L2_FAIL_TPS = '-5';
+    expect(applyEnvOverrides(original).map((check) => check.failLimit)).toEqual([18_000, 10.0, 3.0]);
+    delete process.env.CI_BENCH_L2_FAIL_TPS;
+  });
+});
 
 describe('ci-bench-check: evaluate() SLA verdicts', () => {
   const throughputCheck = {

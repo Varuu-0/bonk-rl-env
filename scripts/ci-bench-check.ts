@@ -225,7 +225,7 @@ const FAIL_LIMIT_ENV: Record<string, { layer: number; benchMatch?: RegExp }> = {
   CI_BENCH_L6_FAIL_CV_PCT: { layer: 6 },
 };
 
-function applyEnvOverrides(checks: SlaCheck[]): SlaCheck[] {
+export function applyEnvOverrides(checks: SlaCheck[]): SlaCheck[] {
   for (const [envName, target] of Object.entries(FAIL_LIMIT_ENV)) {
     const raw = process.env[envName];
     if (raw === undefined || raw === '') continue;
