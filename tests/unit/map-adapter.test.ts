@@ -553,6 +553,43 @@ describe('normalizeMap', () => {
             ]);
         });
 
+        it('rebases a one-sided wedge exporter polygon near the origin despite the distance signature (#307 review)', () => {
+            // The bake center (10,0) is near the world origin and the wedge
+            // extends toward -x, so the vertices' greatest distance from the
+            // bake center (50) exceeds their greatest distance from the world
+            // origin (40) — a distance heuristic reads that as "shape-local"
+            // and skips the rebase, leaving the world-baked vertices
+            // double-offset with `scale` dropped. With the structured
+            // hierarchy present the flat view is unambiguously the exporter's,
+            // so the rebase must still run.
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 10, y: 0, angle: 0.25, scale: 2, vertices: [{ x: -40, y: 0 }, { x: 10, y: 10 }, { x: 10, y: -10 }], static: true },
+                ],
+                physicsBodies: [
+                    {
+                        index: 0,
+                        name: 'body',
+                        type: 's',
+                        typeName: 'static',
+                        position: { x: 10, y: 0 },
+                        angle: 0.25,
+                        fixtureIndices: [0],
+                        fixtures: [],
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].vertices).toEqual([
+                { x: -100, y: 0 },
+                { x: 0, y: 20 },
+                { x: 0, y: -20 },
+            ]);
+            expect(out.bodies[0].x).toBe(10);
+            expect(out.bodies[0].y).toBe(0);
+        });
+
         it('leaves hand-authored shape-local flat polygons unrebased so the legacy placement survives (#307 review)', () => {
             // A hand-authored flat polygon follows the legacy convention
             // (world = def.x/y + R(angle)·v) with vertices around the shape's

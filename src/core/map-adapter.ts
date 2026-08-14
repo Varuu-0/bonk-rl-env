@@ -586,6 +586,19 @@ if (body.fixtureIndex !== undefined) {
     // rotated/off-center native fixture lands correctly whether or not its
     // structured fixture resolves.
     if (flatBodies) {
+        // When the structured hierarchy (physicsBodies/physicsFixtures/
+        // physicsShapes) is present, the flat bodies[] view is unambiguously
+        // the exporter's compatibility view, whose polygon vertices are ALWAYS
+        // world-baked (mapexporter.js:518-521) — rebase them unconditionally.
+        // A distance heuristic here misclassifies one-sided/wedge polygons
+        // whose bake center is near the world origin (the bake offset can
+        // partially cancel the shape extent, so the vertices' greatest
+        // distance from the bake center exceeds their greatest distance from
+        // the world origin), leaving them double-offset with `scale` dropped.
+        const hasStructured =
+            (Array.isArray(map.physicsBodies) && map.physicsBodies.some((b) => b !== null && b !== undefined))
+            || (Array.isArray(map.physicsFixtures) && map.physicsFixtures.some((f) => f !== null && f !== undefined))
+            || (Array.isArray(map.physicsShapes) && map.physicsShapes.some((s) => s !== null && s !== undefined));
         for (const b of flatSource) {
             if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
             // Resolve the bake center exactly like toBodyDef resolves the
@@ -601,26 +614,28 @@ if (body.fixtureIndex !== undefined) {
             // makes sense).
             if ((b.x === undefined && b.position?.x === undefined)
                 && (b.y === undefined && b.position?.y === undefined)) continue;
-            // Discriminate the exporter's world-baked form from a hand-authored
-            // shape-local polygon (the legacy convention world = def.x/y +
-            // R(def.angle)·v, which every consumer already handles as-is):
-            // world-baked vertices carry the bake center as a far-from-origin
-            // offset, so their greatest distance from the bake center is
-            // SHORTER than their greatest distance from the world origin. An
-            // authored shape-local polygon far from the origin has the
-            // opposite signature — rebasing it would silently shift the
-            // shape. Both conventions satisfy the shape-local consumers
-            // (sensor AABB, deathCenter, engine placement), so only the
-            // world-baked form is rebased.
-            let maxFromCenter = 0;
-            let maxFromOrigin = 0;
-            for (const v of b.vertices) {
-                const dx = v.x - cx;
-                const dy = v.y - cy;
-                maxFromCenter = Math.max(maxFromCenter, dx * dx + dy * dy);
-                maxFromOrigin = Math.max(maxFromOrigin, v.x * v.x + v.y * v.y);
+            if (!hasStructured) {
+                // No structured hierarchy: the bodies[] view may be a
+                // hand-authored legacy flat map whose polygon vertices are
+                // shape-local about the shape origin (the legacy convention
+                // world = def.x/y + R(def.angle)·v, which every consumer
+                // already handles as-is) rather than world-baked. Only rebase
+                // when the vertices carry a far-from-origin bake offset:
+                // world-baked vertices' greatest distance from the bake center
+                // is SHORTER than their greatest distance from the world
+                // origin, while an authored shape-local polygon far from the
+                // origin has the opposite signature — rebasing it would
+                // silently shift the shape.
+                let maxFromCenter = 0;
+                let maxFromOrigin = 0;
+                for (const v of b.vertices) {
+                    const dx = v.x - cx;
+                    const dy = v.y - cy;
+                    maxFromCenter = Math.max(maxFromCenter, dx * dx + dy * dy);
+                    maxFromOrigin = Math.max(maxFromOrigin, v.x * v.x + v.y * v.y);
+                }
+                if (maxFromCenter > maxFromOrigin) continue;
             }
-            if (maxFromCenter > maxFromOrigin) continue;
             const vertexScale = b.scale ?? 1;
             b.vertices = b.vertices.map((v) => ({
                 x: (v.x - cx) * vertexScale,
