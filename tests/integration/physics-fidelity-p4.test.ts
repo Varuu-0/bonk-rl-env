@@ -602,13 +602,16 @@ describe('P4: differential validation — replay comparator', () => {
       expect(verdict.pass).toBe(true);
       // The WDB arena has no floor under the spawns and `re` is off, so both
       // discs free-fall off the arena and die OOB partway through the trace.
-      // Ticks with recorded disc data — not the full tick count — are the
-      // comparable set the replay must reproduce exactly (comparator #366:
-      // ticksCompared excludes no-data ticks).
+      // Death-agreement ticks count as compared data (comparator #369), so a
+      // faithful replay of a trace with a mid-run death compares every tick
+      // and skips none. Pin that contract directly, and keep a documentation
+      // assertion that the recording does contain a mid-run death so any
+      // future physics change that keeps the discs alive surfaces here.
       const dataTicks = rec.trace.ticks.filter(t => t.discs.some(d => d != null)).length;
-      expect(verdict.ticksCompared).toBe(dataTicks);
+      expect(dataTicks).toBeLessThan(rec.trace.ticks.length);
+      expect(verdict.ticksCompared).toBe(rec.trace.ticks.length);
       expect(verdict.ticksCompared).toBeGreaterThan(0);
-      expect(verdict.skippedNoData).toBe(rec.trace.ticks.length - dataTicks);
+      expect(verdict.skippedNoData).toBe(0);
       expect(verdict.ticksOutsideTolerance).toBe(0);
       expect(verdict.worst.dx).toBeLessThan(1e-6);
       expect(verdict.worst.dy).toBeLessThan(1e-6);
@@ -632,11 +635,13 @@ describe('P4: differential validation — replay comparator', () => {
         tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
       });
       expect(verdict.pass).toBe(true);
-      // Same dead-tail accounting as the sibling WDB replay test above: the
-      // comparable set is the ticks that carry recorded disc data.
+      // Same death-agreement accounting as the sibling WDB replay test above:
+      // every tick is compared (mid-run deaths count as data, comparator #369).
       const dataTicks = rec.trace.ticks.filter(t => t.discs.some(d => d != null)).length;
-      expect(verdict.ticksCompared).toBe(dataTicks);
+      expect(dataTicks).toBeLessThan(rec.trace.ticks.length);
+      expect(verdict.ticksCompared).toBe(rec.trace.ticks.length);
       expect(verdict.ticksCompared).toBeGreaterThan(0);
+      expect(verdict.skippedNoData).toBe(0);
       expect(verdict.ticksOutsideTolerance).toBe(0);
       expect(verdict.worst.dx).toBeLessThan(1e-6);
       expect(verdict.worst.dy).toBeLessThan(1e-6);
