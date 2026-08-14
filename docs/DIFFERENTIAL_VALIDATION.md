@@ -86,9 +86,11 @@ The comparator (`replay-comparator.ts`):
 4. reads each player's `getPlayerState()` and diffs it against the recorded
    disc kinematics in map units (1:1 per §9.5).
 
-Verdict: **PASS** only when every compared tick is inside all per-field
-tolerances. A disc the native trace reports missing but the engine keeps alive
-(counted per tick) is a mismatch — the engine must agree about deaths too.
+Verdict: **PASS** only when at least one tick has comparable data and every
+compared tick is inside all per-field tolerances. A disc the native trace
+reports missing but the engine keeps alive (counted per tick) is a mismatch —
+the engine must agree about deaths too. A trace whose ticks are all skipped as
+no-data is not a pass.
 
 ## Exact-match gates
 
