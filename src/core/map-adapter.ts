@@ -569,8 +569,39 @@ export function normalizeMap(raw: unknown): MapDef {
     if (flatBodies) {
         for (const b of flatSource) {
             if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
-            const cx = b.x ?? 0;
-            const cy = b.y ?? 0;
+            // Resolve the bake center exactly like toBodyDef resolves the
+            // placement (b.x ?? b.position?.x ?? 0), so a position-keyed flat
+            // polygon is rebased about the point it will actually be placed
+            // at — rebasing about (0,0) would silently shift every vertex by
+            // -position·scale.
+            const cx = b.x ?? b.position?.x ?? 0;
+            const cy = b.y ?? b.position?.y ?? 0;
+            // Without an authored placement there is nothing baked into the
+            // vertices to rebase: leave them untouched (def.x/y default to 0
+            // downstream, so the shape-local reading is the only one that
+            // makes sense).
+            if ((b.x === undefined && b.position?.x === undefined)
+                && (b.y === undefined && b.position?.y === undefined)) continue;
+            // Discriminate the exporter's world-baked form from a hand-authored
+            // shape-local polygon (the legacy convention world = def.x/y +
+            // R(def.angle)·v, which every consumer already handles as-is):
+            // world-baked vertices carry the bake center as a far-from-origin
+            // offset, so their greatest distance from the bake center is
+            // SHORTER than their greatest distance from the world origin. An
+            // authored shape-local polygon far from the origin has the
+            // opposite signature — rebasing it would silently shift the
+            // shape. Both conventions satisfy the shape-local consumers
+            // (sensor AABB, deathCenter, engine placement), so only the
+            // world-baked form is rebased.
+            let maxFromCenter = 0;
+            let maxFromOrigin = 0;
+            for (const v of b.vertices) {
+                const dx = v.x - cx;
+                const dy = v.y - cy;
+                maxFromCenter = Math.max(maxFromCenter, dx * dx + dy * dy);
+                maxFromOrigin = Math.max(maxFromOrigin, v.x * v.x + v.y * v.y);
+            }
+            if (maxFromCenter > maxFromOrigin) continue;
             const vertexScale = b.scale ?? 1;
             b.vertices = b.vertices.map((v) => ({
                 x: (v.x - cx) * vertexScale,

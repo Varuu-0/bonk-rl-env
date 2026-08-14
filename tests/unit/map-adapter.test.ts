@@ -439,6 +439,48 @@ describe('normalizeMap', () => {
             expect(out.bodies[0].angle).toBe(0.25);
         });
 
+        it('rebases a position-keyed exporter-flat polygon about its position, not (0,0) (#307 review)', () => {
+            // toBodyDef places a flat body without x/y at body.position, so
+            // the rebase must resolve the bake center the same way — a
+            // position-keyed polygon rebased about (0,0) would shift every
+            // vertex by -position·scale.
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', position: { x: 100, y: 50 }, angle: 0.25, scale: 2, vertices: [{ x: 80, y: 50 }, { x: 120, y: 50 }, { x: 100, y: 90 }], static: true },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].x).toBe(100);
+            expect(out.bodies[0].y).toBe(50);
+            expect(out.bodies[0].vertices).toEqual([
+                { x: -40, y: 0 },
+                { x: 40, y: 0 },
+                { x: 0, y: 80 },
+            ]);
+        });
+
+        it('leaves hand-authored shape-local flat polygons unrebased so the legacy placement survives (#307 review)', () => {
+            // A hand-authored flat polygon follows the legacy convention
+            // (world = def.x/y + R(angle)·v) with vertices around the shape's
+            // own origin. The exporter-style rebase would silently shift it
+            // by -def.x·scale, so the world-baked discriminator must skip it.
+            const out = normalizeMap({
+                bodies: [
+                    { name: 'poly', type: 'polygon', x: 300, y: 200, vertices: [{ x: -20, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 30 }], static: true },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].vertices).toEqual([
+                { x: -20, y: 0 },
+                { x: 20, y: 0 },
+                { x: 0, y: 30 },
+            ]);
+            // deathCenter reads the vertices as shape-local about def.x/y.
+            expect(out.physics.deathCenter).toEqual({ x: 300, y: 215 });
+        });
+
         it('keeps an object carrying both x and an empty fixtures list as a flat body (#307 review)', () => {
             const out = normalizeMap({
                 physicsBodies: [
