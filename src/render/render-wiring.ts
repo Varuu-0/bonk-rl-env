@@ -19,8 +19,10 @@ export { computeCamera, Camera };
 
 /**
  * Build a render-state reader over a live env. Reads the AI + each opponent's
- * current materialized state (including `angle`, which the observation drops
- * for opponents) with zero simulation — it only pulls already-computed values.
+ * current visible state (the dying-step pre-respawn snapshot on a death tick,
+ * so rendered frames match the step's observation; including `angle`, which
+ * the observation drops for opponents) with zero simulation — it only pulls
+ * already-computed values.
  */
 export function createEnvReader(env: BonkEnvironment): RenderStateReader {
   const e = env as any;
@@ -29,7 +31,9 @@ export function createEnvReader(env: BonkEnvironment): RenderStateReader {
     getTick: () => e.physics.getTickCount(),
     getDisc: (id: number) => {
       if (id < 0 || id >= playerSlots) return null;
-      const s = e.physics.getPlayerState(id);
+      // Death-step view: a disc that died this tick still shows its
+      // pre-respawn position, consistent with the agent's observation.
+      const s = e.physics.getVisiblePlayerState(id);
       if (!s) return null;
       return { x: s.x, y: s.y, angle: s.angle, isHeavy: s.isHeavy, alive: s.alive };
     },
