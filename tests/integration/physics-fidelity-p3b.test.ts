@@ -298,6 +298,94 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
         }
     });
 
+    it('preserves an OOB death when timed cap completion lands on the same tick', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, 100, 0);
+            engine.setPlayerTeam(1, 'red');
+
+            // Arrange the blue disc outside the death circle while a red-owned
+            // timed zone is one countdown tick from eliminating blue.
+            (engine as any).playerBodies.get(0).SetXForm(
+                new (require('box2d').b2Vec2)(200, 0),
+                0,
+            );
+            (engine as any).capZoneState.set(0, {
+                ty: 1,
+                p: 1,
+                l: 1,
+                i: 0,
+                o: 1,
+                ot: 'red',
+                f: 1,
+            });
+
+            engine.tick();
+
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(4);
+            expect(deaths[0].state.alive).toBe(false);
+            expect(engine.getTeamScored()).toBe('red');
+
+            // Type 4 remains respawnable even though the cap completed: the
+            // disc stays dead on the death tick (queued for its deferred
+            // respawn, #339) so the environment observes the death, then
+            // returns to spawn on the following tick.
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(4);
+            expect(engine.isPendingRespawn(0)).toBe(true);
+            // The dying-step view keeps the pre-respawn snapshot so any
+            // reader observes the death on the tick it happened.
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getVisiblePlayerState(0).deathType).toBe(4);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(0).deathType).toBe(0);
+            expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            expect(engine.isPendingRespawn(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('an instant-goal elimination stays terminal even when the victim is OOB', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, 100, 0);
+            engine.setPlayerTeam(1, 'red');
+
+            // Red scores a round-ending instant goal while blue's disc sits
+            // outside the death circle: the type-3 elimination must remain
+            // terminal, so the OOB pass must not reclassify it into a
+            // respawnable type-4 death.
+            (engine as any).playerBodies.get(0).SetXForm(
+                new (require('box2d').b2Vec2)(200, 0),
+                0,
+            );
+            (engine as any).triggerInstantGoal(2);
+
+            engine.tick();
+
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(3);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(3);
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(1).alive).toBe(true);
+        } finally {
+            engine.destroy();
+        }
+    });
+
     it('explicit env config respawnEnabled overrides the map setting', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,
