@@ -221,13 +221,18 @@ interface NativeFixtureRef {
 }
 
 function isNativeBody(value: unknown): value is NativeBody {
-    return !!value
-        && typeof value === 'object'
-        // A native body is defined by its structured fixture hierarchy, not by
-        // a `position` key: programmatic/exporter flat bodies may also carry a
-        // `position` (position-keyed flat bodies), and treating them as native
-        // would silently drop them (they flatten to nothing without fixtures).
-        && ('fixtures' in value || 'fixtureIndices' in value);
+    if (!value || typeof value !== 'object') return false;
+    const body = value as Record<string, unknown>;
+    // A native body is defined by its structured fixture hierarchy, not by a
+    // `position` or `x` key: programmatic/exporter flat bodies may also carry
+    // a `position` (position-keyed flat bodies) or `x` (the exporter flat
+    // compatibility view), and treating them as native would silently drop
+    // them (they flatten to nothing without fixtures). The fixture list must
+    // be non-empty to count: an object that carries flat markers (x/width)
+    // alongside an empty fixtures/fixtureIndices list is a flat body with a
+    // stray structured key, not a native body.
+    return (Array.isArray(body.fixtures) && body.fixtures.length > 0)
+        || (Array.isArray(body.fixtureIndices) && body.fixtureIndices.length > 0);
 }
 
 function isFlatBody(value: unknown): value is FlatBody {
@@ -549,16 +554,33 @@ export function normalizeMap(raw: unknown): MapDef {
     // the existing MapDef facade while retaining nativeBody/nativeFixture
     // metadata so PhysicsEngine can rebuild one Box2D body per bodyIndex.
     const flatSource = (flatBodies || (map.physicsBodies || []).filter(isFlatBody))
-        .filter((b): b is FlatBody => b !== null && b !== undefined);
+        .filter((b): b is FlatBody => b !== null && b !== undefined)
+        .map((b) => ({ ...b }));
+    // The exporter's flat compatibility view bakes the fixture's world
+    // position (bodyPos + center, mapexporter.js:518-521) into every polygon
+    // vertex and emits the shape scale separately. Every geometry consumer
+    // (the cap-zone sensor AABB, the derived-fixture polygon baking in
+    // PhysicsEngine, deathCenter) uses the shape-LOCAL convention — world
+    // vertex = def.x/y + R(def.angle)·(scaled v) — so rebase the world-baked
+    // vertices onto def.x/y and bake the scale in. Flat-source polygons then
+    // carry exactly the same convention as flattened-native polygons, and a
+    // rotated/off-center native fixture lands correctly whether or not its
+    // structured fixture resolves.
+    if (flatBodies) {
+        for (const b of flatSource) {
+            if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
+            const cx = b.x ?? 0;
+            const cy = b.y ?? 0;
+            const vertexScale = b.scale ?? 1;
+            b.vertices = b.vertices.map((v) => ({
+                x: (v.x - cx) * vertexScale,
+                y: (v.y - cy) * vertexScale,
+            }));
+        }
+    }
     const source = flatSource.length > 0
         ? flatSource
         : flattenNativeBodies(map, nativeBodies);
-    // Whether the facade bodies came from flattenNativeBodies: those emit
-    // shape-LOCAL polygon vertices (the getCapZoneSensorSize convention),
-    // while the exporter's flat view bakes bodyPos + center into the
-    // vertices. Consumers that treat vertices as world coordinates must add
-    // the body offset back only for flattened bodies.
-    const fromFlattened = flatSource.length === 0;
 
     // Exported fixtures frequently use the shared default name "Unnamed Shape"
     // even when their structured parent body has a meaningful name. Use the
@@ -784,9 +806,15 @@ export function normalizeMap(raw: unknown): MapDef {
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
             else if (b.vertices && b.vertices.length) {
+                // Polygon vertices are shape-local (scaled) in one unified
+                // convention (world vertex = def.x/y + R(def.angle)·v), so
+                // rotate before the bounds — an unrotated AABB would center
+                // the death circle on the wrong point for rotated polygons.
+                const cosA = Math.cos(b.angle ?? 0);
+                const sinA = Math.sin(b.angle ?? 0);
                 for (const v of b.vertices) {
-                    const vx = fromFlattened ? (b.x ?? 0) + v.x : v.x;
-                    const vy = fromFlattened ? (b.y ?? 0) + v.y : v.y;
+                    const vx = (b.x ?? 0) + v.x * cosA - v.y * sinA;
+                    const vy = (b.y ?? 0) + v.x * sinA + v.y * cosA;
                     if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx; if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
                 }
             }

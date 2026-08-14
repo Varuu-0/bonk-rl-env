@@ -422,17 +422,22 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     ]);
   });
 
-  it('places an unresolvable polygon fixture at def.x + R(def.angle)·v on a rotated native body (#307 review)', () => {
+  it('places an unresolvable exporter-flat polygon fixture at def.x + R(def.angle)·(scale·v) on a rotated native body (#307 review)', () => {
     // The native body is rotated AND the flat polygon is off-center with its
-    // own authored angle; the synthetic (derived) fixture must reproduce the
-    // legacy flat placement def.x + R(def.angle)·v in world space exactly —
-    // no double transform from feeding the vertices through center+rotation.
+    // own authored angle and scale. The exporter flat view bakes bodyPos +
+    // center into each vertex (mapexporter.js:518-521), so the adapter must
+    // rebase them to shape-local and bake scale in before the synthetic
+    // (derived) fixture reproduces the world placement def.x + R(def.angle)·v
+    // exactly — no double transform from re-translating/rotating world-baked
+    // vertices, and no dropped flat.scale.
     const bodyAngle = Math.PI / 6;
     const defAngle = Math.PI / 6;
     const e = makeEngine();
     const md = normalizeMap({
       bodies: [
-        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 100, y: 40, angle: defAngle, vertices: [{ x: -30, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }], static: false, density: 1 },
+        // World-baked vertices: (bodyPos + center) + raw local v, scale emitted
+        // separately — the real exporter convention.
+        { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 100, y: 40, angle: defAngle, scale: 2, vertices: [{ x: 70, y: 40 }, { x: 130, y: 40 }, { x: 100, y: 80 }], static: false, density: 1 },
       ],
       physicsBodies: [
         {
@@ -449,6 +454,14 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       spawns: [{ x: 0, y: 0, blue: true, red: true }],
     } as any) as any;
 
+    // The adapter rebases the world-baked vertices onto def.x/y and bakes the
+    // scale (2) in, so the MapDef carries the unified shape-local convention.
+    expect(md.bodies[0].vertices).toEqual([
+      { x: -60, y: 0 },
+      { x: 60, y: 0 },
+      { x: 0, y: 80 },
+    ]);
+
     for (const body of md.bodies) e.addBody(body);
     const bodyMap = e.getBodyMap() as Map<string, any>;
     const grouped = bodyMap.get(md.bodies[0].name);
@@ -460,11 +473,16 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
       x: v.x * Math.cos(a) - v.y * Math.sin(a),
       y: v.x * Math.sin(a) + v.y * Math.cos(a),
     });
-    const authored = md.bodies[0].vertices as { x: number; y: number }[];
-    const expectedWorld = authored.map((v) => ({
-      x: md.bodies[0].x + rotate(v, defAngle).x,
-      y: md.bodies[0].y + rotate(v, defAngle).y,
-    })).sort((a, b) => a.x - b.x);
+    // Expected world placement derived from the AUTHORED raw vertices and
+    // scale, not from the normalized MapDef output.
+    const rawLocal = [{ x: -30, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }];
+    const expectedWorld = rawLocal.map((v) => {
+      const sv = { x: v.x * 2, y: v.y * 2 };
+      return {
+        x: md.bodies[0].x + rotate(sv, defAngle).x,
+        y: md.bodies[0].y + rotate(sv, defAngle).y,
+      };
+    }).sort((a, b) => a.x - b.x);
     const actualWorld = [] as { x: number; y: number }[];
     for (let i = 0; i < shape.m_vertexCount; i++) {
       const local = shape.m_vertices[i];
@@ -516,6 +534,66 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     // center must equal the adapter-emitted x/y (sensor alignment).
     expect(cx).toBeCloseTo(md.bodies[0].x, 4);
     expect(cy).toBeCloseTo(md.bodies[0].y, 4);
+  });
+
+  it('places a cap-zone sensor on a rotated/off-center NATIVE polygon fixture at the true world AABB center (#307 review)', () => {
+    // Exporter-format map: the flat view bakes (bodyPos + center) into the
+    // polygon vertices (mapexporter.js:518-521) while the structured shape
+    // carries center/angle/scale. The sensor must land on the true world AABB
+    // of the shape — not on the world-baked vertices (which would double
+    // transform for a rotated, off-center native fixture).
+    const bodyAngle = Math.PI / 6;
+    const shapeAngle = Math.PI / 18;
+    const env = new BonkEnvironment({
+      mapData: {
+        bodies: [
+          { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 50, y: 0, angle: bodyAngle + shapeAngle, scale: 2, vertices: [{ x: 30, y: 0 }, { x: 70, y: 0 }, { x: 50, y: 30 }], static: true },
+        ],
+        physicsBodies: [
+          {
+            index: 0,
+            name: 'poly',
+            type: 's',
+            typeName: 'static',
+            position: { x: 0, y: 0 },
+            angle: bodyAngle,
+            fixtureIndices: [0],
+            fixtures: [
+              { fixtureIndex: 0, name: 'Unnamed Shape', shape: { type: 'po', typeName: 'polygon', center: { x: 50, y: 0 }, angle: shapeAngle, scale: 2, vertices: [{ x: -20, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 30 }] } },
+            ],
+          },
+        ],
+        capZones: [{ index: 0, owner: 'neutral', type: 3, fixtureIndex: 0 }],
+        spawns: [{ x: 0, y: 0, blue: true, red: true }],
+      },
+      numOpponents: 0,
+      randomOpponent: false,
+      seed: 42,
+      maxTicks: 900,
+    } as any);
+    try {
+      const physics = (env as any).physics;
+      const sensor = physics.capZoneSensors[0] as { GetPosition(): { x: number; y: number } };
+      expect(sensor).toBeTruthy();
+      const scale = physics.scale as number;
+      const rot = (v: { x: number; y: number }, a: number) => ({
+        x: v.x * Math.cos(a) - v.y * Math.sin(a),
+        y: v.x * Math.sin(a) + v.y * Math.cos(a),
+      });
+      // True world AABB center of bodyPos + R(bodyAngle)·(center + R(shapeAngle)·(scale·v)).
+      const pts = [{ x: -20, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 30 }].map((v) => {
+        const inner = rot({ x: v.x * 2, y: v.y * 2 }, shapeAngle);
+        return rot({ x: 50 + inner.x, y: 0 + inner.y }, bodyAngle);
+      });
+      const xs = pts.map((p) => p.x);
+      const ys = pts.map((p) => p.y);
+      const expectedCx = (Math.min(...xs) + Math.max(...xs)) / 2;
+      const expectedCy = (Math.min(...ys) + Math.max(...ys)) / 2;
+      expect(sensor.GetPosition().x * scale).toBeCloseTo(expectedCx, 3);
+      expect(sensor.GetPosition().y * scale).toBeCloseTo(expectedCy, 3);
+    } finally {
+      env.close();
+    }
   });
 
   it('keeps the first native fixture alias as the grouped body user data (#307 review)', () => {

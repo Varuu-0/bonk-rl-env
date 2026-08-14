@@ -347,7 +347,7 @@ describe('normalizeMap', () => {
             expect(out.capZones[0].fixture).toBe('cap platform');
         });
 
-        it('keeps flattened polygon vertices shape-local (scaled) while deathCenter stays world-correct', () => {
+        it('keeps flattened polygon vertices shape-local (scaled) while deathCenter rotates by def.angle', () => {
             const out = normalizeMap({
                 physicsBodies: [
                     {
@@ -384,8 +384,76 @@ describe('normalizeMap', () => {
             expect(vertices[2]).toEqual({ x: 0, y: 60 });
             expect(out.bodies[0].x).toBe(100);
             expect(out.bodies[0].y).toBe(50);
-            // deathCenter adds the body offset back: AABB of (x + local v).
-            expect(out.physics.deathCenter).toEqual({ x: 100, y: 80 });
+            // deathCenter = AABB of (x,y) + R(def.angle)·v — an unrotated AABB
+            // would center the circle at (100, 80) instead of the true
+            // geometry (def.angle = 0.5 + 0.25 = 0.75).
+            const angle = 0.75;
+            const rot = (v: { x: number; y: number }) => ({
+                x: v.x * Math.cos(angle) - v.y * Math.sin(angle),
+                y: v.x * Math.sin(angle) + v.y * Math.cos(angle),
+            });
+            const xs = vertices.map((v) => 100 + rot(v).x);
+            const ys = vertices.map((v) => 50 + rot(v).y);
+            expect(out.physics.deathCenter).toEqual({
+                x: (Math.min(...xs) + Math.max(...xs)) / 2,
+                y: (Math.min(...ys) + Math.max(...ys)) / 2,
+            });
+            expect(out.physics.deathCenter.x).toBeCloseTo(94.185, 3);
+            expect(out.physics.deathCenter.y).toBeCloseTo(58.318, 3);
+        });
+
+        it('rebases exporter-flat world-baked polygon vertices to shape-local (scaled) so sensors and deathCenter share one convention', () => {
+            // The real exporter (mapexporter.js:518-521) bakes bodyPos +
+            // center into every polygon vertex and emits scale separately.
+            // normalizeMap must rebase them onto def.x/y and bake the scale in
+            // (world vertex = def.x/y + R(def.angle)·(scaled v)) — otherwise
+            // the cap-zone sensor AABB and the derived-fixture polygon both
+            // double-transform and drop flat.scale.
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 100, y: 50, angle: 0.25, scale: 2, vertices: [{ x: 80, y: 50 }, { x: 120, y: 50 }, { x: 100, y: 90 }], static: true },
+                ],
+                physicsBodies: [
+                    {
+                        index: 0,
+                        name: 'body',
+                        type: 's',
+                        typeName: 'static',
+                        position: { x: 100, y: 50 },
+                        angle: 0.25,
+                        fixtureIndices: [0],
+                        fixtures: [],
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            const vertices = out.bodies[0].vertices as { x: number; y: number }[];
+            expect(vertices).toEqual([
+                { x: -40, y: 0 },
+                { x: 40, y: 0 },
+                { x: 0, y: 80 },
+            ]);
+            expect(out.bodies[0].x).toBe(100);
+            expect(out.bodies[0].y).toBe(50);
+            expect(out.bodies[0].angle).toBe(0.25);
+        });
+
+        it('keeps an object carrying both x and an empty fixtures list as a flat body (#307 review)', () => {
+            const out = normalizeMap({
+                physicsBodies: [
+                    { index: 0, name: 'wall', type: 'rect', bodyType: 'static', x: 100, y: 200, width: 40, height: 10, fixtures: [] },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            // An empty fixtures list is a stray structured key on a flat body,
+            // not a native body — flattening it to nothing would drop it.
+            expect(out.bodies).toHaveLength(1);
+            expect(out.bodies[0].name).toBe('wall');
+            expect(out.bodies[0].x).toBe(100);
+            expect(out.bodies[0].y).toBe(200);
+            expect(out.bodies[0].width).toBe(40);
         });
 
         it('emits the rotated world center for native-fixture bodies so sensors align', () => {

@@ -811,12 +811,18 @@ export class PhysicsEngine {
             const offX = (def.x ?? 0) - nativeBody.x;
             const offY = (def.y ?? 0) - nativeBody.y;
             if (def.type === 'polygon') {
-              // MapDef polygon vertices are authored about def.x/def.y and
-              // rotated by def.angle about that point. Bake the world → body
-              // local transform into the vertices themselves (center 0 /
-              // angle 0) so the polygon builder places the shape at
-              // def.x + R(def.angle)·v without re-translating/rotating
-              // vertices that already carry world placement.
+              // Convention (single, enforced by the map adapter): MapDef
+              // polygon vertices are shape-LOCAL and pre-scaled (world vertex
+              // = def.x/y + R(def.angle)·v), and def.x/y is the world-space
+              // shape center. Both the flattened-native facade and the
+              // exporter's flat view (whose world-baked vertices the adapter
+              // rebases onto def.x/y) satisfy this, so feeding the vertices
+              // through a center+rotation transform here would double-shift
+              // and double-rotate them. Bake the world → body local transform
+              // into the vertices themselves (center 0 / angle 0) so the
+              // polygon builder places the shape at def.x + R(def.angle)·v
+              // without re-translating/rotating vertices that already carry
+              // the placement.
               const cosD = Math.cos(def.angle ?? 0);
               const sinD = Math.sin(def.angle ?? 0);
               const vertices = (def.vertices ?? []).map((v) => {
