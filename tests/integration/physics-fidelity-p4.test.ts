@@ -48,6 +48,36 @@ function loadMap(file: string): unknown {
   return JSON.parse(fs.readFileSync(file, 'utf8'));
 }
 
+/** Minimal exported-map trace with one lsj joint between a static anchor body
+ *  and a dynamic spring body (the P2b decoder-canonical setup from
+ *  physics-fidelity-p2b.test.ts), with a configurable authored anchorA. */
+function makeLsjTrace(anchorA: { x: number; y: number }): NativeTrace {
+  const rawMap: any = {
+    bodies: [
+      { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+      { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+    ],
+    spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    physicsJoints: [{
+      index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+      anchorA,
+      axis: { x: 0, y: 1 },
+      lowerTranslation: -40, upperTranslation: 40,
+      length: 40, enableLimit: false, enableMotor: true,
+      motorSpeed: 300, maxMotorForce: 25,
+    }],
+  };
+  return {
+    schema: 'bonk.rl.env.native-trace',
+    version: TRACE_SCHEMA_VERSION,
+    tps: 30,
+    map: rawMap,
+    players: [{ id: 0, team: 1 }],
+    spawns: [{ id: 0, x: 0, y: 0 }],
+    ticks: [],
+  };
+}
+
 /** Deterministic sim recording: step an engine N ticks with neutral (zero)
  *  inputs and capture recorder ticks, yielding a trace the comparator replays.
  *  Player 0 is the AI slot; extra players are the opponent slots. */
@@ -417,6 +447,112 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       expect(lagged.mismatches.some(m => /prismatic lowerTranslation mismatch/.test(m))).toBe(true);
     } finally {
       env.close();
+    }
+  });
+
+  it('lsj gate passes the decoder-canonical case: built maxMotorForce ≈ 0 (bias k ≡ 0) must not be compared against the authored sf', () => {
+    // Issue #373: anchorA == the connected body's position collapses the P2b
+    // formula to k ≡ 0, so the engine deliberately builds
+    // m_maxMotorForce = sf·|k| = 0 while the trace authors maxMotorForce 25.
+    // The gate must expect the derived 0 (never the raw authored sf) and must
+    // flag a rebuilt authored force as the mismatch it would be.
+    const trace = makeLsjTrace({ x: 0, y: 0 });
+    const env = buildTraceEnvironment(trace, { seed: 1 });
+    try {
+      const built: any = (env as any).physics.createdJoints.get('joint_0');
+      expect(built).toBeTruthy();
+      expect(built.m_maxMotorForce).toBeCloseTo(0, 5);
+      expect(built.m_motorSpeed).toBeCloseTo(300, 5);
+
+      const gate = verifyJointGates(env, trace);
+      expect(gate.ok).toBe(true);
+      expect(gate.mismatches).toEqual([]);
+
+      // A gate that lagged behind P2b (comparing the raw authored sf) would
+      // pass with the authored force restored; the derived comparison must
+      // reject it as the engine never builds that value for this geometry.
+      built.m_maxMotorForce = 25;
+      const lagged = verifyJointGates(env, trace);
+      expect(lagged.ok).toBe(false);
+      expect(lagged.mismatches.some(m => /prismatic maxMotorForce mismatch/.test(m))).toBe(true);
+    } finally {
+      env.close();
+    }
+  });
+
+  it('lsj gate validates the offset-anchor bias (k = +1): derived force sf and the −300 motorSpeed override are enforced', () => {
+    // Issue #373: an authored anchor offset +slen along the axis yields
+    // k = +1, so the engine builds maxMotorForce = sf·|k| = 25 and the
+    // sign-aware motorSpeed −300 against the authored +300. The gate must
+    // pass both, and a regression that silently reverts the motor direction
+    // to +300 must fail the gate.
+    const trace = makeLsjTrace({ x: 0, y: 40 });
+    const env = buildTraceEnvironment(trace, { seed: 1 });
+    try {
+      const built: any = (env as any).physics.createdJoints.get('joint_0');
+      expect(built).toBeTruthy();
+      expect(built.m_maxMotorForce).toBeCloseTo(25, 5);
+      expect(built.m_motorSpeed).toBe(-300);
+
+      expect(verifyJointGates(env, trace).ok).toBe(true);
+
+      built.m_motorSpeed = 300;
+      const regressed = verifyJointGates(env, trace);
+      expect(regressed.ok).toBe(false);
+      expect(regressed.mismatches.some(m => /prismatic motorSpeed mismatch/.test(m))).toBe(true);
+    } finally {
+      env.close();
+    }
+  });
+
+  it('lsj gate expects the engine hardcoded 300/sf fallback for degenerate inputs (length 0, null anchorA, ground-anchored)', () => {
+    // Issue #373 review: when the P2b bias cannot engage (zero/non-finite
+    // length, invalid anchorA) the engine still OVERWRITES every lsj joint's
+    // motor with its hardcoded 300 (and force sf). The gate must expect those
+    // engine-built values — not the authored motorSpeed — so an authored
+    // non-300 motorSpeed (e.g. 500) on a degenerate lsj must NOT false-fail.
+    const scenarios: Array<{ name: string; mutate: (j: any) => void }> = [
+      { name: 'length 0', mutate: (j) => { j.length = 0; } },
+      { name: 'null anchorA', mutate: (j) => { j.anchorA = null; } },
+      { name: 'ground-anchored (ba -1)', mutate: (j) => { j.bodyA = -1; j.length = 0; } },
+    ];
+    for (const s of scenarios) {
+      const rawMap: any = {
+        bodies: [
+          { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+          { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+        ],
+        spawns: [{ x: 0, y: 0, blue: true, red: true }],
+        physicsJoints: [{
+          index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+          anchorA: { x: 0, y: 40 },
+          axis: { x: 0, y: 1 },
+          lowerTranslation: -40, upperTranslation: 40,
+          length: 40, enableLimit: false, enableMotor: true,
+          motorSpeed: 500, maxMotorForce: 25,
+        }],
+      };
+      s.mutate(rawMap.physicsJoints[0]);
+      const trace: NativeTrace = {
+        schema: 'bonk.rl.env.native-trace',
+        version: TRACE_SCHEMA_VERSION,
+        tps: 30,
+        map: rawMap,
+        players: [{ id: 0, team: 1 }],
+        spawns: [{ id: 0, x: 0, y: 0 }],
+        ticks: [],
+      };
+      const env = buildTraceEnvironment(trace, { seed: 1 });
+      try {
+        const built: any = (env as any).physics.createdJoints.get('joint_0');
+        expect(built, s.name).toBeTruthy();
+        // Degenerate lsj: engine hardcodes force sf and motor 300.
+        expect(built.m_maxMotorForce, s.name).toBeCloseTo(25, 5);
+        expect(built.m_motorSpeed, s.name).toBe(300);
+        expect(verifyJointGates(env, trace).ok, s.name).toBe(true);
+      } finally {
+        env.close();
+      }
     }
   });
 });
