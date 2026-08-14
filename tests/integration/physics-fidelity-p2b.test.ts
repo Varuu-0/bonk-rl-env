@@ -118,6 +118,44 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
         }
     });
 
+    it('signed slen −40, anchor −40 px below the body (k = +1): maxMotorForce = 25, motorSpeed = −300 (#372)', () => {
+        // slen = −40/30 = −1.3333; θ = −π/2 → ay = anchor.y + sin(θ)·(−slen)
+        // = −1.3333 + (−1)·(1.3333) = −2.6667; anchorWorld = (0, −2.6667);
+        // rel = (0, 2.6667); φ = π/2 (not kept) → len = −2.6667;
+        // k = (−2.6667/(2·(−1.3333)) − 0.5)·2 = +1 → force sf, −300.
+        const { engine, close } = makeEngine();
+        try {
+            const j = addLsj(engine, {
+                anchorA: { x: 0, y: -40 }, length: -40,
+                lowerTranslation: -40, upperTranslation: 40,
+                maxMotorForce: 25, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(j.m_motorSpeed).toBe(-300);
+            expect(j.m_maxMotorForce).toBeCloseTo(25, 6);
+        } finally {
+            close();
+        }
+    });
+
+    it('signed slen −40, anchor at the body center (k = 0): maxMotorForce = 0, motorSpeed stays +300 (#372)', () => {
+        // anchorWorld = (0, −1.3333); rel = (0, 1.3333); φ = π/2 (not kept) →
+        // len = −1.3333; k = (−1.3333/(−2.6667) − 0.5)·2 = 0 → force 0, +300.
+        const { engine, close } = makeEngine();
+        try {
+            const j = addLsj(engine, {
+                anchorA: { x: 0, y: 0 }, length: -40,
+                lowerTranslation: -40, upperTranslation: 40,
+                maxMotorForce: 25, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(j.m_maxMotorForce).toBeCloseTo(0, 6);
+            expect(j.m_motorSpeed).toBe(300);
+        } finally {
+            close();
+        }
+    });
+
     it('static 300/sf fallbacks when slen is absent/zero or the anchor is invalid', () => {
         const { engine, close } = makeEngine();
         try {
@@ -136,6 +174,44 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
             });
             expect(noAnchor.m_maxMotorForce).toBe(500);
             expect(noAnchor.m_motorSpeed).toBe(300);
+
+            const signedNoAnchor = addLsj(engine, {
+                length: -40, maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(signedNoAnchor.m_maxMotorForce).toBe(500);
+            expect(signedNoAnchor.m_motorSpeed).toBe(300);
+        } finally {
+            close();
+        }
+    });
+
+    it('magnitude floor: finite tiny non-zero slen takes the degenerate 300/sf fallback (#372)', () => {
+        // The signed-slen bias engages only when |slen| >= 1e-6 (slen =
+        // length / scale, scale 30). A finite tiny length such as 1e-9·30
+        // yields slen = 1e-9 < 1e-6, so k = len/(2·slen) must NOT be computed
+        // (it would be unbounded); the joint keeps the static motor 300 /
+        // force sf defaults instead of an exploded maxMotorForce. Pins the
+        // magnitude-floor branch for both signs of the signed length.
+        const { engine, close } = makeEngine();
+        try {
+            const tinyPositive = addLsj(engine, {
+                anchorA: { x: 0, y: 100 }, length: 1e-9 * 30,
+                lowerTranslation: -1, upperTranslation: 1,
+                maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(tinyPositive.m_maxMotorForce).toBe(500);
+            expect(tinyPositive.m_motorSpeed).toBe(300);
+
+            const tinyNegative = addLsj(engine, {
+                anchorA: { x: 0, y: -100 }, length: -1e-9 * 30,
+                lowerTranslation: -1, upperTranslation: 1,
+                maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(tinyNegative.m_maxMotorForce).toBe(500);
+            expect(tinyNegative.m_motorSpeed).toBe(300);
         } finally {
             close();
         }
@@ -219,6 +295,44 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
             const j = (engine as any).createdJoints.get('joint_0');
             expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
             expect(j.m_motorSpeed).toBeCloseTo(-300, 5);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('signed slen −40 through the adapter path (length: -40, anchorA (0,-40)): force 25, motor −300, 0/0 limits (#372)', () => {
+        // normalizeMap forwards the raw signed `length` and `anchorA` verbatim
+        // (§33.8 map-adapter 469/487). With no authored lower/upperTranslation,
+        // the positive-only `lenLimit` gate (length > 0) does NOT turn the
+        // negative length into a ±len symmetric limit, so the limit range falls
+        // back to the 0/0 default while the signed-slen bias still engages:
+        // slen = −40/30 = −1.3333 → k = +1 → force sf, motor −300.
+        const engine = new PhysicsEngine({});
+        try {
+            const md = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+                    { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+                physicsJoints: [{
+                    index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+                    anchorA: { x: 0, y: -40 }, // signed initial side (native k = +1)
+                    axis: { x: 0, y: 1 },
+                    length: -40, enableLimit: false, enableMotor: true,
+                    motorSpeed: 300, maxMotorForce: 25,
+                }],
+            } as any) as any;
+            const bm = new Map<string, any>();
+            for (const b of md.bodies) { engine.addBody(b); bm.set(b.name, engine.getBodyMap().get(b.name)); }
+            engine.addJoint(md.joints[0], bm);
+            const j = (engine as any).createdJoints.get('joint_0');
+            expect(j.m_motorSpeed).toBe(-300);
+            expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
+            // Positive-only lenLimit gate: the negative length is not a limit
+            // source, so the default 0/0 limit range is kept.
+            expect(j.m_lowerTranslation).toBe(0);
+            expect(j.m_upperTranslation).toBe(0);
         } finally {
             engine.destroy();
         }

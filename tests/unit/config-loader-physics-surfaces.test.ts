@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadConfig, resetConfig, mergeEngineSections } from '../../src/config/config-loader';
+import { loadConfig, resetConfig, mergeEngineSections, getConfig, PHYSICS_PROVENANCE } from '../../src/config/config-loader';
 
 describe('config-loader physics/arena/player surfaces (#217)', () => {
     const testDir = path.join(__dirname, '..', 'fixtures', 'config-loader-physics-' + process.pid);
@@ -287,6 +287,78 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
     });
 
     describe('mergeEngineSections', () => {
+        it('omits the loader solverIterations default when no source authored it (#325)', () => {
+            const sections = mergeEngineSections({});
+            expect(sections.physics.solverIterations).toBeUndefined();
+            expect(sections.physics.ticksPerSecond).toBe(30);
+            expect(sections.physics.worldAabbExtent).toBe(1000);
+        });
+
+        it('preserves an explicit config.json solverIterations even when it equals the default (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+        });
+
+        it('preserves a config.json snake_case solver_iterations as explicit (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solver_iterations: 7 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(7);
+        });
+
+        it('preserves a config.json snake_case solver_iterations equal to the default (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solver_iterations: 2 } }));
+            loadConfig(testDir);
+
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+        });
+
+        it('re-derives provenance per load instead of carrying load history (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+
+            // A subsequent load without a solver key must omit it again: the
+            // provenance is scoped to the resolved config, not the module.
+            resetConfig();
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { gravityY: 3 } }));
+            loadConfig(testDir);
+            expect(mergeEngineSections({}).physics.solverIterations).toBeUndefined();
+            expect(mergeEngineSections({}).physics.gravityY).toBe(3);
+        });
+
+        it('keeps the physics provenance marker out of the spreadable config surface (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+
+            // The provenance marker is attached to the resolved config as a
+            // non-enumerable, non-configurable own symbol. Assert its
+            // descriptor directly (not every own symbol on AppConfig) so an
+            // unrelated future symbol can never fail this test spuriously.
+            const descriptor = Object.getOwnPropertyDescriptor(getConfig(), PHYSICS_PROVENANCE);
+            expect(descriptor).toBeDefined();
+            expect(descriptor!.enumerable).toBe(false);
+            // Non-configurable: a delete-then-reassign cannot re-create the
+            // property as enumerable.
+            expect(descriptor!.configurable).toBe(false);
+            // ...non-enumerable: a spread cannot copy it (by reference or
+            // otherwise), so it can never leak into a deepMerge result.
+            expect(Object.getOwnPropertySymbols({ ...getConfig() })).toHaveLength(0);
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
+        });
+
+        it('preserves authored environment and CLI solverIterations in the merged sections (#325)', () => {
+            process.env.SOLVER_ITERATIONS = '12';
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(12);
+
+            resetConfig();
+            delete (process.env as any).SOLVER_ITERATIONS;
+            process.argv = ['node', 'script.js', '--solver-iterations', '13'];
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(13);
+        });
+
         it('resolves overrides over the resolved config defaults', () => {
             process.env.GRAVITY_Y = '11';
             process.env.PLAYER_MOVE_FORCE = '55';
@@ -325,6 +397,11 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
         it('an explicit camelCase override wins over the snake_case alias', () => {
             const sections = mergeEngineSections({ physics: { gravity_y: 5, gravityY: 7 } });
             expect(sections.physics.gravityY).toBe(7);
+        });
+
+        it('preserves an explicit per-env solverIterations override over map quality defaults (#325)', () => {
+            expect(mergeEngineSections({ physics: { solverIterations: 2 } }).physics.solverIterations).toBe(2);
+            expect(mergeEngineSections({ physics: { solver_iterations: 12 } }).physics.solverIterations).toBe(12);
         });
     });
 });
