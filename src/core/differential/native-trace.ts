@@ -103,20 +103,28 @@ export interface ParsedTrace {
   errors: string[];
 }
 
+/** Return the first validation failure for a disc, or null when it is valid. */
+function discValidationError(value: unknown): string | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return 'not an object';
+  }
+  const disc = value as Partial<NativeTraceDisc>;
+  if (typeof disc.id !== 'number' || !Number.isInteger(disc.id) || disc.id < 0) {
+    return 'id must be a non-negative integer';
+  }
+  if (typeof disc.x !== 'number' || !Number.isFinite(disc.x)) return 'x must be a finite number';
+  if (typeof disc.y !== 'number' || !Number.isFinite(disc.y)) return 'y must be a finite number';
+  if (typeof disc.xv !== 'number' || !Number.isFinite(disc.xv)) return 'xv must be a finite number';
+  if (typeof disc.yv !== 'number' || !Number.isFinite(disc.yv)) return 'yv must be a finite number';
+  if (typeof disc.a !== 'number' || !Number.isFinite(disc.a)) return 'a must be a finite number';
+  if (typeof disc.av !== 'number' || !Number.isFinite(disc.av)) return 'av must be a finite number';
+  if (typeof disc.alive !== 'boolean') return 'alive must be a boolean';
+  return null;
+}
+
 /** Return true for a disc object with every comparator-required field present. */
 export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
-  if (value === null || typeof value !== 'object' || Array.isArray(value)) return false;
-  const disc = value as Partial<NativeTraceDisc>;
-  return (
-    typeof disc.id === 'number' && Number.isFinite(disc.id) && disc.id >= 0 &&
-    typeof disc.x === 'number' && Number.isFinite(disc.x) &&
-    typeof disc.y === 'number' && Number.isFinite(disc.y) &&
-    typeof disc.xv === 'number' && Number.isFinite(disc.xv) &&
-    typeof disc.yv === 'number' && Number.isFinite(disc.yv) &&
-    typeof disc.a === 'number' && Number.isFinite(disc.a) &&
-    typeof disc.av === 'number' && Number.isFinite(disc.av) &&
-    typeof disc.alive === 'boolean'
-  );
+  return discValidationError(value) === null;
 }
 
 /**
@@ -172,8 +180,11 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
       }
       tick.discs.forEach((disc, id) => {
         if (disc === null || disc === undefined) return;
-        if (!isNativeTraceDisc(disc)) {
-          errors.push(`tick ${tick.t} disc ${id} is malformed`);
+        const reason = discValidationError(disc);
+        if (reason !== null) {
+          errors.push(`tick ${tick.t} disc ${id} is malformed: ${reason}`);
+        } else if (disc.id !== id) {
+          errors.push(`tick ${tick.t} disc ${id} id mismatch: disc.id=${disc.id} does not match slot ${id}`);
         }
       });
     }

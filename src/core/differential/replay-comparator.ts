@@ -177,7 +177,7 @@ export function compareTrace(
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (recorded.discs[id] !== null && recorded.discs[id] !== undefined) {
+        if (isNativeTraceDisc(recorded.discs[id])) {
           physics.applyInput(id, decodeInput(inputs[id]));
         }
       }

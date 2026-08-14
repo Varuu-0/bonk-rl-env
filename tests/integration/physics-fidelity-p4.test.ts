@@ -140,10 +140,32 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       }],
     });
     expect(parsed.errors).toEqual([
-      'tick 0 disc 1 is malformed',
-      'tick 0 disc 2 is malformed',
+      'tick 0 disc 1 is malformed: not an object',
+      'tick 0 disc 2 is malformed: alive must be a boolean',
     ]);
     expect(parsed.trace.ticks[0].discs[0]).toBeNull();
+  });
+
+  it('rejects fractional or misaligned disc ids', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [
+          { id: 1.5, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+          { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+        ],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 0 is malformed: id must be a non-negative integer',
+      'tick 0 disc 1 id mismatch: disc.id=2 does not match slot 1',
+    ]);
   });
 });
 
@@ -241,13 +263,35 @@ describe('P4: differential validation — replay comparator', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     bad.ticks[0].discs[0] = 5 as any;
     const parsed = parseNativeTrace(bad);
-    expect(parsed.errors).toContain('tick 0 disc 0 is malformed');
+    expect(parsed.errors).toContain('tick 0 disc 0 is malformed: not an object');
 
     const verdict = compareTrace(bad, { seed: 0 });
     expect(verdict.pass).toBe(false);
     expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
     expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed disc entry' });
     for (const value of Object.values(verdict.worst)) expect(Number.isFinite(value)).toBe(true);
+  });
+
+  it('does not apply replayed inputs to malformed (non-null) disc entries', () => {
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    // Every tick's slot 0 is a malformed disc; slot 1 stays valid, so only slot
+    // 1 may receive its replayed input.
+    for (const tick of bad.ticks) tick.discs[0] = 5 as any;
+    const applied: number[] = [];
+    const verdict = compareTrace(bad, {
+      seed: 0,
+      onReady: (env) => {
+        const physics: any = (env as any).physics;
+        const orig = physics.applyInput.bind(physics);
+        physics.applyInput = (id: number, input: unknown) => {
+          applied.push(id);
+          return orig(id, input as any);
+        };
+      },
+    });
+    expect(verdict.pass).toBe(false);
+    expect(applied).not.toContain(0);
+    expect(applied.filter(id => id === 1).length).toBeGreaterThan(0);
   });
 
   it('trace settings drive the engine through the map-settings path (pq high → 15 solver iterations)', () => {
