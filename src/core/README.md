@@ -47,7 +47,8 @@ map; this port applies it as `850 / SCALE` world units, independent of ppm.
 
 `BonkEnvironment` exposes `teamsEnabled` and `noCollide` config options
 (map-level `physics.teams` and `settings.nc` act as defaults; the legacy
-hand-authored `physics.nc` key is honoured as a fallback, issue #329).
+`physics.nc` key is honoured as a fallback — forwarded by `normalizeMap` for
+pre-P3b exported-format maps, preserved by the internal pass-through, issue #329).
 
 The grapple reach is the verified 500 map units converted through this port's
 exported-map coordinate scale (`500 / SCALE`; DEOBFUSCATION line 2531). The

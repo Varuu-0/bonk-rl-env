@@ -776,7 +776,9 @@ BeginContact case 6:
   bits from every disc mask. `EnvironmentConfig.noCollide` and
   `EnvironmentConfig.teamsEnabled` wire both flags; map `physics.teams` and
   `settings.nc` are honoured as map-level defaults (explicit config wins),
-  with the legacy hand-authored `physics.nc` key as a fallback (issue #329).
+  with the legacy `physics.nc` key as a fallback — forwarded by `normalizeMap`
+  for pre-P3b exported-format maps and preserved by the internal pass-through
+  (issue #329).
 - **Swing destroy (`swingCollideDestroyEvents`)**: a disc-disc contact while a
   grapple joint is active queues the disc for grapple destruction after the
   step (`pendingSwingDestroy` processed post-Step, matching native ordering).

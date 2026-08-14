@@ -280,7 +280,16 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
             randomOpponent: false,
         } as any);
         try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
             expect((env as any).config.noCollide).toBe(false);
+            expect(physics.noCollide).toBe(false);
+            // Settings parity with the sibling tests: masks keep every player
+            // category bit (settings.nc:false → colliding discs).
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+            }
         } finally {
             env.close();
         }
