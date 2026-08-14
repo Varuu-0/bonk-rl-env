@@ -545,6 +545,37 @@ describe('P4: differential validation — replay comparator', () => {
     expect(applied.filter(id => id === 1).length).toBeGreaterThan(0);
   });
 
+  it('does not apply replayed inputs to slot-misaligned disc entries', () => {
+    // parseNativeTrace enforces the slot-alignment invariant at parse time; the
+    // comparator must enforce it too, because a caller can compare an unparsed
+    // (or error-ignoring) trace. A disc whose `id` does not match its array
+    // slot must not drive the input of its slot's player nor be diffed against
+    // that player.
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    // Every tick's slot 1 claims id 0 (misaligned); slot 0 stays valid and
+    // aligned, so only slot 0 may receive its replayed input.
+    for (const tick of bad.ticks) {
+      const d = tick.discs[1];
+      if (d) d.id = 0;
+    }
+    const applied: number[] = [];
+    const verdict = compareTrace(bad, {
+      seed: 0,
+      onReady: (env) => {
+        const physics: any = (env as any).physics;
+        const orig = physics.applyInput.bind(physics);
+        physics.applyInput = (id: number, input: unknown) => {
+          applied.push(id);
+          return orig(id, input as any);
+        };
+      },
+    });
+    expect(verdict.pass).toBe(false);
+    expect(applied).not.toContain(1);
+    expect(applied.filter(id => id === 0).length).toBeGreaterThan(0);
+    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 1, reason: 'malformed disc entry' });
+  });
+
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
     const noData: NativeTrace = {
       schema: 'bonk.rl.env.native-trace',

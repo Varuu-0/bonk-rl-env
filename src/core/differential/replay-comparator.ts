@@ -14,7 +14,10 @@
  *    angular velocity rad/s) — each tick must be within ALL tolerances,
  *  - a missing native disc where the engine reports alive (or vice versa) is a
  *    mismatch,
- *  - the run PASSES only when every compared tick is within tolerance.
+ *  - a null disc the engine agrees is dead counts as compared data when the
+ *    trace previously showed that player alive (death-agreement tick),
+ *  - the run PASSES only when every compared tick is within tolerance and at
+ *    least one tick had comparable data (an all-skipped trace is not a pass).
  *
  * Grounding: coordinate reconciliation (§9.5) proves engine getPlayerState
  * units == native disc units 1:1, so diffs are compared directly in map units.
@@ -23,7 +26,7 @@ import { BonkEnvironment } from '../environment';
 import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
 import { isNativeTraceDisc } from './native-trace';
-import type { NativeTrace } from './native-trace';
+import type { NativeTrace, NativeTraceDisc } from './native-trace';
 import { decodeEncodedAction } from '../action-validation';
 
 // Same port the engine binds (physics-engine.ts:15): b2Vec2 for re-seeding.
@@ -150,6 +153,18 @@ function decodeInput(bits: number | undefined): PlayerInput {
 }
 
 /**
+ * Comparator-side disc gate: a disc only counts as replayable/comparable when
+ * it is a fully-valid native disc AND its `id` matches the array slot it sits
+ * in (the slot-alignment invariant `parseNativeTrace` enforces at parse time).
+ * A misaligned disc must not drive replayed inputs or be compared against the
+ * player of its slot — treat it exactly like any other malformed entry.
+ */
+function isAlignedTraceDisc(value: unknown, slot: number): value is NativeTraceDisc {
+  if (!isNativeTraceDisc(value)) return false;
+  return value.id === slot;
+}
+
+/**
  * Replay a native trace through a fresh environment and compare every tick.
  * Returns the verdict plus per-tick diffs for inspection.
  */
@@ -165,12 +180,17 @@ export function compareTrace(
     let ticksOutsideTolerance = 0;
     let skippedNoData = 0;
     const worst = { dx: 0, dy: 0, dvx: 0, dvy: 0, da: 0, dav: 0 };
+    // Players the native trace has shown alive so far. A later null entry for
+    // such a player (with the engine agreeing it is dead) is a death-agreement
+    // tick — informative compared data, not a no-data skip — so a replay that
+    // faithfully reproduces mid-run deaths still counts every tick.
+    const aliveSeen = new Set<number>();
 
     for (const recorded of trace.ticks) {
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (isNativeTraceDisc(recorded.discs[id])) {
+        if (isAlignedTraceDisc(recorded.discs[id], id)) {
           physics.applyInput(id, decodeInput(inputs[id]));
         }
       }
@@ -181,6 +201,7 @@ export function compareTrace(
       const compared: DiscAxesDiff[] = [];
       const mismatches: TickComparison['mismatches'] = [];
       let withinTolerance = true;
+      let deathAgreements = 0;
 
       // The discs array is index-aligned by player id: entries[i] is player i.
       recorded.discs.forEach((rec, id) => {
@@ -193,14 +214,20 @@ export function compareTrace(
           if (st && st.alive) {
             mismatches.push({ id, reason: 'native absent but engine alive' });
             withinTolerance = false;
+          } else if (aliveSeen.has(id)) {
+            // The trace previously showed this player alive and the engine
+            // killed it on the same tick: the replay reproduced the native
+            // death, so this tick counts as compared data.
+            deathAgreements++;
           }
           return;
         }
-        if (!isNativeTraceDisc(rec)) {
+        if (!isAlignedTraceDisc(rec, id)) {
           mismatches.push({ id, reason: 'malformed disc entry' });
           withinTolerance = false;
           return;
         }
+        aliveSeen.add(id);
         const st = physics.getPlayerState(id);
         if (!st || !st.alive) {
           mismatches.push({ id, reason: 'native present but engine dead/absent' });
@@ -242,7 +269,7 @@ export function compareTrace(
         }
       });
 
-      const hadData = compared.length > 0 || mismatches.length > 0;
+      const hadData = compared.length > 0 || mismatches.length > 0 || deathAgreements > 0;
       if (!hadData) skippedNoData++;
       if (!withinTolerance) ticksOutsideTolerance++;
       perTick.push({ tick: recorded.t, compared, mismatches, withinTolerance });
