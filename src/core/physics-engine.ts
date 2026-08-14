@@ -1396,7 +1396,7 @@ export class PhysicsEngine {
       // `len/(2·slen)` (k) — a negative slen encodes the spring's initial side
       // and is not a degenerate input. The `lenLimit` positive gate above
       // still governs the symmetric translation limits; only absent, zero,
-      // or non-finite lengths keep the fallback here.
+      // near-zero, or non-finite lengths keep the fallback here.
       if (type === 'lsj') {
         const sf = Number.isFinite(def.maxMotorForce) ? def.maxMotorForce : 0;
         const slen = typeof def.length === 'number' && Number.isFinite(def.length) && def.length !== 0
@@ -1405,7 +1405,10 @@ export class PhysicsEngine {
         const anchorValid = def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y);
         let motor = 300; // native hardcodes 300, then signs it when k > 0
         let force = sf;
-        if (slen !== 0 && anchorValid) {
+        // Magnitude floor (review #372): a near-zero signed slen would make
+        // k = len/(2·slen) unbounded, so |slen| < 1e-6 routes into the same
+        // degenerate 300/sf fallback and keeps maxMotorForce bounded.
+        if (Math.abs(slen) >= 1e-6 && anchorValid) {
           const anchor = makeAnchorA(def.anchorA);
           const theta = bodyA.GetAngle() - Math.PI / 2;
           const ax = anchor.x + Math.cos(theta) * -slen;

@@ -268,4 +268,42 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
             engine.destroy();
         }
     });
+
+    it('signed slen −40 through the adapter path (length: -40, anchorA (0,-40)): force 25, motor −300, 0/0 limits (#372)', () => {
+        // normalizeMap forwards the raw signed `length` and `anchorA` verbatim
+        // (§33.8 map-adapter 469/487). With no authored lower/upperTranslation,
+        // the positive-only `lenLimit` gate (length > 0) does NOT turn the
+        // negative length into a ±len symmetric limit, so the limit range falls
+        // back to the 0/0 default while the signed-slen bias still engages:
+        // slen = −40/30 = −1.3333 → k = +1 → force sf, motor −300.
+        const engine = new PhysicsEngine({});
+        try {
+            const md = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+                    { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+                physicsJoints: [{
+                    index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+                    anchorA: { x: 0, y: -40 }, // signed initial side (native k = +1)
+                    axis: { x: 0, y: 1 },
+                    length: -40, enableLimit: false, enableMotor: true,
+                    motorSpeed: 300, maxMotorForce: 25,
+                }],
+            } as any) as any;
+            const bm = new Map<string, any>();
+            for (const b of md.bodies) { engine.addBody(b); bm.set(b.name, engine.getBodyMap().get(b.name)); }
+            engine.addJoint(md.joints[0], bm);
+            const j = (engine as any).createdJoints.get('joint_0');
+            expect(j.m_motorSpeed).toBe(-300);
+            expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
+            // Positive-only lenLimit gate: the negative length is not a limit
+            // source, so the default 0/0 limit range is kept.
+            expect(j.m_lowerTranslation).toBe(0);
+            expect(j.m_upperTranslation).toBe(0);
+        } finally {
+            engine.destroy();
+        }
+    });
 });
