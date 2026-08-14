@@ -87,8 +87,15 @@ The remaining per-map settings now gate runtime behavior, all read from
   (death type 3) stay permanent (§alive rule, readable 8463). Engine option
   `respawnEnabled` + `respawnPlayer`; env forwards `settings.re`. The port
   does not model spawn velocity, so respawns re-spawn at rest; `a1a` is not
-  reset (the native branch does not touch it). Fail-safe: a spawn point
-  outside the OOB death circle detaches instead of churning every tick.
+  reset (the native branch does not touch it). A per-tick death event snapshot
+  keeps lethal/OOB deaths observable and rewardable on the dying step without
+  delaying the immediate respawn; those transient deaths do not terminate the
+  environment, while type-3 eliminations remain terminal. The death-circle
+  pass never reclassifies a same-tick instant-goal elimination into an OOB
+  death, and `getVisiblePlayerState` exposes the dying-step pre-respawn
+  snapshot for one tick so render readers agree with the observation.
+  Fail-safe: a spawn point outside the OOB death circle detaches instead of
+  churning every tick.
 - Config override symmetry: the `flipped` / `respawnEnabled` environment
   config keys win over the map settings, mirroring `noCollide` vs
   `settings.nc`.

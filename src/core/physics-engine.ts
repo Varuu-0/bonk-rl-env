@@ -31,6 +31,8 @@ const {
   b2GearJointDef,
   b2ContactListener,
   b2FilterData,
+  b2XForm,
+  b2Distance,
 } = box2d;
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -176,6 +178,17 @@ export interface PlayerState {
   isHeavy: boolean;
   alive: boolean;
   deathType: number;
+}
+
+/**
+ * A death resolved during the most recent physics tick. The state is captured
+ * before an immediate `re` respawn so environment consumers can observe the
+ * death without changing the native-style body lifecycle.
+ */
+export interface DeathEvent {
+  playerId: number;
+  deathType: number;
+  state: PlayerState;
 }
 
 export interface PlayerInput {
@@ -452,6 +465,12 @@ export class PhysicsEngine {
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
+/** Death causes collected during the current tick, before respawn. */
+  private tickDeathCauses: Map<number, number> = new Map();
+  /** Deaths from the most recent tick, consumed by the environment. */
+  private deathEvents: DeathEvent[] = [];
+  /** Pre-respawn snapshots of players who died during the most recent tick. */
+  private lastDeathStates: Map<number, PlayerState> = new Map();
   /** Disc IDs whose death occurred on the previous tick and that must be
    *  respawned at the start of this tick (issue #339). The death stays
    *  observable for the tick it happened in; the P3b `re` respawn runs one
@@ -734,9 +753,32 @@ export class PhysicsEngine {
 
   private checkLethalCollision(playerData: any, staticData: any): void {
     if (playerData.playerId !== undefined && staticData.isLethal) {
-      this.playerAlive.set(playerData.playerId, false);
-      this.playerDeathType.set(playerData.playerId, 1);
+      this.markPlayerDead(playerData.playerId, 1);
       globalProfiler.increment('collision_lethal');
+    }
+  }
+
+  /**
+   * Record one death cause for the current tick. Physical causes outrank the
+   * round-wide cap elimination so a lethal/OOB death cannot be reclassified as
+   * type 3 merely because cap completion is processed later in the tick.
+   */
+  private markPlayerDead(playerId: number, deathType: number): void {
+    this.playerAlive.set(playerId, false);
+
+    const previous = this.tickDeathCauses.get(playerId);
+    if (previous !== undefined && PhysicsEngine.deathCausePriority(previous) >= PhysicsEngine.deathCausePriority(deathType)) {
+      return;
+    }
+    this.tickDeathCauses.set(playerId, deathType);
+  }
+
+  private static deathCausePriority(deathType: number): number {
+    switch (deathType) {
+      case 1: return 3; // lethal surface
+      case 4: return 2; // out of bounds
+      case 3: return 1; // cap-zone elimination
+      default: return 0;
     }
   }
 
@@ -780,9 +822,10 @@ export class PhysicsEngine {
     this.instantGoalResolved = true;
     this.lastScoredTeam = winnerTeam;
     for (const [id, team] of this.playerTeams) {
-      if (team !== winnerTeam) {
-        this.playerAlive.set(id, false);
-        this.playerDeathType.set(id, 3);
+      // A disc already dead this tick (or on an earlier tick) keeps its
+      // physical death cause; cap completion only eliminates survivors.
+      if (team !== winnerTeam && this.playerAlive.get(id)) {
+        this.markPlayerDead(id, 3);
       }
     }
   }
@@ -1811,6 +1854,36 @@ export class PhysicsEngine {
       this.detachPlayer(id, body);
       return;
     }
+    // A persistent contact does not re-fire BeginContact after SetXForm. Do
+    // not restore a disc on or inside a lethal fixture, or it would become
+    // immune to that fixture once the respawn clears its death state. The
+    // disc has a real radius (ppm/SCALE), so testing only the spawn center
+    // would let a disc whose circle overlaps a lethal fixture edge respawn
+    // immune to it: test the full disc circle against each lethal shape via
+    // b2Distance (distance <= 0 means contact/overlap; DistancePC clamps
+    // penetration to 0, and the toiSlop radius shrink covers a center that
+    // sits just outside the edge).
+    const spawnPoint = new b2Vec2(spawn.x, spawn.y);
+    const discShape = body.GetShapeList();
+    const spawnXForm = new b2XForm();
+    spawnXForm.position.Set(spawn.x, spawn.y);
+    spawnXForm.R.SetIdentity();
+    const witnessA = new b2Vec2();
+    const witnessB = new b2Vec2();
+    for (const platformBody of this.platformBodies) {
+      const userData = platformBody.GetUserData() || {};
+      if (!userData.isLethal) continue;
+      const transform = platformBody.GetXForm();
+      for (let shape = platformBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        const overlapping = discShape
+          ? b2Distance.Distance(witnessA, witnessB, shape, transform, discShape, spawnXForm) <= 0
+          : shape.TestPoint(transform, spawnPoint);
+        if (overlapping) {
+          this.detachPlayer(id, body);
+          return;
+        }
+      }
+    }
     this.releaseGrapple(id);
     this.pendingSwingDestroy.delete(id);
     body.SetXForm(new b2Vec2(spawn.x, spawn.y), 0);
@@ -1829,6 +1902,11 @@ export class PhysicsEngine {
    */
     tick(): void {
         if (!this.world) return;
+// Dying-step snapshots live for exactly one tick (plus any terminal
+        // hold that skips physics): drop the previous tick's pre-respawn
+        // snapshots so respawned discs become visible again on this step.
+        this.lastDeathStates.clear();
+
         // Deferred P3b respawns (issue #339): a disc that died on the previous
         // tick with respawning enabled stays dead for that tick so the
         // environment observes the death (reward, alive flags, termination);
@@ -1869,6 +1947,23 @@ export class PhysicsEngine {
         this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
+    // Detect OOB before cap completion can eliminate survivors so a same-tick
+    // capture cannot erase an OOB death. A disc already flagged type 3 by
+    // this tick's contact/goal handling is an elimination and stays type 3:
+    // the death circle must never reclassify it into a respawnable OOB death,
+    // or a round-ending goal's victim would respawn on `re` maps.
+    for (const [id, body] of Array.from(this.playerBodies)) {
+      if (!this.playerAlive.get(id)) continue;
+      const pos = body.GetPosition();
+      const dx = pos.x - this.oobCenterX;
+      const dy = pos.y - this.oobCenterY;
+      const d2 = dx * dx + dy * dy;
+      if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
+        this.markPlayerDead(id, 4);
+        globalProfiler.increment('death_out_of_bounds');
+      }
+    }
+
     // Process cap-zone completion countdowns (before this tick's touches)
     this.processCapZoneCountdowns();
 
@@ -1887,32 +1982,13 @@ export class PhysicsEngine {
       this.pendingSwingDestroy.clear();
     }
 
-    // One pass over a snapshot of the player map: detect OOB deaths, then detach
-    // every dead disc. Iterating a copy (instead of the live map, which
-    // detachPlayer deletes from) keeps the pass robust if a future cleanup ever
-    // removes a not-yet-visited id, which a Map iterator would silently skip.
-    // The common no-death tick stays a single walk instead of two full passes.
-    for (const [id, body] of Array.from(this.playerBodies)) {
-      if (this.playerAlive.get(id)) {
-        // Squared comparison avoids a per-player Math.sqrt; threshold identical.
-        // Distance is measured from the OOB death-circle center (defaults to
-        // the world origin; setDeathCircleCenter moves it to the map center).
-        const pos = body.GetPosition();
-        const dx = pos.x - this.oobCenterX;
-        const dy = pos.y - this.oobCenterY;
-        const d2 = dx * dx + dy * dy;
-        // Fail-safe (#271, #276): a non-finite position/distance (NaN/Infinity
-        // from any solver corruption) must count as out-of-bounds. Without this
-        // guard, `NaN > threshold` is false, so a corrupted disc would be
-        // immortal (the death circle silently disabled) and poison every
-        // observation for the rest of the episode.
-        if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
-          this.playerAlive.set(id, false);
-          this.playerDeathType.set(id, 4);
-          globalProfiler.increment('death_out_of_bounds');
-        }
-      }
+    // Resolve and snapshot this tick's deaths before immediate respawn/detach.
+    // The environment consumes these events after tick() returns.
+    this.resolveTickDeaths();
 
+    // One pass over a snapshot of the player map: detach or respawn every dead
+    // disc. Iterating a copy keeps the pass robust if cleanup deletes entries.
+    for (const [id, body] of Array.from(this.playerBodies)) {
       if (!this.playerAlive.get(id)) {
         // Native `re` respawning: a disc that died (any type except the
         // permanent cap-zone elimination, type 3) comes back at its spawn
@@ -1944,6 +2020,45 @@ export class PhysicsEngine {
     }
   }
 
+  /** Snapshot and publish deaths collected during the current tick. */
+  private resolveTickDeaths(): void {
+    const ids = Array.from(this.tickDeathCauses.keys()).sort((a, b) => a - b);
+    this.deathEvents = ids.map((id) => {
+      const deathType = this.tickDeathCauses.get(id)!;
+      this.playerDeathType.set(id, deathType);
+      const state = this.getPlayerState(id);
+      this.lastDeathStates.set(id, state);
+      return {
+        playerId: id,
+        deathType,
+        state,
+      };
+    });
+    this.tickDeathCauses.clear();
+  }
+
+  /**
+   * Consume deaths from the most recent tick. This is intentionally separate
+   * from getPlayerState(): immediate respawn restores the live physics state,
+   * while the event preserves the dying-step observation/reward contract.
+   */
+  getDeathEvents(): DeathEvent[] {
+    const events = this.deathEvents;
+    this.deathEvents = [];
+    return events;
+  }
+
+  /**
+   * The dying-step view: a player who died during the most recent tick keeps
+   * its pre-respawn snapshot here until the next tick starts, so the
+   * environment and any render reader observe the death on the tick it
+   * happened. Every other player (and every player once the next tick begins)
+   * returns the live state.
+   */
+  getVisiblePlayerState(playerId: number): PlayerState {
+    return this.lastDeathStates.get(playerId) ?? this.getPlayerState(playerId);
+  }
+
   /**
    * Timed cap-zone (type 1) completion countdown, gated on the native
    * `while (p >= l)` rule (DEOBFUSCATION §34.6, lines 3698-3703): the f
@@ -1958,9 +2073,10 @@ export class PhysicsEngine {
         if (state.f === 0) {
           const ownerTeam = state.ot;
           for (const [id, team] of this.playerTeams) {
-            if (team !== ownerTeam) {
-              this.playerAlive.set(id, false);
-              this.playerDeathType.set(id, 3);
+            // Do not overwrite an OOB/lethal death recorded earlier in this
+            // tick, or a dead disc's cause from an earlier tick.
+            if (team !== ownerTeam && this.playerAlive.get(id)) {
+              this.markPlayerDead(id, 3);
             }
           }
           this.lastScoredTeam = ownerTeam || null;
@@ -2139,6 +2255,9 @@ export class PhysicsEngine {
     this.capZoneTouches = [];
     this.lastScoredTeam = null;
     this.instantGoalResolved = false;
+    this.tickDeathCauses.clear();
+    this.deathEvents = [];
+    this.lastDeathStates.clear();
     this.pendingSwingDestroy.clear();
     this.lastHitBy.clear();
     this.lastHitTicks.clear();

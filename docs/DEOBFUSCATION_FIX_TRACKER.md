@@ -363,10 +363,20 @@ Chronological record of fixes applied. Append new entries here.
   velocity, grapple released, alive/deathType reset) applied in the death
   pass before detach; spawn points are recorded at addPlayer. `a1a` is not
   reset (the native branch does not touch it); the port does not model spawn
-  velocity, so respawns are at rest. Fail-safe (malformed-map guard): a spawn
-  point outside the OOB death circle detaches instead of churning
-  death→respawn every tick (native would churn identically; the port follows
-  its #271/#276 corruption fail-safe policy).
+  velocity, so respawns are at rest. The engine publishes a pre-respawn,
+  per-tick death event so lethal/OOB deaths remain observable and rewardable
+  on the dying step; those transient deaths do not terminate, while type-3
+  eliminations remain terminal. Physical death causes win same-tick cap
+  attribution, but the death-circle pass never reclassifies a recorded
+  type-3 elimination into a respawnable OOB death (a round-ending goal's
+  victim stays dead even outside the circle), and on non-respawn maps a
+  same-tick capture prices the losing team's deaths capture-only (the
+  documented single reward for the capture event). The dying-step snapshot is
+  exposed through `PhysicsEngine.getVisiblePlayerState` for one tick so the
+  environment and render readers observe the same state. Fail-safe
+  (malformed-map guard): a spawn point outside the OOB death circle detaches
+  instead of churning death→respawn every tick (native would churn
+  identically; the port follows its #271/#276 corruption fail-safe policy).
 - Config symmetry: `flipped` / `respawnEnabled` environment config keys now
   override the map settings exactly like `noCollide` vs `settings.nc`;
   `setFlipped` re-runs the #234 ascent-invariant check on the effective base.

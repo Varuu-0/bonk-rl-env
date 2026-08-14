@@ -19,7 +19,7 @@
  *    environment on the tick it occurred.
  */
 import { describe, it, expect, vi } from 'vitest';
-import { PhysicsEngine, MOVE_FORCE, MOVE_FORCE_FLIP_MULTIPLIER } from '../../src/core/physics-engine';
+import { PhysicsEngine, MOVE_FORCE, MOVE_FORCE_FLIP_MULTIPLIER, SCALE } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import type { MapDef } from '../../src/core/physics-engine';
 
@@ -293,6 +293,232 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             engine.tick();
             expect(engine.getPlayerState(0).alive).toBe(false);
             expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('a lethal respawn point detaches instead of becoming immune to a persistent contact', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addBody({
+                name: 'lethal_spawn',
+                type: 'rect',
+                x: 0,
+                y: 0,
+                width: 120,
+                height: 120,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 0, 0);
+
+            engine.tick();
+            // Death tick: the lethal death stays observable and the respawn
+            // is queued (deferred, #339); the body is kept so the respawn
+            // pass on the following tick can validate the lethal spawn point.
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.isPendingRespawn(0)).toBe(true);
+
+            engine.tick();
+            // The deferred respawn pass detects the lethal spawn point and
+            // detaches instead of restoring a disc immune to the fixture.
+            expect(engine.isPendingRespawn(0)).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+
+            // The detached player must stay dead; a naive Persist-only fix
+            // would otherwise create an unbounded death/respawn loop here.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('a lethal-contact death respawns to a valid spawn point and stays alive', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addBody({
+                name: 'lethal_elsewhere',
+                type: 'rect',
+                x: 100,
+                y: 0,
+                width: 120,
+                height: 120,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 0, 0);
+            // Kill the disc by lethal contact (death type 1), not OOB: the
+            // spawn point (0,0) is valid and outside the fixture, so `re`
+            // must respawn it there. SetXForm takes WORLD units (map px /
+            // SCALE): the fixture spans world x ∈ [1.33, 5.33], so teleport
+            // the disc inside it rather than 100 world units out (past the
+            // ~28.3-unit OOB circle), which would die OOB instead.
+            (engine as any).playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(100 / SCALE, 0), 0);
+
+            engine.tick();
+            // Death tick (issue #339): the lethal death must stay observable;
+            // the respawn is deferred to the start of the following tick.
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(1);
+            expect(deaths[0].state.alive).toBe(false);
+            expect(engine.isPendingRespawn(0)).toBe(true);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(0).deathType).toBe(0);
+            // One tick of gravity drift (no floor under the spawn) can pull
+            // the disc slightly below it, so assert it is back at the spawn
+            // region (0, 0), not at the death spot.
+            expect(Math.abs(engine.getPlayerState(0).x)).toBeLessThan(1);
+            expect(Math.abs(engine.getPlayerState(0).y)).toBeLessThan(2);
+            expect((engine as any).playerBodies.has(0)).toBe(true);
+
+            // No death→respawn churn: the respawned disc stays alive.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect((engine as any).playerBodies.has(0)).toBe(true);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('preserves an OOB death when timed cap completion lands on the same tick', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, 100, 0);
+            engine.setPlayerTeam(1, 'red');
+
+            // Arrange the blue disc outside the death circle while a red-owned
+            // timed zone is one countdown tick from eliminating blue.
+            (engine as any).playerBodies.get(0).SetXForm(
+                new (require('box2d').b2Vec2)(200, 0),
+                0,
+            );
+            (engine as any).capZoneState.set(0, {
+                ty: 1,
+                p: 1,
+                l: 1,
+                i: 0,
+                o: 1,
+                ot: 'red',
+                f: 1,
+            });
+
+            engine.tick();
+
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(4);
+            expect(deaths[0].state.alive).toBe(false);
+            expect(engine.getTeamScored()).toBe('red');
+
+            // Type 4 remains respawnable even though the cap completed: the
+            // disc stays dead on the death tick (queued for its deferred
+            // respawn, #339) so the environment observes the death, then
+            // returns to spawn on the following tick.
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(4);
+            expect(engine.isPendingRespawn(0)).toBe(true);
+            // The dying-step view keeps the pre-respawn snapshot so any
+            // reader observes the death on the tick it happened.
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getVisiblePlayerState(0).deathType).toBe(4);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(0).deathType).toBe(0);
+            expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            expect(engine.isPendingRespawn(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('a respawn point whose disc overlaps a lethal fixture edge detaches (radius-aware, not center-only)', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            // Lethal rect spans x ∈ [-10, 10] map px; the disc radius is
+            // ppm/SCALE = 0.4 world units = 12 map px. Spawning at x = 10.2
+            // puts the disc CENTER just outside the fixture edge but the disc
+            // circle still overlapping it — a center-only TestPoint check would
+            // restore the disc there, and the persistent lethal contact would
+            // not re-fire, leaving it immune to the fixture.
+            engine.addBody({
+                name: 'lethal_edge',
+                type: 'rect',
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 20,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 10.2, 0);
+
+            engine.tick();
+            // First tick: the overlapping disc dies by lethal contact (type 1)
+            // and the respawn is queued (deferred, #339), so the death stays
+            // observable before the spawn-point validation runs.
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.isPendingRespawn(0)).toBe(true);
+
+            engine.tick();
+            // The deferred respawn pass tests the full disc circle against the
+            // lethal fixture and detaches instead of restoring an immune disc.
+            expect(engine.isPendingRespawn(0)).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+
+            // The detached player must stay dead; no death→respawn churn.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('an instant-goal elimination stays terminal even when the victim is OOB', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, 100, 0);
+            engine.setPlayerTeam(1, 'red');
+
+            // Red scores a round-ending instant goal while blue's disc sits
+            // outside the death circle: the type-3 elimination must remain
+            // terminal, so the OOB pass must not reclassify it into a
+            // respawnable type-4 death.
+            (engine as any).playerBodies.get(0).SetXForm(
+                new (require('box2d').b2Vec2)(200, 0),
+                0,
+            );
+            (engine as any).triggerInstantGoal(2);
+
+            engine.tick();
+
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(3);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(3);
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(1).alive).toBe(true);
         } finally {
             engine.destroy();
         }
