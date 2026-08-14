@@ -126,7 +126,7 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
   });
 
-it('reports malformed disc entries while preserving null absent discs', () => {
+  it('reports malformed disc entries while preserving null absent discs', () => {
     const parsed = parseNativeTrace({
       schema: 'bonk.rl.env.native-trace',
       version: TRACE_SCHEMA_VERSION,
@@ -165,6 +165,27 @@ it('reports malformed disc entries while preserving null absent discs', () => {
     expect(parsed.errors).toEqual([
       'tick 0 disc 0 is malformed: id must be a non-negative integer',
       'tick 0 disc 1 id mismatch: disc.id=2 does not match slot 1',
+    ]);
+  });
+
+  it('rejects discs claiming alive:false (presence in state.discs means alive)', () => {
+    // §9.2: alive == presence in state.discs. A disc object present in the
+    // array cannot also claim dead, so `alive: false` is malformed and must
+    // never drive the comparator's input/aliveSeen/diff paths.
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [{ id: 0, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: false }],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 0 is malformed: alive must be true (presence in state.discs means alive)',
     ]);
   });
 

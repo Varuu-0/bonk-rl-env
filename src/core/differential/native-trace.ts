@@ -119,6 +119,7 @@ function discValidationError(value: unknown): string | null {
   if (typeof disc.a !== 'number' || !Number.isFinite(disc.a)) return 'a must be a finite number';
   if (typeof disc.av !== 'number' || !Number.isFinite(disc.av)) return 'av must be a finite number';
   if (typeof disc.alive !== 'boolean') return 'alive must be a boolean';
+  if (disc.alive !== true) return 'alive must be true (presence in state.discs means alive)';
   return null;
 }
 
