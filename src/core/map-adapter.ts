@@ -46,11 +46,24 @@ interface FlatBody {
     collidesPlayers?: boolean;
     color?: number;
     ppm?: number;
+    shapeIndex?: number | null;
     width?: number;
     height?: number;
     radius?: number;
     scale?: number;
     vertices?: { x: number; y: number }[];
+    renderShape?: {
+        type: 'rect' | 'circle' | 'polygon';
+        bodyPosition: { x: number; y: number };
+        bodyAngle: number;
+        center: { x: number; y: number };
+        angle: number;
+        width?: number;
+        height?: number;
+        radius?: number;
+        vertices?: { x: number; y: number }[];
+        scale?: number;
+    };
 }
 
 interface NativeShape {
@@ -159,10 +172,10 @@ interface ExportedMap {
     spawns?: FlatSpawn[];
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
+    // The exporter (Webscripts/mapexporter.js) preserves raw-array indices with
+    // literal null placeholders for unsupported bodies, so entries may be null
+    // as well as FlatBody/NativeBody.
     physicsBodies?: (FlatBody | NativeBody | null)[];
-    // The exporter (Webscripts/mapexporter.js) pushes a literal `null` for any
-    // joint it cannot export to keep raw-array indices stable, so entries may
-    // be null as well as FlatJoint.
     physicsJoints?: (FlatJoint | null)[];
     physicsFixtures?: (NativeFixture | null)[];
     physicsShapes?: (NativeShape | null)[];
@@ -468,6 +481,8 @@ function toBodyDef(
         width: body.width ?? shape?.width,
         height: body.height ?? shape?.height,
         radius: body.radius ?? shape?.radius,
+        renderBodyIndex: body.bodyIndex ?? index,
+        renderShape: body.renderShape,
     };
 }
 
@@ -519,6 +534,10 @@ export function normalizeMap(raw: unknown): MapDef {
     // `bodies: [null]`, valid JSON): filter them out so toBodyDef never
     // receives a null body and the filtered list stays index-aligned with
     // `bodies` downstream (#273).
+// Prefer the native-body fixture-owner mapping as the authority for body
+    // grouping (issue #307): a flat bodyIndex can point at a null placeholder
+    // slot or a different body, so key everything the engine groups by the
+    // resolved native body index instead of the raw flat index.
     const nativeBodies = (map.physicsBodies || []).reduce<NativeBody[]>((out, body, i) => {
         if (isNativeBody(body)) {
             out.push(body.index === undefined ? { ...body, index: i } : body);
@@ -542,7 +561,7 @@ export function normalizeMap(raw: unknown): MapDef {
         // a null slot or a different body) cannot group the fixture under the
         // wrong native body. The fixtureIndex fallback still resolves when the
         // flat view omits bodyIndex entirely.
-        if (body.fixtureIndex !== undefined) {
+if (body.fixtureIndex !== undefined) {
             const owner = nativeBodyByFixture.get(body.fixtureIndex);
             if (owner) return owner;
         }
@@ -609,8 +628,45 @@ export function normalizeMap(raw: unknown): MapDef {
             }));
         }
     }
+    // Render enrichment (renderShape/renderBodyIndex) resolves the structured
+    // fixture shape for each flat export body so renderers can redraw it
+    // faithfully without re-deriving placement from physicsBodies.
+    const sourceBodies: any[] = Array.isArray(map.physicsBodies) ? map.physicsBodies : [];
+    const sourceBodiesByFlatPosition = sourceBodies.filter((body) => body !== null && body !== undefined);
+    const sourceShapes: any[] = Array.isArray(map.physicsShapes) ? map.physicsShapes : [];
+    const withRenderShape = (body: FlatBody, index: number): FlatBody => {
+        const shapeIndex = body.shapeIndex;
+        // bodyIndex references raw physicsBodies positions. Positional fallback
+        // must follow flatSource, which excludes raw null placeholders.
+        const sourceBody = typeof body.bodyIndex === 'number'
+            ? sourceBodies[body.bodyIndex]
+            : sourceBodiesByFlatPosition[index];
+        const sourceShape = typeof shapeIndex === 'number' ? sourceShapes[shapeIndex] : undefined;
+        if (!sourceBody || !sourceBody.position || !sourceShape || !sourceShape.center) return body;
+        const type = sourceShape.type === 'bx' ? 'rect'
+            : sourceShape.type === 'ci' ? 'circle'
+            : sourceShape.type === 'po' ? 'polygon'
+            : undefined;
+        if (!type) return body;
+        return {
+            ...body,
+            renderShape: {
+                type,
+                bodyPosition: { x: sourceBody.position.x ?? 0, y: sourceBody.position.y ?? 0 },
+                bodyAngle: sourceBody.angle ?? 0,
+                center: { x: sourceShape.center.x ?? 0, y: sourceShape.center.y ?? 0 },
+                angle: sourceShape.angle ?? 0,
+                width: sourceShape.width,
+                height: sourceShape.height,
+                radius: sourceShape.radius,
+                vertices: sourceShape.vertices,
+                scale: sourceShape.scale,
+            },
+        };
+    };
+    const renderSource = flatSource.map(withRenderShape);
     const source = flatSource.length > 0
-        ? flatSource
+        ? renderSource
         : flattenNativeBodies(map, nativeBodies);
 
     // Exported fixtures frequently use the shared default name "Unnamed Shape"
@@ -686,9 +742,29 @@ export function normalizeMap(raw: unknown): MapDef {
     }
 
     // Cap zones: resolve fixtureIndex -> the unique named fixture alias.
+    // Cap-zone-referenced fixtures additionally get a fixture-unique friendly
+    // name (e.g. "Unnamed Shape#13") so find-by-name selects the actual
+    // platform rather than the first same-named fixture.
+    const capFixtureIndexes = new Set<number>(
+        (map.capZones || []).map(z => z.fixtureIndex).filter((x): x is number => typeof x === 'number'),
+    );
+    const capFriendlyNames = new Map<number, string>();
+    // Friendly renames apply only to the flat-export path (main-line render
+    // contract); structured-only maps keep the shape-less alias names authored
+    // by flattenNativeBodies, which names[] already deduplicates.
+    if (flatSource.length > 0) {
+        bodies.forEach((b, i) => {
+            const fxIdx = source[i]?.fixtureIndex;
+            if (fxIdx !== undefined && capFixtureIndexes.has(fxIdx) && !b.name.endsWith(`#${fxIdx}`)) {
+                const uniqueName = `${b.name}#${fxIdx}`;
+                b.name = uniqueName;
+                capFriendlyNames.set(fxIdx, uniqueName);
+            }
+        });
+    }
     const capZones = (map.capZones || []).map((zone, i) => {
         const fixtureName = zone.fixtureIndex !== undefined
-            ? nameByFixture.get(zone.fixtureIndex)
+            ? capFriendlyNames.get(zone.fixtureIndex) ?? nameByFixture.get(zone.fixtureIndex)
             : undefined;
         return {
             index: zone.index ?? i,
@@ -869,6 +945,11 @@ export function normalizeMap(raw: unknown): MapDef {
         name: map.metadata?.name ?? 'Untitled Map',
         spawnPoints,
         bodies,
+        // `physics.bro` is front-to-back. Preserve it only for renderers; the
+        // physics engine intentionally continues to consume flattened bodies.
+        bodyRenderOrder: Array.isArray((map as any).bodyRenderOrder)
+            ? (map as any).bodyRenderOrder.filter((index: unknown): index is number => typeof index === 'number' && Number.isInteger(index) && index >= 0)
+            : undefined,
         capZones: capZones.length > 0 ? capZones : undefined,
         joints: joints.length > 0 ? joints as any : undefined,
         physics,

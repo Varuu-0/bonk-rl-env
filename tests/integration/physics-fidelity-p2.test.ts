@@ -1130,7 +1130,10 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     expect(j.m_lowerTranslation).toBeCloseTo(-40, 5);
     expect(j.m_upperTranslation).toBeCloseTo(40, 5);
     expect(j.m_enableMotor).toBe(true);
-    expect(j.m_motorSpeed).toBeCloseTo(300, 5);
+    // §33.8 initial-side spring bias (readable 7600-7630): with bodyA at
+    // (0,0)/angle 0 and the anchor +slen above it, k = +1 → motorSpeed −300,
+    // maxMotorForce = sf·|k| = sf (P2b).
+    expect(j.m_motorSpeed).toBeCloseTo(-300, 5);
     expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
     expect(j.m_localXAxis1.x).toBeCloseTo(0, 5);
     expect(j.m_localXAxis1.y).toBeCloseTo(1, 5);
