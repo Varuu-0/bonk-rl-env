@@ -47,8 +47,10 @@ export interface NativeTraceDisc {
   team?: number;
   /** Disc state (native `ds`; 0 = normal). */
   ds?: number;
-  /** Alive == present in state.discs (§9.2). */
-  alive: boolean;
+  /** Alive == present in state.discs (§9.2): a disc object in the array is
+   *  always alive, so this field is the literal `true` — `alive: false` is a
+   *  schema violation and type-checks as an error. */
+  alive: true;
 }
 
 /** One tick of the match. */
