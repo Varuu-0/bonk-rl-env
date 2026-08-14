@@ -361,7 +361,8 @@ export function mergeEnvironmentConfig(
 
 /** The engine-tuning sections of AppConfig (physics/arena/player). */
 export interface EngineTuningSections {
-    physics: PhysicsConfig;
+    /** The loader default solverIterations is omitted when it was not authored. */
+    physics: Omit<PhysicsConfig, 'solverIterations'> & { solverIterations?: number };
     arena: ArenaConfig;
     player: PlayerConfig;
 }
@@ -415,17 +416,31 @@ function mergeTuningSection(
  * forwarded (via the worker pool / IPC bridge) to BonkEnvironment, which hands
  * the values to PhysicsEngine — so values set in config.json, env vars, CLI
  * flags, or the Python client's spawn config actually reach the simulation
- * (issue #217). Overrides that are not plain objects (e.g. null) are ignored,
- * proto-polluting keys are skipped by deepMerge, and snake_case sub-keys
- * (gravity_y, move_force, ...) are resolved into their camelCase slots.
+ * (issue #217). The built-in solverIterations value is omitted unless it was
+ * explicitly authored, allowing the map's native `pq` quality gate to choose
+ * the engine default (issue #325). Overrides that are not plain objects (e.g.
+ * null) are ignored, proto-polluting keys are skipped by deepMerge, and
+ * snake_case sub-keys (gravity_y, move_force, ...) are resolved into their
+ * camelCase slots.
  */
 export function mergeEngineSections(override: Record<string, any> = {}): EngineTuningSections {
+    const physicsOverride = isPlainObject(override.physics) ? override.physics : {};
+    const physics = mergeTuningSection(
+        getConfig().physics as any,
+        physicsOverride,
+        PHYSICS_KEY_ALIASES,
+    ) as Omit<PhysicsConfig, 'solverIterations'> & { solverIterations?: number };
+    const hasPerEnvSolverOverride =
+        (Object.prototype.hasOwnProperty.call(physicsOverride, 'solverIterations') &&
+            physicsOverride.solverIterations != null) ||
+        (Object.prototype.hasOwnProperty.call(physicsOverride, 'solver_iterations') &&
+            physicsOverride.solver_iterations != null);
+    if (!hasPerEnvSolverOverride && !physicsProvenance(getConfig()).has('solverIterations')) {
+        delete physics.solverIterations;
+    }
+
     return {
-        physics: mergeTuningSection(
-            getConfig().physics as any,
-            isPlainObject(override.physics) ? override.physics : {},
-            PHYSICS_KEY_ALIASES,
-        ) as PhysicsConfig,
+        physics,
         arena: mergeTuningSection(
             getConfig().arena as any,
             isPlainObject(override.arena) ? override.arena : {},
@@ -807,8 +822,7 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
         if (!isNaN(v) && v >= 1 && v <= 240) config.physics.ticksPerSecond = v;
     }
     if (env.SOLVER_ITERATIONS !== undefined) {
-        const v = parseInt(env.SOLVER_ITERATIONS, 10);
-        if (!isNaN(v) && v >= 1 && v <= 64) config.physics.solverIterations = v;
+        applySolverIterations(config, parseInt(env.SOLVER_ITERATIONS, 10));
     }
     if (env.PHYSICS_SCALE !== undefined) {
         const v = parseFloat(env.PHYSICS_SCALE);
@@ -1126,9 +1140,7 @@ case '--ai-player-id':
 
             case '--solver-iterations':
                 if (next) {
-                    const v = parseInt(next, 10);
-                    if (!isNaN(v) && v >= 1 && v <= 64) {
-                        config.physics.solverIterations = v;
+                    if (applySolverIterations(config, parseInt(next, 10))) {
                         i++;
                     }
                 }
@@ -1294,6 +1306,78 @@ case '--ai-player-id':
 let cachedConfig: AppConfig | null = null;
 
 /**
+ * Symbol key carrying the physics provenance Set on each resolved AppConfig.
+ *
+ * The marker is attached non-enumerably so it never survives a deepMerge
+ * spread or reaches IPC serialization, and non-configurably so a
+ * delete-then-reassign cannot re-create it as enumerable. It tracks the
+ * physics keys authored by config.json, environment variables, or CLI flags
+ * for THAT resolution pass: the built-in solverIterations default is retained
+ * in AppConfig for compatibility, but is not an explicit per-environment
+ * override (#325). Binding provenance to the config object itself keeps it
+ * coupled to the cached config — a module-global set could silently drift from
+ * the config it describes and make mergeEngineSections output depend on load
+ * history.
+ *
+ * Exported so tests can verify the marker's non-enumerable, non-configurable
+ * descriptor contract without iterating unrelated own symbols (#325).
+ */
+export const PHYSICS_PROVENANCE = Symbol('physics-provenance');
+
+function physicsProvenance(config: AppConfig): Set<string> {
+    const holder = config as AppConfig & { [PHYSICS_PROVENANCE]?: Set<string> };
+    if (holder[PHYSICS_PROVENANCE] === undefined) {
+        const set = new Set<string>();
+        // Non-enumerable so a deepMerge spread never copies it by reference
+        // (a plain assignment would make it enumerable and the guarantee in
+        // the docstring above would only hold by call ordering). Also
+        // non-configurable: a delete-then-reassign would otherwise re-create
+        // the property via plain assignment as enumerable, silently
+        // un-enforcing the guarantee.
+        Object.defineProperty(holder, PHYSICS_PROVENANCE, {
+            value: set,
+            enumerable: false,
+            writable: true,
+            configurable: false,
+        });
+    }
+    return holder[PHYSICS_PROVENANCE] as Set<string>;
+}
+
+/**
+ * Record physics keys explicitly authored by a config.json `physics` object.
+ * Both the camelCase key and the documented snake_case alias count as
+ * explicit: a config.json authoring `solver_iterations` is accepted via
+ * PHYSICS_KEY_ALIASES and must survive the mergeEngineSections delete just
+ * like `solverIterations`.
+ */
+function recordExplicitPhysicsKeys(config: AppConfig, physics: unknown): void {
+    if (!isPlainObject(physics)) return;
+    if (
+        (Object.prototype.hasOwnProperty.call(physics, 'solverIterations') &&
+            physics.solverIterations != null) ||
+        (Object.prototype.hasOwnProperty.call(physics, 'solver_iterations') &&
+            physics.solver_iterations != null)
+    ) {
+        physicsProvenance(config).add('solverIterations');
+    }
+}
+
+/**
+ * Apply a solverIterations value parsed from the SOLVER_ITERATIONS env var or
+ * the --solver-iterations CLI flag. The [1,64] range gate and the provenance
+ * registration live together so the two authoring sources can never drift
+ * (#325). Returns true when the value was applied (the CLI parser consumes the
+ * flag's value only then).
+ */
+function applySolverIterations(config: AppConfig, v: number): boolean {
+    if (isNaN(v) || v < 1 || v > 64) return false;
+    config.physics.solverIterations = v;
+    physicsProvenance(config).add('solverIterations');
+    return true;
+}
+
+/**
  * Load configuration from all sources, applying layered resolution.
  *
  * Call order:
@@ -1320,6 +1404,20 @@ export function loadConfig(projectRoot?: string): AppConfig {
         const fileConfig = loadConfigFile(configPath);
         if (fileConfig) {
             config = deepMerge(config, fileConfig);
+            // deepMerge spreads enumerable keys, so provenance must be recorded
+            // on the merged object (it does not survive the spread).
+            recordExplicitPhysicsKeys(config, fileConfig.physics);
+            if (isPlainObject(fileConfig.physics)) {
+                // Resolve snake_case aliases against the injected camelCase
+                // defaults so a config.json `solver_iterations`/`ticks_per_second`
+                // is not shadowed by the always-present camelCase default
+                // (mirrors the environment section, #204/#325).
+                config.physics = mergeTuningSection(
+                    config.physics as any,
+                    fileConfig.physics as any,
+                    PHYSICS_KEY_ALIASES,
+                ) as PhysicsConfig;
+            }
             if (isPlainObject(fileConfig.environment)) {
                 // Resolve snake_case aliases against the injected camelCase
                 // defaults so a config.json `frame_skip`/`num_opponents`/
@@ -1338,6 +1436,14 @@ export function loadConfig(projectRoot?: string): AppConfig {
             const fileConfig = loadConfigFile(found);
             if (fileConfig) {
                 config = deepMerge(config, fileConfig);
+                recordExplicitPhysicsKeys(config, fileConfig.physics);
+                if (isPlainObject(fileConfig.physics)) {
+                    config.physics = mergeTuningSection(
+                        config.physics as any,
+                        fileConfig.physics as any,
+                        PHYSICS_KEY_ALIASES,
+                    ) as PhysicsConfig;
+                }
                 if (isPlainObject(fileConfig.environment)) {
                     config.environment = mergeEnvironmentConfig(
                         config.environment as any,
@@ -1381,7 +1487,9 @@ export function loadConfig(projectRoot?: string): AppConfig {
 }
 
 /**
- * Reset the cached config. Primarily used for testing.
+ * Reset the cached config. Primarily used for testing. The config-bound
+ * physics provenance dies with the cached object, so a subsequent load always
+ * starts from a clean pass.
  */
 export function resetConfig(): void {
     cachedConfig = null;

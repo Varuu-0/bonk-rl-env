@@ -1,3 +1,4 @@
+import os
 import signal
 import subprocess
 
@@ -205,3 +206,256 @@ def test_process_creation_times_filters_pids(monkeypatch):
     assert conftest._process_creation_times({10, 99}) == {
         10: "20260804120000.123456-300"
     }
+
+
+def test_tail_stderr_log_reads_last_lines(tmp_path):
+    log = tmp_path / "stderr.log"
+    log.write_text("\n".join(f"line {i}" for i in range(50)), encoding="utf-8")
+
+    assert conftest._tail_stderr_log(str(log), max_lines=5) == "\n".join(
+        f"line {i}" for i in range(45, 50)
+    )
+
+
+def test_tail_stderr_log_missing_file_is_actionable():
+    assert "unavailable" in conftest._tail_stderr_log(
+        os.path.join("definitely", "missing", "stderr.log")
+    )
+
+
+def test_listener_belongs_to_windows_confirms_own_tree(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 400})
+    monkeypatch.setattr(conftest, "_windows_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300, 400}
+    )
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_windows_rejects_foreign_listener(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 9999})
+    monkeypatch.setattr(conftest, "_windows_process_table", lambda: {})
+    monkeypatch.setattr(conftest, "_process_tree_pids", lambda table, pid: {200, 300})
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_windows_no_listener_or_dead_proc(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "nt")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: set())
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300})
+    assert not conftest._listener_belongs_to(5556, _FakeProc(poll_result=0))
+
+
+def test_posix_listener_pids_parses_ss_output(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = (
+            "LISTEN 0      4096  127.0.0.1:5556       0.0.0.0:*    "
+            'users:(("node",pid=24156,fd=26))\n'
+            "LISTEN 0      4096  [::1]:5556            [::]:*       "
+            'users:(("node",pid=32832,fd=27))\n'
+            "LISTEN 0      4096  127.0.0.1:5557       0.0.0.0:*    "
+            'users:(("tsx",pid=9999,fd=28))\n'
+        )
+
+    monkeypatch.setattr(conftest.subprocess, "run", lambda *a, **k: _Result())
+
+    assert conftest._posix_listener_pids(5556) == {24156, 32832}
+
+
+def test_posix_listener_pids_parses_lsof_output(monkeypatch):
+    class _Result:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return _Result(1, "")
+        return _Result(0, "24156\n32832\n")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == {24156, 32832}
+
+
+def test_posix_listener_pids_empty_when_no_listener(monkeypatch):
+    # Tools run successfully but no listener matches the port (ss exits 0
+    # with headers only, lsof exits 1 = documented "no match"): a genuine
+    # "no listener", not an inability to look.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type("R", (), {"returncode": 0, "stdout": "LISTEN 0 4096\n"})()
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == set()
+
+
+def test_posix_listener_pids_none_when_ss_lacks_pid_attribution(monkeypatch):
+    # Restricted /proc visibility: ss exits 0 and lists the port's LISTEN
+    # socket but without a users:(pid=...) attribution (lsof not installed).
+    # A matching socket with no identifiable PID is evidence a listener
+    # exists, so the probe is inconclusive (None), not "no listener" (empty
+    # set) — otherwise bonk_server_config would hard-fail after 5 retries.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_listener_pids_ss_without_pid_falls_through_to_lsof(
+    monkeypatch,
+):
+    # ss lists the port without pid= attribution but lsof is installed and
+    # CAN attribute the listener: the fallback must run so ownership
+    # verification is not lost to an early inconclusive return.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        return type("R", (), {"returncode": 0, "stdout": "24156\n"})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == {24156}
+
+
+def test_posix_listener_pids_none_when_ss_and_lsof_cannot_attribute(
+    monkeypatch,
+):
+    # ss sees the port's socket without pid= and lsof runs but also yields
+    # no attribution (no match): still inconclusive (None), not "no
+    # listener".
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_listener_pids_none_when_tools_error(monkeypatch):
+    # Both tools launch but fail (non-zero exit, e.g. permission-denied
+    # /proc): the check is inconclusive, not "no listener", so a host with a
+    # present-but-failing tool must not be misread as a listenerless port.
+    def fake_run(argv, *args, **kwargs):
+        return type("R", (), {"returncode": 2, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_listener_pids_none_when_tools_missing(monkeypatch):
+    # Neither ss nor lsof is installed (OSError when launched): the listener
+    # cannot be identified at all, which must be distinguishable from "no
+    # listener" so ownership-unverifiable hosts do not hard-fail fixtures.
+    def fake_run(argv, *args, **kwargs):
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_listener_pids_none_when_ss_errors_and_lsof_missing(
+    monkeypatch,
+):
+    # The review scenario: ss is installed but fails non-zero (e.g.
+    # permission-denied /proc) and lsof is not installed. Launch alone must
+    # not count as a successful check, so the port stays unverifiable (None)
+    # instead of being misread as "no listener".
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type("R", (), {"returncode": 2, "stdout": ""})()
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_process_table_parses_ps_output(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = " 10 5\n 11 10\n 12 0\n"
+
+    monkeypatch.setattr(conftest.subprocess, "run", lambda *a, **k: _Result())
+
+    assert conftest._posix_process_table() == {10: 5, 11: 10, 12: 0}
+
+
+def test_listener_belongs_to_posix_confirms_own_tree(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300})
+    monkeypatch.setattr(conftest, "_posix_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300}
+    )
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_rejects_foreign_listener(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 9999})
+    monkeypatch.setattr(conftest, "_posix_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300}
+    )
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_retries_when_listener_unverifiable(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: set())
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_accepts_when_tools_unavailable(
+    monkeypatch, capsys
+):
+    # A POSIX host without ss/lsof cannot identify the listener at all; the
+    # probe is accepted with a warning instead of hard-failing the fixture.
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: None)
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())
+    assert "cannot verify" in capsys.readouterr().err

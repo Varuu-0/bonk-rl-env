@@ -7,6 +7,8 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+import { WorkerPool } from '../../src/core/worker-pool';
+import { BonkEnvironment } from '../../src/core/environment';
 import { resetConfig } from '../../src/config/config-loader';
 
 describe('IpcBridge handleRequest', () => {
@@ -457,6 +459,112 @@ describe('IpcBridge constructor internals', () => {
     const bridge = new IpcBridge({ server: { port: 19997 } } as any);
     expect((bridge as any)._wrappedSend).toBeDefined();
     expect(typeof (bridge as any)._wrappedSend).toBe('function');
+  });
+});
+
+describe('IpcBridge solver precedence (#325)', () => {
+  let savedSolverIterations: string | undefined;
+  let savedArgv: string[];
+
+  beforeEach(() => {
+    savedSolverIterations = process.env.SOLVER_ITERATIONS;
+    savedArgv = [...process.argv];
+    delete (process.env as any).SOLVER_ITERATIONS;
+    process.argv = ['node', 'script.js'];
+    resetConfig();
+  });
+
+  afterEach(() => {
+    if (savedSolverIterations === undefined) {
+      delete (process.env as any).SOLVER_ITERATIONS;
+    } else {
+      process.env.SOLVER_ITERATIONS = savedSolverIterations;
+    }
+    process.argv = savedArgv;
+    resetConfig();
+  });
+
+  const mapData = {
+    name: 'ipc-pq-test-map',
+    spawnPoints: {
+      team_blue: { x: -200, y: -100 },
+      team_red: { x: 200, y: -100 },
+    },
+    bodies: [
+      { name: 'left', type: 'rect', x: -500, y: 0, width: 30, height: 600, static: true },
+      { name: 'right', type: 'rect', x: 500, y: 0, width: 30, height: 600, static: true },
+    ],
+    settings: { pq: 2 },
+  };
+
+  async function initThroughIpc(
+    bridge: IpcBridge,
+    config: Record<string, any>,
+  ): Promise<any> {
+    const captured: any[] = [];
+    const sentMessages: any[] = [];
+    const initSpy = vi.spyOn(WorkerPool.prototype, 'init').mockImplementation(async (_count, workerConfig) => {
+      captured.push(workerConfig);
+    });
+    (bridge as any)._wrappedSend = vi.fn(async (frames: any[]) => {
+      sentMessages.push(frames[1]?.toString() ?? frames[1]);
+    });
+
+    try {
+      await (bridge as any).handleRequest(
+        Buffer.from('ipc-pq-test-client'),
+        JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false, config }),
+      );
+      expect(JSON.parse(sentMessages[0])).toMatchObject({ status: 'ok' });
+      expect(captured).toHaveLength(1);
+      return captured[0];
+    } finally {
+      initSpy.mockRestore();
+    }
+  }
+
+  it('forwards pq=2 through IPC without injecting solverIterations=2 (#325)', async () => {
+    const bridge = new IpcBridge({ server: { port: 15576 } } as any);
+    try {
+      const workerConfig = await initThroughIpc(bridge, {
+        mapData,
+        numOpponents: 0,
+      });
+      expect(workerConfig.mapData.settings.pq).toBe(2);
+      expect(workerConfig.physics.solverIterations).toBeUndefined();
+
+      const workerEnv = new BonkEnvironment(workerConfig);
+      try {
+        expect((workerEnv as any).physics.velocityIterations).toBe(15);
+        expect((workerEnv as any).physics.positionIterations).toBe(15);
+      } finally {
+        workerEnv.close();
+      }
+    } finally {
+      await bridge.close();
+    }
+  });
+
+  it('preserves an explicit IPC solverIterations override over pq=2 (#325)', async () => {
+    const bridge = new IpcBridge({ server: { port: 15577 } } as any);
+    try {
+      const workerConfig = await initThroughIpc(bridge, {
+        mapData,
+        numOpponents: 0,
+        physics: { solverIterations: 12 },
+      });
+      expect(workerConfig.physics.solverIterations).toBe(12);
+
+      const workerEnv = new BonkEnvironment(workerConfig);
+      try {
+        expect((workerEnv as any).physics.velocityIterations).toBe(12);
+        expect((workerEnv as any).physics.positionIterations).toBe(15);
+      } finally {
+        workerEnv.close();
+      }
+    } finally {
+      await bridge.close();
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import json
 import pytest
+import re
 import signal
 import subprocess
 import time
@@ -23,10 +24,102 @@ def _listener_pids(netstat_output, port):
     return pids
 
 
+def _ss_listener_pids(ss_output, port):
+    """Parse ``ss -ltnp`` output for PIDs listening on ``port``."""
+    pids = set()
+    for line in ss_output.splitlines():
+        if not any(token.endswith(f":{port}") for token in line.split()):
+            continue
+        for match in re.finditer(r"pid=(\d+)", line):
+            pids.add(int(match.group(1)))
+    return pids
+
+
+def _lsof_listener_pids(lsof_output, port):
+    """Parse ``lsof -iTCP:port -sTCP:LISTEN -t`` output (one PID per line)."""
+    pids = set()
+    for line in lsof_output.splitlines():
+        if line.strip().isdigit():
+            pids.add(int(line.strip()))
+    return pids
+
+
+def _ss_port_seen(ss_output, port):
+    """True if ``ss`` output lists any socket on ``port``.
+
+    ``ss -ltnp`` only prints listeners, so a matching line means a listener
+    exists on the port even when the ``users:`` column carries no pid=
+    attribution (the host cannot read /proc for other processes).
+    """
+    for line in ss_output.splitlines():
+        if any(token.endswith(f":{port}") for token in line.split()):
+            return True
+    return False
+
+
+def _posix_listener_pids(port):
+    """Return PIDs listening on ``port`` on POSIX, or ``None`` when the
+    listener cannot be identified.
+
+    Uses ``ss -ltnp`` (Linux, iproute2) with an ``lsof`` fallback so the
+    listener answering a connect probe can be identified on POSIX too,
+    instead of blindly trusting that it belongs to the spawned server.
+    ``None`` means the check was inconclusive — no tool successfully
+    verified the listener, or ``ss`` listed a socket on the port without
+    ``pid=`` attribution (restricted ``/proc`` visibility) and ``lsof``
+    could not attribute it either. Callers must treat that distinctly from
+    a genuine "no listener found" (empty set), so ownership-unverifiable
+    hosts do not hard-fail a fixture.
+    """
+    # A tool counts as having checked only on a successful exit: ``ss``
+    # exits 0 (even with no matches, headers only); ``lsof`` exits 1 for a
+    # genuine "no match" and non-zero/2 only on error. When ``ss`` lists a
+    # socket on the port but its ``users:`` column carries no pid= (the
+    # host cannot read /proc for other processes), a listener exists yet
+    # cannot be attributed by ss: keep the lsof fallback running so an
+    # attribution-capable host still gets ownership verification, and only
+    # resolve to inconclusive after lsof also fails to attribute.
+    attempts = (
+        (["ss", "-ltnp"], _ss_listener_pids, (0,)),
+        (
+            ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN", "-t"],
+            _lsof_listener_pids,
+            (0, 1),
+        ),
+    )
+    tool_checked = False
+    listener_seen_unverified = False
+    for argv, parse, success_codes in attempts:
+        try:
+            result = subprocess.run(
+                argv, capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode not in success_codes:
+            continue
+        tool_checked = True
+        pids = parse(result.stdout, port)
+        if pids:
+            return pids
+        if argv[0] == "ss" and _ss_port_seen(result.stdout, port):
+            listener_seen_unverified = True
+    if listener_seen_unverified or not tool_checked:
+        return None
+    return set()
+
+
 def _listening_pids(port):
-    """Return the PIDs currently listening on ``port`` (Windows only)."""
+    """Return the PIDs currently listening on ``port``.
+
+    Windows uses ``netstat -ano -p tcp``; POSIX uses ``ss`` with an ``lsof``
+    fallback, so listener ownership can be verified on both platforms.
+    Returns ``None`` on POSIX when neither tool is installed (the listener
+    cannot be identified at all); callers must treat that distinctly from an
+    empty set.
+    """
     if os.name != "nt":
-        return set()
+        return _posix_listener_pids(port)
     try:
         output = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"],
@@ -87,6 +180,31 @@ def _windows_process_table():
         try:
             table[int(row["ProcessId"])] = int(row["ParentProcessId"])
         except (KeyError, TypeError, ValueError):
+            continue
+    return table
+
+
+def _posix_process_table():
+    """Snapshot of {pid: parent_pid} for all live POSIX processes."""
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    table = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            table[int(parts[0])] = int(parts[1])
+        except ValueError:
             continue
     return table
 
@@ -192,8 +310,71 @@ def _kill_process_tree(proc):
                 pass
 
 
+def _find_tsx_cli(project_root):
+    """Find tsx in the workspace or an ancestor dependency directory."""
+    candidate_root = os.path.abspath(project_root)
+    while True:
+        candidate = os.path.join(candidate_root, "node_modules", "tsx", "dist", "cli.mjs")
+        if os.path.isfile(candidate):
+            return candidate
+        parent = os.path.dirname(candidate_root)
+        if parent == candidate_root:
+            return None
+        candidate_root = parent
+
+
+MAX_SERVER_START_ATTEMPTS = 5
+
+
+def _tail_stderr_log(stderr_path, max_lines=40):
+    """Return the last ``max_lines`` lines of a captured server stderr log."""
+    try:
+        with open(stderr_path, "r", encoding="utf-8", errors="replace") as log:
+            lines = log.read().splitlines()
+    except OSError:
+        return "(server stderr log is unavailable)"
+    if not lines:
+        return "(server stderr log is empty)"
+    return "\n".join(lines[-max_lines:])
+
+
+def _listener_belongs_to(port, proc):
+    """True if every PID listening on ``port`` is inside ``proc``'s tree.
+
+    Confirms a successful connect probe reached the server we spawned rather
+    than a foreign listener that claimed the ephemeral port after the
+    allocation probe was released. Runs on Windows (netstat + Win32_Process)
+    and POSIX (``ss``/``lsof`` + ``ps``) so a foreign listener is retried on
+    a fresh port on every platform. When the listener cannot be identified
+    (POSIX host with neither ``ss`` nor ``lsof``), ownership cannot be
+    verified: the probe is accepted with a warning so the fixture does not
+    hard-fail on a host that can never pass verification. When the listener
+    is identified but does not belong to the spawned tree, it returns False
+    so the fixture abandons the port instead of silently running against an
+    unconfigured server.
+    """
+    if proc is None or proc.poll() is not None:
+        return False
+    listening = _listening_pids(port)
+    if listening is None:
+        print(
+            f"WARNING: cannot verify that the listener on port {port} belongs to "
+            "the spawned bonk server (neither ss nor lsof is available); "
+            "proceeding without listener-ownership verification",
+            file=sys.stderr,
+        )
+        return True
+    if not listening:
+        return False
+    if os.name == "nt":
+        table = _windows_process_table()
+    else:
+        table = _posix_process_table()
+    return listening <= _process_tree_pids(table, proc.pid)
+
+
 @pytest.fixture(scope="session")
-def bonk_server():
+def bonk_server(tmp_path_factory):
     """Start and stop the TypeScript bonk server for the test session.
 
     The fixture owns port 5555 for the whole session: any stale server left
@@ -206,6 +387,11 @@ def bonk_server():
     session and teardown kills the whole process group with killpg; stale
     listeners are not reclaimed there, so a leftover server would be reused
     rather than killed.
+
+    The spawned server's stderr is captured to a file (never a pipe, which
+    would deadlock the server once the buffer filled) and a failed startup
+    is a hard error surfacing that stderr, not a silent skip, so a broken
+    server or config can never quietly no-op the Python suite.
     """
     project_root = os.path.abspath(
         os.path.join(os.path.dirname(__file__), "..", "..")
@@ -230,7 +416,7 @@ def bonk_server():
     # so the tests always talk to a server we control and can tear down.
     # (_listening_pids uses netstat + taskkill, so this reclamation is
     # Windows-only; POSIX spawns in a fresh session instead.)
-    for pid in _listening_pids(port):
+    for pid in _listening_pids(port) or ():
         _taskkill(pid)
         time.sleep(0.5)
 
@@ -243,67 +429,182 @@ def bonk_server():
         # Own session/process group so the whole tree can be killpg'd.
         spawn_kwargs["start_new_session"] = True
 
-    proc = subprocess.Popen(
-        [shutil.which("node"), tsx_cli, "src/main.ts"],
-        cwd=project_root,
-        # DEVNULL, not PIPE: the server logs verbosely per init/reset and an
-        # undrained pipe buffer deadlocks the server after a few test cycles.
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-        **spawn_kwargs,
+    stderr_path = os.path.join(
+        str(tmp_path_factory.mktemp("bonk-server-stderr")), "server-stderr.log"
     )
-
-    connected = False
-    for _ in range(100):
-        if proc.poll() is not None:
-            break
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.1):
-                connected = True
-                break
-        except (ConnectionRefusedError, OSError):
-            time.sleep(0.1)
-
-    if not connected:
-        _kill_process_tree(proc)
-        if _listening_pids(port):
-            # Our server died but another process serves the port (e.g. a
-            # manually started server). Use it and leave it alone.
-            print(
-                f"WARNING: spawned bonk server exited (code {proc.returncode}) "
-                f"but port {port} is served by another process; tests will use it",
-                file=sys.stderr,
-            )
-            proc = None
-        else:
-            pytest.skip("bonk server did not start within 10s")
-
-    # Record the identity of the process serving the port at probe time:
-    # it is our spawn (stale listeners were removed at startup). Teardown
-    # reclaims the port only from that exact process, matched by pid AND
-    # creation time, so a foreign server or a recycled pid is never touched.
+    stderr_file = open(stderr_path, "w", encoding="utf-8", errors="replace")
+    proc = None
     probe_listener_pids = set()
     probe_creation_times = {}
-    if proc is not None and os.name == "nt":
-        probe_listener_pids = _listening_pids(port)
-        probe_creation_times = _process_creation_times(probe_listener_pids)
+    try:
+        proc = subprocess.Popen(
+            [shutil.which("node"), tsx_cli, "src/main.ts"],
+            cwd=project_root,
+            # A file, not PIPE: the server logs verbosely per init/reset and
+            # an undrained pipe buffer deadlocks the server after a few test
+            # cycles, while a file never blocks and keeps the errors readable.
+            stdout=subprocess.DEVNULL,
+            stderr=stderr_file,
+            **spawn_kwargs,
+        )
 
-    yield proc
+        connected = False
+        for _ in range(100):
+            if proc.poll() is not None:
+                break
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    connected = True
+                    break
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.1)
 
-    if proc is not None:
+        if not connected:
+            _kill_process_tree(proc)
+            if _listening_pids(port):
+                # Our server died but another process serves the port (e.g. a
+                # manually started server). Use it and leave it alone.
+                print(
+                    f"WARNING: spawned bonk server exited (code {proc.returncode}) "
+                    f"but port {port} is served by another process; tests will use it",
+                    file=sys.stderr,
+                )
+                proc = None
+            else:
+                raise RuntimeError(
+                    "bonk server did not start within 10s on port "
+                    f"{port}; server stderr:\n{_tail_stderr_log(stderr_path)}"
+                )
+
+        # Record the identity of the process serving the port at probe time:
+        # it is our spawn (stale listeners were removed at startup). Teardown
+        # reclaims the port only from that exact process, matched by pid AND
+        # creation time, so a foreign server or a recycled pid is never touched.
+        if proc is not None and os.name == "nt":
+            probe_listener_pids = _listening_pids(port)
+            probe_creation_times = _process_creation_times(probe_listener_pids)
+
+        yield proc
+    finally:
+        if proc is not None:
+            _kill_process_tree(proc)
+
+            # Belt and suspenders: reclaim the port from our own server process
+            # if the tree-kill missed it (e.g. the parent died and the child
+            # kept serving). Only the exact process that answered the startup
+            # probe is killed, and only while its creation time still matches.
+            if probe_creation_times:
+                current = _listening_pids(port) & probe_listener_pids
+                current_times = _process_creation_times(current)
+                for pid in current:
+                    probe_time = probe_creation_times.get(pid)
+                    if probe_time is not None and current_times.get(pid) == probe_time:
+                        _taskkill(pid, tree=False)
+        stderr_file.close()
+
+
+@pytest.fixture
+def bonk_server_config(tmp_path):
+    """Start a server from a temporary config.json for config-file regressions.
+
+    The server binds an OS-allocated ephemeral port. The allocation probe is
+    released before the child binds, so another process could claim the port
+    in between; to keep that TOCTOU window from silently routing tests to an
+    unconfigured listener, the fixture verifies (on Windows) that the
+    listener answering the probe belongs to the spawned process tree and
+    retries with a fresh port when it does not. Foreign listeners are never
+    killed: the port is simply abandoned and the spawn retried.
+
+    A server that fails to start is a hard error, not a silent skip, and the
+    captured stderr tail is surfaced to make the failure actionable.
+    """
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    server_script = os.path.join(project_root, "src", "main.ts")
+    if not os.path.isfile(server_script):
+        pytest.skip("src/main.ts not found")
+
+    node = shutil.which("node")
+    if node is None:
+        pytest.skip("node not found")
+    tsx_cli = _find_tsx_cli(project_root)
+    if tsx_cli is None:
+        pytest.skip("tsx CLI not found (run npm install)")
+
+    spawn_kwargs = {}
+    if os.name == "nt":
+        spawn_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        spawn_kwargs["start_new_session"] = True
+
+    config_path = os.path.join(tmp_path, "config.json")
+    stderr_path = os.path.join(tmp_path, "bonk-server-stderr.log")
+    failures = []
+
+    for attempt in range(1, MAX_SERVER_START_ATTEMPTS + 1):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+
+        config = {
+            "server": {"port": port},
+            "environment": {
+                "frame_skip": 4,
+                "max_ticks": 5,
+                "num_opponents": 0,
+                "random_opponent": False,
+            },
+            "workerPool": {"numWorkers": 1, "useSharedMemory": True},
+        }
+        with open(config_path, "w", encoding="utf-8") as config_file:
+            json.dump(config, config_file)
+        with open(stderr_path, "w", encoding="utf-8", errors="replace") as stderr_log:
+            proc = subprocess.Popen(
+                [node, tsx_cli, server_script],
+                cwd=tmp_path,
+                stdout=subprocess.DEVNULL,
+                stderr=stderr_log,
+                **spawn_kwargs,
+            )
+
+        connected = False
+        for _ in range(100):
+            if proc.poll() is not None:
+                break
+            try:
+                with socket.create_connection(("127.0.0.1", port), timeout=0.1):
+                    connected = True
+                    break
+            except (ConnectionRefusedError, OSError):
+                time.sleep(0.1)
+
+        if connected and _listener_belongs_to(port, proc):
+            try:
+                yield port
+            finally:
+                _kill_process_tree(proc)
+            return
+
         _kill_process_tree(proc)
+        if connected:
+            failures.append(
+                f"attempt {attempt}: port {port} is served by a process outside "
+                "the spawned bonk server tree; abandoned for a fresh port"
+            )
+        else:
+            failures.append(
+                f"attempt {attempt}: bonk server did not start within 10s "
+                f"on port {port}"
+            )
 
-        # Belt and suspenders: reclaim the port from our own server process
-        # if the tree-kill missed it (e.g. the parent died and the child
-        # kept serving). Only the exact process that answered the startup
-        # probe is killed, and only while its creation time still matches.
-        if probe_creation_times:
-            current = _listening_pids(port) & probe_listener_pids
-            current_times = _process_creation_times(current)
-            for pid in current:
-                probe_time = probe_creation_times.get(pid)
-                if probe_time is not None and current_times.get(pid) == probe_time:
-                    _taskkill(pid, tree=False)
+    raise RuntimeError(
+        "config-file bonk server failed to start after "
+        f"{MAX_SERVER_START_ATTEMPTS} attempts:\n"
+        + "\n".join(failures)
+        + "\nserver stderr:\n"
+        + _tail_stderr_log(stderr_path)
+    )
 
 
 @pytest.fixture
