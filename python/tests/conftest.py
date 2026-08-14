@@ -44,6 +44,19 @@ def _lsof_listener_pids(lsof_output, port):
     return pids
 
 
+def _ss_port_seen(ss_output, port):
+    """True if ``ss`` output lists any socket on ``port``.
+
+    ``ss -ltnp`` only prints listeners, so a matching line means a listener
+    exists on the port even when the ``users:`` column carries no pid=
+    attribution (the host cannot read /proc for other processes).
+    """
+    for line in ss_output.splitlines():
+        if any(token.endswith(f":{port}") for token in line.split()):
+            return True
+    return False
+
+
 def _posix_listener_pids(port):
     """Return PIDs listening on ``port`` on POSIX, or ``None`` when the
     listener cannot be identified.
@@ -51,17 +64,19 @@ def _posix_listener_pids(port):
     Uses ``ss -ltnp`` (Linux, iproute2) with an ``lsof`` fallback so the
     listener answering a connect probe can be identified on POSIX too,
     instead of blindly trusting that it belongs to the spawned server.
-    ``None`` (no tool successfully checked — not installed, or installed
-    but failing) lets callers distinguish "listener cannot be identified"
-    from a genuine "no listener found" (empty set), so a host without a
-    working iproute2/lsof does not hard-fail a fixture that can never
-    verify ownership.
+    ``None`` means the check was inconclusive — no tool successfully
+    verified the listener, or ``ss`` listed a socket on the port without
+    ``pid=`` attribution (restricted ``/proc`` visibility). Callers must
+    treat that distinctly from a genuine "no listener found" (empty set),
+    so ownership-unverifiable hosts do not hard-fail a fixture.
     """
     # A tool counts as having checked only on a successful exit: ``ss``
     # exits 0 (even with no matches, headers only); ``lsof`` exits 1 for a
-    # genuine "no match" and non-zero/2 only on error. A present-but-failing
-    # tool (e.g. permission-denied /proc) must not be misread as "no
-    # listener", so its non-zero exit leaves the port unverifiable.
+    # genuine "no match" and non-zero/2 only on error. When ``ss`` lists a
+    # socket on the port but its ``users:`` column carries no pid= (the
+    # host cannot read /proc for other processes), a listener exists yet
+    # cannot be identified: that is inconclusive, not "no listener", so the
+    # probe is accepted with a warning instead of hard-failing.
     attempts = (
         (["ss", "-ltnp"], _ss_listener_pids, (0,)),
         (
@@ -84,6 +99,8 @@ def _posix_listener_pids(port):
         pids = parse(result.stdout, port)
         if pids:
             return pids
+        if argv[0] == "ss" and _ss_port_seen(result.stdout, port):
+            return None
     if not tool_checked:
         return None
     return set()

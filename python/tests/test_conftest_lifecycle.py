@@ -300,6 +300,29 @@ def test_posix_listener_pids_empty_when_no_listener(monkeypatch):
     assert conftest._posix_listener_pids(5556) == set()
 
 
+def test_posix_listener_pids_none_when_ss_lacks_pid_attribution(monkeypatch):
+    # Restricted /proc visibility: ss exits 0 and lists the port's LISTEN
+    # socket but without a users:(pid=...) attribution (lsof not installed).
+    # A matching socket with no identifiable PID is evidence a listener
+    # exists, so the probe is inconclusive (None), not "no listener" (empty
+    # set) — otherwise bonk_server_config would hard-fail after 5 retries.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
 def test_posix_listener_pids_none_when_tools_error(monkeypatch):
     # Both tools launch but fail (non-zero exit, e.g. permission-denied
     # /proc): the check is inconclusive, not "no listener", so a host with a
