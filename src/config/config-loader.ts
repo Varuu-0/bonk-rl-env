@@ -1306,17 +1306,19 @@ case '--ai-player-id':
 let cachedConfig: AppConfig | null = null;
 
 /**
- * Provenance marker attached to each resolved AppConfig (non-enumerable so it
- * never survives a deepMerge spread or reaches IPC serialization). Tracks the
- * physics keys authored by config.json, environment variables, or CLI flags for
- * THAT resolution pass: the built-in solverIterations default is retained in
- * AppConfig for compatibility, but is not an explicit per-environment override
- * (#325). Binding provenance to the config object itself keeps it coupled to
- * the cached config — a module-global set could silently drift from the config
- * it describes and make mergeEngineSections output depend on load history.
- */
-/**
  * Symbol key carrying the physics provenance Set on each resolved AppConfig.
+ *
+ * The marker is attached non-enumerably so it never survives a deepMerge
+ * spread or reaches IPC serialization, and non-configurably so a
+ * delete-then-reassign cannot re-create it as enumerable. It tracks the
+ * physics keys authored by config.json, environment variables, or CLI flags
+ * for THAT resolution pass: the built-in solverIterations default is retained
+ * in AppConfig for compatibility, but is not an explicit per-environment
+ * override (#325). Binding provenance to the config object itself keeps it
+ * coupled to the cached config — a module-global set could silently drift from
+ * the config it describes and make mergeEngineSections output depend on load
+ * history.
+ *
  * Exported so tests can verify the marker's non-enumerable, non-configurable
  * descriptor contract without iterating unrelated own symbols (#325).
  */
