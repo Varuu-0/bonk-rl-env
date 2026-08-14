@@ -125,20 +125,21 @@ function quantizeObservation(obs: Observation): Observation {
 }
 
 /**
- * Applies the per-env auto-reset rule for a step result. The terminal
- * observation is always captured on a done step. The environment itself is
- * reset only once its frame-skip terminal hold window has been served: with
- * frameSkip > 1 the env keeps returning done for the whole window, so an
- * unconditional reset on the first done step would discard the hold and
- * surface a fresh episode one step after the terminal one (#228). On the
- * reset step the result keeps the ended episode's observation, so the
- * returned graph stays internally consistent (observation.tick aligns with
- * info.tick, and the fresh episode's observation only appears on the next
- * step, #222).
+ * Applies the per-env auto-reset rule for a step result. The environment
+ * itself is reset only once its frame-skip terminal hold window has been
+ * served: with frameSkip > 1 the env keeps returning done for the whole
+ * window, so an unconditional reset on the first done step would discard
+ * the hold and surface a fresh episode one step after the terminal one
+ * (#228). On the reset step the result keeps the ended episode's
+ * observation, so the returned graph stays internally consistent
+ * (observation.tick aligns with info.tick, and the fresh episode's
+ * observation only appears on the next step, #222). The environment already
+ * attaches terminal_observation to every done step, so the worker no longer
+ * backfills it — a missing key on a done step is an env-side regression that
+ * must surface instead of being masked for pool consumers.
  */
 function applyStepAutoReset(env: BonkEnvironment, res: StepResult): StepResult {
     if (!res.done) return res;
-    res.info.terminal_observation = res.observation;
     if (!env.isTerminalHoldActive()) {
         const terminalObservation = res.observation;
         env.reset();
