@@ -101,7 +101,10 @@ function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): v
   for (const res of sseClients) res.end();
   sseClients.clear();
   server.close(() => process.exit(code));
-  server.closeAllConnections();
+  // Give the graceful SSE flush (final frame + 'done') a brief window, then
+  // exit deterministically even when a connected client never closes.
+  const deadline = setTimeout(() => process.exit(code), 500);
+  deadline.unref();
 }
 
 function handleRequest(
@@ -157,7 +160,9 @@ async function main(): Promise<void> {
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
   server.on('error', (e) => { console.error(e); shutdown(env, server, 1); });
   server.listen(port, () => {
-    console.log(`bonk-rl-env live preview → http://localhost:${port}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
+    const bound = server.address();
+    const boundPort = typeof bound === 'object' && bound ? bound.port : port;
+    console.log(`bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
   });
 
   const intervalMs = Math.max(1, Math.round(1000 / fps));
