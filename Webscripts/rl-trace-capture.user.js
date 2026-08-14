@@ -128,8 +128,7 @@
       } : null);
     }
     // Prefer the full game-settings map because it carries authored spawns.
-    // If it is unavailable, keep the tick-state map and leave spawns empty so
-    // the comparator can use its map-spawn fallback instead of fake (0, 0)s.
+    // If it is unavailable, keep the tick-state map.
     const gameMap = window.__bonkExportGameSettings?.map;
     if (gameMap?.physics?.bodies) {
       S.map = gameMap;
@@ -141,22 +140,41 @@
     if (S.players.length === 0) {
       S.tps = 30;
       const players = [];
+      const spawns = [];
+      // Per-player round-start spawns come from the disc runtime fields
+      // `sx`/`sy` (LIVE_STATE_EXTRACTION §11.2: live discs carry the authored
+      // spawn point; it is fixed per round, so any captured tick yields the
+      // same pre-tick position). Emit an entry only when the fields are
+      // actually present — never a fake (0, 0) — so the comparator falls back
+      // to the map's authored spawn points for any id without one.
       if (state.players) {
         for (let i = 0; i < state.players.length; i++) {
           const p = state.players[i];
           if (p) {
             players.push({ id: i, team: p.team });
+            const sx = typeof p.sx === 'number' ? p.sx : state.discs[i]?.sx;
+            const sy = typeof p.sy === 'number' ? p.sy : state.discs[i]?.sy;
+            if (typeof sx === 'number' && Number.isFinite(sx) &&
+                typeof sy === 'number' && Number.isFinite(sy)) {
+              spawns.push({ id: i, x: sx, y: sy });
+            }
           }
         }
       }
       if (players.length === 0 && state.discs.length > 0) {
         for (let i = 0; i < state.discs.length; i++) {
-          if (state.discs[i]) {
-            players.push({ id: i, team: state.discs[i].team });
+          const d = state.discs[i];
+          if (d) {
+            players.push({ id: i, team: d.team });
+            if (typeof d.sx === 'number' && Number.isFinite(d.sx) &&
+                typeof d.sy === 'number' && Number.isFinite(d.sy)) {
+              spawns.push({ id: i, x: d.sx, y: d.sy });
+            }
           }
         }
       }
       S.players = players;
+      S.spawns = spawns;
     }
     S.ticks.push({ t, discs });
   }
