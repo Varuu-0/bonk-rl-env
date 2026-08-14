@@ -78,20 +78,43 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.info.capZones[0].type).toBe(2);
     });
 
-    it('physics.bounds survives the constructor-internal reset and episode resets', async () => {
+    it('physics.bounds stays in map-pixel observation units across resets', async () => {
       const mapData: MapDef = makeMap({});
       (mapData as any).physics = { bounds: { width: 60, height: 40 } };
 
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
       const obs = env.reset();
-      expect(obs.arenaHalfWidth).toBe(30 * 30);  // width/2 (30m) × SCALE(30)
-      expect(obs.arenaHalfHeight).toBe(20 * 30);
+      expect(obs.arenaHalfWidth).toBe(30);  // width/2 in map pixels
+      expect(obs.arenaHalfHeight).toBe(20);
 
       for (let i = 0; i < 5; i++) env.step(0);
 
       const obs2 = env.reset();
-      expect(obs2.arenaHalfWidth).toBe(30 * 30);
-      expect(obs2.arenaHalfHeight).toBe(20 * 30);
+      expect(obs2.arenaHalfWidth).toBe(30);
+      expect(obs2.arenaHalfHeight).toBe(20);
+    });
+
+    it('skips the map-bounds override when a duck-typed engine lacks getScale (#320)', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      // Duck-type the engine: expose setMapBounds but not the getScale
+      // accessor reset()'s conversion needs. reset() must skip the override
+      // instead of throwing on the missing accessor.
+      physics.getScale = undefined;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).not.toHaveBeenCalled();
+
+      // With the override skipped, observations report the engine's dynamic
+      // bounds rather than the skipped map-px half extents.
+      const observation = (env as any).getObservation();
+      const dynamic = physics.getArenaBounds();
+      expect(observation.arenaHalfWidth).toBe(dynamic.halfWidth);
+      expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
     });
 
     it('capZones empty array when no capZones in map', async () => {
@@ -770,6 +793,44 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.reward).toBeCloseTo(10, 6);
     });
 
+    it('respawn-enabled opponent OOB death remains visible and rewarded before continuation', async () => {
+      const mapData: MapDef = {
+        name: 'respawn-opponent-death',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+
+      const death = env.step(0);
+      expect(death.reward).toBeCloseTo(10, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.opponentsAlive).toBe(0);
+      expect(death.observation.opponents[0].alive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.done).toBe(false);
+      expect(continuation.info.opponentsAlive).toBe(1);
+      expect(continuation.observation.opponents[0].alive).toBe(true);
+      expect(continuation.observation.opponents[0].x).toBeCloseTo(200, 4);
+    });
+
     it('configurable deathPenalty: AI death pays the configured -5', async () => {
       const mapData: MapDef = {
         name: 'death-config',
@@ -792,6 +853,133 @@ describe('BonkEnvironment edge cases', () => {
       const result = env.step(0);
       expect(result.info.aiAlive).toBe(false);
       expect(result.reward).toBeCloseTo(-5, 6);
+    });
+
+    it('respawn-enabled AI OOB death pays the penalty and continues next step', async () => {
+      const mapData: MapDef = {
+        name: 'respawn-ai-death',
+        spawnPoints: {
+          team_blue: { x: 0, y: 0 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 0,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        deathPenalty: -5,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+
+      const death = env.step(0);
+      expect(death.reward).toBeCloseTo(-5, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.aiAlive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.done).toBe(false);
+      expect(continuation.info.aiAlive).toBe(true);
+      expect(continuation.observation.playerX).toBeCloseTo(0, 4);
+    });
+
+    it('non-respawn same-tick capture prices the losing-team death capture-only', async () => {
+      const mapData: MapDef = {
+        name: 'capture-oob-nonrespawn',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      // Opponent dies OOB on the same tick a blue-owned timed zone completes:
+      // the death stays observable, but the capture is the single reward for
+      // the event (no kill reward on top).
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+      physics.capZoneState.set(0, {
+        ty: 1,
+        p: 1,
+        l: 1,
+        i: 0,
+        o: 1,
+        ot: 'blue',
+        f: 1,
+      });
+
+      const result = env.step(0);
+      expect(result.reward).toBeCloseTo(1, 6);
+      expect(result.info.opponentsAlive).toBe(0);
+      expect(result.observation.opponents[0].alive).toBe(false);
+      expect(result.done).toBe(true);
+      expect(result.info.terminated).toBe(true);
+    });
+
+    it('respawn same-tick capture keeps the transient kill reward', async () => {
+      const mapData: MapDef = {
+        name: 'capture-oob-respawn',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+      physics.capZoneState.set(0, {
+        ty: 1,
+        p: 1,
+        l: 1,
+        i: 0,
+        o: 1,
+        ot: 'blue',
+        f: 1,
+      });
+
+      const death = env.step(0);
+      // On respawn maps the transient OOB death is a real elimination and
+      // still pays killReward alongside the capture.
+      expect(death.reward).toBeCloseTo(11, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.opponentsAlive).toBe(0);
+      expect(death.observation.opponents[0].alive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.reward).toBeCloseTo(0, 6);
+      expect(continuation.info.opponentsAlive).toBe(1);
+      expect(continuation.observation.opponents[0].alive).toBe(true);
     });
 
     it('configurable timePenalty applies on every non-terminal tick', async () => {
@@ -936,8 +1124,8 @@ describe('BonkEnvironment edge cases', () => {
 
         expect(world).not.toBe(previousWorld);
         expect(observation.tick).toBe(0);
-        expect(observation.arenaHalfWidth).toBe(30 * 30);
-        expect(observation.arenaHalfHeight).toBe(20 * 30);
+        expect(observation.arenaHalfWidth).toBe(30);
+        expect(observation.arenaHalfHeight).toBe(20);
         expect(physics.getBodyMap().size).toBe(mapData.bodies.length);
         expect(physics.capZoneSensors).toHaveLength(1);
         expect(physics.ppm).toBe(18);

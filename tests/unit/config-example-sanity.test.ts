@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getDefaults } from '../../src/config/config-loader';
 
 const configPath = path.resolve(__dirname, '..', '..', 'config.example.json');
 const raw = fs.readFileSync(configPath, 'utf8');
@@ -52,5 +53,49 @@ describe('config.example.json verified physics values', () => {
     // The engine derives the disc radius from the map ppm (default 12); the
     // config value is retained only for backward compatibility.
     expect(typeof config.player.radius).toBe('number');
+  });
+
+  it('documents the worker-pool and IPC configuration surfaces', () => {
+    expect(config.workerPool).toMatchObject({
+      numWorkers: 0,
+      maxWorkers: 8,
+      ringBufferSize: 16,
+      messageTimeoutMs: 30000,
+      stepTimeoutMs: 5000,
+    });
+    expect(config.workerPool._doc_numWorkers).toContain('NUM_WORKERS');
+    expect(config.workerPool._doc_numWorkers).toContain('--num-workers');
+    expect(config.workerPool._doc_maxWorkers).toContain('MAX_WORKERS');
+    expect(config.workerPool._doc_ringBufferSize).toContain('RING_BUFFER_SIZE');
+    expect(config.workerPool._doc_messageTimeoutMs).toContain('MESSAGE_TIMEOUT_MS');
+    expect(config.workerPool._doc_stepTimeoutMs).toContain('STEP_TIMEOUT_MS');
+    expect(config.server._doc_zmqBacklog).toContain('ZMQ_BACKLOG');
+    expect(config.server._doc_zmqBacklog).toContain('--zmq-backlog');
+    expect(config.ipc).toMatchObject({
+      socketType: 'ROUTER',
+      serialization: 'json',
+      tcpKeepalive: 0,
+      sndHwm: 1000,
+      rcvHwm: 1000,
+      lingerMs: 1000,
+    });
+    expect(config.ipc._doc_socketType).toContain('--socket-type');
+    expect(config.ipc._doc_serialization).toContain('--serialization');
+    expect(config.ipc._doc_tcpKeepalive).toContain('--tcp-keepalive');
+    expect(config.ipc._doc_sndHwm).toContain('--snd-hwm');
+    expect(config.ipc._doc_rcvHwm).toContain('--rcv-hwm');
+    expect(config.ipc._doc_lingerMs).toContain('--linger-ms');
+  });
+
+  it('documents and ships the configured default map', () => {
+    // Dereference inside the test (not at module load) so a missing key
+    // fails this case instead of crashing the whole file at import.
+    expect(config.environment.defaultMapPath).toBe(getDefaults().environment.defaultMapPath);
+
+    const defaultMapPath = path.resolve(path.dirname(configPath), config.environment.defaultMapPath);
+    expect(fs.existsSync(defaultMapPath)).toBe(true);
+
+    const map = JSON.parse(fs.readFileSync(defaultMapPath, 'utf8'));
+    expect(map.metadata?.name).toBe('WDB (No Mapshake)');
   });
 });

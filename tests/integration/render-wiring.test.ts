@@ -1,6 +1,8 @@
 import { describe, it, expect, afterEach } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
 import { renderEnvFrameSvg, envMapRender } from '../../src/render/render-wiring';
+import { buildGeometry } from '../../src/render/map-geometry';
+import { computeCamera } from '../../src/render/render-math';
 import { safeDestroy } from '../utils/test-helpers';
 
 describe('render-wiring (M5) env-path cap zones', () => {
@@ -37,5 +39,44 @@ describe('render-wiring (M5) env-path cap zones', () => {
     expect(svg.indexOf('<title>')).toBeLessThan(svg.indexOf('<defs>'));
     expect(svg.length).toBeGreaterThan(200);
     expect(svg).not.toMatch(/NaN/);
+  });
+
+  it('paints the WDB opaque background beneath gameplay geometry', () => {
+    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__no_nothing__1232248.json', numOpponents: 0, randomOpponent: false });
+    const mapDef = (env as any).config.mapData;
+    const backgroundIndex = mapDef.bodies.findIndex((body: any) => body.renderBodyIndex === 7);
+    expect(backgroundIndex).toBeGreaterThanOrEqual(0);
+
+    const { geometry } = envMapRender(env);
+    const commands = buildGeometry(geometry, computeCamera(730, 500, 12));
+    const backgroundColor = `#${(mapDef.bodies[backgroundIndex].color >>> 0).toString(16).padStart(6, '0')}`;
+    const backgroundCommand = commands.findIndex(command => command.primitive.fill === backgroundColor);
+    expect(backgroundCommand).toBe(0);
+    expect(commands.some(command => command.primitive.fill !== backgroundColor)).toBe(true);
+  });
+
+  it('keeps WDB fixture paint order while reversing native body order', () => {
+    env = new BonkEnvironment({ mapPath: 'maps/bonk_WDB__no_nothing__1232248.json', numOpponents: 0, randomOpponent: false });
+    const mapDef = (env as any).config.mapData;
+    const { geometry } = envMapRender(env);
+    const sourceBodyIndex = 12;
+    const sourceFixtureGeometry = mapDef.bodies
+      .filter((body: any) => body.renderBodyIndex === sourceBodyIndex)
+      .map((body: any) => ({
+        color: body.color,
+        center: body.renderShape?.center,
+        angle: body.renderShape?.angle,
+      }));
+    const renderedFixtureGeometry = (geometry.bodyRenderOrder ?? [])
+      .map(index => mapDef.bodies[index])
+      .filter((body: any) => body?.renderBodyIndex === sourceBodyIndex)
+      .map((body: any) => ({
+        color: body.color,
+        center: body.renderShape?.center,
+        angle: body.renderShape?.angle,
+      }))
+      .reverse();
+
+    expect(renderedFixtureGeometry).toEqual(sourceFixtureGeometry);
   });
 });
