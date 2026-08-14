@@ -331,15 +331,23 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             expect(deaths[0].state.alive).toBe(false);
             expect(engine.getTeamScored()).toBe('red');
 
-            // Type 4 remains respawnable even though the cap completed, while
-            // the capture event is still available to the environment.
-            expect(engine.getPlayerState(0).alive).toBe(true);
-            expect(engine.getPlayerState(0).deathType).toBe(0);
-            expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            // Type 4 remains respawnable even though the cap completed: the
+            // disc stays dead on the death tick (queued for its deferred
+            // respawn, #339) so the environment observes the death, then
+            // returns to spawn on the following tick.
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(4);
+            expect(engine.isPendingRespawn(0)).toBe(true);
             // The dying-step view keeps the pre-respawn snapshot so any
             // reader observes the death on the tick it happened.
             expect(engine.getVisiblePlayerState(0).alive).toBe(false);
             expect(engine.getVisiblePlayerState(0).deathType).toBe(4);
+
+            engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect(engine.getPlayerState(0).deathType).toBe(0);
+            expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            expect(engine.isPendingRespawn(0)).toBe(false);
         } finally {
             engine.destroy();
         }
