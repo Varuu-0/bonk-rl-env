@@ -11,7 +11,6 @@ import { getDefaults } from '../../src/config/config-loader';
 const configPath = path.resolve(__dirname, '..', '..', 'config.example.json');
 const raw = fs.readFileSync(configPath, 'utf8');
 const config = JSON.parse(raw);
-const defaultMapPath = path.resolve(path.dirname(configPath), config.environment.defaultMapPath);
 
 describe('config.example.json verified physics values', () => {
   it('gravityY is 20', () => {
@@ -57,7 +56,11 @@ describe('config.example.json verified physics values', () => {
   });
 
   it('documents and ships the configured default map', () => {
+    // Dereference inside the test (not at module load) so a missing key
+    // fails this case instead of crashing the whole file at import.
     expect(config.environment.defaultMapPath).toBe(getDefaults().environment.defaultMapPath);
+
+    const defaultMapPath = path.resolve(path.dirname(configPath), config.environment.defaultMapPath);
     expect(fs.existsSync(defaultMapPath)).toBe(true);
 
     const map = JSON.parse(fs.readFileSync(defaultMapPath, 'utf8'));
