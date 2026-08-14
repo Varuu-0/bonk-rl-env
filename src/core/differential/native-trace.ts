@@ -47,8 +47,10 @@ export interface NativeTraceDisc {
   team?: number;
   /** Disc state (native `ds`; 0 = normal). */
   ds?: number;
-  /** Alive == present in state.discs (§9.2). */
-  alive: boolean;
+  /** Alive == present in state.discs (§9.2): a disc object in the array is
+   *  always alive, so this field is the literal `true` — `alive: false` is a
+   *  schema violation and type-checks as an error. */
+  alive: true;
 }
 
 /** One tick of the match. */
@@ -103,15 +105,59 @@ export interface ParsedTrace {
   errors: string[];
 }
 
+/** Return the first validation failure for a disc, or null when it is valid. */
+function discValidationError(value: unknown): string | null {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    return 'not an object';
+  }
+  const disc = value as Partial<NativeTraceDisc>;
+  if (typeof disc.id !== 'number' || !Number.isInteger(disc.id) || disc.id < 0) {
+    return 'id must be a non-negative integer';
+  }
+  if (typeof disc.x !== 'number' || !Number.isFinite(disc.x)) return 'x must be a finite number';
+  if (typeof disc.y !== 'number' || !Number.isFinite(disc.y)) return 'y must be a finite number';
+  if (typeof disc.xv !== 'number' || !Number.isFinite(disc.xv)) return 'xv must be a finite number';
+  if (typeof disc.yv !== 'number' || !Number.isFinite(disc.yv)) return 'yv must be a finite number';
+  if (typeof disc.a !== 'number' || !Number.isFinite(disc.a)) return 'a must be a finite number';
+  if (typeof disc.av !== 'number' || !Number.isFinite(disc.av)) return 'av must be a finite number';
+  if (typeof disc.alive !== 'boolean') return 'alive must be a boolean';
+  if (disc.alive !== true) return 'alive must be true (presence in state.discs means alive)';
+  return null;
+}
+
+/** Return true for a disc object with every comparator-required field present. */
+export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
+  return discValidationError(value) === null;
+}
+
+/**
+ * The single disc acceptance predicate for the parsed output: a disc is
+ * comparable only when it is a fully-valid native disc AND its `id` matches
+ * its array slot (the index-alignment invariant). Returns the message suffix
+ * describing why the disc is rejected (malformed fields, or slot mismatch), or
+ * null when it passes. Both the parse error loop and the output nulling pass
+ * share this one predicate, so the reported errors and the typed output cannot
+ * silently diverge.
+ */
+function discOutputError(value: unknown, slot: number): string | null {
+  const reason = discValidationError(value);
+  if (reason !== null) return `is malformed: ${reason}`;
+  const disc = value as NativeTraceDisc;
+  if (disc.id !== slot) return `id mismatch: disc.id=${disc.id} does not match slot ${slot}`;
+  return null;
+}
+
 /**
  * Parse and validate a native trace object (from JSON). Returns the typed trace
  * plus a list of validation errors. Throws on a structurally-unsound input
  * (non-object, missing schema marker, non-array fields). Entries that fail the
  * per-entry shape/field contract (null, non-objects, or objects with missing or
  * invalid required fields) inside players, spawns, and ticks are reported as
- * errors and omitted from the returned trace, so downstream iteration stays
- * safe even when a caller ignores the errors. The embedded map is normalized by
- * the replay comparator (which owns the normalizeMap import).
+ * errors and omitted from the returned trace; malformed or slot-misaligned
+ * disc entries are replaced with null (absent) so the index-aligned discs
+ * array stays safe for downstream iteration even when a caller ignores the
+ * errors. The embedded map is normalized by the replay comparator (which owns
+ * the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -162,7 +208,17 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
         continue;
       }
       if (typeof tick.t !== 'number' || tick.t < 0) errors.push(`tick index invalid: ${String(tick.t)}`);
-      if (!Array.isArray(tick.discs)) errors.push(`tick ${tick.t} has no discs array`);
+      if (!Array.isArray(tick.discs)) {
+        errors.push(`tick ${tick.t} has no discs array`);
+        continue;
+      }
+      tick.discs.forEach((disc, id) => {
+        if (disc === null || disc === undefined) return;
+        const err = discOutputError(disc, id);
+        if (err !== null) {
+          errors.push(`tick ${tick.t} disc ${id} ${err}`);
+        }
+      });
     }
   }
 
@@ -185,10 +241,26 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
           typeof s.y === 'number' && Number.isFinite(s.y))
       : [],
     ticks: Array.isArray(t.ticks)
-      ? t.ticks.filter((tk): tk is NativeTraceTick =>
-          tk !== null && typeof tk === 'object' && !Array.isArray(tk) &&
-          typeof tk.t === 'number' && tk.t >= 0 &&
-          Array.isArray(tk.discs))
+      ? t.ticks
+          .filter((tk): tk is NativeTraceTick =>
+            tk !== null && typeof tk === 'object' && !Array.isArray(tk) &&
+            typeof tk.t === 'number' && tk.t >= 0 &&
+            Array.isArray(tk.discs))
+          .map((tk) => ({
+            ...tk,
+            // Malformed discs (including `alive: false`, which the
+            // `alive: true` literal type forbids) and slot-misaligned discs
+            // (id != slot) never leak into the typed output: they are replaced
+            // with null, keeping the array index-aligned by player id
+            // (§9.2 alive == presence). discOutputError is the same predicate
+            // the error loop above used, so errors and output cannot diverge.
+            discs: tk.discs.map((disc, id) =>
+              disc === null || disc === undefined
+                ? null
+                : discOutputError(disc, id) === null
+                  ? disc
+                  : null),
+          }))
       : [],
   };
 
