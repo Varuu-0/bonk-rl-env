@@ -272,7 +272,7 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
             expect(out.physics.deathCenter).toEqual({ x: 158.5, y: 101 });
         });
 
-        it('inverts the body rotation when converting absolute polygon vertices (#318, #344)', () => {
+        it('keeps the authored rotation on def.angle when converting absolute polygon vertices (#318, #344 review)', () => {
             const out = normalizeMap({
                 bodies: [
                     {
@@ -294,21 +294,26 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
                 spawns: [{ x: 0, y: 0, blue: true, red: true }],
             } as any) as any;
 
-            // abs - pos = [{0,-50},{50,0},{0,50}]; R(-90°)·(dx,dy) = (dy,-dx).
+            // The exporter bakes ONLY the placement (`bx + cx + v`,
+            // mapexporter.js:518-521) into absolute vertices; the rotation is
+            // carried by def.angle and applied exactly once by the engine's
+            // def.x + R(def.angle)·v placement. No R(-angle) inverse: that
+            // would cancel the forward rotation and render the polygon
+            // unrotated. abs - pos = [{0,-50},{50,0},{0,50}].
             const local = out.bodies[0].vertices;
             const expectedLocal = [
-                { x: -50, y: 0 },
                 { x: 0, y: -50 },
                 { x: 50, y: 0 },
+                { x: 0, y: 50 },
             ];
             expect(local).toHaveLength(expectedLocal.length);
             expectedLocal.forEach((e, i) => {
                 expect(local[i].x).toBeCloseTo(e.x, 10);
                 expect(local[i].y).toBeCloseTo(e.y, 10);
             });
-            // Reconstructing world bounds as pos + R(90°)·local reproduces the
-            // authored absolute vertices [300..350, 150..250] → (325, 200).
-            expect(out.physics.deathCenter).toEqual({ x: 325, y: 200 });
+            // World bounds reconstruct as pos + R(90°)·local = [(350,200),
+            // (300,250), (250,200)] → x in [250..350], y in [200..250].
+            expect(out.physics.deathCenter).toEqual({ x: 300, y: 225 });
         });
 
         it('computes polygon world bounds when the origin lies outside the hull (#344)', () => {
@@ -377,11 +382,12 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
             expect(out.physics.deathCenter).toEqual({ x: 325, y: 200 });
         });
 
-        it('combines the absolute-frame rotation inverse with the exporter scale bake (#344 review)', () => {
-            // vertexFrame: 'absolute' + angle + scale must convert in ONE step:
-            // R(-angle)·((v - pos)·scale). Baking scale without the rotation
-            // inverse would leave rotated polygons double-rotated; rotating
-            // without baking scale would drop the exporter's shape scale.
+        it('bakes the exporter scale once while keeping the authored rotation on def.angle (#344 review)', () => {
+            // vertexFrame: 'absolute' + angle + scale converts in ONE step:
+            // local = (v - pos)·scale. The rotation stays on def.angle (the
+            // engine applies it exactly once), so a rotated, scaled exporter
+            // polygon is neither double-rotated (an R(-angle) inverse would
+            // cancel the forward rotation) nor scale-dropped.
             const out = normalizeMap({
                 bodies: [
                     {
@@ -405,30 +411,32 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
                 spawns: [{ x: 0, y: 0, blue: true, red: true }],
             } as any) as any;
 
-            // abs - pos = [{0,-25},{50,0},{0,25}]; ×2 = [{0,-50},{100,0},{0,50}];
-            // R(-90°)·(dx,dy) = (dy,-dx).
+            // abs - pos = [{0,-25},{50,0},{0,25}]; ×2 = [{0,-50},{100,0},{0,50}].
             const local = out.bodies[0].vertices;
             const expectedLocal = [
-                { x: -50, y: 0 },
-                { x: 0, y: -100 },
-                { x: 50, y: 0 },
+                { x: 0, y: -50 },
+                { x: 100, y: 0 },
+                { x: 0, y: 50 },
             ];
             expect(local).toHaveLength(expectedLocal.length);
             expectedLocal.forEach((e, i) => {
                 expect(local[i].x).toBeCloseTo(e.x, 10);
                 expect(local[i].y).toBeCloseTo(e.y, 10);
             });
-            // Reconstructing world bounds as pos + R(90°)·local reproduces the
-            // SCALED authored absolute vertices: (v - pos) × scale, rotated
-            // back to world = [100..200, 0..100] → (150, 50).
-            expect(out.physics.deathCenter).toEqual({ x: 150, y: 50 });
+            // World bounds reconstruct as pos + R(90°)·local = [(150,50),
+            // (100,150), (50,50)] → x in [50..150], y in [50..150].
+            expect(out.physics.deathCenter).toEqual({ x: 100, y: 100 });
         });
 
-        it('does not rebase exporter-absolute vertices a second time after normalizeMap (#344 review)', () => {
-            // Re-normalizing an already-normalized output must be a no-op for
-            // polygon vertices: the first pass converted absolute→body-local,
-            // so the second pass must recognize the shape-local frame and
-            // leave the vertices untouched (no -placement·scale double shift).
+        it('does not double-rebase normalizeMap output through the polygon rebase path (#344 review)', () => {
+            // normalizeMap flips the frame marker to 'local' (and drops the
+            // consumed scale) after rebasing world-baked vertices, so feeding
+            // the converted body-local vertices back through the rebase-relevant
+            // path leaves them untouched — no -placement·scale second shift and
+            // no second scale bake. This runs the polygon rebase loop directly
+            // instead of being short-circuited by the isInternalMapDef early
+            // return, closing the double-rebase gap that previously relied on
+            // that early return alone.
             const raw = {
                 bodies: [
                     {
@@ -440,6 +448,7 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
                         y: 200,
                         angle: 0.5,
                         vertexFrame: 'absolute',
+                        scale: 2,
                         vertices: [
                             { x: 300, y: 150 },
                             { x: 350, y: 200 },
@@ -451,8 +460,39 @@ it('converts exported polygon vertices to body-local coordinates (#318)', () => 
                 spawns: [{ x: 0, y: 0, blue: true, red: true }],
             } as any;
             const once = normalizeMap(raw);
-            const twice = normalizeMap(once as any);
+            // Re-import the CONVERTED flat polygon (body-local, pre-scaled) as
+            // a fresh exporter-format body carrying the adapter's post-rebase
+            // marker. The rebase must be a no-op: a second -placement·scale
+            // rebase would shift every vertex, and a second scale bake would
+            // double them.
+            const reimport = {
+                bodies: [
+                    {
+                        bodyIndex: 0,
+                        fixtureIndex: 0,
+                        name: 'local-poly',
+                        type: 'polygon',
+                        x: 300,
+                        y: 200,
+                        angle: 0.5,
+                        vertexFrame: 'local',
+                        vertices: once.bodies[0].vertices as { x: number; y: number }[],
+                        static: true,
+                    },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any;
+            const twice = normalizeMap(reimport);
             expect(twice.bodies[0].vertices).toEqual(once.bodies[0].vertices);
+            // Control: WITHOUT the adapter's marker clearing, the same already
+            // body-local vertices declared 'absolute' WOULD be rebased again
+            // (shifted by -placement·scale), proving the 'local' marker is what
+            // makes the round-trip idempotent when the rebase path is reached.
+            const shifted = normalizeMap({
+                ...reimport,
+                bodies: [{ ...reimport.bodies[0], vertexFrame: 'absolute' }],
+            } as any);
+            expect(shifted.bodies[0].vertices).not.toEqual(once.bodies[0].vertices);
         });
 
 it('keeps fixture aliases unique and resolves joints to the first fixture of each native body (#307)', () => {

@@ -635,6 +635,10 @@ if (body.fixtureIndex !== undefined) {
             // (`vertexFrame: 'local'`) must never be shifted again — it is
             // already in the shape-local frame every consumer expects, so the
             // world-baked rebase would silently move it by -placement·scale.
+            // normalizeMap flips the marker to 'local' after rebasing (below),
+            // so a re-run of this loop on already-converted vertices also
+            // short-circuits here: the rebase is idempotent without relying on
+            // the isInternalMapDef early return alone.
             if (b.vertexFrame === 'local') continue;
             // Resolve the bake center exactly like toBodyDef resolves the
             // placement (b.x ?? b.position?.x ?? 0), so a position-keyed flat
@@ -656,31 +660,30 @@ if (body.fixtureIndex !== undefined) {
             // rebasing it would silently shift the shape.
             if (!hasStructured && !fromExporterFlatView(b)) continue;
             const vertexScale = b.scale ?? 1;
-            if (b.vertexFrame === 'absolute') {
-                // #344/#318: `vertexFrame: 'absolute'` declares the exporter's
-                // world map-px frame (`bx + cx + v`), so the absolute→local
-                // conversion must invert the body transform exactly — bake the
-                // scale in and rotate by -angle (R(-angle)·((v - pos)·scale)),
-                // the inverse of the engine's def.x + R(def.angle)·v placement.
-                // Rotated exporter polygons then land where the exporter
-                // authored them instead of being re-rotated on top.
-                const angle = b.angle ?? 0;
-                const cosA = Math.cos(angle);
-                const sinA = Math.sin(angle);
-                b.vertices = b.vertices.map((v) => {
-                    const dx = (v.x - cx) * vertexScale;
-                    const dy = (v.y - cy) * vertexScale;
-                    return { x: dx * cosA + dy * sinA, y: -dx * sinA + dy * cosA };
-                });
-            } else {
-                // No vertexFrame marker (maps exported before #344): the
-                // legacy exporter baked `pos + rawLocal` WITHOUT rotation, so
-                // keep the existing rebase (subtract placement, bake scale).
-                b.vertices = b.vertices.map((v) => ({
-                    x: (v.x - cx) * vertexScale,
-                    y: (v.y - cy) * vertexScale,
-                }));
-            }
+            // The exporter's flat view bakes ONLY the placement into every
+            // polygon vertex (`bx + cx + v`, mapexporter.js:518-521); the body
+            // and shape rotations are carried by the flat `angle` field
+            // (emitted as `vertexFrame: 'absolute'` since #344), not by the
+            // vertices. So the absolute→local conversion subtracts the
+            // placement and bakes the separately-emitted scale in — the
+            // rotation stays on def.angle and the engine's single placement
+            // transform def.x + R(def.angle)·v applies it exactly once. No
+            // R(-angle) inverse: that would cancel the engine's forward
+            // rotation, and angled polygons (including rotating dynamic
+            // bodies) would render unrotated on reload. This matches the
+            // flattened-native path (flattenNativeBodies), which already emits
+            // shape-local scaled vertices with the rotation on def.angle, so
+            // both exporter paths share one placement convention.
+            b.vertices = b.vertices.map((v) => ({
+                x: (v.x - cx) * vertexScale,
+                y: (v.y - cy) * vertexScale,
+            }));
+            // The vertices are now shape-local and pre-scaled. Declare the
+            // frame so this loop (or a re-import of the processed flat bodies)
+            // never rebases them a second time, and drop the consumed scale
+            // marker so it cannot re-apply.
+            b.vertexFrame = 'local';
+            b.scale = undefined;
         }
     }
     // Render enrichment (renderShape/renderBodyIndex) resolves the structured

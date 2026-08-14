@@ -552,6 +552,86 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     }
   });
 
+  it('places a vertexFrame:absolute exporter polygon at def.x + R(def.angle)·(scale·v) with exactly one rotation (#344 review)', () => {
+    // The reviewer scenario: the exporter emits vertexFrame: 'absolute' with
+    // ONLY the placement baked into the vertices (`bx + cx + v`,
+    // mapexporter.js:518-521) — the rotation is carried by the flat angle
+    // field. The adapter must rebase to shape-local WITHOUT an R(-angle)
+    // inverse, so the engine's single def.x + R(def.angle)·(scale·v)
+    // placement lands the polygon at its authored world rotation — a rotating
+    // dynamic body keeps turning from that orientation instead of rendering
+    // unrotated. Same authored geometry as the no-marker test above; only the
+    // explicit vertexFrame marker differs.
+    const bodyAngle = Math.PI / 6;
+    const defAngle = Math.PI / 6;
+    const e = makeEngine();
+    const md = normalizeMap({
+      bodies: [
+        {
+          bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon',
+          x: 100, y: 40, angle: defAngle, vertexFrame: 'absolute', scale: 2,
+          vertices: [{ x: 70, y: 40 }, { x: 130, y: 40 }, { x: 100, y: 80 }],
+          static: false, density: 1,
+        },
+      ],
+      physicsBodies: [
+        {
+          index: 0,
+          name: 'body',
+          type: 'd',
+          typeName: 'dynamic',
+          position: { x: 0, y: 40 },
+          angle: bodyAngle,
+          fixtureIndices: [0],
+          fixtures: [],
+        },
+      ],
+      spawns: [{ x: 0, y: 0, blue: true, red: true }],
+    } as any) as any;
+
+    // Shape-local, scale baked in — identical to the flattened-native
+    // convention; the rotation is NOT in the vertices.
+    expect(md.bodies[0].vertices).toEqual([
+      { x: -60, y: 0 },
+      { x: 60, y: 0 },
+      { x: 0, y: 80 },
+    ]);
+
+    for (const body of md.bodies) e.addBody(body);
+    const bodyMap = e.getBodyMap() as Map<string, any>;
+    const grouped = bodyMap.get(md.bodies[0].name);
+    expect(grouped).toBeTruthy();
+
+    const shape = grouped.GetShapeList();
+    const scale = (e as any).scale as number;
+    const rotate = (v: { x: number; y: number }, a: number) => ({
+      x: v.x * Math.cos(a) - v.y * Math.sin(a),
+      y: v.x * Math.sin(a) + v.y * Math.cos(a),
+    });
+    // Expected world placement derived from the AUTHORED raw vertices and
+    // scale, with the rotation carried by def.angle (one rotation total).
+    const rawLocal = [{ x: -30, y: 0 }, { x: 30, y: 0 }, { x: 0, y: 40 }];
+    const expectedWorld = rawLocal.map((v) => {
+      const sv = { x: v.x * 2, y: v.y * 2 };
+      return {
+        x: md.bodies[0].x + rotate(sv, defAngle).x,
+        y: md.bodies[0].y + rotate(sv, defAngle).y,
+      };
+    }).sort((a, b) => a.x - b.x);
+    const actualWorld = [] as { x: number; y: number }[];
+    for (let i = 0; i < shape.m_vertexCount; i++) {
+      const local = shape.m_vertices[i];
+      const world = rotate({ x: local.x, y: local.y }, bodyAngle);
+      actualWorld.push({ x: world.x * scale, y: world.y * scale + 40 });
+    }
+    actualWorld.sort((a, b) => a.x - b.x);
+    expect(actualWorld.length).toBe(3);
+    for (let i = 0; i < actualWorld.length; i++) {
+      expect(actualWorld[i].x).toBeCloseTo(expectedWorld[i].x, 4);
+      expect(actualWorld[i].y).toBeCloseTo(expectedWorld[i].y, 4);
+    }
+  });
+
   it('places native-fixture shapes at the adapter\'s world-space center for rotated/off-center fixtures (#307 review)', () => {
     const angle = Math.PI / 4;
     const e = makeEngine();
