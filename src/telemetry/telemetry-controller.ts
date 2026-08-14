@@ -410,12 +410,16 @@ export class TelemetryController {
   /**
    * Shutdown the telemetry system.
    * Called when the server shuts down.
+   *
+   * By default the shutdown emits a forced final report so a shutdown over a
+   * short and otherwise-incomplete profiler window is not a silent no-op in
+   * console mode (issue #237). A failed-start rollback passes
+   * `{ emitFinalReport: false }`: a server that never served must not emit a
+   * zero-tick report (or JSONL entry in file/both modes) that could pollute
+   * replay-validation traces (#324).
    */
-  shutdown(): void {
-    // Generate final report. Force the emission so a shutdown over a short
-    // and otherwise-incomplete profiler window is not a silent no-op in
-    // console mode (issue #237).
-    if (TelemetryController.isEnabled()) {
+  shutdown(options: { emitFinalReport?: boolean } = {}): void {
+    if ((options.emitFinalReport ?? true) && TelemetryController.isEnabled()) {
       this.reportNow(true);
     }
 

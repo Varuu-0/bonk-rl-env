@@ -130,8 +130,12 @@ export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
 /**
  * Parse and validate a native trace object (from JSON). Returns the typed trace
  * plus a list of validation errors. Throws on a structurally-unsound input
- * (non-object, missing schema marker, non-array fields). The embedded map is
- * normalized by the replay comparator (which owns the normalizeMap import).
+ * (non-object, missing schema marker, non-array fields). Entries that fail the
+ * per-entry shape/field contract (null, non-objects, or objects with missing or
+ * invalid required fields) inside players, spawns, and ticks are reported as
+ * errors and omitted from the returned trace, so downstream iteration stays
+ * safe even when a caller ignores the errors. The embedded map is normalized by
+ * the replay comparator (which owns the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -159,6 +163,10 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     }
     const seenIds = new Set<number>();
     for (const p of t.players) {
+      if (p === null || typeof p !== 'object' || Array.isArray(p)) {
+        errors.push('player entries must be objects');
+        continue;
+      }
       if (typeof p.id !== 'number' || p.id < 0) errors.push('player id must be a non-negative number');
       if (seenIds.has(p.id)) errors.push(`duplicate player id ${p.id}`);
       seenIds.add(p.id);
@@ -173,6 +181,10 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
       if (typeof s.y !== 'number' || !Number.isFinite(s.y)) errors.push(`spawn ${s.id} y must be a finite number`);
     }
     for (const tick of t.ticks) {
+      if (tick === null || typeof tick !== 'object' || Array.isArray(tick)) {
+        errors.push('tick entries must be objects');
+        continue;
+      }
       if (typeof tick.t !== 'number' || tick.t < 0) errors.push(`tick index invalid: ${String(tick.t)}`);
       if (!Array.isArray(tick.discs)) {
         errors.push(`tick ${tick.t} has no discs array`);
@@ -196,9 +208,24 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     tps: t.tps,
     map: t.map,
     settings: t.settings,
-    players: Array.isArray(t.players) ? t.players : [],
-    spawns: Array.isArray(t.spawns) ? t.spawns : [],
-    ticks: Array.isArray(t.ticks) ? t.ticks : [],
+    players: Array.isArray(t.players)
+      ? t.players.filter((p): p is NativeTracePlayer =>
+          p !== null && typeof p === 'object' && !Array.isArray(p) &&
+          typeof p.id === 'number' && p.id >= 0)
+      : [],
+    spawns: Array.isArray(t.spawns)
+      ? t.spawns.filter((s): s is NativeTraceSpawn =>
+          s !== null && typeof s === 'object' && !Array.isArray(s) &&
+          typeof s.id === 'number' && s.id >= 0 &&
+          typeof s.x === 'number' && Number.isFinite(s.x) &&
+          typeof s.y === 'number' && Number.isFinite(s.y))
+      : [],
+    ticks: Array.isArray(t.ticks)
+      ? t.ticks.filter((tk): tk is NativeTraceTick =>
+          tk !== null && typeof tk === 'object' && !Array.isArray(tk) &&
+          typeof tk.t === 'number' && tk.t >= 0 &&
+          Array.isArray(tk.discs))
+      : [],
   };
 
   return { trace, errors };

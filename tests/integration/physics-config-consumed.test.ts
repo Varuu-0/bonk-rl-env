@@ -26,6 +26,7 @@ import { describe, it, expect, afterEach, vi } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
 import { PhysicsEngine } from '../../src/core/physics-engine';
 import { BonkEnv } from '../../src/env/bonk-env';
+import { normalizeMap } from '../../src/core/map-adapter';
 import type { MapDef } from '../../src/core/physics-engine';
 
 /** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
@@ -38,6 +39,18 @@ const TEST_MAP: MapDef = {
     bodies: [
         { name: 'left', type: 'rect', x: -500, y: 0, width: 30, height: 600, static: true },
         { name: 'right', type: 'rect', x: 500, y: 0, width: 30, height: 600, static: true },
+    ],
+};
+
+const EXPORTED_BOUNDS_MAP = {
+    metadata: { name: 'exported-bounds-test' },
+    physics: { ppm: 12, boundsWidth: 1000, boundsHeight: 800 },
+    spawns: [
+        { x: -100, y: -50, blue: true },
+        { x: 100, y: -50, red: true },
+    ],
+    bodies: [
+        { bodyIndex: 0, fixtureIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
     ],
 };
 
@@ -153,6 +166,53 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         const def = arenaBounds({});
         expect(def.w - m0.w).toBeCloseTo(5 * 30, 6);
         expect(def.h - m0.h).toBeCloseTo(5 * 30, 6);
+    });
+
+    it('converts exported map-pixel bounds once before reporting observations (#320)', () => {
+        const map = normalizeMap(EXPORTED_BOUNDS_MAP);
+        expect(map.physics?.bounds).toEqual({ width: 1000, height: 800 });
+
+        const env = new BonkEnvironment({
+            numOpponents: 0,
+            seed: 1,
+            maxTicks: 10,
+            mapData: EXPORTED_BOUNDS_MAP as any,
+        });
+        try {
+            // The constructor performs an initial reset, exercising the same
+            // path as the first step before an explicit caller reset.
+            const firstStep = env.step(0).observation;
+            // Exact equality: the map-px half bounds must round-trip without
+            // 1-ulp drift (500.00000000000006) for exact-equality consumers.
+            expect(firstStep.arenaHalfWidth).toBe(500);
+            expect(firstStep.arenaHalfHeight).toBe(400);
+
+            const fast = env.getObservationFast();
+            expect(fast[13]).toBe(500);
+            expect(fast[14]).toBe(400);
+
+            const reset = env.reset(1);
+            expect(reset.arenaHalfWidth).toBe(500);
+            expect(reset.arenaHalfHeight).toBe(400);
+        } finally {
+            env.close();
+        }
+    });
+
+    it('keeps exported map-pixel bounds stable when physics.scale changes (#320)', () => {
+        const env = new BonkEnvironment({
+            numOpponents: 0,
+            seed: 1,
+            mapData: EXPORTED_BOUNDS_MAP as any,
+            physics: { scale: 60 },
+        });
+        try {
+            const observation = env.reset(1);
+            expect(observation.arenaHalfWidth).toBe(500);
+            expect(observation.arenaHalfHeight).toBe(400);
+        } finally {
+            env.close();
+        }
     });
 
     it('arena.defaultHalfWidth/Height set the fallback bounds for bodyless maps', () => {

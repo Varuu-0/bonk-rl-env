@@ -335,6 +335,19 @@ describe('TelemetryController', () => {
       reportSpy.mockRestore();
     });
 
+    it('skips the forced final report when shutdown opts out (emitFinalReport: false)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
+      TelemetryController.getInstance().shutdown();
+      const controller = TelemetryController.getInstance();
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+      globalProfiler.tick();
+      // A server that never served a tick must not append a zero-tick report /
+      // JSONL entry to replay-validation traces (#324).
+      controller.shutdown({ emitFinalReport: false });
+      expect(reportSpy).not.toHaveBeenCalled();
+      reportSpy.mockRestore();
+    });
+
     it('emits a final report on shutdown over an incomplete profiler window (not a silent no-op)', () => {
       process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '100'];
       TelemetryController.getInstance().shutdown();

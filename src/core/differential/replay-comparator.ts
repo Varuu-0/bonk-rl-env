@@ -24,6 +24,7 @@ import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
 import { isNativeTraceDisc } from './native-trace';
 import type { NativeTrace } from './native-trace';
+import { decodeEncodedAction } from '../action-validation';
 
 // Same port the engine binds (physics-engine.ts:15): b2Vec2 for re-seeding.
 const box2d = require('box2d');
@@ -59,7 +60,7 @@ export interface TickComparison {
 }
 
 export interface DifferentialVerdict {
-  /** True when the whole trace replayed within tolerance (and no mismatch). */
+  /** True when the trace had comparable data and replayed within tolerance. */
   pass: boolean;
   ticksCompared: number;
   ticksOutsideTolerance: number;
@@ -145,15 +146,7 @@ export function buildTraceEnvironment(
 }
 
 function decodeInput(bits: number | undefined): PlayerInput {
-  const b = bits ?? 0;
-  return {
-    left: !!(b & 1),
-    right: !!(b & 2),
-    up: !!(b & 4),
-    down: !!(b & 8),
-    heavy: !!(b & 16),
-    grapple: !!(b & 32),
-  };
+  return decodeEncodedAction(bits ?? 0);
 }
 
 /**
@@ -255,9 +248,12 @@ export function compareTrace(
       perTick.push({ tick: recorded.t, compared, mismatches, withinTolerance });
     }
 
+    const comparedTicks = perTick.length - skippedNoData;
     return {
-      pass: ticksOutsideTolerance === 0,
-      ticksCompared: perTick.length,
+      // A trace with no comparable ticks cannot establish a differential pass.
+      pass: ticksOutsideTolerance === 0 && comparedTicks > 0,
+      // Actual compared ticks: skips the no-data ticks that contributed nothing.
+      ticksCompared: comparedTicks,
       ticksOutsideTolerance,
       worst,
       perTick,
