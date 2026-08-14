@@ -925,7 +925,7 @@ describe('CapZoneScoring', () => {
             expect(unrotated.maxProgress).toBe(15);
         });
 
-        it('capzone on a rect at a non-orthogonal angle rotates the sensor with the fixture (#334)', () => {
+        it('capzone on a rect at a non-orthogonal angle rotates the sensor with the fixture and fires captures from a disc on its surface (#334)', () => {
             // At 45° the old AABB sizing returned w = h = 200*cos45 + 20*sin45
             // ≈ 155.56 — an enlarged axis-aligned box that over-covered the
             // rotated rect's corners. Exact fidelity: the sensor must be the
@@ -1001,6 +1001,35 @@ describe('CapZoneScoring', () => {
                 expect(position.y * scale).toBeCloseTo(120, 10);
             } finally {
                 env.close();
+            }
+
+            // Sensor geometry alone does not prove the #334 regression is
+            // gone: a disc must actually fire captures/touches while on the
+            // rotated platform. Spawn the disc on the platform surface (a
+            // drop from above bounces off the 45° slope, so the ball is
+            // placed directly on it) and run the episode: the type-1 zone
+            // must fill p to its limit (l = 0.5 -> 15 ticks) before the disc
+            // slides off the platform edge. Pre-fix, the unrotated sensor
+            // never overlapped the sloped platform, so p stayed 0.
+            const captureMap: MapDef = {
+                ...mapData,
+                name: 'capzone-rotated-rect-45deg-capture',
+                spawnPoints: {
+                    team_blue: { x: 40, y: 120 },
+                    team_red: { x: 300, y: -350 },
+                },
+            };
+            const captureEnv = new BonkEnvironment({ mapData: captureMap, numOpponents: 0, randomOpponent: false, seed: 1, maxTicks: 4000 });
+            try {
+                const capturePhysics = (captureEnv as any).physics;
+                let maxProgress = 0;
+                for (let i = 0; i < 3000; i++) {
+                    captureEnv.step(0);
+                    maxProgress = Math.max(maxProgress, capturePhysics.capZoneState.get(0)?.p ?? 0);
+                }
+                expect(maxProgress).toBe(15);
+            } finally {
+                captureEnv.close();
             }
         });
 
