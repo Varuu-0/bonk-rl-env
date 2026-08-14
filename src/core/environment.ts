@@ -476,11 +476,14 @@ export class BonkEnvironment {
             randomOppHeavyProb: oppHeavyProb,
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
-            noCollide: config.noCollide ?? (mapDef as any).settings?.nc ?? false,
+            // Explicit config wins; then the map's parsed `settings.nc`; then
+            // the legacy `physics.nc` key hand-authored MapDefs carried before
+            // P3b (exporter emits nc under settings, issue #329).
+            noCollide: config.noCollide ?? mapDef.settings?.nc ?? mapDef.physics?.nc ?? false,
             // Symmetric with noCollide: explicit config overrides the map's
             // per-map settings (P3b fl/re gating).
-            flipped: config.flipped ?? !!((mapDef as any).settings?.fl),
-            respawnEnabled: config.respawnEnabled ?? !!((mapDef as any).settings?.re),
+            flipped: config.flipped ?? !!mapDef.settings?.fl,
+            respawnEnabled: config.respawnEnabled ?? !!mapDef.settings?.re,
             physics: config.physics ?? {},
             arena: config.arena ?? {},
             player: config.player ?? {},

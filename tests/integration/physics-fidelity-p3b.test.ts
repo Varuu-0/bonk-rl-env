@@ -21,7 +21,10 @@
 import { describe, it, expect, vi } from 'vitest';
 import { PhysicsEngine, MOVE_FORCE, MOVE_FORCE_FLIP_MULTIPLIER, SCALE } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
+import { normalizeMap } from '../../src/core/map-adapter';
 import type { MapDef } from '../../src/core/physics-engine';
+
+const path = require('path');
 
 /** Deterministic static-wall arena (x ±515 / y ±300 map px, no floor). */
 const TEST_MAP: MapDef = {
@@ -40,6 +43,30 @@ const PLAYER_BITS = 0x0002 | 0x0004 | 0x0008 | 0x0010;
 
 function withSettings(settings: MapDef['settings']): MapDef {
     return { ...TEST_MAP, settings };
+}
+
+function exportedMap(nc: boolean): Record<string, unknown> {
+    return {
+        metadata: { name: 'p3b-exported-map' },
+        settings: { nc },
+        physics: { ppm: 12 },
+        spawns: [
+            { x: 0, y: 0, blue: true },
+            { x: 0, y: 0, red: true },
+        ],
+        bodies: [{
+            bodyIndex: 0,
+            fixtureIndex: 0,
+            name: 'floor',
+            type: 'rect',
+            x: 0,
+            y: 500,
+            width: 1200,
+            height: 30,
+            static: true,
+            collidesGroup1: true,
+        }],
+    };
 }
 
 /** One left-input tick on a fresh single-player engine; returns |velX| (map px/s). */
@@ -137,7 +164,66 @@ describe('P3b: fl — flipped move-force base (DEOBFUSCATION §11)', () => {
 });
 
 describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
-    it('env forwards mapData.settings.nc: player masks drop every disc bit', () => {
+    it.each([true, false])('normalized exported settings.nc:%s drives player collision masks', (nc) => {
+        // normalizeMap is the choke point every map surface (mapData, mapPath,
+        // bundled maps) converges on. Its settings.nc output must drive the
+        // disc filters directly: nc drops every player category bit, nc:false
+        // keeps them — direct mask coverage, not inferred via separation.
+        const rawMap = exportedMap(nc);
+        const normalized = normalizeMap(rawMap);
+        expect(normalized.settings?.nc).toBe(nc);
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: normalized,
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(nc);
+            for (const id of [0, 1]) {
+                const shape = physics.playerBodies.get(id).GetShapeList();
+                const mask = shape.GetFilterData().maskBits;
+                if (nc) {
+                    expect(mask & PLAYER_BITS).toBe(0);
+                } else {
+                    expect(mask & PLAYER_BITS).not.toBe(0);
+                }
+                // Map geometry (category 1) stays solid either way.
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('exported settings.nc:true applies to player fixtures', () => {
+        const rawMap = exportedMap(true);
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: rawMap as any,
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(true);
+            expect(physics.noCollide).toBe(true);
+            for (const id of [0, 1]) {
+                const shape = physics.playerBodies.get(id).GetShapeList();
+                const mask = shape.GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).toBe(0);
+                // Map geometry (category 1) stays solid.
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('internal MapDef settings.nc also drops every player category bit', () => {
         const env = new BonkEnvironment({
             numOpponents: 1,
             seed: 7,
@@ -160,12 +246,61 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
         }
     });
 
-    it('nc discs pass through each other; default discs separate on contact', () => {
-        const run = (nc: boolean): number => {
+    it('legacy physics.nc on a hand-authored MapDef still enables no-collide (issue #329)', () => {
+        // Before P3b, hand-authored MapDefs carried nc under `physics`; the
+        // exporter emits it under `settings`, but the legacy key must keep
+        // working so old authored maps do not silently flip back to colliding.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: { ...TEST_MAP, physics: { nc: true } },
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(true);
+            expect(physics.noCollide).toBe(true);
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('settings.nc (parsed) wins over a conflicting legacy physics.nc', () => {
+        // The parsed settings section is the authoritative map source; a
+        // conflicting legacy physics.nc on the same map must not override it.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: { ...TEST_MAP, settings: { nc: false }, physics: { nc: true } },
+            randomOpponent: false,
+        } as any);
+        try {
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            expect((env as any).config.noCollide).toBe(false);
+            expect(physics.noCollide).toBe(false);
+            // Settings parity with the sibling tests: masks keep every player
+            // category bit (settings.nc:false → colliding discs).
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('nc discs pass through each other; explicit nc:false discs separate on contact', () => {
+        const run = (mapData: MapDef | Record<string, unknown>): number => {
             const env = new BonkEnvironment({
                 numOpponents: 1,
                 seed: 7,
-                mapData: withSettings(nc ? { nc: true } : {}),
+                mapData: mapData as MapDef,
                 randomOpponent: false,
             } as any);
             try {
@@ -188,8 +323,83 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
         // Overlapping discs: contact correction must push the control discs
         // to (or past) the touching distance — 2 × 12 px radius = 24 px —
         // while nc discs keep their initial ~3 px separation.
-        expect(run(true)).toBeLessThan(5);
-        expect(run(false)).toBeGreaterThan(20);
+        expect(run(exportedMap(true))).toBeLessThan(5);
+        expect(run(exportedMap(false))).toBeGreaterThan(20);
+    });
+
+    it('explicit noCollide config overrides map settings in both directions', () => {
+        const mapTrueConfigFalse = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: exportedMap(true) as any,
+            noCollide: false,
+            randomOpponent: false,
+        });
+        const mapFalseConfigTrue = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: exportedMap(false) as any,
+            noCollide: true,
+            randomOpponent: false,
+        });
+        try {
+            expect((mapTrueConfigFalse as any).config.noCollide).toBe(false);
+            expect((mapTrueConfigFalse as any).physics.noCollide).toBe(false);
+            expect((mapFalseConfigTrue as any).config.noCollide).toBe(true);
+            expect((mapFalseConfigTrue as any).physics.noCollide).toBe(true);
+        } finally {
+            mapTrueConfigFalse.close();
+            mapFalseConfigTrue.close();
+        }
+    });
+
+    it('the mapPath file-loading surface applies bundled settings.nc:false to player masks', () => {
+        // Simple 1v1 ships settings.nc:false; the env's file-loading path
+        // (mapPath → JSON parse → normalizeMap) must carry it through so the
+        // disc masks keep every player category bit.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapPath: path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json'),
+            randomOpponent: false,
+        });
+        try {
+            expect((env as any).config.mapData.settings?.nc).toBe(false);
+            expect((env as any).config.noCollide).toBe(false);
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
+
+    it('maps without settings keep the default colliding behaviour (noCollide false)', () => {
+        // Issue #329 default-parity: a map that never declares nc must not flip
+        // into no-collide mode — the genesis/default colliding behaviour stays
+        // intact for maps without a settings section.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: TEST_MAP,
+            randomOpponent: false,
+        });
+        try {
+            expect((env as any).config.noCollide).toBe(false);
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
     });
 });
 
