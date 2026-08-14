@@ -318,13 +318,13 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
         }
     });
 
-    it('a valid respawn outside lethal fixtures remains alive', () => {
+    it('a lethal-contact death respawns to a valid spawn point and stays alive', () => {
         const engine = new PhysicsEngine({ respawnEnabled: true });
         try {
             engine.addBody({
                 name: 'lethal_elsewhere',
                 type: 'rect',
-                x: 300,
+                x: 100,
                 y: 0,
                 width: 120,
                 height: 120,
@@ -332,7 +332,10 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
                 isLethal: true,
             });
             engine.addPlayer(0, 0, 0);
-            (engine as any).playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+            // Kill the disc by lethal contact (death type 1), not OOB: the
+            // spawn point (0,0) is valid and outside the fixture, so `re`
+            // must respawn it there.
+            (engine as any).playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(100, 0), 0);
 
             engine.tick();
             expect(engine.getPlayerState(0).alive).toBe(true);
@@ -340,6 +343,49 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
             expect(engine.getPlayerState(0).y).toBeCloseTo(0, 4);
             expect((engine as any).playerBodies.has(0)).toBe(true);
+
+            // No death→respawn churn: the respawned disc stays alive.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).alive).toBe(true);
+            expect((engine as any).playerBodies.has(0)).toBe(true);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('a respawn point whose disc overlaps a lethal fixture edge detaches (radius-aware, not center-only)', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            // Lethal rect spans x ∈ [-10, 10] map px; the disc radius is
+            // ppm/SCALE = 0.4 world units = 12 map px. Spawning at x = 10.2
+            // puts the disc CENTER just outside the fixture edge but the disc
+            // circle still overlapping it — a center-only TestPoint check would
+            // restore the disc there, and the persistent lethal contact would
+            // not re-fire, leaving it immune to the fixture.
+            engine.addBody({
+                name: 'lethal_edge',
+                type: 'rect',
+                x: 0,
+                y: 0,
+                width: 20,
+                height: 20,
+                static: true,
+                isLethal: true,
+            });
+            engine.addPlayer(0, 10.2, 0);
+
+            engine.tick();
+            // First tick: the overlapping disc dies by lethal contact (type 1).
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            // The respawn attempt detaches instead of restoring an immune disc.
+            expect((engine as any).playerBodies.has(0)).toBe(false);
+
+            // The detached player must stay dead; no death→respawn churn.
+            for (let i = 0; i < 30; i++) engine.tick();
+            expect(engine.getPlayerState(0).deathType).toBe(1);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect((engine as any).playerBodies.has(0)).toBe(false);
         } finally {
             engine.destroy();
         }
