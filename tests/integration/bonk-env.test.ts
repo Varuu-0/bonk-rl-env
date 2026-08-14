@@ -173,11 +173,25 @@ describe('BonkEnvironment', () => {
       expect(result).toBeDefined();
     });
 
-    it('accepts number action', () => {
+    it.each([0, 63])('accepts encoded boundary action %i', action => {
       env = new BonkEnvironment({ numOpponents: 1 });
       env.reset();
-      const result = env.step(1);
+      const result = env.step(action);
       expect(result).toBeDefined();
+    });
+
+    it('rejects invalid encoded actions before advancing physics', () => {
+      env = new BonkEnvironment({ numOpponents: 0, maxTicks: 100, randomOpponent: false });
+      env.reset();
+
+      const invalidActions = [-1, 3.5, 64, 100, 255];
+      for (const action of invalidActions) {
+        expect(() => env!.step(action)).toThrow(
+          `Invalid action: expected an encoded action in [0, 63], got ${action}`,
+        );
+      }
+
+      expect(env.step(0).observation.tick).toBe(1);
     });
   });
 

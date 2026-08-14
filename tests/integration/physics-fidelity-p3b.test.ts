@@ -11,10 +11,12 @@
  *    any scale (P0 abstraction rule).
  *  - `nc`: all disc-disc contacts are disabled (`contact.SetEnabled(false)`
  *    when `physics.nc`, readable 1300-1303; §Key Collision Rules 5).
- *  - `re`: a disc that died respawns immediately at its spawn point with
- *    cleared grapple and fresh velocity (`x=sx; y=sy; xv=sxv; yv=syv;
- *    ni=true; delete swing`, readable 8595-8606); cap-zone eliminations
- *    (death type 3) stay permanent (§alive rule, readable 8463).
+ *  - `re`: a disc that died respawns at its spawn point with cleared grapple
+ *    and fresh velocity (`x=sx; y=sy; xv=sxv; yv=syv; ni=true; delete swing`,
+ *    readable 8595-8606); cap-zone eliminations (death type 3) stay permanent
+ *    (§alive rule, readable 8463). The respawn runs at the start of the tick
+ *    AFTER the death (issue #339) so the death stays observable to the
+ *    environment on the tick it occurred.
  */
 import { describe, it, expect, vi } from 'vitest';
 import { PhysicsEngine, MOVE_FORCE, MOVE_FORCE_FLIP_MULTIPLIER } from '../../src/core/physics-engine';
@@ -192,7 +194,7 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
 });
 
 describe('P3b: re — respawning mode (readable 8595-8606)', () => {
-    it('a disc that dies OOB respawns at its spawn point, alive, next tick', () => {
+    it('a disc that dies OOB stays dead for the death tick, then respawns at its spawn point next tick', () => {
         const env = new BonkEnvironment({
             numOpponents: 0,
             seed: 7,
@@ -206,12 +208,21 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             // Teleport far beyond the 850/scale death circle (≈28.3 world units).
             physics.playerBodies.get(0).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
             physics.tick();
+            // Death tick (issue #339): the death must stay observable; the
+            // respawn is deferred to the start of the following tick.
+            const deathState = physics.getPlayerState(0);
+            expect(deathState.alive).toBe(false);
+            expect(deathState.deathType).toBe(4);
+            physics.tick();
             const st = physics.getPlayerState(0);
             expect(st.alive).toBe(true);
             expect(st.deathType).toBe(0);
-            // Respawned at the AI spawn (team_blue: −200, −100 map px).
-            expect(st.x).toBeCloseTo(-200, 4);
-            expect(st.y).toBeCloseTo(-100, 4);
+            // Respawned at the AI spawn (team_blue: −200, −100 map px). One
+            // tick of gravity drift (no floor under the spawn) can pull the
+            // disc slightly below it, so assert it is back at the spawn
+            // region, not at the death spot.
+            expect(Math.abs(st.x - -200)).toBeLessThan(1);
+            expect(Math.abs(st.y - -100)).toBeLessThan(2);
             // Grapple was cleared by the respawn (native `delete disc.swing`).
             expect(physics.hasGrappleJoint(0)).toBe(false);
         } finally {

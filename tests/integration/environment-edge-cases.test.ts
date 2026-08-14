@@ -78,20 +78,43 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.info.capZones[0].type).toBe(2);
     });
 
-    it('physics.bounds survives the constructor-internal reset and episode resets', async () => {
+    it('physics.bounds stays in map-pixel observation units across resets', async () => {
       const mapData: MapDef = makeMap({});
       (mapData as any).physics = { bounds: { width: 60, height: 40 } };
 
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
       const obs = env.reset();
-      expect(obs.arenaHalfWidth).toBe(30 * 30);  // width/2 (30m) × SCALE(30)
-      expect(obs.arenaHalfHeight).toBe(20 * 30);
+      expect(obs.arenaHalfWidth).toBe(30);  // width/2 in map pixels
+      expect(obs.arenaHalfHeight).toBe(20);
 
       for (let i = 0; i < 5; i++) env.step(0);
 
       const obs2 = env.reset();
-      expect(obs2.arenaHalfWidth).toBe(30 * 30);
-      expect(obs2.arenaHalfHeight).toBe(20 * 30);
+      expect(obs2.arenaHalfWidth).toBe(30);
+      expect(obs2.arenaHalfHeight).toBe(20);
+    });
+
+    it('skips the map-bounds override when a duck-typed engine lacks getScale (#320)', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      // Duck-type the engine: expose setMapBounds but not the getScale
+      // accessor reset()'s conversion needs. reset() must skip the override
+      // instead of throwing on the missing accessor.
+      physics.getScale = undefined;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).not.toHaveBeenCalled();
+
+      // With the override skipped, observations report the engine's dynamic
+      // bounds rather than the skipped map-px half extents.
+      const observation = (env as any).getObservation();
+      const dynamic = physics.getArenaBounds();
+      expect(observation.arenaHalfWidth).toBe(dynamic.halfWidth);
+      expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
     });
 
     it('capZones empty array when no capZones in map', async () => {
@@ -1101,8 +1124,8 @@ describe('BonkEnvironment edge cases', () => {
 
         expect(world).not.toBe(previousWorld);
         expect(observation.tick).toBe(0);
-        expect(observation.arenaHalfWidth).toBe(30 * 30);
-        expect(observation.arenaHalfHeight).toBe(20 * 30);
+        expect(observation.arenaHalfWidth).toBe(30);
+        expect(observation.arenaHalfHeight).toBe(20);
         expect(physics.getBodyMap().size).toBe(mapData.bodies.length);
         expect(physics.capZoneSensors).toHaveLength(1);
         expect(physics.ppm).toBe(18);

@@ -17,13 +17,13 @@ describe('Environment aiPlayerId wiring (#221)', () => {
     env = new BonkEnvironment({ aiPlayerId: 1, numOpponents: 1, maxTicks: 100, randomOpponent: false });
     const obs = env.reset();
 
-    // Default_Box blue AI spawn is (-200, -100) and the red opponent spawn
-    // is (200, -100).
+    // The shipped WDB default's blue AI spawn is (-100, 212.5) and the red
+    // opponent spawn is (100, 212.5).
     expect(obs.opponents).toHaveLength(1);
-    expect(obs.playerX).toBeCloseTo(-200, 6);
-    expect(obs.playerY).toBeCloseTo(-100, 6);
-    expect(obs.opponents[0].x).toBeCloseTo(200, 6);
-    expect(obs.opponents[0].y).toBeCloseTo(-100, 6);
+    expect(obs.playerX).toBeCloseTo(-100, 6);
+    expect(obs.playerY).toBeCloseTo(212.5, 6);
+    expect(obs.opponents[0].x).toBeCloseTo(100, 6);
+    expect(obs.opponents[0].y).toBeCloseTo(212.5, 6);
 
     // The observation's player fields must be the physics state of slot 1
     // (the configured AI slot), NOT the hardcoded slot 0. With the buggy
