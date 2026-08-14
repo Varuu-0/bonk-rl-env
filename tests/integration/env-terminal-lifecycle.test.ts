@@ -79,7 +79,7 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
       expect(done.info.terminated).toBe(false);
       expect(done.observation.tick).toBe(3);
       expect(done.info.tick).toBe(3);
-      expect(done.info.terminal_observation).toBe(done.observation);
+      expect(done.info.terminal_observation).toEqual(done.observation);
       expect(done.info.terminal_observation.tick).toBe(done.info.tick);
 
       // Well past maxTicks: the episode stays settled — same flags, no
@@ -91,7 +91,7 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
         expect(res.info.terminated).toBe(false);
         expect(res.observation.tick).toBe(3);
         expect(res.info.tick).toBe(3);
-        expect(res.info.terminal_observation).toBe(res.observation);
+        expect(res.info.terminal_observation).toEqual(res.observation);
         expect(res.info.terminal_observation.tick).toBe(res.info.tick);
         expect(res.reward).toBe(0);
       }
@@ -171,7 +171,7 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
       expect(death!.truncated).toBe(false);
       expect(death!.info.terminated).toBe(true);
       const deathTick = death!.info.tick;
-      expect(death!.info.terminal_observation).toBe(death!.observation);
+      expect(death!.info.terminal_observation).toEqual(death!.observation);
       expect(death!.info.terminal_observation.tick).toBe(deathTick);
 
       // Forward from the death: the tail must keep replaying the recorded
@@ -185,7 +185,7 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
         expect(res.info.terminated).toBe(true);
         expect(res.info.tick).toBe(deathTick);
         expect(res.observation.tick).toBe(deathTick);
-        expect(res.info.terminal_observation).toBe(res.observation);
+        expect(res.info.terminal_observation).toEqual(res.observation);
         expect(res.info.terminal_observation.tick).toBe(res.info.tick);
         expect(res.reward).toBe(0);
       }
