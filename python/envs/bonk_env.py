@@ -156,6 +156,7 @@ class BonkVecEnv(VecEnv):
                 f"expected an integer or integral float in [1, {MAX_FRAME_SKIP}]; "
                 "using the default window of 1",
                 UserWarning,
+                stacklevel=2,
             )
             self._frame_skip = 1
         self._effective_frame_skip = np.full(

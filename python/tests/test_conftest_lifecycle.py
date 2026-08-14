@@ -286,13 +286,27 @@ def test_posix_listener_pids_parses_lsof_output(monkeypatch):
     assert conftest._posix_listener_pids(5556) == {24156, 32832}
 
 
-def test_posix_listener_pids_empty_when_no_tool_available(monkeypatch):
+def test_posix_listener_pids_empty_when_tools_report_no_listener(monkeypatch):
+    # Both tools run but report no match (e.g. lsof returncode 1/2 on a
+    # listenerless port): a genuine "no listener", not an inability to look.
     def fake_run(argv, *args, **kwargs):
         return type("R", (), {"returncode": 2, "stdout": ""})()
 
     monkeypatch.setattr(conftest.subprocess, "run", fake_run)
 
     assert conftest._posix_listener_pids(5556) == set()
+
+
+def test_posix_listener_pids_none_when_tools_missing(monkeypatch):
+    # Neither ss nor lsof is installed (OSError when launched): the listener
+    # cannot be identified at all, which must be distinguishable from "no
+    # listener" so ownership-unverifiable hosts do not hard-fail fixtures.
+    def fake_run(argv, *args, **kwargs):
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
 
 
 def test_posix_process_table_parses_ps_output(monkeypatch):
@@ -332,3 +346,15 @@ def test_listener_belongs_to_posix_retries_when_listener_unverifiable(monkeypatc
     monkeypatch.setattr(conftest, "_listening_pids", lambda port: set())
 
     assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_accepts_when_tools_unavailable(
+    monkeypatch, capsys
+):
+    # A POSIX host without ss/lsof cannot identify the listener at all; the
+    # probe is accepted with a warning instead of hard-failing the fixture.
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: None)
+
+    assert conftest._listener_belongs_to(5556, _FakeProc())
+    assert "cannot verify" in capsys.readouterr().err

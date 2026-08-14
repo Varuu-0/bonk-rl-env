@@ -45,11 +45,16 @@ def _lsof_listener_pids(lsof_output, port):
 
 
 def _posix_listener_pids(port):
-    """Return PIDs listening on ``port`` on POSIX.
+    """Return PIDs listening on ``port`` on POSIX, or ``None`` when the
+    host has no tool with which to identify them.
 
     Uses ``ss -ltnp`` (Linux, iproute2) with an ``lsof`` fallback so the
     listener answering a connect probe can be identified on POSIX too,
     instead of blindly trusting that it belongs to the spawned server.
+    ``None`` (neither tool installed) lets callers distinguish "listener
+    cannot be identified" from a genuine "no listener found" (empty set),
+    so a host without iproute2/lsof does not hard-fail a fixture that can
+    never verify ownership.
     """
     attempts = (
         (["ss", "-ltnp"], _ss_listener_pids),
@@ -58,6 +63,7 @@ def _posix_listener_pids(port):
             _lsof_listener_pids,
         ),
     )
+    tool_available = False
     for argv, parse in attempts:
         try:
             result = subprocess.run(
@@ -65,11 +71,14 @@ def _posix_listener_pids(port):
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
+        tool_available = True
         if result.returncode != 0:
             continue
         pids = parse(result.stdout, port)
         if pids:
             return pids
+    if not tool_available:
+        return None
     return set()
 
 
@@ -78,6 +87,9 @@ def _listening_pids(port):
 
     Windows uses ``netstat -ano -p tcp``; POSIX uses ``ss`` with an ``lsof``
     fallback, so listener ownership can be verified on both platforms.
+    Returns ``None`` on POSIX when neither tool is installed (the listener
+    cannot be identified at all); callers must treat that distinctly from an
+    empty set.
     """
     if os.name != "nt":
         return _posix_listener_pids(port)
@@ -307,13 +319,24 @@ def _listener_belongs_to(port, proc):
     allocation probe was released. Runs on Windows (netstat + Win32_Process)
     and POSIX (``ss``/``lsof`` + ``ps``) so a foreign listener is retried on
     a fresh port on every platform. When the listener cannot be identified
-    or does not belong to the spawned tree, it returns False so the fixture
-    abandons the port instead of silently running against an unconfigured
-    server.
+    (POSIX host with neither ``ss`` nor ``lsof``), ownership cannot be
+    verified: the probe is accepted with a warning so the fixture does not
+    hard-fail on a host that can never pass verification. When the listener
+    is identified but does not belong to the spawned tree, it returns False
+    so the fixture abandons the port instead of silently running against an
+    unconfigured server.
     """
     if proc is None or proc.poll() is not None:
         return False
     listening = _listening_pids(port)
+    if listening is None:
+        print(
+            f"WARNING: cannot verify that the listener on port {port} belongs to "
+            "the spawned bonk server (neither ss nor lsof is available); "
+            "proceeding without listener-ownership verification",
+            file=sys.stderr,
+        )
+        return True
     if not listening:
         return False
     if os.name == "nt":
@@ -366,7 +389,7 @@ def bonk_server(tmp_path_factory):
     # so the tests always talk to a server we control and can tear down.
     # (_listening_pids uses netstat + taskkill, so this reclamation is
     # Windows-only; POSIX spawns in a fresh session instead.)
-    for pid in _listening_pids(port):
+    for pid in _listening_pids(port) or ():
         _taskkill(pid)
         time.sleep(0.5)
 
