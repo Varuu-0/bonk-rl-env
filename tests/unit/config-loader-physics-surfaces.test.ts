@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadConfig, resetConfig, mergeEngineSections, getConfig } from '../../src/config/config-loader';
+import { loadConfig, resetConfig, mergeEngineSections, getConfig, PHYSICS_PROVENANCE } from '../../src/config/config-loader';
 
 describe('config-loader physics/arena/player surfaces (#217)', () => {
     const testDir = path.join(__dirname, '..', 'fixtures', 'config-loader-physics-' + process.pid);
@@ -334,18 +334,15 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
             loadConfig(testDir);
 
             // The provenance marker is attached to the resolved config as a
-            // non-enumerable, non-configurable own symbol. Assert the
-            // invariant for every own symbol rather than an exact count so an
-            // unrelated future symbol cannot fail the test spuriously.
-            const ownSymbols = Object.getOwnPropertySymbols(getConfig());
-            expect(ownSymbols.length).toBeGreaterThan(0);
-            for (const symbol of ownSymbols) {
-                const descriptor = Object.getOwnPropertyDescriptor(getConfig(), symbol)!;
-                expect(descriptor.enumerable).toBe(false);
-                // Non-configurable: a delete-then-reassign cannot re-create
-                // the property as enumerable.
-                expect(descriptor.configurable).toBe(false);
-            }
+            // non-enumerable, non-configurable own symbol. Assert its
+            // descriptor directly (not every own symbol on AppConfig) so an
+            // unrelated future symbol can never fail this test spuriously.
+            const descriptor = Object.getOwnPropertyDescriptor(getConfig(), PHYSICS_PROVENANCE);
+            expect(descriptor).toBeDefined();
+            expect(descriptor!.enumerable).toBe(false);
+            // Non-configurable: a delete-then-reassign cannot re-create the
+            // property as enumerable.
+            expect(descriptor!.configurable).toBe(false);
             // ...non-enumerable: a spread cannot copy it (by reference or
             // otherwise), so it can never leak into a deepMerge result.
             expect(Object.getOwnPropertySymbols({ ...getConfig() })).toHaveLength(0);

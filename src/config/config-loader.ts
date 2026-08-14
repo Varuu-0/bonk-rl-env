@@ -1315,7 +1315,12 @@ let cachedConfig: AppConfig | null = null;
  * the cached config — a module-global set could silently drift from the config
  * it describes and make mergeEngineSections output depend on load history.
  */
-const PHYSICS_PROVENANCE = Symbol('physics-provenance');
+/**
+ * Symbol key carrying the physics provenance Set on each resolved AppConfig.
+ * Exported so tests can verify the marker's non-enumerable, non-configurable
+ * descriptor contract without iterating unrelated own symbols (#325).
+ */
+export const PHYSICS_PROVENANCE = Symbol('physics-provenance');
 
 function physicsProvenance(config: AppConfig): Set<string> {
     const holder = config as AppConfig & { [PHYSICS_PROVENANCE]?: Set<string> };
