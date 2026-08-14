@@ -432,6 +432,57 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       env.close();
     }
   });
+
+  it('lsj gate expects the engine hardcoded 300/sf fallback for degenerate inputs (length 0, null anchorA, ground-anchored)', () => {
+    // Issue #373 review: when the P2b bias cannot engage (zero/non-finite
+    // length, invalid anchorA) the engine still OVERWRITES every lsj joint's
+    // motor with its hardcoded 300 (and force sf). The gate must expect those
+    // engine-built values — not the authored motorSpeed — so an authored
+    // non-300 motorSpeed (e.g. 500) on a degenerate lsj must NOT false-fail.
+    const scenarios: Array<{ name: string; mutate: (j: any) => void }> = [
+      { name: 'length 0', mutate: (j) => { j.length = 0; } },
+      { name: 'null anchorA', mutate: (j) => { j.anchorA = null; } },
+      { name: 'ground-anchored (ba -1)', mutate: (j) => { j.bodyA = -1; j.length = 0; } },
+    ];
+    for (const s of scenarios) {
+      const rawMap: any = {
+        bodies: [
+          { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true },
+          { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
+        ],
+        spawns: [{ x: 0, y: 0, blue: true, red: true }],
+        physicsJoints: [{
+          index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
+          anchorA: { x: 0, y: 40 },
+          axis: { x: 0, y: 1 },
+          lowerTranslation: -40, upperTranslation: 40,
+          length: 40, enableLimit: false, enableMotor: true,
+          motorSpeed: 500, maxMotorForce: 25,
+        }],
+      };
+      s.mutate(rawMap.physicsJoints[0]);
+      const trace: NativeTrace = {
+        schema: 'bonk.rl.env.native-trace',
+        version: TRACE_SCHEMA_VERSION,
+        tps: 30,
+        map: rawMap,
+        players: [{ id: 0, team: 1 }],
+        spawns: [{ id: 0, x: 0, y: 0 }],
+        ticks: [],
+      };
+      const env = buildTraceEnvironment(trace, { seed: 1 });
+      try {
+        const built: any = (env as any).physics.createdJoints.get('joint_0');
+        expect(built, s.name).toBeTruthy();
+        // Degenerate lsj: engine hardcodes force sf and motor 300.
+        expect(built.m_maxMotorForce, s.name).toBeCloseTo(25, 5);
+        expect(built.m_motorSpeed, s.name).toBe(300);
+        expect(verifyJointGates(env, trace).ok, s.name).toBe(true);
+      } finally {
+        env.close();
+      }
+    }
+  });
 });
 
 describe('P4: differential validation — replay comparator', () => {

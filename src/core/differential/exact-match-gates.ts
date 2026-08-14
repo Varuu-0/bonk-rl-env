@@ -192,25 +192,27 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
       }
 
       // lsj spring bias (#373): the engine overrides maxMotorForce/motorSpeed
-      // with the P2b derived values whenever the bias engages — signed slen,
-      // so any finite non-zero length counts (#372) — and keeps the authored
-      // fallback only for degenerate inputs (zero/non-finite length, invalid
-      // anchorA). Mirror the engine's addJoint lsj branch here and compare the
-      // built motor against the derived sf·|k| (which may be 0) and the ±300
-      // motor direction, so the gate cannot disagree with the engine's own
-      // documented behavior. Non-lsj prismatic joints keep the authored values.
+      // with the P2b derived values whenever the bias engages, and hardcodes
+      // the 300/sf fallback for degenerate inputs. Mirror the engine's
+      // addJoint lsj branch AT THE CURRENT HEAD exactly: the bias engages only
+      // for a positive finite slen (`lenLimit`, the same positive-length gate
+      // the engine uses — signed slen from #372 is not on main yet) with a
+      // valid anchorA. When it engages, expect the derived sf·|k| (which may
+      // be 0) and the ±300 motor; when it cannot (absent/zero/non-finite
+      // length, invalid anchorA), expect the engine's hardcoded motor 300 and
+      // force sf — never the authored motorSpeed (the engine overwrites it for
+      // every lsj joint). Non-lsj prismatic joints keep the authored values.
       let expectedForce = j.maxMotorForce ?? 0;
       let expectedSpeed = j.motorSpeed ?? 0;
       if (t === 'lsj') {
         const sf = Number.isFinite(j.maxMotorForce) ? j.maxMotorForce : 0;
-        const lengthFinite = typeof j.length === 'number' && Number.isFinite(j.length) && j.length !== 0;
         const anchorValid = j.anchorA && Number.isFinite(j.anchorA.x) && Number.isFinite(j.anchorA.y);
         const bodyA = j.bodyA != null ? bodyMap.get(j.bodyA) : undefined;
         // Ground-anchored bodyA (ba = -1) resolves to the synthetic ground
         // body at world (0,0)/angle 0 when absent from the body map — the same
         // resolution addJoint's ensureGroundBody performs.
         const isGroundA = bodyA === undefined && j.bodyA === GROUND_BODY_NAME;
-        if (lengthFinite && anchorValid && (bodyA || isGroundA)) {
+        if (lenLimit && anchorValid && (bodyA || isGroundA)) {
           const angleA = bodyA ? bodyA.GetAngle() : 0;
           const pos = bodyA ? bodyA.GetPosition() : { x: 0, y: 0 };
           const slen = j.length / scale;
@@ -226,6 +228,9 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
           const k = (len / (slen * 2) - 0.5) * 2;
           expectedForce = sf * Math.abs(k);
           expectedSpeed = k > 0 ? -300 : 300;
+        } else {
+          expectedForce = sf;
+          expectedSpeed = 300;
         }
       }
       if (Math.abs((built as any).m_maxMotorForce - expectedForce) > 1e-9) {
