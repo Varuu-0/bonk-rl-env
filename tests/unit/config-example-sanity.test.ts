@@ -97,4 +97,5 @@ it('documents the worker-pool and IPC configuration surfaces', () => {
 
     const map = JSON.parse(fs.readFileSync(defaultMapPath, 'utf8'));
     expect(map.metadata?.name).toBe('WDB (No Mapshake)');
+  });
 });
