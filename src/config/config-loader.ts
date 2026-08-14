@@ -1323,12 +1323,15 @@ function physicsProvenance(config: AppConfig): Set<string> {
         const set = new Set<string>();
         // Non-enumerable so a deepMerge spread never copies it by reference
         // (a plain assignment would make it enumerable and the guarantee in
-        // the docstring above would only hold by call ordering).
+        // the docstring above would only hold by call ordering). Also
+        // non-configurable: a delete-then-reassign would otherwise re-create
+        // the property via plain assignment as enumerable, silently
+        // un-enforcing the guarantee.
         Object.defineProperty(holder, PHYSICS_PROVENANCE, {
             value: set,
             enumerable: false,
             writable: true,
-            configurable: true,
+            configurable: false,
         });
     }
     return holder[PHYSICS_PROVENANCE] as Set<string>;

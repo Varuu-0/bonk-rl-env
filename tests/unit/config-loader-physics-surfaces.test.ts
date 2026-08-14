@@ -333,9 +333,20 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
             fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
             loadConfig(testDir);
 
-            // The provenance marker is attached to the resolved config...
-            expect(Object.getOwnPropertySymbols(getConfig())).toHaveLength(1);
-            // ...but non-enumerable: a spread cannot copy it (by reference or
+            // The provenance marker is attached to the resolved config as a
+            // non-enumerable, non-configurable own symbol. Assert the
+            // invariant for every own symbol rather than an exact count so an
+            // unrelated future symbol cannot fail the test spuriously.
+            const ownSymbols = Object.getOwnPropertySymbols(getConfig());
+            expect(ownSymbols.length).toBeGreaterThan(0);
+            for (const symbol of ownSymbols) {
+                const descriptor = Object.getOwnPropertyDescriptor(getConfig(), symbol)!;
+                expect(descriptor.enumerable).toBe(false);
+                // Non-configurable: a delete-then-reassign cannot re-create
+                // the property as enumerable.
+                expect(descriptor.configurable).toBe(false);
+            }
+            // ...non-enumerable: a spread cannot copy it (by reference or
             // otherwise), so it can never leak into a deepMerge result.
             expect(Object.getOwnPropertySymbols({ ...getConfig() })).toHaveLength(0);
             expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
