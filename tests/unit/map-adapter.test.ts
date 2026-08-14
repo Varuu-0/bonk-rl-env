@@ -234,5 +234,17 @@ describe('normalizeMap', () => {
             expect((out.bodies[0] as any).collides.g1).toBe(true);
             expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
         });
+
+        it('preserves exported bounds in map-pixel units for downstream conversion (#320)', () => {
+            const out = normalizeMap({
+                physics: { ppm: 12, boundsWidth: 730, boundsHeight: 500 },
+                bodies: [
+                    { bodyIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+                ],
+                spawns: [{ x: -100, y: -50, blue: true }, { x: 100, y: -50, red: true }],
+            } as any);
+
+            expect(out.physics?.bounds).toEqual({ width: 730, height: 500 });
+        });
     });
 });
