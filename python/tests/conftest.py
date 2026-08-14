@@ -66,17 +66,19 @@ def _posix_listener_pids(port):
     instead of blindly trusting that it belongs to the spawned server.
     ``None`` means the check was inconclusive — no tool successfully
     verified the listener, or ``ss`` listed a socket on the port without
-    ``pid=`` attribution (restricted ``/proc`` visibility). Callers must
-    treat that distinctly from a genuine "no listener found" (empty set),
-    so ownership-unverifiable hosts do not hard-fail a fixture.
+    ``pid=`` attribution (restricted ``/proc`` visibility) and ``lsof``
+    could not attribute it either. Callers must treat that distinctly from
+    a genuine "no listener found" (empty set), so ownership-unverifiable
+    hosts do not hard-fail a fixture.
     """
     # A tool counts as having checked only on a successful exit: ``ss``
     # exits 0 (even with no matches, headers only); ``lsof`` exits 1 for a
     # genuine "no match" and non-zero/2 only on error. When ``ss`` lists a
     # socket on the port but its ``users:`` column carries no pid= (the
     # host cannot read /proc for other processes), a listener exists yet
-    # cannot be identified: that is inconclusive, not "no listener", so the
-    # probe is accepted with a warning instead of hard-failing.
+    # cannot be attributed by ss: keep the lsof fallback running so an
+    # attribution-capable host still gets ownership verification, and only
+    # resolve to inconclusive after lsof also fails to attribute.
     attempts = (
         (["ss", "-ltnp"], _ss_listener_pids, (0,)),
         (
@@ -86,6 +88,7 @@ def _posix_listener_pids(port):
         ),
     )
     tool_checked = False
+    listener_seen_unverified = False
     for argv, parse, success_codes in attempts:
         try:
             result = subprocess.run(
@@ -100,8 +103,8 @@ def _posix_listener_pids(port):
         if pids:
             return pids
         if argv[0] == "ss" and _ss_port_seen(result.stdout, port):
-            return None
-    if not tool_checked:
+            listener_seen_unverified = True
+    if listener_seen_unverified or not tool_checked:
         return None
     return set()
 

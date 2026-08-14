@@ -323,6 +323,52 @@ def test_posix_listener_pids_none_when_ss_lacks_pid_attribution(monkeypatch):
     assert conftest._posix_listener_pids(5556) is None
 
 
+def test_posix_listener_pids_ss_without_pid_falls_through_to_lsof(
+    monkeypatch,
+):
+    # ss lists the port without pid= attribution but lsof is installed and
+    # CAN attribute the listener: the fallback must run so ownership
+    # verification is not lost to an early inconclusive return.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        return type("R", (), {"returncode": 0, "stdout": "24156\n"})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == {24156}
+
+
+def test_posix_listener_pids_none_when_ss_and_lsof_cannot_attribute(
+    monkeypatch,
+):
+    # ss sees the port's socket without pid= and lsof runs but also yields
+    # no attribution (no match): still inconclusive (None), not "no
+    # listener".
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type(
+                "R",
+                (),
+                {
+                    "returncode": 0,
+                    "stdout": "LISTEN 0      4096  127.0.0.1:5556  0.0.0.0:*\n",
+                },
+            )()
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
 def test_posix_listener_pids_none_when_tools_error(monkeypatch):
     # Both tools launch but fail (non-zero exit, e.g. permission-denied
     # /proc): the check is inconclusive, not "no listener", so a host with a
