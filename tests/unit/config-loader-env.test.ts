@@ -15,6 +15,8 @@ describe('config-loader env vars and CLI', () => {
         'RANDOM_OPP_MOVE_PROB', 'RANDOM_OPP_UP_PROB', 'RANDOM_OPP_DOWN_PROB',
         'RANDOM_OPP_HEAVY_PROB', 'RANDOM_OPP_GRAPPLE_PROB',
         'KILL_REWARD', 'DEATH_PENALTY', 'TIME_PENALTY',
+        'MAX_WORKERS', 'RING_BUFFER_SIZE', 'MESSAGE_TIMEOUT_MS', 'STEP_TIMEOUT_MS',
+        'ZMQ_BACKLOG', 'SOCKET_TYPE', 'SERIALIZATION', 'TCP_KEEPALIVE', 'SND_HWM', 'RCV_HWM', 'LINGER_MS',
     ];
     let savedEnv: Record<string, string | undefined>;
     let savedArgv: string[];
@@ -1014,6 +1016,15 @@ describe('config-loader env vars and CLI', () => {
             expect(section.useSharedMemory).toBe(true);
         });
 
+        it('getSection returns IPC subsection', () => {
+            const section = getSection('ipc');
+            expect(section.socketType).toBe('ROUTER');
+            expect(section.serialization).toBe('json');
+            expect(section.sndHwm).toBe(1000);
+            expect(section.rcvHwm).toBe(1000);
+            expect(section.lingerMs).toBe(1000);
+        });
+
         it('getSection returns environment subsection', () => {
             const section = getSection('environment');
             expect(section.numOpponents).toBe(1);
@@ -1319,6 +1330,17 @@ describe('config-loader env vars and CLI', () => {
             expect(cfg.workerPool.numWorkers).toBe(5);
         });
 
+        it('CLI worker-pool and IPC values override env values', () => {
+            process.env.MAX_WORKERS = '2';
+            process.env.STEP_TIMEOUT_MS = '200';
+            process.env.SND_HWM = '200';
+            process.argv = ['node', 'script.js', '--max-workers', '5', '--step-timeout-ms', '800', '--snd-hwm', '500'];
+            const cfg = loadConfig(testDir);
+            expect(cfg.workerPool.maxWorkers).toBe(5);
+            expect(cfg.workerPool.stepTimeoutMs).toBe(800);
+            expect(cfg.ipc.sndHwm).toBe(500);
+        });
+
         it('CLI seed overrides env seed', () => {
             process.env.SEED = '100';
             process.argv = ['node', 'script.js', '--seed', '200'];
@@ -1390,6 +1412,15 @@ describe('config-loader env vars and CLI', () => {
             expect(defaults.physics.ticksPerSecond).toBe(30);
             expect(defaults.telemetry.enabled).toBe(false);
             expect(defaults.workerPool.maxWorkers).toBe(8);
+            expect(defaults.workerPool.ringBufferSize).toBe(16);
+            expect(defaults.workerPool.messageTimeoutMs).toBe(30000);
+            expect(defaults.workerPool.stepTimeoutMs).toBe(5000);
+            expect(defaults.ipc.socketType).toBe('ROUTER');
+            expect(defaults.ipc.serialization).toBe('json');
+            expect(defaults.ipc.tcpKeepalive).toBe(0);
+            expect(defaults.ipc.sndHwm).toBe(1000);
+            expect(defaults.ipc.rcvHwm).toBe(1000);
+            expect(defaults.ipc.lingerMs).toBe(1000);
         });
 
         it('defaults match the verified native player/grapple values (C2 re-audit)', () => {

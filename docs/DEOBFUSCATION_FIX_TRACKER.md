@@ -162,9 +162,9 @@ and `tests/unit/config-example-sanity.test.ts`.
   (2→red, 3→blue, 4→green, 5→yellow), dynamic-body-only triggers, and
   elimination of non-owners. Verified by `capzone-scoring.test.ts`.
 
-### H5. Joints: distance only vs 4 types — 🔧 Partially fixed (`lsj` spring bias ❌ unimplemented)
+### H5. Joints: distance only vs 4 types — ✅ FIXED (P2 + P2b + P4 gate)
 
-- **Status:** 🔧 Implemented (verified 2026-08-12) — `addJoint` builds every
+- **Status:** ✅ Implemented (verified 2026-08-12) — `addJoint` builds every
   native joint type per §33.8:
   - `d` (distance): fh/dr, authored `len` applied after Initialize (with
     ground `bodyB=-1` anchors in map-px `+365/250` coords),
@@ -174,25 +174,30 @@ and `tests/unit/config-example-sanity.test.ts`.
     -bodyA.angle` for lpj/lsj, #281 symmetric ±length limit fallback, motor
     force,
   - `lsj` (springy prismatic): vertical axis (0,1), limits ±slen with
-    `enableLimit=false`, motor 300 — §33.8 3487-3506 constructs `lsj` with
+    `enableLimit=false` — §33.8 3487-3506 constructs `lsj` with
     `b2PrismaticJointDef` (NOT a line joint; the earlier `t$e[57]` line-joint
-    reading was corrected by the 2026-07-29 §33.8 audit),
+    reading was corrected by the 2026-07-29 §33.8 audit). **P2b (2026-08-12)
+    implements the initial-side spring bias** (`maxMotorForce = sf*|k|`,
+    signed motorSpeed ±300, readable 7600-7630) on this branch per the §33.9
+    3522-3527 emulation recipe — no `b2LineJoint` port is required. Native
+    input pipeline note: the decoder overwrites `sax/say` with the body's
+    decoded position (readable 6448-6449) and the build creates each body at
+    that exact position (7449), so decoder-normalized maps collapse to
+    `k ≡ 0` (maxMotorForce = 0, motor 300 — identical to native); the biased
+    branch engages only for authored anchors that differ from the build
+    position. Degenerate inputs (absent/zero `slen`, invalid anchor) keep the
+    static 300/sf fallback (corrupt-map guard).
   - `g` (gear): ratio + revolute/prismatic referent validation (other
     referent types silently produce NaN coordinates and are skipped loudly),
   - ground joints: `bodyB = -1` binds to the world with map-px anchors.
-- **`lsj` spring bias — ❌ Not implemented:** the native initial-side spring
-  bias (`maxMotorForce = sf*|k|`, `motorSpeed ±300` from the k factor,
-  §33.8 3496-3505) is absent — the exporter emits a static
-  `motorSpeed = 300` / `maxMotorForce = sf` (mapexporter.js 622-623) and the
-  engine applies those statically. No line-joint port is required: §33.9
-  3522-3527 prescribes emulating this on the existing `b2PrismaticJoint`
-  branch with a translation-proportional force and the signed 300 motor speed.
-  `reference/bonk1-box2d` does ship AS3 `b2LineJoint` source, but it is not a
-  prerequisite for this native-client prismatic implementation.
 - **Fix refs:** `src/core/physics-engine.ts addJoint`; verified by
   `tests/integration/physics-fidelity-p2.test.ts` (joint invariant tests per
-  §33.7 formulas) and the P4 joint exact-match gate (`verifyJointGates` on the
-  bundled WDB ground-prismatic map).
+  §33.7 formulas), `tests/integration/physics-fidelity-p2b.test.ts`
+  (deterministic ±k spring-bias cases: k=+1→sf/−300, k=−2→sf·2/+300, rotated
+  side-aware k, k=0 degenerate, invalid-input fallback, lpj unaffected, plus
+  a decoder-canonical k≡0 case and an authored-offset k=+1 case end-to-end
+  through `normalizeMap`/`addJoint`), and the P4 joint exact-match gate
+  (`verifyJointGates` on the bundled WDB ground-prismatic map).
 
 ---
 
@@ -288,6 +293,52 @@ can capture both in one run.
 
 Chronological record of fixes applied. Append new entries here.
 
+### 2026-08-12 — P2b: lsj initial-side spring bias (springy-prismatic fidelity)
+
+- The map decoder builds `lsj` with `b2PrismaticJointDef` (§33.8; readable
+  7583-7632) and, at joint build, applies an initial-side spring bias
+  (readable 7600-7630):
+  ```
+  θ = bodyA.GetAngle() − π/2
+  anchorWorld = (sax + safeCos(θ)·(−slen), say + safeSin(θ)·(−slen))
+  rel = bodyA.GetPosition() − anchorWorld;  len = |rel|
+  φ = safeATan2(rel.y, rel.x) − bodyA.GetAngle();  φ %= 2π
+  len = −len unless φ ∈ [−π, 0) ∪ (π, 2π]
+  k = (len/(2·slen) − 0.5)·2
+  maxMotorForce = sf·|k|;  if (k > 0) motorSpeed = −300
+  ```
+- The decoder overwrites `sax/say` with the body's position and scales
+  `slen /= ppm`, `sf /= ppm²` (readable 6448-6453); the exporter carries
+  `(sax, say)` on `anchorA` and `slen` on `length`, feeding the same inputs to
+  the engine's `addJoint` prismatic branch in world units (`k` is
+  dimensionless). This is the §33.9 3522-3527 emulation recipe — no
+  `b2LineJoint` port is involved.
+- Decoder-canonical note: because the build creates each body at the decoded
+  `p` (readable 7449) and the overwrite copies that same `p` into `sax/say`,
+  real decoder-normalized maps collapse to `k ≡ 0` (`maxMotorForce = sf·0 =
+  0`, motor 300) — the same degenerate result the native computes; the biased
+  branch engages only for authored anchors that differ from the build
+  position.
+- Degenerate inputs (absent/zero `slen`, invalid `anchorA`) keep the static
+  300/`sf` defaults — a corrupt-map guard (native would divide by zero into
+  NaN/Infinity), consistent with #271/#276.
+- Tests: `tests/integration/physics-fidelity-p2b.test.ts` (8 tests) —
+  deterministic hand-computed oracle cases: k=+1 (force sf, motor −300),
+  k=−2 (force sf·2, motor +300; φ=0 flips len), rotated body (angle π/4,
+  side-aware k ≈ 0.8477 → force ≈ 423.87, motor −300), k=0 degenerate
+  (anchor at body center → force 0, motor +300), invalid-input static
+  fallbacks, and lpj unaffected by the lsj-only bias — plus two end-to-end
+  tests through `normalizeMap`/`addJoint` on the mapexporter emission shape:
+  decoder-canonical `anchorA == body position` → k≡0 (force 0, motor +300)
+  and an authored offset anchor → k=+1 (force sf, motor −300). The existing
+  P2 lsj exporter test's motorSpeed assertion was updated to the biased −300
+  (its geometry yields k=+1).
+- Docs: `PHYSICS_FIDELITY_PLAN.md` P2→P2+P2b IMPLEMENTED; tracker H5 → ✅
+  with the bias cited.
+- Verification: `tsc --noEmit` clean; P0/P1/P2/P2b/P3/P3b/P4 + config-consumed
+  + map suites green (181 tests; the pre-existing unrelated
+  `env-ai-player-id` failure reproduces on unmodified main).
+
 ### 2026-08-12 — P3b: runtime gating of `fl` / `nc` / `re` map settings
 
 - **`fl` (flipped)** — the native move-force base is 12, or **20 when `fl`**
@@ -312,10 +363,20 @@ Chronological record of fixes applied. Append new entries here.
   velocity, grapple released, alive/deathType reset) applied in the death
   pass before detach; spawn points are recorded at addPlayer. `a1a` is not
   reset (the native branch does not touch it); the port does not model spawn
-  velocity, so respawns are at rest. Fail-safe (malformed-map guard): a spawn
-  point outside the OOB death circle detaches instead of churning
-  death→respawn every tick (native would churn identically; the port follows
-  its #271/#276 corruption fail-safe policy).
+  velocity, so respawns are at rest. The engine publishes a pre-respawn,
+  per-tick death event so lethal/OOB deaths remain observable and rewardable
+  on the dying step; those transient deaths do not terminate, while type-3
+  eliminations remain terminal. Physical death causes win same-tick cap
+  attribution, but the death-circle pass never reclassifies a recorded
+  type-3 elimination into a respawnable OOB death (a round-ending goal's
+  victim stays dead even outside the circle), and on non-respawn maps a
+  same-tick capture prices the losing team's deaths capture-only (the
+  documented single reward for the capture event). The dying-step snapshot is
+  exposed through `PhysicsEngine.getVisiblePlayerState` for one tick so the
+  environment and render readers observe the same state. Fail-safe
+  (malformed-map guard): a spawn point outside the OOB death circle detaches
+  instead of churning death→respawn every tick (native would churn
+  identically; the port follows its #271/#276 corruption fail-safe policy).
 - Config symmetry: `flipped` / `respawnEnabled` environment config keys now
   override the map settings exactly like `noCollide` vs `settings.nc`;
   `setFlipped` re-runs the #234 ascent-invariant check on the effective base.
@@ -690,7 +751,7 @@ tests unless a port limitation is noted.
 | R3C1, R3H5-R3H8, R3M10-R3M11 | ✅ | Fixed composite reward construction, enabled propagation, navigation bonus logic, curiosity repeat reward, normalization, and validator state cleanup. |
 | R2M4/R2M5, R3M12-R3M15, R3L9 | ✅ | Fixed Python episode metadata/close behavior, logger durability, visualization default map, benchmark metrics/timing, and BonkHost trimmed-mean arithmetic. |
 | R2H4, H2-H4, `fz`/`cf`/`fr`/`bu`/`sk`, full native grapple anchor, Step 2/6 parity, ClearForces | ⚠️ Blocked | Requires captured native maps, unresolved runtime traces, or Box2D-port capabilities unavailable in the installed dependency. H1/H5 are superseded by their current sections above. |
-| `lsj` initial-side spring bias | ❌ Not implemented | §33.9 prescribes a translation-proportional force / signed-300 motor emulation on the existing prismatic branch; no Box2D-port capability is missing. |
+| `lsj` initial-side spring bias | ✅ Implemented (P2b 2026-08-12) | §33.9 emulation on the existing prismatic branch (readable 7600-7630): `maxMotorForce = sf*|k|`, signed ±300; verified by physics-fidelity-p2b.test.ts. |
 
 Verification on 2026-07-28:
 
