@@ -282,18 +282,6 @@ export function isAnyTelemetryEnabled(): boolean {
  * @returns Merged flags with environment overrides
  */
 export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
-  // Check for environment variable: MANIFOLD_TELEMETRY
-  const envTelemetry = process.env.MANIFOLD_TELEMETRY;
-  if (envTelemetry !== undefined) {
-    if (envTelemetry === 'true' || envTelemetry === '1' || envTelemetry === 'yes') {
-      flags.enableTelemetry = true;
-      _explicitFlagKeys.add('enableTelemetry');
-    } else if (envTelemetry === 'false' || envTelemetry === '0' || envTelemetry === 'no') {
-      flags.enableTelemetry = false;
-      _explicitFlagKeys.add('enableTelemetry');
-    }
-  }
-
   // Check for environment variable: MANIFOLD_TELEMETRY_OUTPUT
   const envOutput = process.env.MANIFOLD_TELEMETRY_OUTPUT;
   if (envOutput !== undefined) {
@@ -308,6 +296,10 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   if (envProfile !== undefined) {
     if (envProfile === 'minimal' || envProfile === 'standard' || envProfile === 'detailed') {
       flags.profileLevel = envProfile;
+      // Selecting a profile level implies telemetry, exactly like the CLI
+      // --profile/-l flags in parseFlags() (issue #385).
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
     }
   }
 
@@ -316,6 +308,24 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   if (envDebug !== undefined) {
     if (envDebug === 'none' || envDebug === 'error' || envDebug === 'verbose') {
       flags.debugLevel = envDebug;
+      // Selecting a debug level implies telemetry, exactly like the CLI
+      // --debug/-d flags in parseFlags() (issue #385).
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  // Check for environment variable: MANIFOLD_TELEMETRY. Applied after the
+  // level selectors so an explicit master-switch value always wins over the
+  // implied activation above (issue #385).
+  const envTelemetry = process.env.MANIFOLD_TELEMETRY;
+  if (envTelemetry !== undefined) {
+    if (envTelemetry === 'true' || envTelemetry === '1' || envTelemetry === 'yes') {
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    } else if (envTelemetry === 'false' || envTelemetry === '0' || envTelemetry === 'no') {
+      flags.enableTelemetry = false;
+      _explicitFlagKeys.add('enableTelemetry');
     }
   }
 

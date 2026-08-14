@@ -72,6 +72,11 @@ npx tsx src/main.ts -t --profile detailed --debug verbose
 | `MANIFOLD_PROFILE` | `minimal`, `standard`, `detailed` | Profile level |
 | `MANIFOLD_DEBUG` | `none`, `error`, `verbose` | Debug level |
 
+Setting `MANIFOLD_PROFILE` or `MANIFOLD_DEBUG` to a valid value also enables
+telemetry, exactly like the equivalent `--profile`/`--debug` CLI flags. An
+explicit `MANIFOLD_TELEMETRY=false` still disables telemetry even when a
+profile or debug variable is set.
+
 ### Precedence Order
 
 1. Environment variables (highest)
