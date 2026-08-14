@@ -1055,6 +1055,15 @@ export class PhysicsEngine {
   }
 
   /**
+   * @deprecated Renamed to setPpm(). This alias sets the map's pixels-per-metre
+   * setting, not the coordinate scale (getScale() reports that). Kept for
+   * backwards compatibility with external consumers.
+   */
+  setScale(ppm: number): void {
+    this.setPpm(ppm);
+  }
+
+  /**
    * Sets the out-of-bounds death-circle center in map coordinates.
    *
    * Native semantics (DEOBFUSCATION "Death Type 4"): a disc dies with

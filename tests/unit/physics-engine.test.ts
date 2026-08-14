@@ -39,6 +39,13 @@ describe('PhysicsEngine', () => {
       engine.setPpm(4);
       expect(engine.getScale()).toBe(SCALE); // PPM shapes the disc radius, not the coordinate conversion
     });
+
+    it('setScale stays as a deprecated alias of setPpm', () => {
+      engine = new PhysicsEngine();
+      engine.setScale(6);
+      expect((engine as any).ppm).toBe(6); // still sets the PPM setting
+      expect(engine.getScale()).toBe(SCALE); // and never the coordinate scale
+    });
   });
 
   describe('player creation', () => {

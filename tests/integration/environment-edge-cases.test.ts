@@ -133,23 +133,24 @@ describe('BonkEnvironment edge cases', () => {
       expect(observation.arenaHalfHeight).toBeCloseTo(250, 10);
     });
 
-    it('reset survives a physics implementation without getScale (identity scale)', async () => {
+    it('reset skips the mapBounds override when getScale is missing', async () => {
       const mapData: MapDef = makeMap({});
       (mapData as any).physics = { bounds: { width: 60, height: 40 } };
 
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
 
       // Simulate a partial physics implementation that provides setMapBounds
-      // but not getScale: reset() must not throw a TypeError and must pass
-      // the authored map-pixel bounds through unchanged (scale fallback 1).
+      // but not getScale: reset() must not throw, and the override must be
+      // skipped rather than applied at identity scale (which would pass map
+      // pixels into the world-unit API and inflate the observation 30x).
       const realPhysics = (env as any).physics;
-      const lastBounds: number[] = [];
+      let setMapBoundsCalled = 0;
       const partial = new Proxy(realPhysics, {
         get(target, prop) {
           if (prop === 'getScale') return undefined;
           if (prop === 'setMapBounds') {
             return (width: number, height: number) => {
-              lastBounds.push(width, height);
+              setMapBoundsCalled++;
               return target.setMapBounds(width, height);
             };
           }
@@ -158,8 +159,12 @@ describe('BonkEnvironment edge cases', () => {
       });
       (env as any).physics = partial;
 
-      expect(() => env!.reset()).not.toThrow();
-      expect(lastBounds).toEqual([60, 40]);
+      const observation = env!.reset();
+      expect(setMapBoundsCalled).toBe(0);
+      // The partial implementation falls back to its computed bounds instead
+      // of reporting the 30x-inflated 60×40 map-pixel override (#319).
+      expect(observation.arenaHalfWidth).toBe(realPhysics.getArenaBounds().halfWidth);
+      expect(observation.arenaHalfHeight).toBe(realPhysics.getArenaBounds().halfHeight);
     });
 
     it('capZones empty array when no capZones in map', async () => {

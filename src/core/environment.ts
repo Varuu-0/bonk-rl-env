@@ -702,15 +702,16 @@ export class BonkEnvironment {
 
         // Re-apply explicit map bounds last — body re-adds above recomputed
         // dynamic bounds and would otherwise clobber the override every reset.
-        if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
+        // A physics implementation without getScale() cannot convert the
+        // authored map-pixel bounds into the world-unit setMapBounds API, so
+        // the override is skipped rather than applied at the wrong scale
+        // (which would inflate the reported observation by the engine scale).
+        if (this.mapBounds
+            && typeof (this.physics as any).setMapBounds === 'function'
+            && typeof (this.physics as any).getScale === 'function') {
             // MapDef physics bounds are authored in map pixels, while the
-            // engine's setMapBounds API stores world-unit dimensions. Partial
-            // physics implementations without getScale() receive the authored
-            // values unchanged (identity scale), matching their pre-scale
-            // behaviour instead of throwing a TypeError.
-            const scale = typeof (this.physics as any).getScale === 'function'
-                ? (this.physics as any).getScale()
-                : 1;
+            // engine's setMapBounds API stores world-unit dimensions.
+            const scale = (this.physics as any).getScale();
             this.physics.setMapBounds(
                 this.mapBounds.width / scale,
                 this.mapBounds.height / scale,
