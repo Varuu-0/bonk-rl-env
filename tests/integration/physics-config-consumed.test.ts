@@ -182,16 +182,18 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
             // The constructor performs an initial reset, exercising the same
             // path as the first step before an explicit caller reset.
             const firstStep = env.step(0).observation;
-            expect(firstStep.arenaHalfWidth).toBeCloseTo(500, 6);
-            expect(firstStep.arenaHalfHeight).toBeCloseTo(400, 6);
+            // Exact equality: the map-px half bounds must round-trip without
+            // 1-ulp drift (500.00000000000006) for exact-equality consumers.
+            expect(firstStep.arenaHalfWidth).toBe(500);
+            expect(firstStep.arenaHalfHeight).toBe(400);
 
             const fast = env.getObservationFast();
-            expect(fast[13]).toBeCloseTo(500, 6);
-            expect(fast[14]).toBeCloseTo(400, 6);
+            expect(fast[13]).toBe(500);
+            expect(fast[14]).toBe(400);
 
             const reset = env.reset(1);
-            expect(reset.arenaHalfWidth).toBeCloseTo(500, 6);
-            expect(reset.arenaHalfHeight).toBeCloseTo(400, 6);
+            expect(reset.arenaHalfWidth).toBe(500);
+            expect(reset.arenaHalfHeight).toBe(400);
         } finally {
             env.close();
         }
@@ -206,8 +208,8 @@ describe('physics/arena/player config is consumed by the engine (#217)', () => {
         });
         try {
             const observation = env.reset(1);
-            expect(observation.arenaHalfWidth).toBeCloseTo(500, 6);
-            expect(observation.arenaHalfHeight).toBeCloseTo(400, 6);
+            expect(observation.arenaHalfWidth).toBe(500);
+            expect(observation.arenaHalfHeight).toBe(400);
         } finally {
             env.close();
         }

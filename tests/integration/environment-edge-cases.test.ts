@@ -94,6 +94,29 @@ describe('BonkEnvironment edge cases', () => {
       expect(obs2.arenaHalfHeight).toBe(20);
     });
 
+    it('skips the map-bounds override when a duck-typed engine lacks getScale (#320)', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      // Duck-type the engine: expose setMapBounds but not the getScale
+      // accessor reset()'s conversion needs. reset() must skip the override
+      // instead of throwing on the missing accessor.
+      physics.getScale = undefined;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).not.toHaveBeenCalled();
+
+      // With the override skipped, observations report the engine's dynamic
+      // bounds rather than the skipped map-px half extents.
+      const observation = (env as any).getObservation();
+      const dynamic = physics.getArenaBounds();
+      expect(observation.arenaHalfWidth).toBe(dynamic.halfWidth);
+      expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
+    });
+
     it('capZones empty array when no capZones in map', async () => {
       const mapData: MapDef = makeMap({});
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });

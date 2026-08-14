@@ -370,6 +370,8 @@ export class BonkEnvironment {
     private mapBounds: { width: number; height: number } | null = null;
     /** Map-relative OOB death-circle center (physics.deathCenter), if declared. */
     private mapDeathCenter: { x: number; y: number } | null = null;
+    /** Reused by getObservationArenaBounds so the fast observation path allocates nothing. */
+    private _obsArenaBoundsCache: { halfWidth: number; halfHeight: number } = { halfWidth: 0, halfHeight: 0 };
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case. The
@@ -705,8 +707,14 @@ export class BonkEnvironment {
         // MapDef physics.bounds are map pixels, while setMapBounds consumes
         // internal world metres; convert with the engine's resolved scale so
         // custom physics.scale values preserve the observation's map-pixel unit.
-        if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
-            const scale = this.physics.getScale();
+        // Both methods are duck-checked: an engine exposing setMapBounds but not
+        // getScale skips the override instead of throwing in reset().
+        // Both methods are duck-checked: an engine exposing setMapBounds but not
+        // getScale skips the override instead of throwing in reset().
+        if (this.mapBounds
+            && typeof (this.physics as any).setMapBounds === 'function'
+            && typeof (this.physics as any).getScale === 'function') {
+            const scale = (this.physics as any).getScale();
             this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
         }
 
@@ -985,7 +993,7 @@ export class BonkEnvironment {
             };
         });
 
-        const arenaBounds = this.physics.getArenaBounds();
+        const arenaBounds = this.getObservationArenaBounds();
 
         return {
             playerX: aiState.x,
@@ -1000,6 +1008,26 @@ export class BonkEnvironment {
             arenaHalfHeight: arenaBounds.halfHeight,
             tick: this.physics.getTickCount(),
         };
+    }
+
+    /**
+     * Arena half extents for the observation, in map pixels. When an exported
+     * map declares explicit physics.bounds, reset() stores world metres
+     * (bounds / scale) in the engine and getArenaBounds() converts back with
+     * × scale; that round trip can drift by 1 ulp (e.g. 500.00000000000006
+     * for a 1000px bound), so report the authoritative map pixels directly.
+     * Mirrors the reset() duck-check: an engine without setMapBounds or
+     * getScale keeps the engine-reported (dynamic) bounds.
+     */
+    private getObservationArenaBounds(): { halfWidth: number; halfHeight: number } {
+        if (this.mapBounds !== null
+            && typeof (this.physics as any).setMapBounds === 'function'
+            && typeof (this.physics as any).getScale === 'function') {
+            this._obsArenaBoundsCache.halfWidth = this.mapBounds.width / 2;
+            this._obsArenaBoundsCache.halfHeight = this.mapBounds.height / 2;
+            return this._obsArenaBoundsCache;
+        }
+        return this.physics.getArenaBounds();
     }
 
     /**
@@ -1036,7 +1064,7 @@ export class BonkEnvironment {
             this._obsBuffer[base + 5] = state.alive ? 1 : 0;
         }
 
-        const arenaBounds = this.physics.getArenaBounds();
+        const arenaBounds = this.getObservationArenaBounds();
         this._obsBuffer[13] = arenaBounds.halfWidth;
         this._obsBuffer[14] = arenaBounds.halfHeight;
         this._obsBuffer[15] = this.physics.getTickCount();
