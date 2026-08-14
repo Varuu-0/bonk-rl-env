@@ -143,7 +143,9 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       'tick 0 disc 1 is malformed: not an object',
       'tick 0 disc 2 is malformed: alive must be a boolean',
     ]);
-    expect(parsed.trace.ticks[0].discs[0]).toBeNull();
+    // Malformed discs never leak into the typed output: they are replaced with
+    // null, keeping the index-aligned discs array safe for downstream iteration.
+    expect(parsed.trace.ticks[0].discs).toEqual([null, null, null]);
   });
 
   it('rejects fractional or misaligned disc ids', () => {
@@ -187,6 +189,9 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(parsed.errors).toEqual([
       'tick 0 disc 0 is malformed: alive must be true (presence in state.discs means alive)',
     ]);
+    // The alive:false disc is dropped from the typed output (nulled), so the
+    // parsed trace only ever carries absent (null) or fully-valid alive discs.
+    expect(parsed.trace.ticks[0].discs[0]).toBeNull();
   });
 
   it('returns a validation error and drops null player entries, preserving valid players', () => {
