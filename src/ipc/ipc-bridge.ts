@@ -826,11 +826,17 @@ export class IpcBridge {
         }
         this.sessions.clear();
 
-        // Close the socket to break out of the for await loop
-        try {
-            this.sock.close();
-        } catch (e) {
-            // Ignore close errors
+        // Close the socket to break out of the for await loop. A bind that
+        // failed in start() already closed the ROUTER handle, so skip the
+        // redundant second close when this shutdown follows a failed start
+        // (server.ts calls close() to roll back, and start()'s catch already
+        // released the socket; the double-close was a swallowed no-op).
+        if (!this.sock.closed) {
+            try {
+                this.sock.close();
+            } catch (e) {
+                // Ignore close errors
+            }
         }
 
         await Promise.all(pools.map(pool => pool.close()));

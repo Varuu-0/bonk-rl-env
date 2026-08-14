@@ -4,7 +4,7 @@
  * A failed standalone server bind must release its bridge, ROUTER socket, and
  * telemetry dashboard so the caller can retry after the port becomes free.
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as net from 'net';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { startServer, stopServer, isServerRunning } from '../../src/server';
@@ -137,6 +137,27 @@ describe('standalone server bind-failure lifecycle (issue #326)', () => {
       expect(isServerRunning()).toBe(false);
       await waitForPortAvailable(dashboard.port);
     } finally {
+      await closeServer(blocker.server);
+    }
+  });
+
+  it('does not force-emit a telemetry report (or JSONL entry) for a server that never served', async () => {
+    const blocker = await listenOnEphemeralPort();
+    const controller = getTelemetryController();
+    const reportSpy = vi.spyOn(controller, 'reportNow').mockImplementation(() => true);
+    const writeSpy = vi.spyOn(controller as any, 'writeToFile').mockImplementation(() => {});
+    try {
+      await expect(startServer(makeConfig(blocker.port, true))).rejects.toThrow(/address already in use|eaddrinuse/i);
+      expect(isServerRunning()).toBe(false);
+      // The failed bind never served a tick, so its rollback must tear down
+      // telemetry without the forced shutdown final report: a zero-tick
+      // report (and JSONL entry in file/both modes) would pollute
+      // replay-validation traces (#324).
+      expect(reportSpy).not.toHaveBeenCalled();
+      expect(writeSpy).not.toHaveBeenCalled();
+    } finally {
+      reportSpy.mockRestore();
+      writeSpy.mockRestore();
       await closeServer(blocker.server);
     }
   });

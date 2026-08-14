@@ -54,7 +54,11 @@ export async function startServer(config?: AppConfig): Promise<void> {
             console.error('Error during failed server startup cleanup:', cleanupError);
         }
         try {
-            getTelemetryController().shutdown();
+            // The failed server never served a tick, so tear down telemetry
+            // without the forced shutdown final report: a zero-tick report
+            // (and JSONL entry in file/both output modes) would pollute
+            // replay-validation traces (#324).
+            getTelemetryController().shutdown({ emitFinalReport: false });
         } catch (cleanupError) {
             console.error('Error during telemetry startup cleanup:', cleanupError);
         }
