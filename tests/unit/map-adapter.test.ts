@@ -235,7 +235,7 @@ describe('normalizeMap', () => {
             expect(out.spawnPoints.team_blue).toEqual({ x: 0, y: 0 });
         });
 
-        it('keeps fixture aliases unique and resolves joints to the first fixture of each native body (#307)', () => {
+it('keeps fixture aliases unique and resolves joints to the first fixture of each native body (#307)', () => {
             const out = normalizeMap({
                 bodies: [
                     { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'rect', x: -50, y: 0, width: 20, height: 10, static: false },
@@ -590,6 +590,53 @@ describe('normalizeMap', () => {
             expect(out.bodies[0].y).toBe(0);
         });
 
+        it('does not count flat (non-native) physicsBodies entries as structured, so legacy shape-local polygons stay unrebased (#307 review)', () => {
+            // A legacy map carries BOTH a hand-authored shape-local polygon in
+            // bodies[] and a position-keyed flat physicsBodies entry. The flat
+            // physicsBodies entry must NOT flip the hasStructured gate — it is
+            // not the exporter hierarchy — or the shape-local polygon would be
+            // rebased about (300,200) and corrupted.
+            const out = normalizeMap({
+                bodies: [
+                    { name: 'poly', type: 'polygon', x: 300, y: 200, vertices: [{ x: -20, y: 0 }, { x: 20, y: 0 }, { x: 0, y: 30 }], static: true },
+                ],
+                physicsBodies: [
+                    { index: 0, name: 'wall', type: 'rect', bodyType: 'static', position: { x: 0, y: 0 }, width: 40, height: 10 },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].vertices).toEqual([
+                { x: -20, y: 0 },
+                { x: 20, y: 0 },
+                { x: 0, y: 30 },
+            ]);
+            expect(out.physics.deathCenter).toEqual({ x: 300, y: 215 });
+        });
+
+        it('rebases a flat-only exporter wedge polygon near the origin via its exporter identity keys (#307 review)', () => {
+            // No structured hierarchy at all — but the flat body carries the
+            // exporter's identity keys (bodyIndex/fixtureIndex), so it came
+            // from the exporter flat view and its vertices ARE world-baked.
+            // The old distance fallback misclassified this near-origin wedge
+            // (greatest distance from the bake center exceeds the greatest
+            // distance from the world origin) and skipped the rebase, leaving
+            // the vertices double-offset with `scale` dropped.
+            const out = normalizeMap({
+                bodies: [
+                    { bodyIndex: 0, fixtureIndex: 0, name: 'Unnamed Shape', type: 'polygon', x: 10, y: 0, angle: 0.25, scale: 2, vertices: [{ x: -40, y: 0 }, { x: 10, y: 10 }, { x: 10, y: -10 }], static: true },
+                ],
+                spawns: [{ x: 0, y: 0, blue: true, red: true }],
+            } as any) as any;
+
+            expect(out.bodies[0].vertices).toEqual([
+                { x: -100, y: 0 },
+                { x: 0, y: 20 },
+                { x: 0, y: -20 },
+            ]);
+            expect(out.bodies[0].x).toBe(10);
+        });
+
         it('leaves hand-authored shape-local flat polygons unrebased so the legacy placement survives (#307 review)', () => {
             // A hand-authored flat polygon follows the legacy convention
             // (world = def.x/y + R(angle)·v) with vertices around the shape's
@@ -697,6 +744,18 @@ describe('normalizeMap', () => {
             expect(out.bodies[2].nativeBody?.index).toBe(2);
             // A joint to native body 2 must resolve to ITS first alias.
             expect(out.joints[0].bodyA).toBe('bodyB#9');
+        });
+
+        it('preserves exported bounds in map-pixel units for downstream conversion (#320)', () => {
+            const out = normalizeMap({
+                physics: { ppm: 12, boundsWidth: 730, boundsHeight: 500 },
+                bodies: [
+                    { bodyIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+                ],
+                spawns: [{ x: -100, y: -50, blue: true }, { x: 100, y: -50, red: true }],
+            } as any);
+
+            expect(out.physics?.bounds).toEqual({ width: 730, height: 500 });
         });
     });
 });

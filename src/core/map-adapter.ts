@@ -586,19 +586,43 @@ if (body.fixtureIndex !== undefined) {
     // rotated/off-center native fixture lands correctly whether or not its
     // structured fixture resolves.
     if (flatBodies) {
-        // When the structured hierarchy (physicsBodies/physicsFixtures/
-        // physicsShapes) is present, the flat bodies[] view is unambiguously
-        // the exporter's compatibility view, whose polygon vertices are ALWAYS
-        // world-baked (mapexporter.js:518-521) — rebase them unconditionally.
-        // A distance heuristic here misclassifies one-sided/wedge polygons
-        // whose bake center is near the world origin (the bake offset can
-        // partially cancel the shape extent, so the vertices' greatest
-        // distance from the bake center exceeds their greatest distance from
-        // the world origin), leaving them double-offset with `scale` dropped.
+        // When the structured hierarchy carries real native bodies / fixtures /
+        // shapes, the flat bodies[] view is unambiguously the exporter's
+        // compatibility view, whose polygon vertices are ALWAYS world-baked
+        // (mapexporter.js:518-521) — rebase them unconditionally. A distance
+        // heuristic here misclassifies one-sided/wedge polygons whose bake
+        // center is near the world origin (the bake offset can partially cancel
+        // the shape extent, so the vertices' greatest distance from the bake
+        // center exceeds their greatest distance from the world origin),
+        // leaving them double-offset with `scale` dropped. Only NATIVE bodies
+        // count as structured: flat (position-keyed, fixture-less) physicsBodies
+        // entries belong to the same legacy hand-authored map, not the exporter.
         const hasStructured =
-            (Array.isArray(map.physicsBodies) && map.physicsBodies.some((b) => b !== null && b !== undefined))
-            || (Array.isArray(map.physicsFixtures) && map.physicsFixtures.some((f) => f !== null && f !== undefined))
-            || (Array.isArray(map.physicsShapes) && map.physicsShapes.some((s) => s !== null && s !== undefined));
+            (Array.isArray(map.physicsBodies) && map.physicsBodies.some((b) => isNativeBody(b)))
+            || (Array.isArray(map.physicsFixtures) && map.physicsFixtures.some((f) => {
+                if (f === null || f === undefined) return false;
+                return !!(f.shape || typeof f.shapeIndex === 'number');
+            }))
+            || (Array.isArray(map.physicsShapes) && map.physicsShapes.some((s) => {
+                if (s === null || s === undefined) return false;
+                return !!(s.type || s.typeName);
+            }));
+        // The exporter flat view always emits its identity keys, while a bare
+        // hand-authored legacy polygon carries only name/type/x/y/vertices.
+        // These keys are a deterministic world-baked signal that works even
+        // when the structured arrays are absent or all-null (a trimmed/corrupt
+        // export): the exporter world-bakes every flat polygon vertex, so no
+        // distance signature is needed — and no distance heuristic that can
+        // misfire for near-origin wedges.
+        const fromExporterFlatView = (body: FlatBody): boolean =>
+            body.bodyIndex !== undefined
+            || body.fixtureIndex !== undefined
+            || body.shapeIndex !== undefined
+            || body.bodyType !== undefined
+            || body.collidesGroup1 !== undefined
+            || body.collidesGroup2 !== undefined
+            || body.collidesGroup3 !== undefined
+            || body.collidesGroup4 !== undefined;
         for (const b of flatSource) {
             if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
             // Resolve the bake center exactly like toBodyDef resolves the
@@ -614,28 +638,12 @@ if (body.fixtureIndex !== undefined) {
             // makes sense).
             if ((b.x === undefined && b.position?.x === undefined)
                 && (b.y === undefined && b.position?.y === undefined)) continue;
-            if (!hasStructured) {
-                // No structured hierarchy: the bodies[] view may be a
-                // hand-authored legacy flat map whose polygon vertices are
-                // shape-local about the shape origin (the legacy convention
-                // world = def.x/y + R(def.angle)·v, which every consumer
-                // already handles as-is) rather than world-baked. Only rebase
-                // when the vertices carry a far-from-origin bake offset:
-                // world-baked vertices' greatest distance from the bake center
-                // is SHORTER than their greatest distance from the world
-                // origin, while an authored shape-local polygon far from the
-                // origin has the opposite signature — rebasing it would
-                // silently shift the shape.
-                let maxFromCenter = 0;
-                let maxFromOrigin = 0;
-                for (const v of b.vertices) {
-                    const dx = v.x - cx;
-                    const dy = v.y - cy;
-                    maxFromCenter = Math.max(maxFromCenter, dx * dx + dy * dy);
-                    maxFromOrigin = Math.max(maxFromOrigin, v.x * v.x + v.y * v.y);
-                }
-                if (maxFromCenter > maxFromOrigin) continue;
-            }
+            // Rebase only world-baked vertices. A bare hand-authored legacy
+            // polygon (no structured hierarchy AND no exporter flat identity
+            // keys) follows the shape-local convention — world = def.x/y +
+            // R(def.angle)·v — which every consumer already handles as-is;
+            // rebasing it would silently shift the shape.
+            if (!hasStructured && !fromExporterFlatView(b)) continue;
             const vertexScale = b.scale ?? 1;
             b.vertices = b.vertices.map((v) => ({
                 x: (v.x - cx) * vertexScale,
