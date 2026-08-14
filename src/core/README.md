@@ -62,7 +62,9 @@ Each `tick()` advances the world through:
 2. **Physics Step** — `world.Step(DT, 2, 6)` is requested; this port applies only the velocity count
 3. **Observation Extraction** — Read player positions, velocities, angles, alive state
 4. **Reward Calculation** — +1.0 for opponent kill, -1.0 for death, -0.001 time penalty
-5. **Terminal Check** — Out-of-bounds death, lethal collision, or `MAX_TICKS` reached
+5. **Terminal Check** — permanent death or `MAX_TICKS` reached; on `re` maps,
+   lethal/OOB deaths are reported and rewarded on the dying step, then respawn
+   immediately while cap-zone eliminations remain terminal
 
 ## Key Exports
 

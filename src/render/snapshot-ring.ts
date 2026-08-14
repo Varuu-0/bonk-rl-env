@@ -147,7 +147,7 @@ export function readSnapshotCoherent(
   const header = slotHeader(buf, maxPlayers, slotIndex);
   const seqBefore = header[0];
   // Unwritten slot, or a write currently in progress (odd seq): skip.
-  if (seqBefore === 0 || seqBefore % 2 === 1) return null;
+  if (seqBefore === 0 || (seqBefore & 1) !== 0) return null;
   const payload = slotPayload(buf, maxPlayers, slotIndex);
   const discs = [];
   for (let p = 0; p < maxPlayers; p++) {
@@ -168,7 +168,7 @@ export function readSnapshotCoherent(
   // by the concurrent worker stress test
   // (tests/integration/snapshot-ring-stress.test.ts) and by real detached
   // render consumers reading while the sim writes.
-  if (seqAfter % 2 === 1 || seqAfter !== seqBefore) return null;
+  if ((seqAfter & 1) !== 0 || seqAfter !== seqBefore) return null;
   return { tick, seq: seqBefore, discs };
 }
 

@@ -22,6 +22,8 @@ import * as os from 'os';
  * missing-cap fallback can never drift from the loader default.
  */
 export const DEFAULT_MAX_CLIENT_SESSIONS = 32;
+const MAX_ZMQ_OPTION = 0x7fffffff;
+const MAX_RING_BUFFER_SIZE = 1 << 20;
 
 export interface ServerConfig {
     port: number;
@@ -497,6 +499,7 @@ function loadConfigFile(filePath: string): Partial<AppConfig> | null {
 // Deliberately excludes JS non-decimal numeric literals ("0x10", "0b101",
 // "0o17") so a config value can never be parsed from a base-N literal.
 const DECIMAL_NUMERIC_RE = /^[+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?$/;
+const INTEGER_NUMERIC_RE = /^[+-]?\d+$/;
 
 /**
  * Strictly parse a finite float from a CLI/env string.
@@ -515,6 +518,123 @@ function parseFiniteFloat(rawValue: string): number | null {
     return Number.isFinite(v) ? v : null;
 }
 
+/**
+ * Strictly parse an integer from a CLI/env string. Newly wired numeric
+ * surfaces use this helper so values such as "32abc" cannot silently change
+ * runtime configuration.
+ */
+function parseInteger(rawValue: string): number | null {
+    const trimmed = rawValue.trim();
+    if (!INTEGER_NUMERIC_RE.test(trimmed)) return null;
+    const value = Number(trimmed);
+    return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
+ * Parse a CLI/env integer exactly as the loader historically did with
+ * `parseInt(value, 10)`: the leading integer portion is taken and any trailing
+ * garbage is ignored. Pre-existing surfaces (NUM_WORKERS, --workers/-w) keep
+ * this lenient contract so documented values such as "2abc" or "2.5" keep
+ * parsing instead of silently falling back to defaults.
+ */
+function parseLegacyInteger(rawValue: string): number | null {
+    const value = parseInt(rawValue.trim(), 10);
+    return Number.isNaN(value) ? null : value;
+}
+
+function isPowerOfTwo(value: number): boolean {
+    return Number.isSafeInteger(value)
+        && value >= 2
+        && value <= MAX_RING_BUFFER_SIZE
+        && Number.isInteger(Math.log2(value));
+}
+
+function normalizeIntegerConfigValue(
+    raw: unknown,
+    fallback: number,
+    minimum: number,
+    maximum = Number.MAX_SAFE_INTEGER,
+): number {
+    const value = typeof raw === 'string' ? parseInteger(raw) : raw;
+    return typeof value === 'number'
+        && Number.isSafeInteger(value)
+        && value >= minimum
+        && value <= maximum
+        ? value
+        : fallback;
+}
+
+function normalizeResolvedConfig(config: AppConfig): AppConfig {
+    if (!isPlainObject(config.server)) config.server = { ...DEFAULTS.server };
+    if (!isPlainObject(config.workerPool)) config.workerPool = { ...DEFAULTS.workerPool };
+    if (!isPlainObject(config.ipc)) config.ipc = { ...DEFAULTS.ipc };
+
+    config.server.zmqBacklog = normalizeIntegerConfigValue(
+        config.server.zmqBacklog,
+        DEFAULTS.server.zmqBacklog,
+        1,
+        MAX_ZMQ_OPTION,
+    );
+    config.workerPool.maxWorkers = normalizeIntegerConfigValue(
+        config.workerPool.maxWorkers,
+        DEFAULTS.workerPool.maxWorkers,
+        1,
+        MAX_ZMQ_OPTION,
+    );
+    const ringBufferSize = normalizeIntegerConfigValue(
+        config.workerPool.ringBufferSize,
+        DEFAULTS.workerPool.ringBufferSize,
+        2,
+        MAX_RING_BUFFER_SIZE,
+    );
+    config.workerPool.ringBufferSize = isPowerOfTwo(ringBufferSize)
+        ? ringBufferSize
+        : DEFAULTS.workerPool.ringBufferSize;
+    config.workerPool.messageTimeoutMs = normalizeIntegerConfigValue(
+        config.workerPool.messageTimeoutMs,
+        DEFAULTS.workerPool.messageTimeoutMs,
+        100,
+        MAX_ZMQ_OPTION,
+    );
+    config.workerPool.stepTimeoutMs = normalizeIntegerConfigValue(
+        config.workerPool.stepTimeoutMs,
+        DEFAULTS.workerPool.stepTimeoutMs,
+        100,
+        MAX_ZMQ_OPTION,
+    );
+    config.ipc.tcpKeepalive = normalizeIntegerConfigValue(
+        config.ipc.tcpKeepalive,
+        DEFAULTS.ipc.tcpKeepalive,
+        0,
+        1,
+    );
+    config.ipc.sndHwm = normalizeIntegerConfigValue(
+        config.ipc.sndHwm,
+        DEFAULTS.ipc.sndHwm,
+        0,
+        MAX_ZMQ_OPTION,
+    );
+    config.ipc.rcvHwm = normalizeIntegerConfigValue(
+        config.ipc.rcvHwm,
+        DEFAULTS.ipc.rcvHwm,
+        0,
+        MAX_ZMQ_OPTION,
+    );
+    config.ipc.lingerMs = normalizeIntegerConfigValue(
+        config.ipc.lingerMs,
+        DEFAULTS.ipc.lingerMs,
+        0,
+        MAX_ZMQ_OPTION,
+    );
+    if (!['ROUTER', 'DEALER', 'REP', 'REQ'].includes(config.ipc.socketType)) {
+        config.ipc.socketType = DEFAULTS.ipc.socketType;
+    }
+    if (!['json', 'msgpack'].includes(config.ipc.serialization)) {
+        config.ipc.serialization = DEFAULTS.ipc.serialization;
+    }
+    return config;
+}
+
 // ─── Environment Variable Overrides ────────────────────────────────────────
 
 function applyEnvOverrides(config: AppConfig): AppConfig {
@@ -531,6 +651,10 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (env.MAX_RUNTIME !== undefined) {
         const v = parseInt(env.MAX_RUNTIME, 10);
         if (!isNaN(v) && v >= 0) config.server.maxRuntimeSeconds = v;
+    }
+    if (env.ZMQ_BACKLOG !== undefined) {
+        const v = parseInteger(env.ZMQ_BACKLOG);
+        if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) config.server.zmqBacklog = v;
     }
 
     // Telemetry
@@ -574,12 +698,54 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
 
     // Worker pool
     if (env.NUM_WORKERS !== undefined) {
-        const v = parseInt(env.NUM_WORKERS, 10);
-        if (!isNaN(v) && v >= 0) config.workerPool.numWorkers = v;
+        const v = parseLegacyInteger(env.NUM_WORKERS);
+        if (v !== null && v >= 0) config.workerPool.numWorkers = v;
     }
     if (env.USE_SHARED_MEMORY !== undefined) {
         const v = env.USE_SHARED_MEMORY.toLowerCase();
         config.workerPool.useSharedMemory = v !== 'false' && v !== '0' && v !== 'no';
+    }
+    if (env.MAX_WORKERS !== undefined) {
+        const v = parseInteger(env.MAX_WORKERS);
+        if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) config.workerPool.maxWorkers = v;
+    }
+    if (env.RING_BUFFER_SIZE !== undefined) {
+        const v = parseInteger(env.RING_BUFFER_SIZE);
+        if (v !== null && isPowerOfTwo(v)) config.workerPool.ringBufferSize = v;
+    }
+    if (env.MESSAGE_TIMEOUT_MS !== undefined) {
+        const v = parseInteger(env.MESSAGE_TIMEOUT_MS);
+        if (v !== null && v >= 100 && v <= MAX_ZMQ_OPTION) config.workerPool.messageTimeoutMs = v;
+    }
+    if (env.STEP_TIMEOUT_MS !== undefined) {
+        const v = parseInteger(env.STEP_TIMEOUT_MS);
+        if (v !== null && v >= 100 && v <= MAX_ZMQ_OPTION) config.workerPool.stepTimeoutMs = v;
+    }
+
+    // IPC transport
+    if (env.SOCKET_TYPE !== undefined) {
+        const v = env.SOCKET_TYPE;
+        if (v === 'ROUTER' || v === 'DEALER' || v === 'REP' || v === 'REQ') config.ipc.socketType = v;
+    }
+    if (env.SERIALIZATION !== undefined) {
+        const v = env.SERIALIZATION;
+        if (v === 'json' || v === 'msgpack') config.ipc.serialization = v;
+    }
+    if (env.TCP_KEEPALIVE !== undefined) {
+        const v = parseInteger(env.TCP_KEEPALIVE);
+        if (v === 0 || v === 1) config.ipc.tcpKeepalive = v;
+    }
+    if (env.SND_HWM !== undefined) {
+        const v = parseInteger(env.SND_HWM);
+        if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) config.ipc.sndHwm = v;
+    }
+    if (env.RCV_HWM !== undefined) {
+        const v = parseInteger(env.RCV_HWM);
+        if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) config.ipc.rcvHwm = v;
+    }
+    if (env.LINGER_MS !== undefined) {
+        const v = parseInteger(env.LINGER_MS);
+        if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) config.ipc.lingerMs = v;
     }
 
     // Environment
@@ -735,6 +901,16 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 }
                 break;
 
+            case '--zmq-backlog':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) {
+                        config.server.zmqBacklog = v;
+                        i++;
+                    }
+                }
+                break;
+
             case '--telemetry':
             case '-t':
                 config.telemetry.enabled = true;
@@ -793,11 +969,52 @@ function parseCliFlags(config: AppConfig): AppConfig {
                 break;
 
             case '--workers':
+            case '--num-workers':
             case '-w':
                 if (next) {
-                    const v = parseInt(next, 10);
-                    if (!isNaN(v) && v >= 0) {
+                    const v = parseLegacyInteger(next);
+                    if (v !== null && v >= 0) {
                         config.workerPool.numWorkers = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--max-workers':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) {
+                        config.workerPool.maxWorkers = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--ring-buffer-size':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && isPowerOfTwo(v)) {
+                        config.workerPool.ringBufferSize = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--message-timeout-ms':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 100 && v <= MAX_ZMQ_OPTION) {
+                        config.workerPool.messageTimeoutMs = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--step-timeout-ms':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 100 && v <= MAX_ZMQ_OPTION) {
+                        config.workerPool.stepTimeoutMs = v;
                         i++;
                     }
                 }
@@ -805,6 +1022,68 @@ function parseCliFlags(config: AppConfig): AppConfig {
 
             case '--no-shared-mem':
                 config.workerPool.useSharedMemory = false;
+                break;
+
+            case '--use-shared-memory':
+                config.workerPool.useSharedMemory = true;
+                break;
+
+            case '--socket-type':
+                if (next) {
+                    if (next === 'ROUTER' || next === 'DEALER' || next === 'REP' || next === 'REQ') {
+                        config.ipc.socketType = next;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--serialization':
+                if (next) {
+                    if (next === 'json' || next === 'msgpack') {
+                        config.ipc.serialization = next;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--tcp-keepalive':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v === 0 || v === 1) {
+                        config.ipc.tcpKeepalive = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--snd-hwm':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) {
+                        config.ipc.sndHwm = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--rcv-hwm':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) {
+                        config.ipc.rcvHwm = v;
+                        i++;
+                    }
+                }
+                break;
+
+            case '--linger-ms':
+                if (next) {
+                    const v = parseInteger(next);
+                    if (v !== null && v >= 0 && v <= MAX_ZMQ_OPTION) {
+                        config.ipc.lingerMs = v;
+                        i++;
+                    }
+                }
                 break;
 
             case '--seed':
@@ -1069,11 +1348,18 @@ export function loadConfig(projectRoot?: string): AppConfig {
         }
     }
 
+    // Normalize config-file values before the later layers consume their
+    // sections, then normalize once more after env/CLI precedence is applied.
+    config = normalizeResolvedConfig(config);
+
     // Layer 3: environment variables
     config = applyEnvOverrides(config);
 
     // Layer 4: CLI flags
     config = parseCliFlags(config);
+
+    // Normalize the final resolved values, including env/CLI overrides.
+    config = normalizeResolvedConfig(config);
 
     // Resolve numWorkers=0 to actual CPU count. Sanitize every configured
     // value to a positive integer so a misconfigured workerPool can never

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { PhysicsEngine, SCALE } from '../../src/core/physics-engine';
+import { DEFAULT_PPM, NATIVE_DISTANCE_JOINT_MIN_LENGTH, PhysicsEngine, SCALE } from '../../src/core/physics-engine';
 import { normalizeMap } from '../../src/core/map-adapter';
 import { BonkEnvironment } from '../../src/core/environment';
 
@@ -81,17 +81,27 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
 
     // The local anchor on bodyA must be exactly anchorA / SCALE — NOT
     // anchorA / SCALE − bodyA.position, which the old world-point
-    // interpretation would pin at x = −100/30 here.
+    // interpretation would pin at x = −100/30 here. (§33.8 d normalization
+    // also divides exported aa/ab by ppm like the length, so the d branch
+    // converts them with * ppm / SCALE.)
     expect(rv.m_localAnchor1.x).toBeCloseTo(0, 5);
     expect(rv.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
-    // §33.8 d: aa/ab are local anchors in the connected bodies' frames.
+    // §33.8 d: aa/ab are body-relative local anchors in the connected bodies'
+    // frames, consumed in native world units (map px / ppm) like the length.
     expect(d.m_localAnchor1.x).toBeCloseTo(0, 5);
-    expect(d.m_localAnchor1.y).toBeCloseTo(50 / SCALE, 5);
+    expect(d.m_localAnchor1.y).toBeCloseTo((50 * DEFAULT_PPM) / SCALE, 5);
     expect(d.m_localAnchor2.x).toBeCloseTo(0, 5);
-    expect(d.m_localAnchor2.y).toBeCloseTo(-50 / SCALE, 5);
-    // Authored length survives; without a length the anchor distance is used.
-    expect(d.m_length).toBeCloseTo(60 / SCALE, 5);
-    expect(dNolen.m_length).toBeCloseTo(Math.sqrt(100 * 100 + 100 * 100) / SCALE, 5);
+    expect(d.m_localAnchor2.y).toBeCloseTo(-(50 * DEFAULT_PPM) / SCALE, 5);
+    // Authored d lengths are native world units (map px / ppm); without a
+    // length the port uses the converted anchor distance.
+    expect(d.m_length).toBeCloseTo((60 * DEFAULT_PPM) / SCALE, 5);
+    // No authored length: the fallback is the distance between the bodies'
+    // world anchor points. The x term comes from the bodies (100 map px apart,
+    // / SCALE), the y term from the ppm-converted anchors (100 map px, * ppm).
+    expect(dNolen.m_length).toBeCloseTo(
+      Math.sqrt((100 / SCALE) ** 2 + ((100 * DEFAULT_PPM) / SCALE) ** 2),
+      5,
+    );
 
     // Step the world: bodyA must actually move and rotate — otherwise the
     // post-tick pivot assertions below would be vacuous.
@@ -110,10 +120,12 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     const pivot = bodyA.GetWorldPoint(rv.m_localAnchor1);
     expect(pivot.x).toBeCloseTo(pos.x + (0 * Math.cos(angle) - (50 / SCALE) * Math.sin(angle)), 5);
     expect(pivot.y).toBeCloseTo(pos.y + (0 * Math.sin(angle) + (50 / SCALE) * Math.cos(angle)), 5);
-    // The distance-joint anchor stays attached to the same body-frame point.
+    // The distance-joint anchor stays attached to the same body-frame point,
+    // offset by the same authored value in the d branch's native-unit world.
+    const dLocal = (50 * DEFAULT_PPM) / SCALE;
     const dPivot = bodyA.GetWorldPoint(d.m_localAnchor1);
-    expect(dPivot.x).toBeCloseTo(pivot.x, 5);
-    expect(dPivot.y).toBeCloseTo(pivot.y, 5);
+    expect(dPivot.x).toBeCloseTo(pos.x + (0 * Math.cos(angle) - dLocal * Math.sin(angle)), 5);
+    expect(dPivot.y).toBeCloseTo(pos.y + (0 * Math.sin(angle) + dLocal * Math.cos(angle)), 5);
   });
 
   it('rv/d joints without authored anchors pin the pivot at the body origin, not p + R·p (#282)', () => {
@@ -228,6 +240,49 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(warnings.filter(w => /unknown joint type/.test(w))).toHaveLength(0);
   });
 
+  it('scales authored map-pixel translation limits for lpj, lsj, and p joints (#322)', () => {
+    const cases = [
+      { type: 'lpj', lower: -50, upper: 50 },
+      { type: 'lsj', lower: -40, upper: 40 },
+      { type: 'p', lower: -25, upper: 75 },
+    ];
+
+    // Default-scale and custom-scale engines: the stored limits must divide by
+    // THIS engine's scale (this.scale), not the SCALE constant — a hardcoded
+    // SCALE would pass at the default but fail at the custom scale below.
+    const engines = [
+      { e: makeEngine(), divisor: SCALE },
+      { e: new PhysicsEngine({ scale: 15 }), divisor: 15 },
+    ];
+
+    for (const { e, divisor } of engines) {
+      for (const { type, lower, upper } of cases) {
+        const suffix = type;
+        e.addBody({ name: `${suffix}_anchor`, type: 'rect', x: 0, y: 0, width: 40, height: 10, static: true } as any);
+        e.addBody({ name: `${suffix}_slider`, type: 'rect', x: 0, y: 0, width: 20, height: 20, static: false, density: 1 } as any);
+        const bm = e.getBodyMap() as Map<string, any>;
+
+        e.addJoint({
+          type,
+          name: `${suffix}_joint`,
+          bodyA: `${suffix}_anchor`,
+          bodyB: `${suffix}_slider`,
+          anchorA: { x: 0, y: 0 },
+          axis: { x: 1, y: 0 },
+          enableLimit: true,
+          lowerTranslation: lower,
+          upperTranslation: upper,
+        }, bm);
+
+        const joint: any = (e as any).createdJoints.get(`${suffix}_joint`);
+        expect(joint).toBeTruthy();
+        expect(joint.m_enableLimit).toBe(true);
+        expect(joint.m_lowerTranslation).toBeCloseTo(lower / divisor, 5);
+        expect(joint.m_upperTranslation).toBeCloseTo(upper / divisor, 5);
+      }
+    }
+  });
+
   it('supports a ground-anchored prismatic joint (bodyB=-1) without warning', () => {
     const e = makeEngine();
     const bm = makeBodyMap(e);
@@ -315,9 +370,153 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     expect(pr.m_localXAxis1.y).toBeCloseTo(1, 5);
     expect(pr.m_localXAxis1.x).toBeCloseTo(0, 5);
     expect(pr.m_refAngle).toBeCloseTo(0.3, 5);
-    // Distance: authored length applied after Initialize (px / scale).
+    // Distance: exported native-world length converted to the port world.
     const ds = (e as any).createdJoints.get('joint_2');
-    expect(ds.m_length).toBeCloseTo(50 / 30, 5);
+    expect(ds.m_length).toBeCloseTo((50 * DEFAULT_PPM) / SCALE, 5);
+  });
+
+  it('converts exported native distance length to map separation and preserves it (#313)', () => {
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'weight', type: 'circle', x: 120, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'exported-distance',
+      bodyA: 'anchor',
+      bodyB: 'weight',
+      anchorA: { x: 0, y: 0 },
+      anchorB: { x: 0, y: 0 },
+      length: 10, // 120 map px / ppm=12, as emitted by mapexporter.js
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('exported-distance');
+    expect(joint.m_length).toBeCloseTo((10 * DEFAULT_PPM) / SCALE, 5);
+
+    for (let i = 0; i < 120; i++) e.tick();
+
+    const anchor = bm.get('anchor').GetPosition();
+    const weight = bm.get('weight').GetPosition();
+    const dx = (weight.x - anchor.x) * SCALE;
+    const dy = (weight.y - anchor.y) * SCALE;
+    expect(Math.sqrt(dx * dx + dy * dy)).toBeCloseTo(120, 3);
+  });
+
+  it('converts exported d-joint anchors with the map ppm, not bare / SCALE (#313)', () => {
+    // §33.8 d normalization divides exported aa/ab by ppm exactly like the
+    // length, so the port converts them with `anchor * ppm / SCALE`. A custom
+    // map ppm proves the factor is really applied — a bare `/ SCALE` (which
+    // would leave the local anchors mismatched against the rest length) is
+    // what the review caught.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.setScale(15);
+    e.addBody({ name: 'bodyA', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'bodyB', type: 'circle', x: 100, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'scaled-anchors',
+      bodyA: 'bodyA',
+      bodyB: 'bodyB',
+      anchorA: { x: 0, y: 50 },
+      anchorB: { x: 0, y: -50 },
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('scaled-anchors');
+    // 50 native units at ppm=15 → 50 * 15 / SCALE = 25 port units on each side.
+    expect(joint.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(joint.m_localAnchor1.y).toBeCloseTo((50 * 15) / SCALE, 5);
+    expect(joint.m_localAnchor2.x).toBeCloseTo(0, 5);
+    expect(joint.m_localAnchor2.y).toBeCloseTo(-(50 * 15) / SCALE, 5);
+    // The no-length fallback (distance between the bodies' world anchors) is
+    // consistent with the ppm-converted anchors — the whole joint geometry
+    // lives in the same converted unit system.
+    expect(joint.m_length).toBeCloseTo(
+      Math.sqrt((100 / SCALE) ** 2 + ((100 * 15) / SCALE) ** 2),
+      5,
+    );
+  });
+
+  it('converts ground-anchored d-joint anchors with the map ppm (#313)', () => {
+    // The ground branch (isGround, native bodyB = -1) shares the same ppm
+    // conversion for anchorA/anchorB. bodyB is the synthetic static ground
+    // body at the world origin, so its local anchor equals the ppm-converted
+    // world anchor directly — and the A-side local anchor is converted too.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.setScale(15);
+    e.addBody({ name: 'bodyA', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'ground-d',
+      bodyA: 'bodyA',
+      bodyB: '', // the adapter emits '' with isGround for bodyB = -1
+      isGround: true,
+      anchorA: { x: 0, y: 50 },
+      anchorB: { x: 10, y: -20 },
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('ground-d');
+    // Ground body sits at the origin: localAnchor2 is the ppm-converted world
+    // anchor (10/20 native units at ppm=15 → 5 / -10 port units).
+    expect(joint.m_localAnchor2.x).toBeCloseTo((10 * 15) / SCALE, 5);
+    expect(joint.m_localAnchor2.y).toBeCloseTo(-(20 * 15) / SCALE, 5);
+    // bodyA also sits at the origin: its local anchor is the ppm-converted
+    // value on the A side as well.
+    expect(joint.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(joint.m_localAnchor1.y).toBeCloseTo((50 * 15) / SCALE, 5);
+    // Initialize derives the rest length from the converted world anchors.
+    expect(joint.m_length).toBeCloseTo(
+      Math.sqrt(((10 * 15) / SCALE) ** 2 + (((50 + 20) * 15) / SCALE) ** 2),
+      5,
+    );
+  });
+
+  it('applies the native minimum to an explicitly zero distance length (#313)', () => {
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'weight', type: 'circle', x: 120, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'zero-distance',
+      bodyA: 'anchor',
+      bodyB: 'weight',
+      anchorA: { x: 0, y: 0 },
+      anchorB: { x: 0, y: 0 },
+      length: 0,
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('zero-distance');
+    expect(joint.m_length).toBeCloseTo((NATIVE_DISTANCE_JOINT_MIN_LENGTH * DEFAULT_PPM) / SCALE, 8);
+  });
+
+  it('applies the native minimum floor to coincident-anchor fallback lengths with no authored length (#313)', () => {
+    // No length authored: the engine falls back to the distance between the
+    // bodies' world anchor points. When both anchors coincide (local (0,0))
+    // AND both bodies share a position, that distance is 0 — the native
+    // len→0.01 floor must be applied to the fallback path too (physics-engine
+    // addJoint: `else if (jd.length === 0)`).
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    e.addBody({ name: 'weight', type: 'circle', x: 0, y: 0, radius: 5, static: false, density: 1 } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'coincident-fallback',
+      bodyA: 'anchor',
+      bodyB: 'weight',
+      anchorA: { x: 0, y: 0 },
+      anchorB: { x: 0, y: 0 },
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('coincident-fallback');
+    expect(joint.m_length).toBeCloseTo((NATIVE_DISTANCE_JOINT_MIN_LENGTH * DEFAULT_PPM) / SCALE, 8);
   });
 
 it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286)', () => {
@@ -664,8 +863,8 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j).toBeTruthy();
     expect(j.m_enableLimit).toBe(true);
-    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50 / SCALE, 5);
     expect(j.m_enableMotor).toBe(true);
     expect(j.m_motorSpeed).toBeCloseTo(3, 5);
     expect(j.m_maxMotorForce).toBeCloseTo(1000, 5);
@@ -735,10 +934,13 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j).toBeTruthy();
     expect(j.m_enableLimit).toBe(false);
-    expect(j.m_lowerTranslation).toBeCloseTo(-40, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(40, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-40 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(40 / SCALE, 5);
     expect(j.m_enableMotor).toBe(true);
-    expect(j.m_motorSpeed).toBeCloseTo(300, 5);
+    // §33.8 initial-side spring bias (readable 7600-7630): with bodyA at
+    // (0,0)/angle 0 and the anchor +slen above it, k = +1 → motorSpeed −300,
+    // maxMotorForce = sf·|k| = sf (P2b).
+    expect(j.m_motorSpeed).toBeCloseTo(-300, 5);
     expect(j.m_maxMotorForce).toBeCloseTo(25, 5);
     expect(j.m_localXAxis1.x).toBeCloseTo(0, 5);
     expect(j.m_localXAxis1.y).toBeCloseTo(1, 5);
@@ -762,8 +964,8 @@ it('normalizeMap forwards authored distance-joint frequencyHz/dampingRatio (#286
     e.addJoint(md.joints[0], bm);
     const j: any = (e as any).createdJoints.get('joint_0');
     expect(j.m_enableLimit).toBe(true);
-    expect(j.m_lowerTranslation).toBeCloseTo(-50, 5);
-    expect(j.m_upperTranslation).toBeCloseTo(50, 5);
+    expect(j.m_lowerTranslation).toBeCloseTo(-50 / SCALE, 5);
+    expect(j.m_upperTranslation).toBeCloseTo(50 / SCALE, 5);
   });
 
   it('a prismatic joint with a negative or zero length keeps the previous 0/0 range — never inverted (issue #281)', () => {
