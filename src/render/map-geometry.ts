@@ -5,9 +5,9 @@
  * `physicsShapes`/`capZones`/`bodyRenderOrder` structure the Bonk Map Exporter
  * writes) into a backend-agnostic draw list already in *screen px*. Each item
  * is a primitive command a rasterizer can consume directly (SVG, Canvas 2D,
- * PNG). Bodies are drawn back-to-front via `bodyRenderOrder`, mirroring the
- * native client (`physics.bro`), and each shape is transformed by the body's
- * position/angle and the shape's center/angle.
+ * PNG). Native `bodyRenderOrder` (`physics.bro`) is front-to-back, so this
+ * module reverses it before emitting back-to-front painter commands. Each shape
+ * is transformed by the body's position/angle and the shape's center/angle.
  *
  * No PIXI/canvas dependency: this module only produces plain objects.
  */
@@ -57,6 +57,7 @@ export interface MapGeometryInput {
   fixtures?: FixtureGeom[];
   shapes?: ShapeGeom[];
   capZones?: CapZoneGeom[];
+  /** Native front-to-back body order (`physics.bro`). */
   bodyRenderOrder?: number[];
 }
 
@@ -71,7 +72,7 @@ export interface DrawCommand {
   primitive: Primitive;
   /** True when the fixture is a cap zone (outline, not fill). */
   isCapZone: boolean;
-  /** True when the fixture is a noPhysics sensor (faded). */
+  /** True when the fixture is marked noPhysics in the source map. */
   isSensor: boolean;
 }
 
@@ -149,13 +150,13 @@ export function buildGeometry(input: MapGeometryInput, cam: Camera): DrawCommand
   const fixtures = input.fixtures || [];
   const shapes = input.shapes || [];
   const capSet = new Set<number>((input.capZones || []).map(c => c.fixtureIndex));
-  const bro = input.bodyRenderOrder && input.bodyRenderOrder.length
-    ? input.bodyRenderOrder
+  // Native `physics.bro` is front-to-back. SVG/Canvas paint later commands on
+  // top, so reverse it to emit back-to-front. Inputs without native provenance
+  // retain the legacy flattened body order.
+  const paintOrder = input.bodyRenderOrder && input.bodyRenderOrder.length
+    ? [...input.bodyRenderOrder].reverse()
     : bodies.map((_, i) => i);
-
-  // Draw back-to-front: iterate bro descending so low-z (background) bodies
-  // draw first. We assign z = bodyIndex's position in the ascending order.
-  bro.forEach((bodyIndex, orderPos) => {
+  paintOrder.forEach((bodyIndex, orderPos) => {
     const body = bodies[bodyIndex];
     if (!body) return;
     for (const fIdx of (body.fixtureIndices || [])) {
@@ -171,8 +172,9 @@ export function buildGeometry(input: MapGeometryInput, cam: Camera): DrawCommand
       const stroke = isCap ? '#000000' : (fx.death ? '#ff0000' : null);
       // Cap-zone and death strokes scale with the camera like geometry does.
       const lineWidth = isCap ? cam.scale * 3 : (fx.death ? cam.scale * 3 : cam.scale * 2);
-      const sensorAlpha = isSensor ? 0.35 : 1;
-      const effectiveFill = isSensor ? withAlpha(hex(fx.color), sensorAlpha) : hex(fx.color);
+      // Native `np` skips a fixture from physics construction; it does not make
+      // its artwork translucent. Decorative map logos commonly use this flag.
+      const effectiveFill = hex(fx.color);
 
       let primitive: Primitive | null = null;
       if (shape.type === 'bx') {
@@ -208,14 +210,6 @@ export function buildGeometry(input: MapGeometryInput, cam: Camera): DrawCommand
   });
 
   return commands;
-}
-
-function withAlpha(color: string, alpha: string | number): string {
-  const n = parseInt(color.slice(1), 16);
-  const r = (n >> 16) & 255;
-  const g = (n >> 8) & 255;
-  const b = n & 255;
-  return `rgba(${r},${g},${b},${alpha})`;
 }
 
 function mapToScreenRadius(r: number, cam: Camera): number {
@@ -281,31 +275,84 @@ function shapeTypeOf(type: string): ShapeType {
  * Build a geometry input from the engine's normalized MapDef (as exposed by
  * env.config.mapData). Bodies are flattened primitives: x/y already world map
  * px, shapes already at body-local origin, so emit one synthetic fixture per
- * body with a shape centered at (0,0).
+ * body with a shape centered at (0,0). Exported maps additionally retain an
+ * exact render-only native shape projection for decorative geometry.
  */
 export function geometryFromMapDefBody(map: any, capZones?: CapZoneGeom[]): MapGeometryInput {
   const bodies: MapBodyGeom[] = [];
   const fixtures: FixtureGeom[] = [];
   const shapes: ShapeGeom[] = [];
-  const bodyRenderOrder: number[] = [];
-  (map.bodies || []).forEach((b: any, i: number) => {
-    const st = shapeTypeOf(b.type);
-    const radius = st === 'ci' ? b.radius : undefined;
-    const w = st === 'bx' ? b.width : undefined;
-    const h = st === 'bx' ? b.height : undefined;
-    const verts = st === 'po' ? ((b.vertices || []).map((v: { x: number; y: number }) => [v.x, v.y])) : undefined;
-    bodies.push({ index: i, x: b.x ?? 0, y: b.y ?? 0, angle: b.angle ?? 0, fixtureIndices: [i] });
-    shapes.push({ type: st, cx: 0, cy: 0, angle: 0, width: w, height: h, radius, vertices: verts, scale: 1 });
+  let bodyRenderOrder: number[] | undefined;
+  const mapBodies = map.bodies || [];
+  const hasNativeRenderOrder = Array.isArray(map.bodyRenderOrder) && map.bodyRenderOrder.length > 0;
+  const bodiesByRenderIndex = hasNativeRenderOrder ? new Map<number, number[]>() : undefined;
+  mapBodies.forEach((b: any, i: number) => {
+    const renderShape = b.renderShape;
+    const st = shapeTypeOf(renderShape?.type ?? b.type);
+    const radius = st === 'ci' ? (renderShape?.radius ?? b.radius) : undefined;
+    const w = st === 'bx' ? (renderShape?.width ?? b.width) : undefined;
+    const h = st === 'bx' ? (renderShape?.height ?? b.height) : undefined;
+    const sourceVertices = renderShape?.vertices ?? b.vertices ?? [];
+    const verts = st === 'po'
+      ? sourceVertices.map((v: { x: number; y: number } | number[]) =>
+        Array.isArray(v) ? [v[0], v[1]] : [v.x, v.y]
+      )
+      : undefined;
+    const center = renderShape?.center;
+    bodies.push({
+      index: i,
+      x: renderShape?.bodyPosition?.x ?? (b.x ?? 0),
+      y: renderShape?.bodyPosition?.y ?? (b.y ?? 0),
+      angle: renderShape?.bodyAngle ?? (b.angle ?? 0),
+      fixtureIndices: [i],
+    });
+    shapes.push({
+      type: st,
+      cx: center?.x ?? 0,
+      cy: center?.y ?? 0,
+      angle: renderShape?.angle ?? 0,
+      width: w,
+      height: h,
+      radius,
+      vertices: verts,
+      scale: renderShape?.scale ?? 1,
+    });
     fixtures.push({ index: i, shapeIndex: i, color: b.color ?? 0xaaaaaa, noPhysics: b.noPhysics, death: b.isLethal });
-    bodyRenderOrder.push(i);
+    if (bodiesByRenderIndex && typeof b.renderBodyIndex === 'number') {
+      const fixtureBodies = bodiesByRenderIndex.get(b.renderBodyIndex);
+      if (fixtureBodies) fixtureBodies.push(i);
+      else bodiesByRenderIndex.set(b.renderBodyIndex, [i]);
+    }
   });
+
+  if (bodiesByRenderIndex) {
+    // A normalized MapDef flattens each source body fixture into one body.
+    // Expand the native front-to-back order onto those fixture bodies. Any body
+    // missing from the source order is retained behind the ordered set.
+    const ordered = new Set<number>();
+    bodyRenderOrder = [];
+    for (const sourceBodyIndex of map.bodyRenderOrder) {
+      const fixtureBodies = bodiesByRenderIndex.get(sourceBodyIndex) ?? [];
+      // buildGeometry reverses native front-to-back body order for SVG paint.
+      // Reverse the flattened fixture entries here so that reversal does not
+      // also invert their native order within a single source body.
+      for (let fixtureIndex = fixtureBodies.length - 1; fixtureIndex >= 0; fixtureIndex -= 1) {
+        const i = fixtureBodies[fixtureIndex];
+        bodyRenderOrder.push(i);
+        ordered.add(i);
+      }
+    }
+    mapBodies.forEach((_: any, i: number) => {
+      if (!ordered.has(i)) bodyRenderOrder!.push(i);
+    });
+  }
 
   // In the flattened MapDef, each body IS its own fixture (index i). Cap zones
   // reference that body by `fixture` NAME (MapDef contract), so resolve the name
   // to the body's array index and treat that fixture as the cap-zone fixture —
   // otherwise cap-zone outlines never render on the env load path (#review).
   const nameToBodyIndex = new Map<string, number>();
-  ((map.bodies || []) as any[]).forEach((b, i) => {
+  (mapBodies as any[]).forEach((b, i) => {
     if (b && typeof b.name === 'string') nameToBodyIndex.set(b.name, i);
   });
   const resolvedCapZones = (capZones || []).map((cz) => {

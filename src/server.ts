@@ -26,20 +26,44 @@ export async function startServer(config?: AppConfig): Promise<void> {
     
     const appConfig = config || getConfig();
     console.log(`Starting server on port ${appConfig.server.port} (config: ${config ? 'provided' : 'cached'})`);
-    bridge = new IpcBridge(appConfig);
+    const serverBridge = new IpcBridge(appConfig);
+    bridge = serverBridge;
 
-    // Issue #237: initialize the telemetry controller once at startup so the
-    // parsed flags are cached (no per-tick process.argv scan) and the
-    // documented config surfaces (reportIntervalMs, dashboardPort,
-    // outputFormat: 'file') take effect. This must happen before bridge.start()
-    // is awaited: start() only resolves when the server closes.
-    const controller = getTelemetryController();
-    controller.initialize(appConfig.telemetry, appConfig.physics.ticksPerSecond);
-    if (controller.getFlags().enableTelemetry) {
-        controller.startDashboard(appConfig.telemetry.dashboardPort);
+    try {
+        // Issue #237: initialize the telemetry controller once at startup so the
+        // parsed flags are cached (no per-tick process.argv scan) and the
+        // documented config surfaces (reportIntervalMs, dashboardPort,
+        // outputFormat: 'file') take effect. This must happen before bridge.start()
+        // is awaited: start() only resolves when the server closes.
+        const controller = getTelemetryController();
+        controller.initialize(appConfig.telemetry, appConfig.physics.ticksPerSecond);
+        if (controller.getFlags().enableTelemetry) {
+            controller.startDashboard(appConfig.telemetry.dashboardPort);
+        }
+
+        await serverBridge.start();
+    } catch (error) {
+        // A failed bind never started a serve cycle, so roll back the singleton
+        // state and release everything created for this attempt. In particular,
+        // this closes the failed bridge's ROUTER socket and telemetry dashboard
+        // so callers can retry without an intervening stopServer() (issue #326).
+        bridge = null;
+        try {
+            await serverBridge.close();
+        } catch (cleanupError) {
+            console.error('Error during failed server startup cleanup:', cleanupError);
+        }
+        try {
+            // The failed server never served a tick, so tear down telemetry
+            // without the forced shutdown final report: a zero-tick report
+            // (and JSONL entry in file/both output modes) would pollute
+            // replay-validation traces (#324).
+            getTelemetryController().shutdown({ emitFinalReport: false });
+        } catch (cleanupError) {
+            console.error('Error during telemetry startup cleanup:', cleanupError);
+        }
+        throw error;
     }
-
-    await bridge.start();
 }
 
 /**

@@ -11,9 +11,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const sock: { bind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+  const sock: { closed: boolean; bind: () => Promise<void>; unbind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+    closed: false,
     bind: async () => {},
-    close: () => {},
+    unbind: async () => {},
+    // A closed ZMQ socket is permanently destroyed and can never be re-bound
+    // (bind() throws "Socket is closed"), so close() marks the mock closed and
+    // start() then recreates the transport exactly like production
+    // (ipc-bridge.ts:263-267).
+    close: () => {
+      sock.closed = true;
+    },
     send: async () => {},
   };
   const controller = {
@@ -23,7 +31,13 @@ const mocks = vi.hoisted(() => {
   return {
     sock,
     controller,
-    Router: function Router() { return sock; },
+    // A fresh Router models the recreated transport after close(): the
+    // returned socket is open again, so restart tests can observe the
+    // recreation branch (new Router + re-wrapped send) firing.
+    Router: vi.fn(function Router() {
+      sock.closed = false;
+      return sock;
+    }),
     WorkerPool: vi.fn(),
     getConfig: vi.fn(),
     isTelemetryEnabled: vi.fn(),
@@ -78,6 +92,7 @@ let currentBridge: any = null;
 
 const mockSock = mocks.sock;
 let bindSpy: ReturnType<typeof vi.spyOn>;
+let unbindSpy: ReturnType<typeof vi.spyOn>;
 let closeSpy: ReturnType<typeof vi.spyOn>;
 let sendSpy: ReturnType<typeof vi.spyOn>;
 
@@ -93,6 +108,8 @@ beforeEach(() => {
   mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
   mocks.controller.reportNow.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
+  mocks.Router.mockClear();
+  mockSock.closed = false;
   mocks.WorkerPool.mockImplementation(function () {
     return {
       init: vi.fn().mockResolvedValue(undefined),
@@ -108,6 +125,7 @@ beforeEach(() => {
   mocks.gpReport.mockClear();
   mocks.setLatestWorkerTelemetry.mockClear();
   bindSpy = vi.spyOn(mockSock, 'bind').mockResolvedValue(undefined);
+  unbindSpy = vi.spyOn(mockSock, 'unbind').mockResolvedValue(undefined);
   closeSpy = vi.spyOn(mockSock, 'close');
   sendSpy = vi.spyOn(mockSock, 'send').mockResolvedValue(undefined);
   delete mockSock[Symbol.asyncIterator];
@@ -115,9 +133,14 @@ beforeEach(() => {
 
 afterEach(() => {
   bindSpy.mockRestore();
+  unbindSpy.mockRestore();
   closeSpy.mockRestore();
   sendSpy.mockRestore();
   currentBridge = null;
+  // A double-close regression test simulates the socket already being closed
+  // (as start()'s catch leaves it after a failed bind); reset it so later
+  // tests start from the pristine open-socket state.
+  delete (mockSock as any).closed;
 });
 
 describe('IpcBridge constructor', () => {
@@ -340,10 +363,43 @@ describe('IpcBridge close() (lines 159-173)', () => {
     expect(closeSpy).toHaveBeenCalled();
   });
 
+  it('awaits endpoint unbind before closing the socket (#316)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12357 } });
+    const endpoint = 'tcp://127.0.0.1:12357';
+    (bridge as any).boundEndpoint = endpoint;
+
+    let releaseUnbind!: () => void;
+    unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
+      releaseUnbind = resolve;
+    }));
+
+    const closePromise = bridge.close();
+    expect(unbindSpy).toHaveBeenCalledWith(endpoint);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    releaseUnbind();
+    await closePromise;
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
   it('ignores socket close errors (lines 166-170)', async () => {
     closeSpy.mockImplementation(() => { throw new Error('Socket already closed'); });
     const bridge = new IpcBridge({ server: { port: 12354 } });
     await expect(bridge.close()).resolves.toBeUndefined();
+  });
+
+  it('does not close the socket a second time when close() follows a failed bind (issue #326)', async () => {
+    // start()'s catch closes the ROUTER handle when a bind fails. A later
+    // close() (server.ts rolls back a failed start via serverBridge.close())
+    // must not close the already-closed socket a redundant second time.
+    const bridge = new IpcBridge({ server: { port: 12354 } });
+    // Model the failed-start path: construction yields an open ROUTER (like
+    // production `new zmq.Router()`), then start()'s failed-bind catch
+    // closes this bridge's socket handle before close() runs.
+    (bridge as any).sock.closed = true;
+    closeSpy.mockClear();
+    await bridge.close();
+    expect(closeSpy).not.toHaveBeenCalled();
   });
 
   it('closes the worker pool (line 172)', async () => {
@@ -351,6 +407,147 @@ describe('IpcBridge close() (lines 159-173)', () => {
     const poolCloseSpy = vi.spyOn((bridge as any).pool, 'close');
     await bridge.close();
     expect(poolCloseSpy).toHaveBeenCalled();
+  });
+});
+
+describe('IpcBridge close()/start() lifecycle (#316)', () => {
+  it('single-flights concurrent close() calls onto one teardown (#316)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12380 } });
+    (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12380';
+
+    let releaseUnbind!: () => void;
+    unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
+      releaseUnbind = resolve;
+    }));
+
+    const closeA = bridge.close();
+    const closeB = bridge.close();
+    // The second call shares the in-flight teardown instead of running a
+    // second one (which would unbind/close the already-torn-down socket).
+    expect(closeA).toBe(closeB);
+    expect(unbindSpy).toHaveBeenCalledTimes(1);
+    expect(closeSpy).not.toHaveBeenCalled();
+
+    releaseUnbind();
+    await closeA;
+    await closeB;
+    expect(closeSpy).toHaveBeenCalledTimes(1);
+  });
+
+  it('clears boundEndpoint only after a successful unbind (#316)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12381 } });
+    (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12381';
+
+    await bridge.close();
+    expect((bridge as any).boundEndpoint).toBeNull();
+  });
+
+  it('keeps boundEndpoint when unbind fails so a held port stays visible (#316)', async () => {
+    const endpoint = 'tcp://127.0.0.1:12382';
+    const bridge = new IpcBridge({ server: { port: 12382 } });
+    (bridge as any).boundEndpoint = endpoint;
+
+    unbindSpy.mockImplementationOnce(() => Promise.reject(new Error('endpoint gone')));
+    await expect(bridge.close()).rejects.toThrow('endpoint gone');
+    // The port may still be bound: the endpoint state must not be silently
+    // discarded, or a restart would rebind into the #316 race it prevents.
+    expect((bridge as any).boundEndpoint).toBe(endpoint);
+  });
+
+  it('does not wedge later close()/start() calls on a rejected close (#316)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12383 } });
+      (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12383';
+
+      unbindSpy.mockImplementationOnce(() => Promise.reject(new Error('unbind failed')));
+      await expect(bridge.close()).rejects.toThrow('unbind failed');
+
+      // The bridge is already closed, so a later close() is a clean no-op
+      // instead of a stale re-rejection of the retained promise.
+      await expect(bridge.close()).resolves.toBeUndefined();
+
+      // A restart can still bind and settle ready.
+      const startPromise = bridge.start();
+      await new Promise(r => setTimeout(r, 10));
+      expect(bindSpy).toHaveBeenCalled();
+      // The destroyed socket forces the production transport-recreation path
+      // (a fresh Router + re-wrapped send) instead of rebinding the dead one.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
+      await bridge.close();
+      await startPromise;
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('start() waits for an in-flight close() before binding (#316)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12384 } });
+      (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12384';
+
+      let releaseUnbind!: () => void;
+      unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
+        releaseUnbind = resolve;
+      }));
+
+      const closePromise = bridge.close();
+      const startPromise = bridge.start();
+
+      // While the prior close is still unbinding, the restart must not bind:
+      // the port has not been released yet, and the transport has not been
+      // recreated yet either (start() is still awaiting the in-flight close).
+      await new Promise(r => setTimeout(r, 20));
+      expect(bindSpy).not.toHaveBeenCalled();
+      expect(mocks.Router).toHaveBeenCalledTimes(1);
+
+      releaseUnbind();
+      await closePromise;
+      await startPromise;
+      expect(bindSpy).toHaveBeenCalled();
+      // Only after the close completes does the restart recreate the socket.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('start() recovers from a rejected in-flight close without hanging ready (#316)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12385 } });
+      (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12385';
+
+      let rejectUnbind!: (err: Error) => void;
+      unbindSpy.mockImplementationOnce(() => new Promise<void>((_, reject) => {
+        rejectUnbind = reject;
+      }));
+
+      const closePromise = bridge.close();
+      const startPromise = bridge.start();
+
+      // The re-armed ready promise must settle (here via the restart's fresh
+      // bind) instead of hanging forever after a rejected prior close.
+      const readySettled = Promise.race([
+        (bridge as any).ready.then(() => 'resolved', () => 'rejected'),
+        new Promise<string>(resolve => setTimeout(() => resolve('hung'), 500)),
+      ]);
+
+      rejectUnbind(new Error('unbind failed'));
+      await expect(closePromise).rejects.toThrow('unbind failed');
+      expect(await readySettled).not.toBe('hung');
+      await startPromise;
+      expect(bindSpy).toHaveBeenCalled();
+      // The rejected close still destroyed the socket, so the restart binds a
+      // freshly recreated transport rather than the dead one.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
   });
 });
 

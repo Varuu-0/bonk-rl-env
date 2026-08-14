@@ -63,8 +63,13 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
     try {
       env.reset(42);
 
-      expect(env.step(0).done).toBe(false);
-      expect(env.step(0).done).toBe(false);
+      const first = env.step(0);
+      expect(first.done).toBe(false);
+      expect('terminal_observation' in first.info).toBe(false);
+
+      const second = env.step(0);
+      expect(second.done).toBe(false);
+      expect('terminal_observation' in second.info).toBe(false);
 
       // tick 3 = maxTicks: truncation reported exactly once with the correct
       // cause (truncated, never terminated).
@@ -74,6 +79,8 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
       expect(done.info.terminated).toBe(false);
       expect(done.observation.tick).toBe(3);
       expect(done.info.tick).toBe(3);
+      expect(done.info.terminal_observation).toEqual(done.observation);
+      expect(done.info.terminal_observation.tick).toBe(done.info.tick);
 
       // Well past maxTicks: the episode stays settled — same flags, no
       // physics advance, no step ever inverts truncation into termination.
@@ -84,6 +91,8 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
         expect(res.info.terminated).toBe(false);
         expect(res.observation.tick).toBe(3);
         expect(res.info.tick).toBe(3);
+        expect(res.info.terminal_observation).toEqual(res.observation);
+        expect(res.info.terminal_observation.tick).toBe(res.info.tick);
         expect(res.reward).toBe(0);
       }
 
@@ -162,6 +171,8 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
       expect(death!.truncated).toBe(false);
       expect(death!.info.terminated).toBe(true);
       const deathTick = death!.info.tick;
+      expect(death!.info.terminal_observation).toEqual(death!.observation);
+      expect(death!.info.terminal_observation.tick).toBe(deathTick);
 
       // Forward from the death: the tail must keep replaying the recorded
       // death cause (truncated=false / terminated=true) with the tick frozen
@@ -174,6 +185,8 @@ describe('maxTicks-truncated episodes settle (issue #197)', () => {
         expect(res.info.terminated).toBe(true);
         expect(res.info.tick).toBe(deathTick);
         expect(res.observation.tick).toBe(deathTick);
+        expect(res.info.terminal_observation).toEqual(res.observation);
+        expect(res.info.terminal_observation.tick).toBe(res.info.tick);
         expect(res.reward).toBe(0);
       }
     } finally {

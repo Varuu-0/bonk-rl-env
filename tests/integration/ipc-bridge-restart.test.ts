@@ -64,24 +64,78 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
 
   /**
    * Wait until the bridge's port is bindable again. The closed listener
-   * releases it synchronously, but poll with a throwaway ROUTER so the
-   * follow-up bind cannot flake on OS timing.
+   * releases it asynchronously, so poll with a throwaway ROUTER and await
+   * that probe's explicit unbind before allowing the follow-up bind.
+   * Only port contention (EADDRINUSE) is transient — any other bind/unbind
+   * failure is a real error and propagates immediately instead of burning
+   * the deadline in a misleading retry storm. `deadline` is an absolute
+   * timestamp so a caller can share one bounded budget across a loop of
+   * probes rather than multiplying a per-probe timeout.
    */
-  async function waitForPortFree(): Promise<void> {
-    const deadline = Date.now() + 5000;
+  async function waitForPortFree(deadline = Date.now() + 5000): Promise<void> {
+    const endpoint = `tcp://127.0.0.1:${port}`;
     while (Date.now() < deadline) {
       const probe = new zmq.Router();
+      let bound = false;
+      let unbound = false;
       try {
-        await probe.bind(`tcp://127.0.0.1:${port}`);
-        probe.close();
+        await probe.bind(endpoint);
+        bound = true;
+        await probe.unbind(endpoint);
+        unbound = true;
         return;
-      } catch {
+      } catch (err) {
+        if (!isEaddrInUse(err)) {
+          throw err;
+        }
+      } finally {
+        if (bound && !unbound) {
+          try { await probe.unbind(endpoint); } catch { /* close below */ }
+        }
         probe.close();
-        await new Promise(r => setTimeout(r, 50));
       }
+      await new Promise(r => setTimeout(r, 50));
     }
     throw new Error(`port ${port} did not become free`);
   }
+
+  /**
+   * A bind on a held port rejects with EADDRINUSE (errno 98); anything else
+   * (e.g. a broken ZMQ context or an invalid endpoint) is not contention and
+   * must not be treated as retryable.
+   */
+  function isEaddrInUse(err: unknown): boolean {
+    return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EADDRINUSE';
+  }
+
+  it('leaves the probe endpoint immediately rebindable (#327)', async () => {
+    const endpoint = `tcp://127.0.0.1:${port}`;
+
+    // One shared deadline bounds the whole loop instead of a fresh 5s
+    // per-iteration budget: 50 iterations × 5s ≈ 250s would outlive the 60s
+    // test timeout and surface a slow-release regression as an opaque
+    // timeout instead of the explicit "did not become free" error. The 15s
+    // budget is far above the loop's normal ~50ms-per-iteration cost, so a
+    // passing run finishes well before it.
+    const deadline = Date.now() + 15000;
+
+    for (let attempt = 0; attempt < 50; attempt++) {
+      await waitForPortFree(deadline);
+
+      const retry = new zmq.Router();
+      let bound = false;
+      try {
+        await retry.bind(endpoint);
+        bound = true;
+      } finally {
+        try {
+          if (bound) await retry.unbind(endpoint);
+        } finally {
+          retry.close();
+        }
+      }
+    }
+  }, 60000);
 
   it('start → close → start serves fresh DEALER round-trips on the same instance', async () => {
     // First serve cycle. start() only exits on close(), so never await it

@@ -18,6 +18,7 @@
  * length/spring, prismatic limits/motor, gear ratio/referents).
  */
 import type { BonkEnvironment } from '../environment';
+import { NATIVE_DISTANCE_JOINT_MIN_LENGTH } from '../physics-engine';
 import { normalizeMap } from '../map-adapter';
 import type { NativeTrace } from './native-trace';
 
@@ -115,6 +116,7 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
   const mismatches: string[] = [];
   const physics: any = (env as any).physics;
   const scale: number = physics.scale;
+  const ppm: number = physics.ppm;
   const created: Map<string, any> = physics.createdJoints ?? new Map();
   const mapDef: any = normalizeMap(trace.map);
   const joints: any[] = mapDef.joints ?? [];
@@ -151,13 +153,18 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
         mismatches.push(`joint "${name}" rv maxMotorTorque mismatch`);
       }
     } else if (t === 'd' || t === 'distance') {
-      // The engine stores m_length in metres (authored map px / scale,
-      // physics-engine addJoint: `jd.length = def.length / this.scale`). Only
-      // compare when a length was authored — otherwise the engine replicates
+      // Exported d-joint lengths are native world units (map px / ppm); the
+      // engine stores m_length in its map-px / scale world. Only compare when
+      // a length was authored — otherwise the engine replicates
       // b2DistanceJointDef.Initialize's anchor-distance default and there is
       // no authored value to diff against.
       if (typeof j.length === 'number' && Number.isFinite(j.length)) {
-        if (Math.abs((built as any).m_length - j.length / scale) > 1e-9) {
+        // Share the engine's native zero-length floor so the gate cannot
+        // silently diverge from the construction formula it verifies.
+        const nativeLength = j.length === 0
+          ? NATIVE_DISTANCE_JOINT_MIN_LENGTH
+          : j.length;
+        if (Math.abs((built as any).m_length - (nativeLength * ppm) / scale) > 1e-9) {
           mismatches.push(`joint "${name}" d length mismatch`);
         }
       }
@@ -168,14 +175,15 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
     } else {
       // prismatic (lpj/lsj/p): translation limits + motor force, mirroring the
       // engine's #281 symmetric ±length fallback exactly — a positive authored
-      // length with no explicit translations becomes a symmetric limit.
+      // length with no explicit translations becomes a symmetric limit. The
+      // engine stores these authored map-pixel values in world units.
       const lenLimit = typeof j.length === 'number' && Number.isFinite(j.length) && j.length > 0;
       const lt = j.lowerTranslation !== undefined ? j.lowerTranslation : (lenLimit ? -j.length : 0);
       const ut = j.upperTranslation !== undefined ? j.upperTranslation : (lenLimit ? +j.length : 0);
-      if (Math.abs((built as any).m_lowerTranslation - lt) > 1e-9) {
+      if (Math.abs((built as any).m_lowerTranslation - lt / scale) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic lowerTranslation mismatch`);
       }
-      if (Math.abs((built as any).m_upperTranslation - ut) > 1e-9) {
+      if (Math.abs((built as any).m_upperTranslation - ut / scale) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic upperTranslation mismatch`);
       }
       if (Math.abs((built as any).m_maxMotorForce - (j.maxMotorForce ?? 0)) > 1e-9) {
