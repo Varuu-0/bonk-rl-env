@@ -166,6 +166,11 @@ Environment variables provide an alternative way to configure telemetry. They ta
 | `MANIFOLD_PROFILE` | `minimal`, `standard`, `detailed` | Profile level |
 | `MANIFOLD_DEBUG` | `none`, `error`, `verbose` | Debug level |
 
+Setting `MANIFOLD_PROFILE` or `MANIFOLD_DEBUG` to a valid value also enables
+telemetry, exactly like the equivalent `--profile`/`--debug` CLI flags. An
+explicit `MANIFOLD_TELEMETRY=false` still disables telemetry even when a
+profile or debug variable is set.
+
 #### Precedence Order
 
 Configuration priority (highest to lowest) for the server/config-loader settings

@@ -94,6 +94,53 @@ describe('TelemetryController', () => {
     });
   });
 
+  describe('implicit activation via MANIFOLD_PROFILE/MANIFOLD_DEBUG', () => {
+    it('MANIFOLD_PROFILE alone enables telemetry at the requested level through initialize()', () => {
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.profileLevel).toBe('detailed');
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('MANIFOLD_DEBUG alone enables telemetry through initialize()', () => {
+      process.env.MANIFOLD_DEBUG = 'verbose';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('explicit MANIFOLD_TELEMETRY=false disables telemetry even when MANIFOLD_PROFILE is set', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.profileLevel).toBe('detailed');
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('config telemetry.enabled=false cannot downgrade a MANIFOLD_PROFILE activation', () => {
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+    });
+
+    it('MANIFOLD_DEBUG resolves to the same level as the CLI --debug equivalent', () => {
+      process.env.MANIFOLD_DEBUG = 'error';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      expect(controller.getDebugLevel()).toBe('error');
+    });
+  });
+
   describe('profile levels', () => {
     it('getProfileLevel returns minimal', () => {
       process.argv = ['node', 'script.js', '--profile', 'minimal'];
