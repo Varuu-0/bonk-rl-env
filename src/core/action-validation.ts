@@ -53,7 +53,14 @@ export function encodePlayerInput(action: PlayerInput): number {
  * object, mirroring encodePlayerInput (issue #330).
  */
 export function decodeEncodedAction(bits: number): PlayerInput {
-    const decoded = {} as Record<keyof PlayerInput, boolean>;
+    const decoded: PlayerInput = {
+        left: false,
+        right: false,
+        up: false,
+        down: false,
+        heavy: false,
+        grapple: false,
+    };
     for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
         decoded[ACTION_FIELDS[i]] = !!(bits & ACTION_BIT_FLAGS[i]);
     }
