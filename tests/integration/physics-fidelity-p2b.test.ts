@@ -186,6 +186,37 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
         }
     });
 
+    it('magnitude floor: finite tiny non-zero slen takes the degenerate 300/sf fallback (#372)', () => {
+        // The signed-slen bias engages only when |slen| >= 1e-6 (slen =
+        // length / scale, scale 30). A finite tiny length such as 1e-9·30
+        // yields slen = 1e-9 < 1e-6, so k = len/(2·slen) must NOT be computed
+        // (it would be unbounded); the joint keeps the static motor 300 /
+        // force sf defaults instead of an exploded maxMotorForce. Pins the
+        // magnitude-floor branch for both signs of the signed length.
+        const { engine, close } = makeEngine();
+        try {
+            const tinyPositive = addLsj(engine, {
+                anchorA: { x: 0, y: 100 }, length: 1e-9 * 30,
+                lowerTranslation: -1, upperTranslation: 1,
+                maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(tinyPositive.m_maxMotorForce).toBe(500);
+            expect(tinyPositive.m_motorSpeed).toBe(300);
+
+            const tinyNegative = addLsj(engine, {
+                anchorA: { x: 0, y: -100 }, length: -1e-9 * 30,
+                lowerTranslation: -1, upperTranslation: 1,
+                maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(tinyNegative.m_maxMotorForce).toBe(500);
+            expect(tinyNegative.m_motorSpeed).toBe(300);
+        } finally {
+            close();
+        }
+    });
+
     it('lpj/p prismatic joints are NOT given the lsj bias', () => {
         const { engine, close } = makeEngine();
         try {
