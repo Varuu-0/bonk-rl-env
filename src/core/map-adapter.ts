@@ -52,6 +52,12 @@ interface FlatBody {
     radius?: number;
     scale?: number;
     vertices?: { x: number; y: number }[];
+// Declared vertex frame for flat polygon bodies. The exporter emits
+    // 'absolute' world map-px vertices (`bx + cx + v`); 'local' marks already
+    // body-local input that must not be shifted again. An absent marker
+    // defaults to 'absolute' so maps exported before the marker existed keep
+    // loading unchanged (#318/#344).
+    vertexFrame?: 'absolute' | 'local';
     renderShape?: {
         type: 'rect' | 'circle' | 'polygon';
         bodyPosition: { x: number; y: number };
@@ -215,6 +221,7 @@ function isInternalMapDef(raw: any): raw is MapDef {
                 || (typeof b === 'object' && !('collidesGroup1' in b))));
 }
 
+<<<<<<< HEAD
 interface NativeBodyRef {
     index: number;
     x: number;
@@ -935,17 +942,20 @@ if (body.fixtureIndex !== undefined) {
             let bx0 = b.x, bx1 = b.x, by0 = b.y, by1 = b.y;
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
-            else if (b.vertices && b.vertices.length) {
-                // Polygon vertices are shape-local (scaled) in one unified
-                // convention (world vertex = def.x/y + R(def.angle)·v), so
-                // rotate before the bounds — an unrotated AABB would center
-                // the death circle on the wrong point for rotated polygons.
-                const cosA = Math.cos(b.angle ?? 0);
-                const sinA = Math.sin(b.angle ?? 0);
+else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
+                // Polygon vertices in the normalized MapDef are body-local.
+                // Apply the body transform before folding them into the map
+                // bounds; the exporter input was absolute before toBodyDef()
+                // converted it to this local frame.
+                const angle = b.angle ?? 0;
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
+                bx0 = Infinity; bx1 = -Infinity; by0 = Infinity; by1 = -Infinity;
                 for (const v of b.vertices) {
-                    const vx = (b.x ?? 0) + v.x * cosA - v.y * sinA;
-                    const vy = (b.y ?? 0) + v.x * sinA + v.y * cosA;
-                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx; if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
+                    const wx = b.x + v.x * cosA - v.y * sinA;
+                    const wy = b.y + v.x * sinA + v.y * cosA;
+                    if (wx < bx0) bx0 = wx; if (wx > bx1) bx1 = wx;
+                    if (wy < by0) by0 = wy; if (wy > by1) by1 = wy;
                 }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
