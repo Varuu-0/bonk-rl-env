@@ -63,9 +63,17 @@ function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, se
   const physics: any = (env as any).physics;
   const players: Array<{ id: number; team: number }> = [];
   for (let i = 0; i <= numOpponents; i++) players.push({ id: i, team: i === 0 ? 1 : 2 });
-  const spawns: Array<{ id: number; x: number; y: number }> = [];
-  const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
   env.reset(seed);
+
+  // NativeTrace.spawns describes the round-start state. Capture it before the
+  // first tick advances bodies under gravity or any other map forces.
+  const spawns: Array<{ id: number; x: number; y: number }> = [];
+  for (let i = 0; i <= numOpponents; i++) {
+    const body = physics.playerBodies?.get(i);
+    const pos = body?.GetPosition();
+    spawns.push({ id: i, x: (pos?.x ?? 0) * physics.scale, y: (pos?.y ?? 0) * physics.scale });
+  }
+  const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
 
   // Apply the neutral inputs first, then step, then capture — the same order
   // the comparator replays (inputs → tick → read), so recorded tick t holds
@@ -86,16 +94,7 @@ function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, se
     rec.push({ t, discs: states });
   }
 
-  const trace = rec.toTrace();
-  // Fill in spawns from the actual engine body positions the env spawned.
-  const filledSpawns: Array<{ id: number; x: number; y: number }> = [];
-  for (let i = 0; i <= numOpponents; i++) {
-    const bp = physics.playerBodies?.get(i);
-    const p = bp?.GetPosition();
-    filledSpawns.push({ id: i, x: (p?.x ?? 0) * physics.scale, y: (p?.y ?? 0) * physics.scale });
-  }
-  trace.spawns = filledSpawns;
-  return { trace, env };
+  return { trace: rec.toTrace(), env };
 }
 
 describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE)', () => {
@@ -371,6 +370,79 @@ describe('P4: differential validation — replay comparator', () => {
     // solver path), proving the comparator is genuinely comparing engine output.
     expect(verdict.worst.dx).toBeLessThan(1e-6);
     expect(verdict.worst.dy).toBeLessThan(1e-6);
+  });
+
+  it('captures moving-disc spawns before the first tick and replays the WDB fixture', () => {
+    const raw = loadMap(WDB_GROUND_JOINTS);
+    const rec = recordSimTrace(raw, 60, 1, 7);
+    try {
+      expect(rec.trace.spawns).toEqual([
+        { id: 0, x: -315, y: 212.5 },
+        { id: 1, x: 315, y: 212.5 },
+      ]);
+      // The disc must actually exist at tick 0 (not vacuous) and have moved off
+      // the spawn before the first recorded tick.
+      const tick0Disc = rec.trace.ticks[0].discs[0];
+      expect(tick0Disc).not.toBeNull();
+      expect(tick0Disc!.y).not.toBe(rec.trace.spawns[0]?.y);
+
+      const verdict = compareTrace(rec.trace, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+      });
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksCompared).toBe(60);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      rec.env.close();
+    }
+  });
+
+  it('replays a trace with empty spawns (the userscript fallback) via map-derived spawn points', () => {
+    // The capture userscript omits a spawn entry when the runtime `sx`/`sy`
+    // fields are absent, so the comparator must derive the round-start
+    // positions from the traced map's authored spawns (spawnTeamInfo selection)
+    // and still reproduce the recording exactly.
+    const raw = loadMap(WDB_GROUND_JOINTS);
+    const rec = recordSimTrace(raw, 60, 1, 7);
+    try {
+      const emptySpawns: NativeTrace = JSON.parse(JSON.stringify(rec.trace));
+      emptySpawns.spawns = [];
+      const verdict = compareTrace(emptySpawns, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+      });
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksCompared).toBe(60);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      rec.env.close();
+    }
+  });
+
+  it('engine pre-tick spawns equal the authored map spawns (native↔engine spawn equivalence)', () => {
+    const raw: any = loadMap(WDB_GROUND_JOINTS);
+    // The engine selects the first blue-capable spawn for the AI slot and a
+    // distinct red-capable spawn for the opponent — the same spawnTeamInfo
+    // assignment the native round uses. The recorded pre-tick spawns must land
+    // exactly on those authored coordinates.
+    const blue = raw.spawns.find((s: any) => s.blue === true);
+    const red = raw.spawns.find((s: any) => s.red === true && s !== blue);
+    expect(blue).toBeTruthy();
+    expect(red).toBeTruthy();
+    const rec = recordSimTrace(raw, 3, 1, 7);
+    try {
+      expect(rec.trace.spawns).toEqual([
+        { id: 0, x: blue.x, y: blue.y },
+        { id: 1, x: red.x, y: red.y },
+      ]);
+    } finally {
+      rec.env.close();
+    }
   });
 
   it('a perturbed trace fails the same replay, proving the gate discriminates', () => {
