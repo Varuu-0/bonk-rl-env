@@ -253,7 +253,82 @@ def test_listener_belongs_to_windows_no_listener_or_dead_proc(monkeypatch):
     assert not conftest._listener_belongs_to(5556, _FakeProc(poll_result=0))
 
 
-def test_listener_belongs_to_skips_check_on_posix(monkeypatch):
+def test_posix_listener_pids_parses_ss_output(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = (
+            "LISTEN 0      4096  127.0.0.1:5556       0.0.0.0:*    "
+            'users:(("node",pid=24156,fd=26))\n'
+            "LISTEN 0      4096  [::1]:5556            [::]:*       "
+            'users:(("node",pid=32832,fd=27))\n'
+            "LISTEN 0      4096  127.0.0.1:5557       0.0.0.0:*    "
+            'users:(("tsx",pid=9999,fd=28))\n'
+        )
+
+    monkeypatch.setattr(conftest.subprocess, "run", lambda *a, **k: _Result())
+
+    assert conftest._posix_listener_pids(5556) == {24156, 32832}
+
+
+def test_posix_listener_pids_parses_lsof_output(monkeypatch):
+    class _Result:
+        def __init__(self, returncode, stdout):
+            self.returncode = returncode
+            self.stdout = stdout
+
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return _Result(1, "")
+        return _Result(0, "24156\n32832\n")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == {24156, 32832}
+
+
+def test_posix_listener_pids_empty_when_no_tool_available(monkeypatch):
+    def fake_run(argv, *args, **kwargs):
+        return type("R", (), {"returncode": 2, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == set()
+
+
+def test_posix_process_table_parses_ps_output(monkeypatch):
+    class _Result:
+        returncode = 0
+        stdout = " 10 5\n 11 10\n 12 0\n"
+
+    monkeypatch.setattr(conftest.subprocess, "run", lambda *a, **k: _Result())
+
+    assert conftest._posix_process_table() == {10: 5, 11: 10, 12: 0}
+
+
+def test_listener_belongs_to_posix_confirms_own_tree(monkeypatch):
     monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300})
+    monkeypatch.setattr(conftest, "_posix_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300}
+    )
 
     assert conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_rejects_foreign_listener(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: {300, 9999})
+    monkeypatch.setattr(conftest, "_posix_process_table", lambda: {})
+    monkeypatch.setattr(
+        conftest, "_process_tree_pids", lambda table, pid: {200, 300}
+    )
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())
+
+
+def test_listener_belongs_to_posix_retries_when_listener_unverifiable(monkeypatch):
+    monkeypatch.setattr(conftest.os, "name", "posix")
+    monkeypatch.setattr(conftest, "_listening_pids", lambda port: set())
+
+    assert not conftest._listener_belongs_to(5556, _FakeProc())

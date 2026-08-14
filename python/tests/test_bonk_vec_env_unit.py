@@ -1,6 +1,7 @@
 from collections import UserDict
 from collections.abc import Mapping
 from unittest.mock import MagicMock
+import warnings
 
 import numpy as np
 import pytest
@@ -560,17 +561,35 @@ def test_step_wait_uses_server_config_frame_skip_for_empty_client_config(monkeyp
 
 def test_client_frame_skip_config_accepts_integral_float(monkeypatch):
     """#328 follow-up: an integral float client frame_skip config is kept."""
-    env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": 4.0})
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": 4.0})
     try:
         assert env._frame_skip == 4
     finally:
         env.close()
 
 
-@pytest.mark.parametrize("bad_value", [4.5, 0, -1, 1000, True])
-def test_client_frame_skip_config_rejects_non_integral_or_out_of_range(monkeypatch, bad_value):
-    """#328 follow-up: invalid client frame_skip config falls back to 1."""
-    env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={"frame_skip": bad_value})
+def test_client_frame_skip_config_absent_or_valid_does_not_warn(monkeypatch):
+    with warnings.catch_warnings():
+        warnings.simplefilter("error")
+        env, _, _ = _make_mocked_env(monkeypatch, num_envs=1, config={})
+    try:
+        assert env._frame_skip == 1
+    finally:
+        env.close()
+
+
+@pytest.mark.parametrize("bad_value", [4.5, 0, -1, 1000, True, None, "4"])
+def test_client_frame_skip_config_warns_and_falls_back_on_invalid(
+    monkeypatch, bad_value
+):
+    """#328 follow-up: an invalid client frame_skip config is signalled with a
+    warning, not silently downgraded to window 1."""
+    with pytest.warns(UserWarning, match="ignoring invalid client config frame_skip"):
+        env, _, _ = _make_mocked_env(
+            monkeypatch, num_envs=1, config={"frame_skip": bad_value}
+        )
     try:
         assert env._frame_skip == 1
     finally:

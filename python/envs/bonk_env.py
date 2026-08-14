@@ -1,5 +1,6 @@
 from collections.abc import Mapping
 from numbers import Integral
+import warnings
 
 import gymnasium as gym
 from gymnasium import spaces
@@ -144,7 +145,19 @@ class BonkVecEnv(VecEnv):
         # Keep the client setting as a fallback for older servers, but prefer
         # the effective per-environment value reported by the backend. The
         # server may get frame_skip from config.json rather than this client.
-        self._frame_skip = _frame_skip_window((config or {}).get("frame_skip", 1)) or 1
+        configured_frame_skip = (config or {}).get("frame_skip", 1)
+        self._frame_skip = _frame_skip_window(configured_frame_skip)
+        if self._frame_skip is None:
+            # A provided-but-invalid value (numeric string, None, zero,
+            # negative, fractional, or past the cap) is a misconfiguration,
+            # not an absence: warn instead of silently running window 1.
+            warnings.warn(
+                f"ignoring invalid client config frame_skip {configured_frame_skip!r}: "
+                f"expected an integer or integral float in [1, {MAX_FRAME_SKIP}]; "
+                "using the default window of 1",
+                UserWarning,
+            )
+            self._frame_skip = 1
         self._effective_frame_skip = np.full(
             num_envs, self._frame_skip, dtype=np.int64
         )

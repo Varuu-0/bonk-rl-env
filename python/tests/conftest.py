@@ -1,5 +1,6 @@
 import json
 import pytest
+import re
 import signal
 import subprocess
 import time
@@ -23,10 +24,63 @@ def _listener_pids(netstat_output, port):
     return pids
 
 
+def _ss_listener_pids(ss_output, port):
+    """Parse ``ss -ltnp`` output for PIDs listening on ``port``."""
+    pids = set()
+    for line in ss_output.splitlines():
+        if not any(token.endswith(f":{port}") for token in line.split()):
+            continue
+        for match in re.finditer(r"pid=(\d+)", line):
+            pids.add(int(match.group(1)))
+    return pids
+
+
+def _lsof_listener_pids(lsof_output, port):
+    """Parse ``lsof -iTCP:port -sTCP:LISTEN -t`` output (one PID per line)."""
+    pids = set()
+    for line in lsof_output.splitlines():
+        if line.strip().isdigit():
+            pids.add(int(line.strip()))
+    return pids
+
+
+def _posix_listener_pids(port):
+    """Return PIDs listening on ``port`` on POSIX.
+
+    Uses ``ss -ltnp`` (Linux, iproute2) with an ``lsof`` fallback so the
+    listener answering a connect probe can be identified on POSIX too,
+    instead of blindly trusting that it belongs to the spawned server.
+    """
+    attempts = (
+        (["ss", "-ltnp"], _ss_listener_pids),
+        (
+            ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN", "-t"],
+            _lsof_listener_pids,
+        ),
+    )
+    for argv, parse in attempts:
+        try:
+            result = subprocess.run(
+                argv, capture_output=True, text=True, timeout=10
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            continue
+        if result.returncode != 0:
+            continue
+        pids = parse(result.stdout, port)
+        if pids:
+            return pids
+    return set()
+
+
 def _listening_pids(port):
-    """Return the PIDs currently listening on ``port`` (Windows only)."""
+    """Return the PIDs currently listening on ``port``.
+
+    Windows uses ``netstat -ano -p tcp``; POSIX uses ``ss`` with an ``lsof``
+    fallback, so listener ownership can be verified on both platforms.
+    """
     if os.name != "nt":
-        return set()
+        return _posix_listener_pids(port)
     try:
         output = subprocess.run(
             ["netstat", "-ano", "-p", "tcp"],
@@ -87,6 +141,31 @@ def _windows_process_table():
         try:
             table[int(row["ProcessId"])] = int(row["ParentProcessId"])
         except (KeyError, TypeError, ValueError):
+            continue
+    return table
+
+
+def _posix_process_table():
+    """Snapshot of {pid: parent_pid} for all live POSIX processes."""
+    try:
+        result = subprocess.run(
+            ["ps", "-eo", "pid=,ppid="],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return {}
+    if result.returncode != 0:
+        return {}
+    table = {}
+    for line in result.stdout.splitlines():
+        parts = line.split()
+        if len(parts) < 2:
+            continue
+        try:
+            table[int(parts[0])] = int(parts[1])
+        except ValueError:
             continue
     return table
 
@@ -225,19 +304,23 @@ def _listener_belongs_to(port, proc):
 
     Confirms a successful connect probe reached the server we spawned rather
     than a foreign listener that claimed the ephemeral port after the
-    allocation probe was released. POSIX cannot cheaply identify the
-    listener, so the check is skipped there (the OS-allocated port is bound
-    moments before the child binds it, and any failed spawn retries on a
-    fresh port anyway).
+    allocation probe was released. Runs on Windows (netstat + Win32_Process)
+    and POSIX (``ss``/``lsof`` + ``ps``) so a foreign listener is retried on
+    a fresh port on every platform. When the listener cannot be identified
+    or does not belong to the spawned tree, it returns False so the fixture
+    abandons the port instead of silently running against an unconfigured
+    server.
     """
-    if os.name != "nt":
-        return True
     if proc is None or proc.poll() is not None:
         return False
     listening = _listening_pids(port)
     if not listening:
         return False
-    return listening <= _process_tree_pids(_windows_process_table(), proc.pid)
+    if os.name == "nt":
+        table = _windows_process_table()
+    else:
+        table = _posix_process_table()
+    return listening <= _process_tree_pids(table, proc.pid)
 
 
 @pytest.fixture(scope="session")
