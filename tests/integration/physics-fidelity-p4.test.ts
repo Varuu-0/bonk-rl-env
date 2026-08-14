@@ -36,6 +36,7 @@ import {
   verifyFixtureGates,
   verifyJointGates,
 } from '../../src/core/differential/exact-match-gates';
+import { OUT_OF_BOUNDS_DISTANCE } from '../../src/core/physics-engine';
 import type { NativeTrace } from '../../src/core/differential/native-trace';
 
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
@@ -63,9 +64,17 @@ function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, se
   const physics: any = (env as any).physics;
   const players: Array<{ id: number; team: number }> = [];
   for (let i = 0; i <= numOpponents; i++) players.push({ id: i, team: i === 0 ? 1 : 2 });
-  const spawns: Array<{ id: number; x: number; y: number }> = [];
-  const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
   env.reset(seed);
+
+  // NativeTrace.spawns describes the round-start state. Capture it before the
+  // first tick advances bodies under gravity or any other map forces.
+  const spawns: Array<{ id: number; x: number; y: number }> = [];
+  for (let i = 0; i <= numOpponents; i++) {
+    const body = physics.playerBodies?.get(i);
+    const pos = body?.GetPosition();
+    spawns.push({ id: i, x: (pos?.x ?? 0) * physics.scale, y: (pos?.y ?? 0) * physics.scale });
+  }
+  const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
 
   // Apply the neutral inputs first, then step, then capture — the same order
   // the comparator replays (inputs → tick → read), so recorded tick t holds
@@ -86,16 +95,7 @@ function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, se
     rec.push({ t, discs: states });
   }
 
-  const trace = rec.toTrace();
-  // Fill in spawns from the actual engine body positions the env spawned.
-  const filledSpawns: Array<{ id: number; x: number; y: number }> = [];
-  for (let i = 0; i <= numOpponents; i++) {
-    const bp = physics.playerBodies?.get(i);
-    const p = bp?.GetPosition();
-    filledSpawns.push({ id: i, x: (p?.x ?? 0) * physics.scale, y: (p?.y ?? 0) * physics.scale });
-  }
-  trace.spawns = filledSpawns;
-  return { trace, env };
+  return { trace: rec.toTrace(), env };
 }
 
 describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE)', () => {
@@ -124,6 +124,125 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(parsed.errors.length).toBeGreaterThan(0);
     const v2 = parseNativeTrace({ schema: 'bonk.rl.env.native-trace', version: 99, tps: 30, players: [], spawns: [], ticks: [] });
     expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
+  });
+
+  it('returns a validation error and drops null player entries, preserving valid players', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [null, { id: 0, team: 1 }],
+      spawns: [],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual(['player entries must be objects']);
+    // The returned roster stays safe for downstream iteration even when the
+    // caller ignores the errors (the replay comparator maps over p.id).
+    expect(parsed.trace.players).toEqual([{ id: 0, team: 1 }]);
+  });
+
+  it('returns a validation error and drops non-object player entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [42, 'x', [], { id: 0, team: 1 }],
+      spawns: [],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual([
+      'player entries must be objects',
+      'player entries must be objects',
+      'player entries must be objects',
+    ]);
+    expect(parsed.trace.players).toEqual([{ id: 0, team: 1 }]);
+  });
+
+  it('returns a validation error and drops null tick entries, preserving valid ticks', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [],
+      ticks: [null, { t: 0, discs: [] }],
+    });
+    expect(parsed.errors).toEqual(['tick entries must be objects']);
+    // Replaying this parsed trace must not crash on the null tick (the
+    // comparator dereferences recorded.inputs / recorded.discs).
+    expect(parsed.trace.ticks).toEqual([{ t: 0, discs: [] }]);
+  });
+
+  it('returns a validation error and drops non-object tick entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [],
+      ticks: [null, 7, 'x', { t: 0, discs: [] }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick entries must be objects',
+      'tick entries must be objects',
+      'tick entries must be objects',
+    ]);
+    expect(parsed.trace.ticks).toEqual([{ t: 0, discs: [] }]);
+  });
+
+  it('returns a validation error and drops field-invalid player entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ team: 1 }, { id: -1 }],
+      spawns: [],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual([
+      'player id must be a non-negative number',
+      'player id must be a non-negative number',
+    ]);
+    expect(parsed.trace.players).toEqual([]);
+  });
+
+  it('returns a validation error and drops field-invalid tick entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [],
+      ticks: [{ t: 0 }, { t: -1, discs: [] }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 has no discs array',
+      'tick index invalid: -1',
+    ]);
+    expect(parsed.trace.ticks).toEqual([]);
+  });
+
+  it('returns a validation error and drops null spawn entries, preserving valid spawns', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [null, { id: 0, x: -100, y: -25 }],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual(['spawn entries must be objects']);
+    // buildTraceEnvironment re-seeds from spawn.id/spawn.x/spawn.y, so the
+    // parsed spawns must stay safe for downstream iteration when errors are
+    // ignored (the spawn-filtering path added with this PR).
+    expect(parsed.trace.spawns).toEqual([{ id: 0, x: -100, y: -25 }]);
   });
 });
 
@@ -169,6 +288,65 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       env.close();
     }
   });
+
+  it('joint gate enforces the prismatic translation scale conversion (#322)', () => {
+    // The WDB fixture joints above are all 0/0, so a gate that lagged behind
+    // the engine's map-px → world-unit conversion (e.g. comparing the raw
+    // authored translation, or dividing by the wrong scale) would pass
+    // silently. Pin the gate-side `lt / scale` with a non-zero prismatic limit
+    // built at a NON-default engine scale: the gate must match the engine's
+    // stored world-unit value (authored px / this.scale), and a tampered
+    // unscaled value must be flagged.
+    const raw: any = {
+      metadata: { name: 'gate-scale-probe' },
+      spawns: [
+        { index: 0, name: 'blue', x: -100, y: 0, blue: true },
+        { index: 1, name: 'red', x: 100, y: 0, red: true },
+      ],
+      bodies: [
+        { bodyIndex: 0, name: 'anchor', type: 'rect', bodyType: 'static', static: true, x: 0, y: 0, width: 40, height: 10, density: 0, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
+        { bodyIndex: 1, name: 'slider', type: 'rect', bodyType: 'dynamic', static: false, x: 0, y: 0, width: 20, height: 20, density: 1, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
+      ],
+      physicsJoints: [
+        { index: 0, type: 'lpj', bodyA: 0, bodyB: 1, data: { cc: false, bf: 0, dl: false }, length: 0, collideConnected: false, breakForce: 0, deleteOnBreak: false, anchorA: { x: 0, y: 0 }, angle: 0, lowerTranslation: -50, upperTranslation: 50, enableLimit: true, maxMotorForce: 0 },
+      ],
+    };
+    const trace: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: raw,
+      players: [{ id: 0, team: 1 }],
+      spawns: [{ id: 0, x: -100, y: 0 }],
+      ticks: [],
+    };
+    const mapDef: any = normalizeMap(raw);
+    const env = new BonkEnvironment({
+      numOpponents: 0,
+      seed: 1,
+      mapData: mapDef,
+      randomOpponent: false,
+      maxTicks: 8,
+      physics: { scale: 15 },
+    } as any);
+    try {
+      const gates = verifyJointGates(env, trace);
+      expect(gates.ok).toBe(true);
+      expect(gates.mismatches).toEqual([]);
+
+      // The gate must discriminate on the conversion: an unscaled authored
+      // value left in the engine joint (as a hypothetical gate lag would
+      // compare) must be flagged as a lowerTranslation mismatch.
+      const joint: any = (env as any).physics.createdJoints.get('joint_0');
+      expect(joint).toBeTruthy();
+      joint.m_lowerTranslation = -50;
+      const lagged = verifyJointGates(env, trace);
+      expect(lagged.ok).toBe(false);
+      expect(lagged.mismatches.some(m => /prismatic lowerTranslation mismatch/.test(m))).toBe(true);
+    } finally {
+      env.close();
+    }
+  });
 });
 
 describe('P4: differential validation — replay comparator', () => {
@@ -195,6 +373,79 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.worst.dy).toBeLessThan(1e-6);
   });
 
+  it('captures moving-disc spawns before the first tick and replays the WDB fixture', () => {
+    const raw = loadMap(WDB_GROUND_JOINTS);
+    const rec = recordSimTrace(raw, 60, 1, 7);
+    try {
+      expect(rec.trace.spawns).toEqual([
+        { id: 0, x: -315, y: 212.5 },
+        { id: 1, x: 315, y: 212.5 },
+      ]);
+      // The disc must actually exist at tick 0 (not vacuous) and have moved off
+      // the spawn before the first recorded tick.
+      const tick0Disc = rec.trace.ticks[0].discs[0];
+      expect(tick0Disc).not.toBeNull();
+      expect(tick0Disc!.y).not.toBe(rec.trace.spawns[0]?.y);
+
+      const verdict = compareTrace(rec.trace, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+      });
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksCompared).toBe(60);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      rec.env.close();
+    }
+  });
+
+  it('replays a trace with empty spawns (the userscript fallback) via map-derived spawn points', () => {
+    // The capture userscript omits a spawn entry when the runtime `sx`/`sy`
+    // fields are absent, so the comparator must derive the round-start
+    // positions from the traced map's authored spawns (spawnTeamInfo selection)
+    // and still reproduce the recording exactly.
+    const raw = loadMap(WDB_GROUND_JOINTS);
+    const rec = recordSimTrace(raw, 60, 1, 7);
+    try {
+      const emptySpawns: NativeTrace = JSON.parse(JSON.stringify(rec.trace));
+      emptySpawns.spawns = [];
+      const verdict = compareTrace(emptySpawns, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+      });
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksCompared).toBe(60);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      rec.env.close();
+    }
+  });
+
+  it('engine pre-tick spawns equal the authored map spawns (native↔engine spawn equivalence)', () => {
+    const raw: any = loadMap(WDB_GROUND_JOINTS);
+    // The engine selects the first blue-capable spawn for the AI slot and a
+    // distinct red-capable spawn for the opponent — the same spawnTeamInfo
+    // assignment the native round uses. The recorded pre-tick spawns must land
+    // exactly on those authored coordinates.
+    const blue = raw.spawns.find((s: any) => s.blue === true);
+    const red = raw.spawns.find((s: any) => s.red === true && s !== blue);
+    expect(blue).toBeTruthy();
+    expect(red).toBeTruthy();
+    const rec = recordSimTrace(raw, 3, 1, 7);
+    try {
+      expect(rec.trace.spawns).toEqual([
+        { id: 0, x: blue.x, y: blue.y },
+        { id: 1, x: red.x, y: red.y },
+      ]);
+    } finally {
+      rec.env.close();
+    }
+  });
+
   it('a perturbed trace fails the same replay, proving the gate discriminates', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     // Move every recorded disc 3 map px in +x: far beyond the 0.5 px tolerance.
@@ -214,6 +465,36 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.perTick.some(t => t.mismatches.length > 0)).toBe(true);
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
+    expect(verdict.pass).toBe(false);
+  });
+
+  it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
+    const noData: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: loadMap(SIMPLE_1V1),
+      // Pin respawning off: with `re` on, an OOB death would respawn the disc
+      // back at its spawn point, and a disc that never leaves the death circle
+      // would come back alive — breaking the all-skipped premise.
+      settings: { re: false },
+      players: [{ id: 0, team: 1 }, { id: 1, team: 2 }],
+      // Both discs are placed one unit beyond the engine's OOB death circle
+      // (OUT_OF_BOUNDS_DISTANCE map units from the origin death center) before
+      // the first replay tick, so every native-absent entry agrees with a dead
+      // engine disc.
+      spawns: [
+        { id: 0, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 0 },
+        { id: 1, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 50 },
+      ],
+      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] })),
+    };
+
+    const verdict = compareTrace(noData, { seed: 7 });
+    expect(verdict.skippedNoData).toBe(noData.ticks.length);
+    expect(verdict.ticksCompared).toBe(0);
+    expect(verdict.ticksOutsideTolerance).toBe(0);
+    expect(verdict.worst).toEqual({ dx: 0, dy: 0, dvx: 0, dvy: 0, da: 0, dav: 0 });
     expect(verdict.pass).toBe(false);
   });
 

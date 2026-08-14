@@ -26,6 +26,18 @@ const OBS_FLOAT_FIELDS = [
 
 const OPP_FLOAT_FIELDS = ['x', 'y', 'velX', 'velY'];
 
+const EXPORTED_BOUNDS_MAP = {
+  metadata: { name: 'exported-bounds-transport-test' },
+  physics: { ppm: 12, boundsWidth: 1000, boundsHeight: 800 },
+  spawns: [
+    { x: -100, y: -50, blue: true },
+    { x: 100, y: -50, red: true },
+  ],
+  bodies: [
+    { bodyIndex: 0, fixtureIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+  ],
+};
+
 function assertObservationEqual(a: any, b: any): void {
   for (const field of OBS_FLOAT_FIELDS) {
     expect(a[field]).toBe(b[field]);
@@ -110,5 +122,38 @@ describe('transport precision parity (issue #236)', () => {
       shared.result.info.terminal_observation,
       message.result.info.terminal_observation,
     );
+  });
+
+  it('reports exported map-pixel bounds correctly in both transports (#320)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const run = async (useSharedMemory: boolean) => {
+      const pool = new WorkerPool(1);
+      try {
+        await pool.init(1, {
+          mapData: EXPORTED_BOUNDS_MAP,
+          numOpponents: 0,
+          maxTicks: 10,
+          seed: 1,
+        }, useSharedMemory);
+        const resetObservation = (await pool.reset([1]))[0];
+        const stepObservation = (await pool.step([0]))[0].observation;
+        return { resetObservation, stepObservation };
+      } finally {
+        await pool.close();
+      }
+    };
+
+    const shared = await run(true);
+    const message = await run(false);
+
+    for (const observation of [shared.resetObservation, shared.stepObservation, message.resetObservation, message.stepObservation]) {
+      // Exact equality in both transports: the map-px half bounds round-trip
+      // without 1-ulp drift (500.00000000000006) in either transport.
+      expect(observation.arenaHalfWidth).toBe(500);
+      expect(observation.arenaHalfHeight).toBe(400);
+    }
+    assertObservationEqual(shared.resetObservation, message.resetObservation);
+    assertObservationEqual(shared.stepObservation, message.stepObservation);
   });
 });

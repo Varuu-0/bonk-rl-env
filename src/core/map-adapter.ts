@@ -178,7 +178,7 @@ function isInternalMapDef(raw: any): raw is MapDef {
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
 function toBodyDef(body: FlatBody, index: number): any {
-    const x = body.x ?? 0;
+const x = body.x ?? 0;
     const y = body.y ?? 0;
     // The exporter's flat polygon view stores vertices in map/world pixels
     // (`bx + cx + v`), while MapBodyDef vertices are body-local for Box2D and
@@ -541,7 +541,7 @@ export function normalizeMap(raw: unknown): MapDef {
             let bx0 = b.x, bx1 = b.x, by0 = b.y, by1 = b.y;
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
-            else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
+else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
                 // Polygon vertices in the normalized MapDef are body-local.
                 // Apply the body transform before folding them into the map
                 // bounds; the exporter input was absolute before toBodyDef()

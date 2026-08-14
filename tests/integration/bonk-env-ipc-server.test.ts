@@ -133,6 +133,43 @@ describe('BonkEnv IPC server mode (issue #223)', () => {
     expect(portManager.isAllocated(env.port)).toBe(false);
   });
 
+  it('waits for the IPC listener to unbind before releasing the port (#316)', { timeout: 60000 }, async () => {
+    const port = IPC_SERVER_TEST_START + 600;
+    const portManager = new PortManager({ startPort: port, endPort: port + 10 });
+    const env = new BonkEnv({
+      numEnvs: 1,
+      useSharedMemory: false,
+      portManager,
+      port,
+      enableIpcServer: true,
+    });
+
+    try {
+      await env.start();
+      await env.stop();
+
+      expect(await canConnectTcp(port)).toBe(false);
+
+      const replacement = new BonkEnv({
+        numEnvs: 1,
+        useSharedMemory: false,
+        portManager,
+        port,
+        enableIpcServer: true,
+      });
+      try {
+        await replacement.start();
+        expect(await canConnectTcp(port)).toBe(true);
+      } finally {
+        await replacement.stop();
+      }
+
+      expect(portManager.isAllocated(port)).toBe(false);
+    } finally {
+      await env.stop();
+    }
+  });
+
   it('does not bind a port when IPC server mode is not requested', { timeout: 60000 }, async () => {
     const portManager = new PortManager({ startPort: IPC_SERVER_TEST_START + 100, endPort: IPC_SERVER_TEST_START + 149 });
     const env = new BonkEnv({

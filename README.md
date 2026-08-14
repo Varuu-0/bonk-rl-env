@@ -87,6 +87,30 @@ const env = await init({
 
 If SharedArrayBuffer is not available (or headers not set), the system automatically falls back to standard `postMessage` communication.
 
+### Worker and IPC Tuning
+
+Worker-pool and ZeroMQ tuning can be supplied in `config.json`, through the
+documented environment variables, or through CLI flags. Resolution order is
+config file, environment, then CLI, with the highest-priority value winning.
+
+| Setting | Environment | CLI | Default |
+|:--------|:------------|:----|:--------|
+| Worker count | `NUM_WORKERS` | `--num-workers` | auto-detect |
+| Worker cap | `MAX_WORKERS` | `--max-workers` | `8` |
+| Ring buffer | `RING_BUFFER_SIZE` | `--ring-buffer-size` | `16` |
+| Message timeout | `MESSAGE_TIMEOUT_MS` | `--message-timeout-ms` | `30000` ms |
+| Step timeout | `STEP_TIMEOUT_MS` | `--step-timeout-ms` | `5000` ms |
+| ZMQ backlog | `ZMQ_BACKLOG` | `--zmq-backlog` | `100` |
+| ZMQ send HWM | `SND_HWM` | `--snd-hwm` | `1000` |
+| ZMQ receive HWM | `RCV_HWM` | `--rcv-hwm` | `1000` |
+| ZMQ linger | `LINGER_MS` | `--linger-ms` | `1000` ms |
+| TCP keepalive | `TCP_KEEPALIVE` | `--tcp-keepalive` | `0` |
+
+`IpcBridge` applies the numeric ZeroMQ settings before binding its ROUTER
+socket and reapplies them after a restart. The wire contract remains ROUTER
+plus JSON; alternate `socketType` and `serialization` values are reserved
+until a matching client protocol is available.
+
 ### Result Ownership
 
 SharedArrayBuffer transport still uses pooled internal buffers, but public
@@ -305,31 +329,32 @@ The server handles graceful shutdown across different platforms:
 
 ## Running Tests
 
-The test suite provides a consolidated CLI with multiple ways to run tests:
+The test suite uses Vitest. The legacy runner aliases remain available for
+interactive selection and listing:
 
 ```bash
 # Run all tests (default)
 npm test
 
-# Interactive test runner menu
+# Compatibility runner (interactive in a TTY, full suite otherwise)
 npm run test:runner
 
 # List all available tests
 npm run test:list
 
 # Run specific test categories
-npm run test:physics    # Physics engine tests
-npm run test:prng       # PRNG tests
-npm run test:env        # Environment tests
-npm run test:frameskip  # Frame skip tests
-npm run test:shared     # Shared memory tests
-npm run test:manager    # Env manager tests
-npm run test:map-types    # Map body type tests
-npm run test:collision    # Collision filtering tests  
-npm run test:nophysics    # noPhysics/friction tests
-npm run test:grapple      # Grapple mechanics tests
-npm run test:bounds       # Dynamic arena bounds tests
-npm run test:integration  # Map integration tests
+npm run test:physics      # tests/unit/physics-engine.test.ts
+npm run test:prng         # tests/unit/prng.test.ts
+npm run test:env          # tests/integration/bonk-env.test.ts
+npm run test:frameskip    # tests/integration/frame-skip.test.ts
+npm run test:shared       # tests/integration/shared-memory.test.ts
+npm run test:manager      # tests/integration/env-manager.test.ts
+npm run test:map-types    # tests/integration/map-body-types.test.ts
+npm run test:collision    # tests/integration/collision-filtering.test.ts
+npm run test:nophysics    # tests/integration/nophysics-friction.test.ts
+npm run test:grapple      # tests/integration/grapple-mechanics.test.ts
+npm run test:bounds       # tests/integration/dynamic-arena-bounds.test.ts
+npm run test:integration  # all tests/integration/ suites
 
 # Type check
 npm run typecheck
