@@ -89,8 +89,11 @@ The comparator (`replay-comparator.ts`):
 Verdict: **PASS** only when at least one tick has comparable data and every
 compared tick is inside all per-field tolerances. A disc the native trace
 reports missing but the engine keeps alive (counted per tick) is a mismatch —
-the engine must agree about deaths too. A trace whose ticks are all skipped as
-no-data is not a pass.
+the engine must agree about deaths too. A tick where the engine agrees a
+previously-alive traced disc is dead counts as compared data (it confirms the
+death timing), so a replay that faithfully reproduces mid-run deaths still
+counts every tick. A trace whose ticks are all skipped as no-data is not a
+pass.
 
 ## Exact-match gates
 
