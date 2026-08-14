@@ -425,6 +425,12 @@ export class PhysicsEngine {
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
+  /** Disc IDs whose death occurred on the previous tick and that must be
+   *  respawned at the start of this tick (issue #339). The death stays
+   *  observable for the tick it happened in; the P3b `re` respawn runs one
+   *  tick later, preserving the native "disc returns to spawn" behavior
+   *  without erasing the episode-level death event. */
+  private pendingRespawns: Set<number> = new Set();
   private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> = new Map();
   private capZoneTouches: Array<{ zoneIndex: number; playerId: number; team: string }> = [];
   /** True when the game has teams enabled (native game setting `tea`). */
@@ -1685,6 +1691,23 @@ export class PhysicsEngine {
   }
 
   /**
+   * True when the recorded spawn point can host a respawn: present and inside
+   * the OOB death circle. A spawn outside the circle would respawn a disc
+   * that dies again on the very next tick — unbounded death→respawn churn.
+   * Non-finite coordinates count as out-of-bounds too: `NaN > r²` is false,
+   * so a plain comparison would let a NaN spawn slip through and restart the
+   * churn — the same fail-safe the OOB check itself uses (#271/#276).
+   */
+  private canRespawnAtSpawn(id: number): boolean {
+    const spawn = this.playerSpawnPoints.get(id);
+    if (!spawn) return false;
+    const sx = spawn.x - this.oobCenterX;
+    const sy = spawn.y - this.oobCenterY;
+    const sd2 = sx * sx + sy * sy;
+    return Number.isFinite(sd2) && sd2 <= this.oobRadiusSquared;
+  }
+
+  /**
    * Native `re` respawn: return a disc that just died to its spawn point with
    * cleared grapple and fresh velocity, keeping it alive in the round. Mirrors
    * the native state-sync respawn branch (readable 8595-8606): x/y = sx/sy,
@@ -1699,14 +1722,12 @@ export class PhysicsEngine {
       this.detachPlayer(id, body);
       return;
     }
-    // Fail-safe (malformed-map guard): a spawn point outside the OOB death
-    // circle would respawn a disc that dies again on the very next tick —
-    // unbounded death→respawn churn with telemetry/body work every tick.
-    // Non-finite coordinates must count as out-of-bounds too: `NaN > r²` is
-    // false, so a plain comparison would let a NaN spawn slip through and
-    // restart the churn — the same fail-safe the OOB check itself uses
-    // (#271/#276). Native has no such escape (it would churn identically);
-    // the port detaches instead.
+    // Fail-safe (malformed-map guard), same rule the death pass gates on via
+    // canRespawnAtSpawn: a spawn point outside the OOB death circle would
+    // respawn a disc that dies again on the very next tick — unbounded
+    // death→respawn churn with telemetry/body work every tick (#271/#276).
+    // The check is kept here too so a directly invoked respawnPlayer is safe
+    // even without the death-pass gate.
     const sx = spawn.x - this.oobCenterX;
     const sy = spawn.y - this.oobCenterY;
     const sd2 = sx * sx + sy * sy;
@@ -1732,6 +1753,19 @@ export class PhysicsEngine {
    */
     tick(): void {
         if (!this.world) return;
+        // Deferred P3b respawns (issue #339): a disc that died on the previous
+        // tick with respawning enabled stays dead for that tick so the
+        // environment observes the death (reward, alive flags, termination);
+        // this tick starts by returning it to its spawn, keeping the native
+        // respawn mechanics (teleport, cleared grapple, fresh velocity) one
+        // tick after the death instead of inside the same pass.
+        if (this.pendingRespawns.size > 0) {
+          for (const id of this.pendingRespawns) {
+            const body = this.playerBodies.get(id);
+            if (body) this.respawnPlayer(id, body);
+          }
+          this.pendingRespawns.clear();
+        }
         // This bundled Box2D v2.0 port accepts only one iteration count and
         // ignores the third argument; the second argument carries the resolved
         // velocity iterations. The native client uses Step(dt, velIter, posIter)
@@ -1805,12 +1839,24 @@ export class PhysicsEngine {
 
       if (!this.playerAlive.get(id)) {
         // Native `re` respawning: a disc that died (any type except the
-        // permanent cap-zone elimination, type 3) comes back immediately at
-        // its spawn point (readable 8595-8606; the alive rule at 8463 keeps
-        // type-3 eliminations dead). Without respawning, or for type 3, the
-        // dead disc is detached and frozen.
+        // permanent cap-zone elimination, type 3) comes back at its spawn
+        // point (readable 8595-8606; the alive rule at 8463 keeps type-3
+        // eliminations dead). The respawn is deferred by one tick so the
+        // death remains observable to the environment on the tick it
+        // occurred: the dead disc is queued (body kept) and the START of the
+        // following tick returns it to the spawn (#339). Without respawning,
+        // or for type 3, the dead disc is detached and frozen.
         if (this.respawnEnabled && this.playerDeathType.get(id) !== 3) {
-          this.respawnPlayer(id, body);
+          if (this.canRespawnAtSpawn(id)) {
+            this.pendingRespawns.add(id);
+          } else {
+            // Fail-safe (malformed-map guard): a missing or non-finite spawn
+            // point, or one outside the OOB death circle, would respawn a
+            // disc that dies again on the very next tick — unbounded
+            // death→respawn churn with telemetry/body work every tick
+            // (#271/#276). Detach immediately instead of deferring.
+            this.detachPlayer(id, body);
+          }
         } else {
           this.detachPlayer(id, body);
         }
@@ -1950,6 +1996,18 @@ export class PhysicsEngine {
   }
 
   /**
+   * True while a disc's death is queued for the deferred `re` respawn (issue
+   * #339): it died on the previous tick and will be returned to its spawn at
+   * the start of the next tick. False for permanent deaths — cap-zone
+   * eliminations (type 3), respawning disabled, or an invalid spawn point
+   * that detached immediately. The environment uses this to keep respawnable
+   * deaths observable and rewarded without terminating the episode.
+   */
+  isPendingRespawn(playerId: number): boolean {
+    return this.pendingRespawns.has(playerId);
+  }
+
+  /**
    * Get all alive player IDs.
    */
   getAlivePlayerIds(): number[] {
@@ -1985,6 +2043,7 @@ export class PhysicsEngine {
     this.playerAlive.clear();
     this.detachedPlayerStates.clear();
     this.playerDeathType.clear();
+    this.pendingRespawns.clear();
     this.playerSpawnPoints.clear();
     this.playerGrappleJoints.clear();
     this.grappleEnergy.clear();
