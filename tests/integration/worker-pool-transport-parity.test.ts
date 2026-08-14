@@ -148,8 +148,10 @@ describe('transport precision parity (issue #236)', () => {
     const message = await run(false);
 
     for (const observation of [shared.resetObservation, shared.stepObservation, message.resetObservation, message.stepObservation]) {
-      expect(observation.arenaHalfWidth).toBeCloseTo(500, 5);
-      expect(observation.arenaHalfHeight).toBeCloseTo(400, 5);
+      // Exact equality in both transports: the map-px half bounds round-trip
+      // without 1-ulp drift (500.00000000000006) in either transport.
+      expect(observation.arenaHalfWidth).toBe(500);
+      expect(observation.arenaHalfHeight).toBe(400);
     }
     assertObservationEqual(shared.resetObservation, message.resetObservation);
     assertObservationEqual(shared.stepObservation, message.stepObservation);
