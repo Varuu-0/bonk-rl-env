@@ -55,7 +55,7 @@ describe('config.example.json verified physics values', () => {
     expect(typeof config.player.radius).toBe('number');
   });
 
-it('documents the worker-pool and IPC configuration surfaces', () => {
+  it('documents the worker-pool and IPC configuration surfaces', () => {
     expect(config.workerPool).toMatchObject({
       numWorkers: 0,
       maxWorkers: 8,
