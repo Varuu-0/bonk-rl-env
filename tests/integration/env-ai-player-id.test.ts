@@ -1,7 +1,11 @@
 import { describe, it, expect, afterEach } from 'vitest';
+import * as fs from 'node:fs';
+import * as path from 'node:path';
 import { BonkEnvironment } from '../../src/core/environment';
 import { safeDestroy, EMPTY_INPUT } from '../utils/test-helpers';
 import type { MapDef } from '../../src/core/physics-engine';
+
+const bundledWdbMapPath = path.resolve(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
 
 describe('Environment aiPlayerId wiring (#221)', () => {
   let env: BonkEnvironment | null = null;
@@ -14,11 +18,15 @@ describe('Environment aiPlayerId wiring (#221)', () => {
   });
 
   it('aiPlayerId 1 makes the agent observe player 1 (blue spawn) while player 0 is the opponent (red spawn)', () => {
+    expect(fs.existsSync(bundledWdbMapPath), `bundled default map missing at ${bundledWdbMapPath}`).toBe(true);
     env = new BonkEnvironment({ aiPlayerId: 1, numOpponents: 1, maxTicks: 100, randomOpponent: false });
+    // The existence check alone cannot prove the env consumed the map — a
+    // malformed or unreadable file silently falls back to Default_Box.
+    expect((env as any).config.mapData?.name).toBe('WDB (No Mapshake)');
     const obs = env.reset();
 
-    // The shipped WDB default's blue AI spawn is (-100, 212.5) and the red
-    // opponent spawn is (100, 212.5).
+    // The shipped WDB default map's blue AI spawn is (-100, 212.5) and the
+    // red opponent spawn is (100, 212.5).
     expect(obs.opponents).toHaveLength(1);
     expect(obs.playerX).toBeCloseTo(-100, 6);
     expect(obs.playerY).toBeCloseTo(212.5, 6);
