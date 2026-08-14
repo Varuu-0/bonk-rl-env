@@ -1137,9 +1137,12 @@ export class PhysicsEngine {
     this.extendArenaExtents(body);
   }
 
-  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
+  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number, angle = 0): void {
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
+    // Rotate the sensor body to match an angle-rotated fixture so the sensor
+    // covers exactly the rect (not its enlarged axis-aligned AABB).
+    if (angle) bodyDef.angle = angle;
 
     const body = this.world.CreateBody(bodyDef);
 
