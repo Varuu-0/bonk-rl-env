@@ -126,6 +126,78 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
   });
 
+  it('reports malformed disc entries while preserving null absent discs', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [null, 5, { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0 }],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 1 is malformed: not an object',
+      'tick 0 disc 2 is malformed: alive must be a boolean',
+    ]);
+    // Malformed discs never leak into the typed output: they are replaced with
+    // null, keeping the index-aligned discs array safe for downstream iteration.
+    expect(parsed.trace.ticks[0].discs).toEqual([null, null, null]);
+  });
+
+  it('rejects fractional or misaligned disc ids', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [
+          { id: 1.5, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+          { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+        ],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 0 is malformed: id must be a non-negative integer',
+      'tick 0 disc 1 id mismatch: disc.id=2 does not match slot 1',
+    ]);
+    // Neither a shape-invalid disc nor a valid-but-misaligned disc may leak
+    // into the typed output: both are nulled, so every remaining disc honors
+    // the index-alignment invariant (disc.id === slot).
+    expect(parsed.trace.ticks[0].discs).toEqual([null, null]);
+  });
+
+  it('rejects discs claiming alive:false (presence in state.discs means alive)', () => {
+    // §9.2: alive == presence in state.discs. A disc object present in the
+    // array cannot also claim dead, so `alive: false` is malformed and must
+    // never drive the comparator's input/aliveSeen/diff paths.
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{
+        t: 0,
+        discs: [{ id: 0, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: false }],
+      }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 disc 0 is malformed: alive must be true (presence in state.discs means alive)',
+    ]);
+    // The alive:false disc is dropped from the typed output (nulled), so the
+    // parsed trace only ever carries absent (null) or fully-valid alive discs.
+    expect(parsed.trace.ticks[0].discs[0]).toBeNull();
+  });
+
   it('returns a validation error and drops null player entries, preserving valid players', () => {
     const parsed = parseNativeTrace({
       schema: 'bonk.rl.env.native-trace',
@@ -478,6 +550,72 @@ describe('P4: differential validation — replay comparator', () => {
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
     expect(verdict.pass).toBe(false);
+  });
+
+  it('rejects malformed disc entries and keeps failed verdict metrics finite', () => {
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    bad.ticks[0].discs[0] = 5 as any;
+    const parsed = parseNativeTrace(bad);
+    expect(parsed.errors).toContain('tick 0 disc 0 is malformed: not an object');
+
+    const verdict = compareTrace(bad, { seed: 0 });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
+    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed disc entry' });
+    for (const value of Object.values(verdict.worst)) expect(Number.isFinite(value)).toBe(true);
+  });
+
+  it('does not apply replayed inputs to malformed (non-null) disc entries', () => {
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    // Every tick's slot 0 is a malformed disc; slot 1 stays valid, so only slot
+    // 1 may receive its replayed input.
+    for (const tick of bad.ticks) tick.discs[0] = 5 as any;
+    const applied: number[] = [];
+    const verdict = compareTrace(bad, {
+      seed: 0,
+      onReady: (env) => {
+        const physics: any = (env as any).physics;
+        const orig = physics.applyInput.bind(physics);
+        physics.applyInput = (id: number, input: unknown) => {
+          applied.push(id);
+          return orig(id, input as any);
+        };
+      },
+    });
+    expect(verdict.pass).toBe(false);
+    expect(applied).not.toContain(0);
+    expect(applied.filter(id => id === 1).length).toBeGreaterThan(0);
+  });
+
+  it('does not apply replayed inputs to slot-misaligned disc entries', () => {
+    // parseNativeTrace enforces the slot-alignment invariant at parse time; the
+    // comparator must enforce it too, because a caller can compare an unparsed
+    // (or error-ignoring) trace. A disc whose `id` does not match its array
+    // slot must not drive the input of its slot's player nor be diffed against
+    // that player.
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    // Every tick's slot 1 claims id 0 (misaligned); slot 0 stays valid and
+    // aligned, so only slot 0 may receive its replayed input.
+    for (const tick of bad.ticks) {
+      const d = tick.discs[1];
+      if (d) d.id = 0;
+    }
+    const applied: number[] = [];
+    const verdict = compareTrace(bad, {
+      seed: 0,
+      onReady: (env) => {
+        const physics: any = (env as any).physics;
+        const orig = physics.applyInput.bind(physics);
+        physics.applyInput = (id: number, input: unknown) => {
+          applied.push(id);
+          return orig(id, input as any);
+        };
+      },
+    });
+    expect(verdict.pass).toBe(false);
+    expect(applied).not.toContain(1);
+    expect(applied.filter(id => id === 0).length).toBeGreaterThan(0);
+    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 1, reason: 'malformed disc entry' });
   });
 
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
