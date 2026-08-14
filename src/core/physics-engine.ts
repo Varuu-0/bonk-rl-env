@@ -142,6 +142,15 @@ export const WORLD_AABB_EXTENT = 5000;
  */
 export const MOVE_FORCE = 30.0;
 
+/**
+ * Native `fl` (flipped) ratio: the move-force base is 12 normally and 20 on
+ * flipped maps (DEOBFUSCATION §11 "Move Force", readable
+ * `state.ms.fl ? 20 : 12`), so the flipped base = base × 20/12. The port keeps
+ * its own tuned base (MOVE_FORCE, #234 ascent invariant) and applies the same
+ * ratio, preserving the native proportion on any scale (P0 abstraction rule).
+ */
+export const MOVE_FORCE_FLIP_MULTIPLIER = 20 / 12;
+
 /** Bonk's circular death boundary in native map pixels; consumed as `850 / SCALE` world units in this port. */
 export const OUT_OF_BOUNDS_DISTANCE = 850;
 
@@ -208,6 +217,23 @@ export interface MapBodyDef {
   };
   color?: number;                // Visual color (RGB as integer)
   surfaceName?: string;          // Surface type name
+  /** Original `physics.bodies` index from an exported Bonk map. Render-only
+   * provenance used with MapDef.bodyRenderOrder; ignored by physics. */
+  renderBodyIndex?: number;
+  /** Native fixture geometry retained for rendering after the physics-facing
+   * flattened body representation has been normalized. */
+  renderShape?: {
+    type: 'rect' | 'circle' | 'polygon';
+    bodyPosition: { x: number; y: number };
+    bodyAngle: number;
+    center: { x: number; y: number };
+    angle: number;
+    width?: number;
+    height?: number;
+    radius?: number;
+    vertices?: { x: number; y: number }[];
+    scale?: number;
+  };
   linearDamping?: number;        // Body linear velocity drag
   angularDamping?: number;       // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
@@ -223,6 +249,9 @@ export interface MapDef {
   name: string;
   spawnPoints: MapSpawnPoints;
   bodies: MapBodyDef[];
+  /** Native `physics.bro` order, front-to-back by original body index. This is
+   * render-only metadata; physics consumes the flattened `bodies` array. */
+  bodyRenderOrder?: number[];
   capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
   joints?: Array<{
     type: string; bodyA: string; bodyB: string;
@@ -250,6 +279,24 @@ export interface MapDef {
      * around the origin (see setDeathCircleCenter). */
     deathCenter?: { x: number; y: number };
   };
+  /** Native map settings (`s` in the bonk map format; blank-map defaults
+   * re:false, nc:false, pq:1, gd:25, fl:false — DEOBFUSCATION §33). `pq` gates
+   * solver iterations (1 → 2/6, 2 → 15/15). `gd` is the serialized gravity
+   * field: the native client enforces gravity (0, 20) at round start and never
+   * applies gd at runtime, so the engine keeps config/default gravity (P3 —
+   * runtime gd application is deferred to the P4 differential gate). */
+  settings?: {
+    /** Respawn enabled (native `re`). */
+    re?: boolean;
+    /** No collision (native `nc`). */
+    nc?: boolean;
+    /** Physics quality (native `pq`): 1 = low, 2 = high. */
+    pq?: number;
+    /** Gravity value (native `gd`, sanitized ≥ 2; serialized only). */
+    gd?: number;
+    /** Flipped (native `fl`). */
+    fl?: boolean;
+  };
 }
 
 // ─── PhysicsEngine ───────────────────────────────────────────────────
@@ -264,8 +311,16 @@ export interface MapDef {
 export interface PhysicsEngineOptions {
     /** Fixed physics update rate (ticks/second); dt = 1 / this value. Default: TPS (30). */
     ticksPerSecond?: number;
-    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2). */
+    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2),
+     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
     velocityIterations?: number;
+    /** Position constraint solver iterations per tick. Default: POSITION_ITERATIONS (6),
+     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
+    positionIterations?: number;
+    /** Native map setting `pq` (physics quality): 1 = low (2 velocity / 6 position
+     *  iterations), 2 = high (15 / 15). Explicit `velocityIterations` /
+     *  `positionIterations` always win over the pq-derived defaults. */
+    physicsQuality?: number;
     /** Pixels-per-metre conversion for exported map coordinates. Default: SCALE (30). */
     scale?: number;
     /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
@@ -291,6 +346,18 @@ export interface PhysicsEngineOptions {
     /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7).
      *  `moveForce × heavyForceMultiplier` must exceed `gravityY` for up+heavy to lift. */
     heavyForceMultiplier?: number;
+    /** Native map setting `fl` (flipped): when true the movement-force base is
+     *  `flippedMoveForce` instead of `moveForce` (native 12 → 20, §11). */
+    flipped?: boolean;
+    /** Move-force base used while `flipped` is true. Default: MOVE_FORCE ×
+     *  MOVE_FORCE_FLIP_MULTIPLIER (30 × 20/12 = 50), preserving the native
+     *  12 → 20 ratio on the port's tuned base. */
+    flippedMoveForce?: number;
+    /** Native map setting `re` (respawning): when true a disc that dies
+     *  (except the permanent cap-zone elimination, death type 3) respawns
+     *  immediately at its spawn point with cleared grapple (native state-sync
+     *  branch, readable 8595-8606). */
+    respawnEnabled?: boolean;
 }
 
 /** Frozen final transforms of a dead disc, snapshotted when its body is detached
@@ -346,6 +413,10 @@ export class PhysicsEngine {
   private tps: number = TPS;
   private dt: number = DT;
   private velocityIterations: number = VELOCITY_ITERATIONS;
+  private positionIterations: number = POSITION_ITERATIONS;
+  /** Native map `pq` gate: 1 (low) → 2/6, 2 (high) → 15/15 (DEOBFUSCATION
+   *  §Solver Iterations). Explicit iteration options override the pq defaults. */
+  private physicsQuality: number = 1;
   private scale: number = SCALE;
   private gravityX: number = GRAVITY_X;
   private gravityY: number = GRAVITY_Y;
@@ -354,6 +425,16 @@ export class PhysicsEngine {
   private arenaBoundsMargin: number = ARENA_BOUNDS_MARGIN;
   private moveForce: number = MOVE_FORCE;
   private heavyForceMultiplier: number = HEAVY_FORCE_MULTIPLIER;
+  /** Native map setting `fl`: flipped maps use the flipped move-force base. */
+  private flipped: boolean = false;
+  /** Move-force base used while flipped (native 12 → 20, §11). */
+  private flippedMoveForce: number = MOVE_FORCE * MOVE_FORCE_FLIP_MULTIPLIER;
+  /** Native map setting `re`: dead discs respawn at their spawn point
+   *  (cap-zone eliminations stay permanent). */
+  private respawnEnabled: boolean = false;
+  /** Spawn point per player (world units), recorded at addPlayer for `re`
+   *  respawns (native `sx`/`sy`). */
+  private playerSpawnPoints: Map<number, { x: number; y: number }> = new Map();
   /** Running arena extents in metres, folded in O(1) per addBody so map build
    *  and episode reset stay linear instead of rescanning every platform body
    *  (the old per-add full pass was O(bodies²)). */
@@ -396,7 +477,13 @@ export class PhysicsEngine {
     // `new PhysicsEngine()` keeps the exact behaviour it always had.
     this.tps = PhysicsEngine.sanitizePositive(options.ticksPerSecond, TPS);
     this.dt = 1 / this.tps;
-    this.velocityIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.velocityIterations, VELOCITY_ITERATIONS, 1);
+    // Native `pq` gate (map settings): low 2/6, high 15/15. Explicit iteration
+    // options are the documented override and win over the pq-derived defaults.
+    this.physicsQuality = options.physicsQuality === 2 ? 2 : 1;
+    const pqVelocity = this.physicsQuality === 2 ? 15 : VELOCITY_ITERATIONS;
+    const pqPosition = this.physicsQuality === 2 ? 15 : POSITION_ITERATIONS;
+    this.velocityIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.velocityIterations, pqVelocity, 1);
+    this.positionIterations = PhysicsEngine.sanitizeIntegerAtLeast(options.positionIterations, pqPosition, 1);
     this.scale = PhysicsEngine.sanitizePositive(options.scale, SCALE);
     this.gravityX = PhysicsEngine.sanitizeFinite(options.gravityX, GRAVITY_X);
     this.gravityY = PhysicsEngine.sanitizeFinite(options.gravityY, GRAVITY_Y);
@@ -407,6 +494,9 @@ export class PhysicsEngine {
     this.arenaBoundsMargin = PhysicsEngine.sanitizeNonNegative(options.arenaBoundsMargin, ARENA_BOUNDS_MARGIN);
     this.moveForce = PhysicsEngine.sanitizePositive(options.moveForce, MOVE_FORCE);
     this.heavyForceMultiplier = PhysicsEngine.sanitizeNonNegative(options.heavyForceMultiplier, HEAVY_FORCE_MULTIPLIER);
+    this.flipped = PhysicsEngine.sanitizeBoolean(options.flipped, false);
+    this.flippedMoveForce = PhysicsEngine.sanitizePositive(options.flippedMoveForce, this.moveForce * MOVE_FORCE_FLIP_MULTIPLIER);
+    this.respawnEnabled = PhysicsEngine.sanitizeBoolean(options.respawnEnabled, false);
     this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
     this.warnAscentInvariantBreak();
     this.createWorld();
@@ -432,10 +522,13 @@ export class PhysicsEngine {
     // only ever helps a disc rise, so it is always in a lifting regime.
     if (this.gravityY <= 0) return;
     const gravity = this.gravityY;
-    const heavyLift = this.moveForce * this.heavyForceMultiplier;
-    if (gravity >= this.moveForce) {
+    // Flipped maps run on the flipped base — the invariant must hold for the
+    // base that is actually applied per tick.
+    const base = this.flipped ? this.flippedMoveForce : this.moveForce;
+    const heavyLift = base * this.heavyForceMultiplier;
+    if (gravity >= base) {
       console.warn(
-        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} >= moveForce ${this.moveForce.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
+        `[PhysicsEngine] gravityY ${gravity.toFixed(1)} >= moveForce ${base.toFixed(1)}: pure 'up' cannot beat gravity (#234 ascent invariant broken).`,
       );
     } else if (gravity >= heavyLift) {
       console.warn(
@@ -854,6 +947,20 @@ export class PhysicsEngine {
     this.updateAllPlayerFilters();
   }
 
+  /** Enable/disable the native flipped (`fl`) move-force base. */
+  setFlipped(enabled: boolean): void {
+    this.flipped = !!enabled;
+    // The #234 ascent invariant is checked against the EFFECTIVE base; a
+    // runtime flip can break it after construction, so re-validate here
+    // (the constructor-only warning would otherwise miss the regression).
+    this.warnAscentInvariantBreak();
+  }
+
+  /** Enable/disable the native respawning (`re`) mode. */
+  setRespawnEnabled(enabled: boolean): void {
+    this.respawnEnabled = !!enabled;
+  }
+
   /**
    * Native last-hit attribution (`lhid`/`lht`) for a player.
    * Returns null once the 120-tick attribution window has expired.
@@ -1167,6 +1274,53 @@ export class PhysicsEngine {
       jd.enableMotor = !!def.enableMotor;
       jd.motorSpeed = def.motorSpeed ?? 0;
       jd.maxMotorForce = def.maxMotorForce ?? 0;
+
+      // §33.8 lsj initial-side spring bias (readable 7600-7630):
+      //   θ = bodyA.GetAngle() − π/2
+      //   anchorWorld = (sax + safeCos(θ)·(−slen), say + safeSin(θ)·(−slen))
+      //   rel = bodyA.GetPosition() − anchorWorld;  len = |rel|
+      //   φ = safeATan2(rel.y, rel.x) − bodyA.GetAngle();  φ %= 2π
+      //   len = −len unless φ ∈ [−π, 0) ∪ (π, 2π]
+      //   k = (len/(2·slen) − 0.5)·2
+      //   maxMotorForce = sf·|k|;  if (k > 0) motorSpeed = −300
+      // Native input pipeline: the map decoder overwrites sax/say with the
+      // body's decoded position and scales slen /= ppm, sf /= ppm² (readable
+      // 6448-6453), and the world build creates each body at that exact
+      // position (readable 7449). For such decoder-normalized maps the formula
+      // collapses to rel = R(θ)·slen, len = slen, φ ≡ −π/2, hence k ≡ 0 —
+      // maxMotorForce = sf·|k| = 0 and motorSpeed stays at the hardcoded 300
+      // (the native computes the same result). The nonzero-k branch engages
+      // only when an authored anchor differs from the connected body's build
+      // position. `k` is dimensionless, so the formula is evaluated in engine
+      // world units. Degenerate inputs (absent/zero slen, invalid anchor) keep
+      // the static 300/sf defaults — the native would divide by zero into
+      // NaN/Infinity (corrupt-map guard, consistent with #271/#276).
+      if (type === 'lsj') {
+        const sf = Number.isFinite(def.maxMotorForce) ? def.maxMotorForce : 0;
+        const slen = lenLimit ? def.length / this.scale : 0;
+        const anchorValid = def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y);
+        let motor = 300; // native hardcodes 300, then signs it when k > 0
+        let force = sf;
+        if (slen > 0 && anchorValid) {
+          const anchor = makeAnchorA(def.anchorA);
+          const theta = bodyA.GetAngle() - Math.PI / 2;
+          const ax = anchor.x + Math.cos(theta) * -slen;
+          const ay = anchor.y + Math.sin(theta) * -slen;
+          const pos = bodyA.GetPosition();
+          const relX = pos.x - ax;
+          const relY = pos.y - ay;
+          let len = Math.sqrt(relX * relX + relY * relY);
+          let phi = Math.atan2(relY, relX) - bodyA.GetAngle();
+          phi = phi % (2 * Math.PI);
+          if (!((phi < 0 && phi >= -Math.PI) || phi > Math.PI)) len = -len;
+          const k = (len / (slen * 2) - 0.5) * 2;
+          force = sf * Math.abs(k);
+          if (k > 0) motor = -300;
+        }
+        jd.motorSpeed = motor;
+        jd.maxMotorForce = force;
+      }
+
       created = this.world.CreateJoint(jd);
     } else if (type === 'g' || type === 'gear') {
       const j1 = def.jointA ? (this.createdJoints.get(def.jointA) ?? null) : null;
@@ -1246,6 +1400,9 @@ export class PhysicsEngine {
     this.playerHeavyState.set(id, false);
     this.playerAlive.set(id, true);
     this.playerDeathType.set(id, 0);
+    // Record the spawn point (world units) for `re` respawns — the native
+    // `sx`/`sy` a disc returns to on respawn (readable 8599-8602).
+    this.playerSpawnPoints.set(id, { x: x / this.scale, y: y / this.scale });
     // Native a1a spawn value (DEOBFUSCATION §32.3, line 6866).
     this.grappleEnergy.set(id, A1A_SPAWN);
   }
@@ -1276,10 +1433,14 @@ export class PhysicsEngine {
     // no per-map `ppm` factor is needed. Heavy then damps the vector via the
     // configured heavy multiplier. The base and the heavy damp are the
     // documented `player.moveForce` / `player.heavyMassMultiplier` surfaces.
-    if (input.left) force.x -= this.moveForce;
-    if (input.right) force.x += this.moveForce;
-    if (input.up) force.y -= this.moveForce;
-    if (input.down) force.y += this.moveForce;
+    // Flipped maps (`fl`) move on the flipped force base — native `12` vs `20`
+    // (DEOBFUSCATION §11). The base and the heavy damp are the documented
+    // `player.moveForce` / `player.heavyMassMultiplier` surfaces.
+    const base = this.flipped ? this.flippedMoveForce : this.moveForce;
+    if (input.left) force.x -= base;
+    if (input.right) force.x += base;
+    if (input.up) force.y -= base;
+    if (input.down) force.y += base;
 
     if (input.heavy) force.Multiply(this.heavyForceMultiplier);
     body.ApplyForce(force, body.GetWorldCenter());
@@ -1544,14 +1705,61 @@ export class PhysicsEngine {
   }
 
   /**
+   * Native `re` respawn: return a disc that just died to its spawn point with
+   * cleared grapple and fresh velocity, keeping it alive in the round. Mirrors
+   * the native state-sync respawn branch (readable 8595-8606): x/y = sx/sy,
+   * swing cleared (`delete disc.swing`), `ni` new-spawn marker. The engine
+   * does not model spawn velocity, so the body re-spawns at rest; a1a is NOT
+   * reset (the native branch does not touch it). Falls back to detach when no
+   * spawn point is recorded.
+   */
+  private respawnPlayer(id: number, body: any): void {
+    const spawn = this.playerSpawnPoints.get(id);
+    if (!spawn) {
+      this.detachPlayer(id, body);
+      return;
+    }
+    // Fail-safe (malformed-map guard): a spawn point outside the OOB death
+    // circle would respawn a disc that dies again on the very next tick —
+    // unbounded death→respawn churn with telemetry/body work every tick.
+    // Non-finite coordinates must count as out-of-bounds too: `NaN > r²` is
+    // false, so a plain comparison would let a NaN spawn slip through and
+    // restart the churn — the same fail-safe the OOB check itself uses
+    // (#271/#276). Native has no such escape (it would churn identically);
+    // the port detaches instead.
+    const sx = spawn.x - this.oobCenterX;
+    const sy = spawn.y - this.oobCenterY;
+    const sd2 = sx * sx + sy * sy;
+    if (!Number.isFinite(sd2) || sd2 > this.oobRadiusSquared) {
+      this.detachPlayer(id, body);
+      return;
+    }
+    this.releaseGrapple(id);
+    this.pendingSwingDestroy.delete(id);
+    body.SetXForm(new b2Vec2(spawn.x, spawn.y), 0);
+    body.SetLinearVelocity(new b2Vec2(0, 0));
+    body.SetAngularVelocity(0);
+    body.WakeUp();
+    this.detachedPlayerStates.delete(id);
+    this.playerAlive.set(id, true);
+    this.playerDeathType.set(id, 0);
+    this.playerHeavyState.set(id, false);
+  }
+
+  /**
    * Advance the physics simulation by exactly one tick (1/30s).
    * This is the core synchronous step — no real-time clock involved.
    */
     tick(): void {
         if (!this.world) return;
         // This bundled Box2D v2.0 port accepts only one iteration count and
-        // ignores the third argument. The real client uses Step(dt, 2, 6);
-        // the configured solver iterations drive the velocity-iteration count.
+        // ignores the third argument; the second argument carries the resolved
+        // velocity iterations. The native client uses Step(dt, velIter, posIter)
+        // — 2/6 low, 15/15 high (pq, DEOBFUSCATION §Solver Iterations) — so the
+        // position count cannot be expressed exactly in this port. The engine
+        // still resolves and exposes both counts (positionIterations) so callers
+        // and tests see the pq contract; the port limitation is tracked for the
+        // P4 differential gate.
     // Count down last-hit attribution timers (native lht) before the step so
     // contacts created during this Step keep their full 120-tick window.
     for (const [id, ticks] of this.lastHitTicks) {
@@ -1568,7 +1776,7 @@ export class PhysicsEngine {
     this.updateGrappleEnergy();
     this.updateGrappleJointTuning();
 
-        this.world.Step(this.dt, this.velocityIterations, POSITION_ITERATIONS);
+        this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
     // Process cap-zone completion countdowns (before this tick's touches)
@@ -1616,7 +1824,16 @@ export class PhysicsEngine {
       }
 
       if (!this.playerAlive.get(id)) {
-        this.detachPlayer(id, body);
+        // Native `re` respawning: a disc that died (any type except the
+        // permanent cap-zone elimination, type 3) comes back immediately at
+        // its spawn point (readable 8595-8606; the alive rule at 8463 keeps
+        // type-3 eliminations dead). Without respawning, or for type 3, the
+        // dead disc is detached and frozen.
+        if (this.respawnEnabled && this.playerDeathType.get(id) !== 3) {
+          this.respawnPlayer(id, body);
+        } else {
+          this.detachPlayer(id, body);
+        }
       }
     }
 
@@ -1788,6 +2005,7 @@ export class PhysicsEngine {
     this.playerAlive.clear();
     this.detachedPlayerStates.clear();
     this.playerDeathType.clear();
+    this.playerSpawnPoints.clear();
     this.playerGrappleJoints.clear();
     this.grappleEnergy.clear();
     this.swingJustStarted.clear();

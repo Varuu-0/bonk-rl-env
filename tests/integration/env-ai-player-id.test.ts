@@ -17,8 +17,8 @@ describe('Environment aiPlayerId wiring (#221)', () => {
     env = new BonkEnvironment({ aiPlayerId: 1, numOpponents: 1, maxTicks: 100, randomOpponent: false });
     const obs = env.reset();
 
-    // The bundled WDB default map's Blue Offense AI spawn is (-100, 212.5)
-    // and the Red Offense opponent spawn is (100, 212.5).
+// The shipped WDB default map's blue AI spawn is (-100, 212.5) and the
+    // red opponent spawn is (100, 212.5).
     expect(obs.opponents).toHaveLength(1);
     expect(obs.playerX).toBeCloseTo(-100, 6);
     expect(obs.playerY).toBeCloseTo(212.5, 6);

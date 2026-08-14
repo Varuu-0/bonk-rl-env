@@ -6,7 +6,7 @@ TypeScript test suites for the Bonk.io RL Environment. 361 test cases across 14 
 
 | File | Suite | Test Cases | Coverage |
 |------|-------|------------|----------|
-| `runner.ts` | Test runner | — | CLI runner with `pass`/`fail` output parsing and consolidated summary report |
+| `runner.ts` | Test runner | — | Compatibility CLI that delegates to Vitest and preserves the legacy runner commands |
 | `bonk-env.test.ts` | Gymnasium API | 24 | `reset()`, `step()`, observation shape, reward, truncation, seeding |
 | `collision-filtering.test.ts` | Collision group filtering | 33 | `collisionGroup`, `collisionMask`, group bitmasks, sensor interactions |
 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 | `worldBoundary` expansion, shrink triggers, bounds recalculation |
@@ -26,39 +26,32 @@ TypeScript test suites for the Bonk.io RL Environment. 361 test cases across 14 
 # All tests (336 cases)
 npm test
 
-# Interactive runner (menu-based selection)
+# Compatibility runner (interactive in a TTY, full suite otherwise)
 npm run test:runner
 
 # List available suites
 npm run test:list
 
 # Individual suites
-npm run test:physics        # suite 1  — Box2D physics
-npm run test:prng           # suite 2  — Deterministic RNG
-npm run test:env            # suite 3  — Gymnasium API
-npm run test:frameskip      # suite 4  — Frame skip
-npm run test:shared         # suite 5  — Shared memory
-npm run test:manager        # suite 6  — Pool management
-npm run test:map-types      # suite 7  — Map body types
-npm run test:collision      # suite 8  — Collision filtering
-npm run test:nophysics      # suite 9  — Sensor bodies & friction
-npm run test:grapple        # suite 10 — Grapple mechanics
-npm run test:bounds         # suite 11 — Dynamic arena bounds
-npm run test:integration    # suite 12 — Real map loading
+npm run test:physics        # tests/unit/physics-engine.test.ts
+npm run test:prng           # tests/unit/prng.test.ts
+npm run test:env             # tests/integration/bonk-env.test.ts
+npm run test:frameskip       # tests/integration/frame-skip.test.ts
+npm run test:shared          # tests/integration/shared-memory.test.ts
+npm run test:manager         # tests/integration/env-manager.test.ts
+npm run test:map-types       # tests/integration/map-body-types.test.ts
+npm run test:collision       # tests/integration/collision-filtering.test.ts
+npm run test:nophysics       # tests/integration/nophysics-friction.test.ts
+npm run test:grapple         # tests/integration/grapple-mechanics.test.ts
+npm run test:bounds          # tests/integration/dynamic-arena-bounds.test.ts
+npm run test:integration     # all tests/integration/ suites
 ```
 
-## Output Format
+## Output
 
-Each test file prints results in a parseable format:
-
-```
-+ test name              # pass
-X test name              # fail
-X test name: details     # fail with details
-RESULTS: N passed, M failed
-```
-
-The runner aggregates all suite outputs into a consolidated summary with pass rates, timing analysis, and failure details.
+Vitest prints the test results and controls the exit code. The compatibility
+runner delegates directly to Vitest, so it no longer parses the output or
+produces a separate consolidated report.
 
 ## Requirements
 

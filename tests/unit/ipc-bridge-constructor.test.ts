@@ -118,6 +118,10 @@ afterEach(() => {
   closeSpy.mockRestore();
   sendSpy.mockRestore();
   currentBridge = null;
+  // A double-close regression test simulates the socket already being closed
+  // (as start()'s catch leaves it after a failed bind); reset it so later
+  // tests start from the pristine open-socket state.
+  delete (mockSock as any).closed;
 });
 
 describe('IpcBridge constructor', () => {
@@ -344,6 +348,17 @@ describe('IpcBridge close() (lines 159-173)', () => {
     closeSpy.mockImplementation(() => { throw new Error('Socket already closed'); });
     const bridge = new IpcBridge({ server: { port: 12354 } });
     await expect(bridge.close()).resolves.toBeUndefined();
+  });
+
+  it('does not close the socket a second time when close() follows a failed bind (issue #326)', async () => {
+    // start()'s catch closes the ROUTER handle when a bind fails. A later
+    // close() (server.ts rolls back a failed start via serverBridge.close())
+    // must not close the already-closed socket a redundant second time.
+    (mockSock as any).closed = true;
+    const bridge = new IpcBridge({ server: { port: 12354 } });
+    closeSpy.mockClear();
+    await bridge.close();
+    expect(closeSpy).not.toHaveBeenCalled();
   });
 
   it('closes the worker pool (line 172)', async () => {

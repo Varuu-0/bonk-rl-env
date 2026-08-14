@@ -132,6 +132,13 @@ export interface EnvironmentConfig {
     teamsEnabled?: boolean;
     /** Native no-collision physics mode (`nc`): discs never collide (default false) */
     noCollide?: boolean;
+    /** Native flipped map mode (`fl`): flipped move-force base (default false).
+     *  Explicit config wins over the map's `settings.fl` (symmetric with
+     *  `noCollide` vs `settings.nc`). */
+    flipped?: boolean;
+    /** Native respawning mode (`re`): dead discs respawn at their spawn point
+     *  (default false). Explicit config wins over the map's `settings.re`. */
+    respawnEnabled?: boolean;
     /** Documented physics.* tuning forwarded to the PhysicsEngine (issue #217).
      *  Absent keys keep the engine's sanity defaults, so an env built without a
      *  physics section runs with the exact verified native values. */
@@ -158,6 +165,9 @@ export interface EnvironmentConfig {
 export interface PhysicsTuningConfig {
     ticksPerSecond?: number;
     solverIterations?: number;
+    /** Position constraint solver iterations per tick. Defaults follow the map's
+     * native `pq` setting (6 low / 15 high); explicit values override it. */
+    positionIterations?: number;
     scale?: number;
     gravityX?: number;
     gravityY?: number;
@@ -458,7 +468,11 @@ export class BonkEnvironment {
             randomOppHeavyProb: oppHeavyProb,
             randomOppGrappleProb: oppGrappleProb,
             teamsEnabled: config.teamsEnabled ?? ((mapDef as any).physics?.teams ?? false),
-            noCollide: config.noCollide ?? ((mapDef as any).physics?.nc ?? false),
+            noCollide: config.noCollide ?? (mapDef as any).settings?.nc ?? false,
+            // Symmetric with noCollide: explicit config overrides the map's
+            // per-map settings (P3b fl/re gating).
+            flipped: config.flipped ?? !!((mapDef as any).settings?.fl),
+            respawnEnabled: config.respawnEnabled ?? !!((mapDef as any).settings?.re),
             physics: config.physics ?? {},
             arena: config.arena ?? {},
             player: config.player ?? {},
@@ -496,6 +510,18 @@ export class BonkEnvironment {
         this.physics = new PhysicsEngine({
             ticksPerSecond: config.physics?.ticksPerSecond,
             velocityIterations: config.physics?.solverIterations,
+            positionIterations: config.physics?.positionIterations,
+            // Per-map native physics quality (pq): 2 → 15/15 solver iterations,
+            // anything else → 2/6 (DEOBFUSCATION §Solver Iterations). Explicit
+            // solverIterations/positionIterations config keys override it.
+            physicsQuality: this.config.mapData.settings?.pq,
+            // Per-map native settings (P3b): `fl` flips the move-force base,
+            // `re` enables immediate respawn on death (except cap-zone
+            // eliminations). Resolved at construction (config wins over the
+            // map) and forwarded like pq — the raw config object is not a
+            // settings source the engine re-reads.
+            flipped: this.config.flipped,
+            respawnEnabled: this.config.respawnEnabled,
             scale: config.physics?.scale,
             gravityX: config.physics?.gravityX,
             gravityY: config.physics?.gravityY,
