@@ -11,7 +11,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
-import { loadConfig, resetConfig, mergeEngineSections } from '../../src/config/config-loader';
+import { loadConfig, resetConfig, mergeEngineSections, getConfig } from '../../src/config/config-loader';
 
 describe('config-loader physics/arena/player surfaces (#217)', () => {
     const testDir = path.join(__dirname, '..', 'fixtures', 'config-loader-physics-' + process.pid);
@@ -327,6 +327,18 @@ describe('config-loader physics/arena/player surfaces (#217)', () => {
             loadConfig(testDir);
             expect(mergeEngineSections({}).physics.solverIterations).toBeUndefined();
             expect(mergeEngineSections({}).physics.gravityY).toBe(3);
+        });
+
+        it('keeps the physics provenance marker out of the spreadable config surface (#325)', () => {
+            fs.writeFileSync(configPath, JSON.stringify({ physics: { solverIterations: 2 } }));
+            loadConfig(testDir);
+
+            // The provenance marker is attached to the resolved config...
+            expect(Object.getOwnPropertySymbols(getConfig())).toHaveLength(1);
+            // ...but non-enumerable: a spread cannot copy it (by reference or
+            // otherwise), so it can never leak into a deepMerge result.
+            expect(Object.getOwnPropertySymbols({ ...getConfig() })).toHaveLength(0);
+            expect(mergeEngineSections({}).physics.solverIterations).toBe(2);
         });
 
         it('preserves authored environment and CLI solverIterations in the merged sections (#325)', () => {

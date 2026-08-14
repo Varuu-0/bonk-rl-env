@@ -1041,7 +1041,16 @@ const PHYSICS_PROVENANCE = Symbol('physics-provenance');
 function physicsProvenance(config: AppConfig): Set<string> {
     const holder = config as AppConfig & { [PHYSICS_PROVENANCE]?: Set<string> };
     if (holder[PHYSICS_PROVENANCE] === undefined) {
-        holder[PHYSICS_PROVENANCE] = new Set();
+        const set = new Set<string>();
+        // Non-enumerable so a deepMerge spread never copies it by reference
+        // (a plain assignment would make it enumerable and the guarantee in
+        // the docstring above would only hold by call ordering).
+        Object.defineProperty(holder, PHYSICS_PROVENANCE, {
+            value: set,
+            enumerable: false,
+            writable: true,
+            configurable: true,
+        });
     }
     return holder[PHYSICS_PROVENANCE] as Set<string>;
 }
