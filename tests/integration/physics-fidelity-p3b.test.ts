@@ -418,10 +418,6 @@ expect(engine.getPlayerState(0).y).toBeCloseTo(0, 4);
             engine.destroy();
         }
     });
-        } finally {
-            engine.destroy();
-        }
-    });
 
     it('a respawn point whose disc overlaps a lethal fixture edge detaches (radius-aware, not center-only)', () => {
         const engine = new PhysicsEngine({ respawnEnabled: true });
