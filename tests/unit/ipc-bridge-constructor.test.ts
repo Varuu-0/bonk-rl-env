@@ -11,10 +11,17 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const sock: { bind: () => Promise<void>; unbind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+  const sock: { closed: boolean; bind: () => Promise<void>; unbind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+    closed: false,
     bind: async () => {},
     unbind: async () => {},
-    close: () => {},
+    // A closed ZMQ socket is permanently destroyed and can never be re-bound
+    // (bind() throws "Socket is closed"), so close() marks the mock closed and
+    // start() then recreates the transport exactly like production
+    // (ipc-bridge.ts:263-267).
+    close: () => {
+      sock.closed = true;
+    },
     send: async () => {},
   };
   const controller = {
@@ -24,7 +31,13 @@ const mocks = vi.hoisted(() => {
   return {
     sock,
     controller,
-    Router: function Router() { return sock; },
+    // A fresh Router models the recreated transport after close(): the
+    // returned socket is open again, so restart tests can observe the
+    // recreation branch (new Router + re-wrapped send) firing.
+    Router: vi.fn(function Router() {
+      sock.closed = false;
+      return sock;
+    }),
     WorkerPool: vi.fn(),
     getConfig: vi.fn(),
     isTelemetryEnabled: vi.fn(),
@@ -95,6 +108,8 @@ beforeEach(() => {
   mocks.controller.tick.mockImplementation(() => currentBridge !== null && currentBridge.stepCount % 5000 === 0);
   mocks.controller.reportNow.mockReturnValue(true);
   mocks.WorkerPool.mockClear();
+  mocks.Router.mockClear();
+  mockSock.closed = false;
   mocks.WorkerPool.mockImplementation(function () {
     return {
       init: vi.fn().mockResolvedValue(undefined),
@@ -438,6 +453,10 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       const startPromise = bridge.start();
       await new Promise(r => setTimeout(r, 10));
       expect(bindSpy).toHaveBeenCalled();
+      // The destroyed socket forces the production transport-recreation path
+      // (a fresh Router + re-wrapped send) instead of rebinding the dead one.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
       await bridge.close();
       await startPromise;
     } finally {
@@ -460,14 +479,19 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       const startPromise = bridge.start();
 
       // While the prior close is still unbinding, the restart must not bind:
-      // the port has not been released yet.
+      // the port has not been released yet, and the transport has not been
+      // recreated yet either (start() is still awaiting the in-flight close).
       await new Promise(r => setTimeout(r, 20));
       expect(bindSpy).not.toHaveBeenCalled();
+      expect(mocks.Router).toHaveBeenCalledTimes(1);
 
       releaseUnbind();
       await closePromise;
       await startPromise;
       expect(bindSpy).toHaveBeenCalled();
+      // Only after the close completes does the restart recreate the socket.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
     } finally {
       consoleErrorSpy.mockRestore();
     }
@@ -499,6 +523,10 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       expect(await readySettled).not.toBe('hung');
       await startPromise;
       expect(bindSpy).toHaveBeenCalled();
+      // The rejected close still destroyed the socket, so the restart binds a
+      // freshly recreated transport rather than the dead one.
+      expect(mocks.Router).toHaveBeenCalledTimes(2);
+      expect((bridge as any).sock.closed).toBe(false);
     } finally {
       consoleErrorSpy.mockRestore();
     }
