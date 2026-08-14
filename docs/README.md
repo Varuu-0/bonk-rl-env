@@ -24,6 +24,7 @@ Additional documents:
 | [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md) | Simulator discrepancies and implementation status derived from verified findings |
 | [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md) | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work |
 | [OPEN_ISSUE_REMEDIATION.md](OPEN_ISSUE_REMEDIATION.md) | Evidence-based disposition and PR progress for the full open-issue audit |
+| [FIXES-2026-08.md](FIXES-2026-08.md) | August 2026 fidelity batches: merged joint/model, lifecycle, validation, render, IPC, and Python vec-env fixes |
 | [RENDERER.md](RENDERER.md) | Simulation renderer rebuild (M1–M5): native-coordinate layers, zero-overhead detached transport, usage |
 
 ## Subdirectories
