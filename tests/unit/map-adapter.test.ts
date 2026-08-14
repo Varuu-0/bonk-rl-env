@@ -977,5 +977,33 @@ it('keeps fixture aliases unique and resolves joints to the first fixture of eac
 
             expect(out.physics?.bounds).toEqual({ width: 730, height: 500 });
         });
+
+        it('forwards an authored legacy physics.nc into the exported-format output (#329)', () => {
+            // Pre-P3b exported-format maps carry nc under `physics`; normalizeMap
+            // must forward it so the environment's physics.nc fallback is not
+            // inert for the exported representation (settings remains the
+            // exporter-emitted source, physics.nc a legacy fallback).
+            const out = normalizeMap({
+                physics: { ppm: 12, nc: true },
+                bodies: [
+                    { bodyIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+                ],
+                spawns: [{ x: -100, y: -50, blue: true }, { x: 100, y: -50, red: true }],
+            } as any);
+
+            expect(out.physics?.nc).toBe(true);
+        });
+
+        it('drops a non-boolean legacy physics.nc from the exported-format output (#329)', () => {
+            const out = normalizeMap({
+                physics: { ppm: 12, nc: 'true' as any },
+                bodies: [
+                    { bodyIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+                ],
+                spawns: [{ x: -100, y: -50, blue: true }, { x: 100, y: -50, red: true }],
+            } as any);
+
+            expect(out.physics?.nc).toBeUndefined();
+        });
     });
 });

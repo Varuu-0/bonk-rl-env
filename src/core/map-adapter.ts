@@ -992,10 +992,16 @@ else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
     }
 
     const physics = (ph as any).ppm !== undefined || bounds.width !== undefined || deathCenter
+        || typeof (ph as any).nc === 'boolean'
         ? {
             ppm: (ph as any).ppm,
             bounds: bounds.width !== undefined ? bounds : undefined,
             deathCenter,
+            // Forward the legacy `physics.nc` key when authored: the exporter
+            // emits nc under `settings`, but pre-P3b exported-format maps may
+            // carry it under `physics`, and the environment honors it as a
+            // fallback (issue #329).
+            nc: typeof (ph as any).nc === 'boolean' ? (ph as any).nc : undefined,
         }
         : undefined;
 

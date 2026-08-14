@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { BonkEnvironment, Observation } from '../../src/core/environment';
-import { MapDef } from '../../src/core/physics-engine';
+import { MapDef, PhysicsEngine } from '../../src/core/physics-engine';
 import { safeDestroy, encodeAction, EMPTY_INPUT, GRAPPLE_INPUT, HEAVY_INPUT, RIGHT_INPUT, LEFT_INPUT, UP_INPUT, DOWN_INPUT } from '../utils/test-helpers';
 
 describe('BonkEnvironment edge cases', () => {
@@ -115,6 +115,55 @@ describe('BonkEnvironment edge cases', () => {
       const dynamic = physics.getArenaBounds();
       expect(observation.arenaHalfWidth).toBe(dynamic.halfWidth);
       expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
+    });
+
+    it('skips the map-bounds override when getScale reports an unusable scale', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      // A partial engine whose getScale() returns 0/NaN must not feed
+      // Infinity/NaN bounds into setMapBounds; the override is skipped so
+      // observations keep the engine's dynamic bounds.
+      for (const badScale of [0, NaN, Infinity, -30]) {
+        setMapBoundsSpy.mockClear();
+        physics.getScale = () => badScale;
+        expect(() => env!.reset(2)).not.toThrow();
+        expect(setMapBoundsSpy).not.toHaveBeenCalled();
+      }
+
+      physics.getScale = () => 30;
+      setMapBoundsSpy.mockClear();
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).toHaveBeenCalledWith(2, 4 / 3);
+    });
+
+    it('applies PPM via the legacy setScale alias when setPpm is absent', async () => {
+      const proto: any = PhysicsEngine.prototype;
+      const origSetPpm = proto.setPpm;
+      const origSetScale = proto.setScale;
+      try {
+        // Simulate a legacy engine: no setPpm, and setScale sets this.ppm
+        // directly. The environment must forward its configured PPM through
+        // the alias instead of silently dropping the config.
+        proto.setPpm = undefined;
+        proto.setScale = function (this: any, ppm: number) { this.ppm = ppm; };
+
+        const mapData: MapDef = makeMap({});
+        env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10, ppm: 18 });
+        env.reset(2);
+        const physics: any = (env as any).physics;
+        expect(physics.ppm).toBe(18);
+        // Player disc radius reflects the PPM: radius = ppm / scale = 18/30.
+        const body = physics.playerBodies?.get(0);
+        expect(body.GetShapeList().GetRadius()).toBeCloseTo(18 / 30, 12);
+      } finally {
+        proto.setPpm = origSetPpm;
+        proto.setScale = origSetScale;
+      }
     });
 
     it('capZones empty array when no capZones in map', async () => {
