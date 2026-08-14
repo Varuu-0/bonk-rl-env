@@ -713,8 +713,8 @@ BeginContact case 6:
   unassigned teams keep the legacy id-based categories and always collide.
 - **No-collision mode (`nc`)**: `setNoCollide(true)` removes all four player
   bits from every disc mask. `EnvironmentConfig.noCollide` and
-  `EnvironmentConfig.teamsEnabled` wire both flags; map `physics.teams` /
-  `physics.nc` are honoured as map-level defaults.
+  `EnvironmentConfig.teamsEnabled` wire both flags; map `physics.teams` and
+  `settings.nc` are honoured as map-level defaults (explicit config wins).
 - **Swing destroy (`swingCollideDestroyEvents`)**: a disc-disc contact while a
   grapple joint is active queues the disc for grapple destruction after the
   step (`pendingSwingDestroy` processed post-Step, matching native ordering).

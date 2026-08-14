@@ -326,6 +326,30 @@ describe('P3b: nc — no-collision mode (readable 1300-1303)', () => {
             env.close();
         }
     });
+
+    it('maps without settings keep the default colliding behaviour (noCollide false)', () => {
+        // Issue #329 default-parity: a map that never declares nc must not flip
+        // into no-collide mode — the genesis/default colliding behaviour stays
+        // intact for maps without a settings section.
+        const env = new BonkEnvironment({
+            numOpponents: 1,
+            seed: 7,
+            mapData: TEST_MAP,
+            randomOpponent: false,
+        });
+        try {
+            expect((env as any).config.noCollide).toBe(false);
+            env.reset(7);
+            const physics: any = (env as any).physics;
+            for (const id of [0, 1]) {
+                const mask = physics.playerBodies.get(id).GetShapeList().GetFilterData().maskBits;
+                expect(mask & PLAYER_BITS).not.toBe(0);
+                expect(mask & 0x0001).not.toBe(0);
+            }
+        } finally {
+            env.close();
+        }
+    });
 });
 
 describe('P3b: re — respawning mode (readable 8595-8606)', () => {

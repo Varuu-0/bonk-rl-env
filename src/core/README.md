@@ -46,7 +46,7 @@ map; this port applies it as `850 / SCALE` world units, independent of ppm.
 | Last-hit attribution (`lhid`/`lht`) | `getLastHit(playerId)` | Records both directions; `LAST_HIT_TIMER_TICKS = 120` (4s at 30 TPS); countdown runs before each Step |
 
 `BonkEnvironment` exposes `teamsEnabled` and `noCollide` config options
-(map-level `physics.teams` / `physics.nc` act as defaults).
+(map-level `physics.teams` and `settings.nc` act as defaults).
 
 The grapple reach is the verified 500 map units converted through this port's
 exported-map coordinate scale (`500 / SCALE`; DEOBFUSCATION line 2531). The
