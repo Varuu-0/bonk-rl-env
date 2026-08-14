@@ -357,8 +357,6 @@ export class BonkEnvironment {
     private aiTeam: string = 'blue';
     private scoreBlue: number = 0;
     private scoreRed: number = 0;
-    /** Pre-respawn states exposed for the step in which a death occurs. */
-    private visibleDeathStates: Map<number, PlayerState> = new Map();
     private rng: PRNG;
     private lastAction: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
     private frameSkipTicks: number = 0;
@@ -714,7 +712,6 @@ export class BonkEnvironment {
         this.terminalReached = false;
         this.terminalTruncated = false;
         this.terminalTerminated = false;
-        this.visibleDeathStates.clear();
         this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
 
         return this.getObservation();
@@ -778,11 +775,6 @@ export class BonkEnvironment {
             this.lastAction = this.decodeAction(action);
         }
 
-        // A transient respawn death is visible for exactly the step that
-        // produced it. Keep the overlay through terminal holds, but clear it
-        // before the next live physics tick so the respawned body is visible.
-        this.visibleDeathStates.clear();
-
         const aiInput = this.lastAction;
 
         // Apply AI input
@@ -797,13 +789,11 @@ export class BonkEnvironment {
         // Step physics by exactly 1 tick
         this.physics.tick();
 
-        // Drain deaths before sampling the visible state. Physics may already
-        // have respawned a transient death, so the event carries the
-        // pre-respawn state needed by rewards, info, and observations.
+        // Consume the tick's death events (the reward source). Physics keeps
+        // the pre-respawn snapshots itself and exposes them through
+        // getVisiblePlayerState, so observation/info read the dying step even
+        // though the disc already respawned.
         const deathEvents = this.physics.getDeathEvents();
-        for (const event of deathEvents) {
-            this.visibleDeathStates.set(event.playerId, event.state);
-        }
 
         // Cache both the physical post-tick state (termination policy) and the
         // event-overlaid state (the public dying-step observation contract).
@@ -932,17 +922,35 @@ export class BonkEnvironment {
      *                   death; default -1.0)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
-     *           count as kills)
+     *           count as kills; on non-respawn maps a same-tick death of a
+     *           losing-team player is priced by the capture only)
      *   +timePenalty — per-tick penalty (encourages action; default -0.001)
      */
     private calculateReward(deathEvents: readonly DeathEvent[]): number {
         let reward = 0;
+
+        // getTeamScored() is consume-once: read it before the death loop so a
+        // same-tick capture can absorb the losing team's deaths below.
+        let scoredTeam: string | null = null;
+        if (typeof (this.physics as any).getTeamScored === 'function') {
+            scoredTeam = (this.physics as any).getTeamScored();
+        }
 
         // Events are the transition source because a respawn-enabled death is
         // already alive again in the post-tick physics state. Cap-zone deaths
         // remain priced only by the capture branch below.
         for (const event of deathEvents) {
             if (event.deathType === 3) continue;
+            // On a non-respawn map a same-tick capture eliminates the losing
+            // team: such deaths are priced by the capture only (the documented
+            // single reward for the event). On respawn maps the transient
+            // death is a real elimination and keeps its death reward.
+            if (!this.config.respawnEnabled && scoredTeam) {
+                const onLosingTeam = scoredTeam === this.aiTeam
+                    ? this.opponentIds.includes(event.playerId)
+                    : event.playerId === this.aiPlayerId;
+                if (onLosingTeam) continue;
+            }
             if (event.playerId === this.aiPlayerId) {
                 reward += this.config.reward.deathPenalty;
             } else if (this.opponentIds.includes(event.playerId)) {
@@ -951,18 +959,15 @@ export class BonkEnvironment {
         }
 
         // Check capZone scoring
-        if (typeof (this.physics as any).getTeamScored === 'function') {
-            const scoredTeam = (this.physics as any).getTeamScored();
-            if (scoredTeam) {
-                if (scoredTeam === this.aiTeam) {
-                    reward += 1.0;
-                    this.scoreBlue += (this.aiTeam === 'blue' ? 1 : 0);
-                    this.scoreRed += (this.aiTeam === 'red' ? 1 : 0);
-                } else {
-                    reward -= 1.0;
-                    this.scoreBlue += (scoredTeam === 'blue' ? 1 : 0);
-                    this.scoreRed += (scoredTeam === 'red' ? 1 : 0);
-                }
+        if (scoredTeam) {
+            if (scoredTeam === this.aiTeam) {
+                reward += 1.0;
+                this.scoreBlue += (this.aiTeam === 'blue' ? 1 : 0);
+                this.scoreRed += (this.aiTeam === 'red' ? 1 : 0);
+            } else {
+                reward -= 1.0;
+                this.scoreBlue += (scoredTeam === 'blue' ? 1 : 0);
+                this.scoreRed += (scoredTeam === 'red' ? 1 : 0);
             }
         }
 
@@ -1007,9 +1012,11 @@ export class BonkEnvironment {
         };
     }
 
-    /** Return the dying-step snapshot when one exists, otherwise live state. */
+    /** The dying-step view: physics' pre-respawn snapshot for the latest tick
+     *  (the single source of truth shared with render readers), otherwise the
+     *  live state. */
     private getVisiblePlayerState(playerId: number): PlayerState {
-        return this.visibleDeathStates.get(playerId) ?? this.physics.getPlayerState(playerId);
+        return this.physics.getVisiblePlayerState(playerId);
     }
 
     /**

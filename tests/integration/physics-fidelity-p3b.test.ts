@@ -325,6 +325,43 @@ describe('P3b: re — respawning mode (readable 8595-8606)', () => {
             expect(engine.getPlayerState(0).alive).toBe(true);
             expect(engine.getPlayerState(0).deathType).toBe(0);
             expect(engine.getPlayerState(0).x).toBeCloseTo(0, 4);
+            // The dying-step view keeps the pre-respawn snapshot so any
+            // reader observes the death on the tick it happened.
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getVisiblePlayerState(0).deathType).toBe(4);
+        } finally {
+            engine.destroy();
+        }
+    });
+
+    it('an instant-goal elimination stays terminal even when the victim is OOB', () => {
+        const engine = new PhysicsEngine({ respawnEnabled: true });
+        try {
+            engine.addPlayer(0, 0, 0);
+            engine.setPlayerTeam(0, 'blue');
+            engine.addPlayer(1, 100, 0);
+            engine.setPlayerTeam(1, 'red');
+
+            // Red scores a round-ending instant goal while blue's disc sits
+            // outside the death circle: the type-3 elimination must remain
+            // terminal, so the OOB pass must not reclassify it into a
+            // respawnable type-4 death.
+            (engine as any).playerBodies.get(0).SetXForm(
+                new (require('box2d').b2Vec2)(200, 0),
+                0,
+            );
+            (engine as any).triggerInstantGoal(2);
+
+            engine.tick();
+
+            const deaths = engine.getDeathEvents();
+            expect(deaths).toHaveLength(1);
+            expect(deaths[0].playerId).toBe(0);
+            expect(deaths[0].deathType).toBe(3);
+            expect(engine.getPlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(0).deathType).toBe(3);
+            expect(engine.getVisiblePlayerState(0).alive).toBe(false);
+            expect(engine.getPlayerState(1).alive).toBe(true);
         } finally {
             engine.destroy();
         }

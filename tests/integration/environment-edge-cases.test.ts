@@ -868,6 +868,97 @@ describe('BonkEnvironment edge cases', () => {
       expect(continuation.observation.playerX).toBeCloseTo(0, 4);
     });
 
+    it('non-respawn same-tick capture prices the losing-team death capture-only', async () => {
+      const mapData: MapDef = {
+        name: 'capture-oob-nonrespawn',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      // Opponent dies OOB on the same tick a blue-owned timed zone completes:
+      // the death stays observable, but the capture is the single reward for
+      // the event (no kill reward on top).
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+      physics.capZoneState.set(0, {
+        ty: 1,
+        p: 1,
+        l: 1,
+        i: 0,
+        o: 1,
+        ot: 'blue',
+        f: 1,
+      });
+
+      const result = env.step(0);
+      expect(result.reward).toBeCloseTo(1, 6);
+      expect(result.info.opponentsAlive).toBe(0);
+      expect(result.observation.opponents[0].alive).toBe(false);
+      expect(result.done).toBe(true);
+      expect(result.info.terminated).toBe(true);
+    });
+
+    it('respawn same-tick capture keeps the transient kill reward', async () => {
+      const mapData: MapDef = {
+        name: 'capture-oob-respawn',
+        spawnPoints: {
+          team_blue: { x: -200, y: -100 },
+          team_red: { x: 200, y: -100 },
+        },
+        bodies: [],
+        settings: { re: true },
+      };
+      env = new BonkEnvironment({
+        mapData,
+        numOpponents: 1,
+        randomOpponent: false,
+        maxTicks: 100,
+        seed: 42,
+        killReward: 10,
+        timePenalty: 0,
+      });
+      env.reset(42);
+
+      const physics: any = (env as any).physics;
+      physics.playerBodies.get(1).SetXForm(new (require('box2d').b2Vec2)(200, 0), 0);
+      physics.capZoneState.set(0, {
+        ty: 1,
+        p: 1,
+        l: 1,
+        i: 0,
+        o: 1,
+        ot: 'blue',
+        f: 1,
+      });
+
+      const death = env.step(0);
+      // On respawn maps the transient OOB death is a real elimination and
+      // still pays killReward alongside the capture.
+      expect(death.reward).toBeCloseTo(11, 6);
+      expect(death.done).toBe(false);
+      expect(death.info.terminated).toBe(false);
+      expect(death.info.opponentsAlive).toBe(0);
+      expect(death.observation.opponents[0].alive).toBe(false);
+
+      const continuation = env.step(0);
+      expect(continuation.reward).toBeCloseTo(0, 6);
+      expect(continuation.info.opponentsAlive).toBe(1);
+      expect(continuation.observation.opponents[0].alive).toBe(true);
+    });
+
     it('configurable timePenalty applies on every non-terminal tick', async () => {
       env = new BonkEnvironment({
         maxTicks: 100,

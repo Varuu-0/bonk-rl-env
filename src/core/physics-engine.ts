@@ -440,6 +440,8 @@ export class PhysicsEngine {
   private tickDeathCauses: Map<number, number> = new Map();
   /** Deaths from the most recent tick, consumed by the environment. */
   private deathEvents: DeathEvent[] = [];
+  /** Pre-respawn snapshots of players who died during the most recent tick. */
+  private lastDeathStates: Map<number, PlayerState> = new Map();
   private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> = new Map();
   private capZoneTouches: Array<{ zoneIndex: number; playerId: number; team: string }> = [];
   /** True when the game has teams enabled (native game setting `tea`). */
@@ -1771,6 +1773,10 @@ export class PhysicsEngine {
    */
     tick(): void {
         if (!this.world) return;
+        // Dying-step snapshots live for exactly one tick (plus any terminal
+        // hold that skips physics): drop the previous tick's pre-respawn
+        // snapshots so respawned discs become visible again on this step.
+        this.lastDeathStates.clear();
         // This bundled Box2D v2.0 port accepts only one iteration count and
         // ignores the third argument; the second argument carries the resolved
         // velocity iterations. The native client uses Step(dt, velIter, posIter)
@@ -1798,22 +1804,20 @@ export class PhysicsEngine {
         this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
-    // Detect OOB before cap completion can eliminate survivors. Include a
-    // player already marked dead by this tick's contact/goal handling so a
-    // same-tick cap event cannot hide an OOB cause.
+    // Detect OOB before cap completion can eliminate survivors so a same-tick
+    // capture cannot erase an OOB death. A disc already flagged type 3 by
+    // this tick's contact/goal handling is an elimination and stays type 3:
+    // the death circle must never reclassify it into a respawnable OOB death,
+    // or a round-ending goal's victim would respawn on `re` maps.
     for (const [id, body] of Array.from(this.playerBodies)) {
-      if (this.playerAlive.get(id) || this.tickDeathCauses.has(id)) {
-        const pos = body.GetPosition();
-        const dx = pos.x - this.oobCenterX;
-        const dy = pos.y - this.oobCenterY;
-        const d2 = dx * dx + dy * dy;
-        if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
-          const previousCause = this.tickDeathCauses.get(id);
-          this.markPlayerDead(id, 4);
-          if (previousCause === undefined || PhysicsEngine.deathCausePriority(previousCause) < PhysicsEngine.deathCausePriority(4)) {
-            globalProfiler.increment('death_out_of_bounds');
-          }
-        }
+      if (!this.playerAlive.get(id)) continue;
+      const pos = body.GetPosition();
+      const dx = pos.x - this.oobCenterX;
+      const dy = pos.y - this.oobCenterY;
+      const d2 = dx * dx + dy * dy;
+      if (!Number.isFinite(d2) || d2 > this.oobRadiusSquared) {
+        this.markPlayerDead(id, 4);
+        globalProfiler.increment('death_out_of_bounds');
       }
     }
 
@@ -1867,10 +1871,12 @@ export class PhysicsEngine {
     this.deathEvents = ids.map((id) => {
       const deathType = this.tickDeathCauses.get(id)!;
       this.playerDeathType.set(id, deathType);
+      const state = this.getPlayerState(id);
+      this.lastDeathStates.set(id, state);
       return {
         playerId: id,
         deathType,
-        state: this.getPlayerState(id),
+        state,
       };
     });
     this.tickDeathCauses.clear();
@@ -1885,6 +1891,17 @@ export class PhysicsEngine {
     const events = this.deathEvents;
     this.deathEvents = [];
     return events;
+  }
+
+  /**
+   * The dying-step view: a player who died during the most recent tick keeps
+   * its pre-respawn snapshot here until the next tick starts, so the
+   * environment and any render reader observe the death on the tick it
+   * happened. Every other player (and every player once the next tick begins)
+   * returns the live state.
+   */
+  getVisiblePlayerState(playerId: number): PlayerState {
+    return this.lastDeathStates.get(playerId) ?? this.getPlayerState(playerId);
   }
 
   /**
@@ -2072,6 +2089,7 @@ export class PhysicsEngine {
     this.instantGoalResolved = false;
     this.tickDeathCauses.clear();
     this.deathEvents = [];
+    this.lastDeathStates.clear();
     this.pendingSwingDestroy.clear();
     this.lastHitBy.clear();
     this.lastHitTicks.clear();
