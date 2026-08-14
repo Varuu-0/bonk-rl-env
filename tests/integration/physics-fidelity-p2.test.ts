@@ -396,6 +396,42 @@ describe('physics fidelity P2: joint model (DEOBFUSCATION §33.8)', () => {
     );
   });
 
+  it('converts ground-anchored d-joint anchors with the map ppm (#313)', () => {
+    // The ground branch (isGround, native bodyB = -1) shares the same ppm
+    // conversion for anchorA/anchorB. bodyB is the synthetic static ground
+    // body at the world origin, so its local anchor equals the ppm-converted
+    // world anchor directly — and the A-side local anchor is converted too.
+    const e = new PhysicsEngine({ gravityY: 0 });
+    e.setScale(15);
+    e.addBody({ name: 'bodyA', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
+    const bm = e.getBodyMap() as Map<string, any>;
+
+    e.addJoint({
+      type: 'd',
+      name: 'ground-d',
+      bodyA: 'bodyA',
+      bodyB: '', // the adapter emits '' with isGround for bodyB = -1
+      isGround: true,
+      anchorA: { x: 0, y: 50 },
+      anchorB: { x: 10, y: -20 },
+    }, bm);
+
+    const joint = (e as any).createdJoints.get('ground-d');
+    // Ground body sits at the origin: localAnchor2 is the ppm-converted world
+    // anchor (10/20 native units at ppm=15 → 5 / -10 port units).
+    expect(joint.m_localAnchor2.x).toBeCloseTo((10 * 15) / SCALE, 5);
+    expect(joint.m_localAnchor2.y).toBeCloseTo(-(20 * 15) / SCALE, 5);
+    // bodyA also sits at the origin: its local anchor is the ppm-converted
+    // value on the A side as well.
+    expect(joint.m_localAnchor1.x).toBeCloseTo(0, 5);
+    expect(joint.m_localAnchor1.y).toBeCloseTo((50 * 15) / SCALE, 5);
+    // Initialize derives the rest length from the converted world anchors.
+    expect(joint.m_length).toBeCloseTo(
+      Math.sqrt(((10 * 15) / SCALE) ** 2 + (((50 + 20) * 15) / SCALE) ** 2),
+      5,
+    );
+  });
+
   it('applies the native minimum to an explicitly zero distance length (#313)', () => {
     const e = new PhysicsEngine({ gravityY: 0 });
     e.addBody({ name: 'anchor', type: 'circle', x: 0, y: 0, radius: 5, static: true } as any);
