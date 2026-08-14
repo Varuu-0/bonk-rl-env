@@ -168,6 +168,10 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       'tick 0 disc 0 is malformed: id must be a non-negative integer',
       'tick 0 disc 1 id mismatch: disc.id=2 does not match slot 1',
     ]);
+    // Neither a shape-invalid disc nor a valid-but-misaligned disc may leak
+    // into the typed output: both are nulled, so every remaining disc honors
+    // the index-alignment invariant (disc.id === slot).
+    expect(parsed.trace.ticks[0].discs).toEqual([null, null]);
   });
 
   it('rejects discs claiming alive:false (presence in state.discs means alive)', () => {

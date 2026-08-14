@@ -136,10 +136,11 @@ export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
  * (non-object, missing schema marker, non-array fields). Entries that fail the
  * per-entry shape/field contract (null, non-objects, or objects with missing or
  * invalid required fields) inside players, spawns, and ticks are reported as
- * errors and omitted from the returned trace; malformed disc entries are
- * replaced with null (absent) so the index-aligned discs array stays safe for
- * downstream iteration even when a caller ignores the errors. The embedded map
- * is normalized by the replay comparator (which owns the normalizeMap import).
+ * errors and omitted from the returned trace; malformed or slot-misaligned
+ * disc entries are replaced with null (absent) so the index-aligned discs
+ * array stays safe for downstream iteration even when a caller ignores the
+ * errors. The embedded map is normalized by the replay comparator (which owns
+ * the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -233,13 +234,14 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
           .map((tk) => ({
             ...tk,
             // Malformed discs (including `alive: false`, which the
-            // `alive: true` literal type forbids) never leak into the typed
-            // output: they are replaced with null, keeping the array
-            // index-aligned by player id (§9.2 alive == presence).
+            // `alive: true` literal type forbids) and slot-misaligned discs
+            // (id != slot) never leak into the typed output: they are replaced
+            // with null, keeping the array index-aligned by player id
+            // (§9.2 alive == presence).
             discs: tk.discs.map((disc, id) =>
               disc === null || disc === undefined
                 ? null
-                : discValidationError(disc) === null
+                : discValidationError(disc) === null && disc.id === id
                   ? disc
                   : null),
           }))
