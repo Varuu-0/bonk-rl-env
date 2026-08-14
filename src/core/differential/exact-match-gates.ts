@@ -15,10 +15,13 @@
  *  - restitution: authored, with the -1 → 0.8 fallback.
  * Joint checks: every authored joint created a joint in the engine's created
  * map with the authored core parameters (revolute limits/motor, distance
- * length/spring, prismatic limits/motor, gear ratio/referents).
+ * length/spring, prismatic limits/motor, gear ratio/referents). For `lsj`
+ * joints the prismatic motor check compares the engine's derived P2b values
+ * (maxMotorForce = sf·|k|, motorSpeed ±300) against the same formula the
+ * engine applies, never the raw authored force.
  */
 import type { BonkEnvironment } from '../environment';
-import { NATIVE_DISTANCE_JOINT_MIN_LENGTH } from '../physics-engine';
+import { NATIVE_DISTANCE_JOINT_MIN_LENGTH, GROUND_BODY_NAME } from '../physics-engine';
 import { normalizeMap } from '../map-adapter';
 import type { NativeTrace } from './native-trace';
 
@@ -118,6 +121,7 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
   const scale: number = physics.scale;
   const ppm: number = physics.ppm;
   const created: Map<string, any> = physics.createdJoints ?? new Map();
+  const bodyMap: Map<string, any> = physics.getBodyMap?.() ?? new Map();
   const mapDef: any = normalizeMap(trace.map);
   const joints: any[] = mapDef.joints ?? [];
 
@@ -186,8 +190,49 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
       if (Math.abs((built as any).m_upperTranslation - ut / scale) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic upperTranslation mismatch`);
       }
-      if (Math.abs((built as any).m_maxMotorForce - (j.maxMotorForce ?? 0)) > 1e-9) {
+
+      // lsj spring bias (#373): the engine overrides maxMotorForce/motorSpeed
+      // with the P2b derived values whenever the bias engages — signed slen,
+      // so any finite non-zero length counts (#372) — and keeps the authored
+      // fallback only for degenerate inputs (zero/non-finite length, invalid
+      // anchorA). Mirror the engine's addJoint lsj branch here and compare the
+      // built motor against the derived sf·|k| (which may be 0) and the ±300
+      // motor direction, so the gate cannot disagree with the engine's own
+      // documented behavior. Non-lsj prismatic joints keep the authored values.
+      let expectedForce = j.maxMotorForce ?? 0;
+      let expectedSpeed = j.motorSpeed ?? 0;
+      if (t === 'lsj') {
+        const sf = Number.isFinite(j.maxMotorForce) ? j.maxMotorForce : 0;
+        const lengthFinite = typeof j.length === 'number' && Number.isFinite(j.length) && j.length !== 0;
+        const anchorValid = j.anchorA && Number.isFinite(j.anchorA.x) && Number.isFinite(j.anchorA.y);
+        const bodyA = j.bodyA != null ? bodyMap.get(j.bodyA) : undefined;
+        // Ground-anchored bodyA (ba = -1) resolves to the synthetic ground
+        // body at world (0,0)/angle 0 when absent from the body map — the same
+        // resolution addJoint's ensureGroundBody performs.
+        const isGroundA = bodyA === undefined && j.bodyA === GROUND_BODY_NAME;
+        if (lengthFinite && anchorValid && (bodyA || isGroundA)) {
+          const angleA = bodyA ? bodyA.GetAngle() : 0;
+          const pos = bodyA ? bodyA.GetPosition() : { x: 0, y: 0 };
+          const slen = j.length / scale;
+          const theta = angleA - Math.PI / 2;
+          const ax = j.anchorA.x / scale + Math.cos(theta) * -slen;
+          const ay = j.anchorA.y / scale + Math.sin(theta) * -slen;
+          const relX = pos.x - ax;
+          const relY = pos.y - ay;
+          let len = Math.sqrt(relX * relX + relY * relY);
+          let phi = Math.atan2(relY, relX) - angleA;
+          phi = phi % (2 * Math.PI);
+          if (!((phi < 0 && phi >= -Math.PI) || phi > Math.PI)) len = -len;
+          const k = (len / (slen * 2) - 0.5) * 2;
+          expectedForce = sf * Math.abs(k);
+          expectedSpeed = k > 0 ? -300 : 300;
+        }
+      }
+      if (Math.abs((built as any).m_maxMotorForce - expectedForce) > 1e-9) {
         mismatches.push(`joint "${name}" prismatic maxMotorForce mismatch`);
+      }
+      if (Math.abs((built as any).m_motorSpeed - expectedSpeed) > 1e-9) {
+        mismatches.push(`joint "${name}" prismatic motorSpeed mismatch`);
       }
     }
   }
