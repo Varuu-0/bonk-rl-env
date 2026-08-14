@@ -143,11 +143,25 @@ describe('standalone server bind-failure lifecycle (issue #326)', () => {
 
   it('does not force-emit a telemetry report (or JSONL entry) for a server that never served', async () => {
     const blocker = await listenOnEphemeralPort();
+    const dashboard = await listenOnEphemeralPort();
+    await closeServer(dashboard.server);
+
     const controller = getTelemetryController();
-    const reportSpy = vi.spyOn(controller, 'reportNow').mockImplementation(() => true);
+    // Keep reportNow real so a forced shutdown report would flow into
+    // emitReport, and stub writeToFile so the file/both JSONL branch is
+    // observed without touching disk. outputFormat 'both' keeps that branch
+    // live, so both assertions below genuinely fail if the rollback ever
+    // force-emits the shutdown report for a server that never served.
+    const reportSpy = vi.spyOn(controller, 'reportNow');
     const writeSpy = vi.spyOn(controller as any, 'writeToFile').mockImplementation(() => {});
+    const base = loadConfig();
+    const config = deepMerge(base, {
+      server: { port: blocker.port, bindAddress: '127.0.0.1' },
+      workerPool: { numWorkers: 1, useSharedMemory: false },
+      telemetry: { enabled: true, outputFormat: 'both', dashboardPort: dashboard.port },
+    } as Partial<AppConfig>);
     try {
-      await expect(startServer(makeConfig(blocker.port, true))).rejects.toThrow(/address already in use|eaddrinuse/i);
+      await expect(startServer(config)).rejects.toThrow(/address already in use|eaddrinuse/i);
       expect(isServerRunning()).toBe(false);
       // The failed bind never served a tick, so its rollback must tear down
       // telemetry without the forced shutdown final report: a zero-tick
