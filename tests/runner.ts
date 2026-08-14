@@ -30,11 +30,9 @@ export function resolveVitestCli(
   vitestPackageRoot: string = path.join(repositoryRoot, 'node_modules', 'vitest'),
 ): string {
   const vitestPackagePath = path.join(vitestPackageRoot, 'package.json');
-  let vitestPackage: { bin?: string | Record<string, string> };
+  let parsedPackage: unknown;
   try {
-    vitestPackage = JSON.parse(fs.readFileSync(vitestPackagePath, 'utf8')) as {
-      bin?: string | Record<string, string>;
-    };
+    parsedPackage = JSON.parse(fs.readFileSync(vitestPackagePath, 'utf8'));
   } catch (error) {
     throw new Error(
       `Unable to read the vitest package manifest at ${vitestPackagePath}: ${(error as Error).message}. ` +
@@ -42,7 +40,11 @@ export function resolveVitestCli(
     );
   }
 
-  const binEntry = typeof vitestPackage.bin === 'string' ? vitestPackage.bin : vitestPackage.bin?.['vitest'];
+  const bin =
+    parsedPackage !== null && typeof parsedPackage === 'object' && !Array.isArray(parsedPackage)
+      ? (parsedPackage as { bin?: string | Record<string, string> }).bin
+      : undefined;
+  const binEntry = typeof bin === 'string' ? bin : bin?.['vitest'];
   if (typeof binEntry !== 'string' || binEntry.length === 0) {
     throw new Error(
       `The vitest package manifest at ${vitestPackagePath} has no valid 'bin.vitest' entry. ` +

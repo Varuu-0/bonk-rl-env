@@ -73,6 +73,12 @@ describe('npm test script mappings', () => {
       fs.writeFileSync(path.join(fixture, 'package.json'), JSON.stringify({ bin: {} }));
       expect(() => resolveVitestCli(fixture)).toThrow(/bin\.vitest/);
 
+      fs.writeFileSync(path.join(fixture, 'package.json'), 'null');
+      expect(() => resolveVitestCli(fixture)).toThrow(/bin\.vitest/);
+
+      fs.writeFileSync(path.join(fixture, 'package.json'), '[]');
+      expect(() => resolveVitestCli(fixture)).toThrow(/bin\.vitest/);
+
       fs.writeFileSync(path.join(fixture, 'package.json'), '{ not json');
       expect(() => resolveVitestCli(fixture)).toThrow(/vitest package manifest/);
 
