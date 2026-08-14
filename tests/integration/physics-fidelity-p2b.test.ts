@@ -118,6 +118,44 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
         }
     });
 
+    it('signed slen −40, anchor −40 px below the body (k = +1): maxMotorForce = 25, motorSpeed = −300 (#372)', () => {
+        // slen = −40/30 = −1.3333; θ = −π/2 → ay = anchor.y + sin(θ)·(−slen)
+        // = −1.3333 + (−1)·(1.3333) = −2.6667; anchorWorld = (0, −2.6667);
+        // rel = (0, 2.6667); φ = π/2 (not kept) → len = −2.6667;
+        // k = (−2.6667/(2·(−1.3333)) − 0.5)·2 = +1 → force sf, −300.
+        const { engine, close } = makeEngine();
+        try {
+            const j = addLsj(engine, {
+                anchorA: { x: 0, y: -40 }, length: -40,
+                lowerTranslation: -40, upperTranslation: 40,
+                maxMotorForce: 25, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(j.m_motorSpeed).toBe(-300);
+            expect(j.m_maxMotorForce).toBeCloseTo(25, 6);
+        } finally {
+            close();
+        }
+    });
+
+    it('signed slen −40, anchor at the body center (k = 0): maxMotorForce = 0, motorSpeed stays +300 (#372)', () => {
+        // anchorWorld = (0, −1.3333); rel = (0, 1.3333); φ = π/2 (not kept) →
+        // len = −1.3333; k = (−1.3333/(−2.6667) − 0.5)·2 = 0 → force 0, +300.
+        const { engine, close } = makeEngine();
+        try {
+            const j = addLsj(engine, {
+                anchorA: { x: 0, y: 0 }, length: -40,
+                lowerTranslation: -40, upperTranslation: 40,
+                maxMotorForce: 25, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(j.m_maxMotorForce).toBeCloseTo(0, 6);
+            expect(j.m_motorSpeed).toBe(300);
+        } finally {
+            close();
+        }
+    });
+
     it('static 300/sf fallbacks when slen is absent/zero or the anchor is invalid', () => {
         const { engine, close } = makeEngine();
         try {
@@ -136,6 +174,13 @@ describe('P2b: lsj initial-side spring bias (readable 7600-7630)', () => {
             });
             expect(noAnchor.m_maxMotorForce).toBe(500);
             expect(noAnchor.m_motorSpeed).toBe(300);
+
+            const signedNoAnchor = addLsj(engine, {
+                length: -40, maxMotorForce: 500, motorSpeed: 300,
+                enableMotor: true, enableLimit: false, axis: { x: 0, y: 1 },
+            });
+            expect(signedNoAnchor.m_maxMotorForce).toBe(500);
+            expect(signedNoAnchor.m_motorSpeed).toBe(300);
         } finally {
             close();
         }
