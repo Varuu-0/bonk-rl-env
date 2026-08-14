@@ -193,15 +193,15 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
 
       // lsj spring bias (#373): the engine overrides maxMotorForce/motorSpeed
       // with the P2b derived values whenever the bias engages, and hardcodes
-      // the 300/sf fallback for degenerate inputs. Mirror the engine's
-      // addJoint lsj branch AT THE CURRENT HEAD exactly: the bias engages only
-      // for a positive finite slen (`lenLimit`, the same positive-length gate
-      // the engine uses — signed slen from #372 is not on main yet) with a
-      // valid anchorA. When it engages, expect the derived sf·|k| (which may
-      // be 0) and the ±300 motor; when it cannot (absent/zero/non-finite
-      // length, invalid anchorA), expect the engine's hardcoded motor 300 and
-      // force sf — never the authored motorSpeed (the engine overwrites it for
-      // every lsj joint). Non-lsj prismatic joints keep the authored values.
+      // the 300/sf fallback for degenerate inputs. Mirror the engine's addJoint
+      // lsj branch AT THE CURRENT HEAD exactly: the bias engages for any
+      // finite non-zero slen whose magnitude clears the 1e-6 floor (signed
+      // slen from #372 — negative lengths engage too) with a valid anchorA.
+      // When it engages, expect the derived sf·|k| (which may be 0) and the
+      // ±300 motor; when it cannot (absent/zero/near-zero/non-finite length,
+      // invalid anchorA), expect the engine's hardcoded motor 300 and force
+      // sf — never the authored motorSpeed (the engine overwrites it for every
+      // lsj joint). Non-lsj prismatic joints keep the authored values.
       let expectedForce = j.maxMotorForce ?? 0;
       let expectedSpeed = j.motorSpeed ?? 0;
       if (t === 'lsj') {
@@ -212,10 +212,12 @@ export function verifyJointGates(env: BonkEnvironment, trace: NativeTrace): Gate
         // body at world (0,0)/angle 0 when absent from the body map — the same
         // resolution addJoint's ensureGroundBody performs.
         const isGroundA = bodyA === undefined && j.bodyA === GROUND_BODY_NAME;
-        if (lenLimit && anchorValid && (bodyA || isGroundA)) {
+        const slen = typeof j.length === 'number' && Number.isFinite(j.length) && j.length !== 0
+          ? j.length / scale
+          : 0;
+        if (Math.abs(slen) >= 1e-6 && anchorValid && (bodyA || isGroundA)) {
           const angleA = bodyA ? bodyA.GetAngle() : 0;
           const pos = bodyA ? bodyA.GetPosition() : { x: 0, y: 0 };
-          const slen = j.length / scale;
           const theta = angleA - Math.PI / 2;
           const ax = j.anchorA.x / scale + Math.cos(theta) * -slen;
           const ay = j.anchorA.y / scale + Math.sin(theta) * -slen;
