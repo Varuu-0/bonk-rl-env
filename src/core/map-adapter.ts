@@ -50,6 +50,12 @@ interface FlatBody {
     radius?: number;
     scale?: number;
     vertices?: { x: number; y: number }[];
+// Declared vertex frame for flat polygon bodies. The exporter emits
+    // 'absolute' world map-px vertices (`bx + cx + v`); 'local' marks already
+    // body-local input that must not be shifted again. An absent marker
+    // defaults to 'absolute' so maps exported before the marker existed keep
+    // loading unchanged (#318/#344).
+    vertexFrame?: 'absolute' | 'local';
     renderShape?: {
         type: 'rect' | 'circle' | 'polygon';
         bodyPosition: { x: number; y: number };
@@ -172,24 +178,36 @@ function isInternalMapDef(raw: any): raw is MapDef {
 
 /** Convert a flat body into a MapBodyDef, preserving facade metadata. */
 function toBodyDef(body: FlatBody, index: number): any {
-    const ox = body.x ?? 0;
-    const oy = body.y ?? 0;
-    // The exporter emits flat polygon vertices as WORLD coordinates
-    // (mapexporter.js:518-521: `x: bx + cx + v[0]`), but PhysicsEngine.addBody
-    // consumes MapBodyDef.vertices as BODY-LOCAL while also placing the body at
-    // def.x/def.y — treating the absolute vertices as local double-translates
-    // every exported polygon by its own position (#318). Normalize the
-    // exporter's absolute vertices to body-local here so the engine, renderer,
-    // cap-zone sensors and the death-center all agree on one convention.
-    const vertices = body.type === 'polygon' && body.vertices
-        ? body.vertices.map(v => ({ x: v.x - ox, y: v.y - oy }))
+const x = body.x ?? 0;
+    const y = body.y ?? 0;
+    // The exporter's flat polygon view stores vertices in map/world pixels
+    // (`bx + cx + v`), while MapBodyDef vertices are body-local for Box2D and
+    // the normalized renderer/cap-zone consumers. The flat format declares its
+    // vertex frame explicitly via `vertexFrame`: 'absolute' (exporter output,
+    // and the backward-compatible default when the marker is absent) or
+    // 'local' (already body-local input, which must NOT be shifted a second
+    // time). The absolute→local conversion inverts the body transform exactly
+    // (pos + R(angle) · local reproduces the authored absolute vertex), so
+    // rotated polygons also land where the exporter authored them. Only
+    // polygons are converted; rects and circles already express their extent
+    // around x/y.
+    const vertices = body.type === 'polygon' && body.vertices && body.vertexFrame !== 'local'
+        ? body.vertices.map(v => {
+            const dx = v.x - x;
+            const dy = v.y - y;
+            const angle = body.angle ?? 0;
+            const cosA = Math.cos(angle);
+            const sinA = Math.sin(angle);
+            // R(-angle) · (v - pos): the inverse of the engine's body transform.
+            return { x: dx * cosA + dy * sinA, y: -dx * sinA + dy * cosA };
+        })
         : body.vertices;
     return {
         name: body.name ?? body.bodyType ?? `body_${index}`,
         type: (body.type === 'rect' || body.type === 'circle'
             || body.type === 'polygon') ? body.type : 'rect',
-        x: ox,
-        y: oy,
+        x,
+        y,
         width: body.width,
         height: body.height,
         radius: body.radius,
@@ -523,17 +541,20 @@ export function normalizeMap(raw: unknown): MapDef {
             let bx0 = b.x, bx1 = b.x, by0 = b.y, by1 = b.y;
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
-            else if (b.vertices && b.vertices.length) {
-                // MapBodyDef polygon vertices are BODY-LOCAL (toBodyDef above
-                // normalizes the exporter's world-space emission), and addBody
-                // places the body at def.x/def.y with the shape at the body
-                // origin — so the polygon's world extent is b.x + v.x, exactly
-                // where the engine builds the fixture (#332, #318).
+else if (b.type === 'polygon' && b.vertices && b.vertices.length) {
+                // Polygon vertices in the normalized MapDef are body-local.
+                // Apply the body transform before folding them into the map
+                // bounds; the exporter input was absolute before toBodyDef()
+                // converted it to this local frame.
+                const angle = b.angle ?? 0;
+                const cosA = Math.cos(angle);
+                const sinA = Math.sin(angle);
+                bx0 = Infinity; bx1 = -Infinity; by0 = Infinity; by1 = -Infinity;
                 for (const v of b.vertices) {
-                    const vx = b.x + v.x;
-                    const vy = b.y + v.y;
-                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx;
-                    if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
+                    const wx = b.x + v.x * cosA - v.y * sinA;
+                    const wy = b.y + v.x * sinA + v.y * cosA;
+                    if (wx < bx0) bx0 = wx; if (wx > bx1) bx1 = wx;
+                    if (wy < by0) by0 = wy; if (wy > by1) by1 = wy;
                 }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;

@@ -519,6 +519,11 @@
             x: bx + cx + v[0],
             y: by + cy + v[1],
           }));
+          // Flat polygon vertices are world map-px (`bx + cx + v`). Declare the
+          // frame explicitly so normalizeMap converts them to the body-local
+          // MapBodyDef frame without guessing — and never double-shifts input
+          // that already declares body-local vertices (#344 review).
+          flat.vertexFrame = 'absolute';
         }
 
         mapDef.bodies.push(flat);
