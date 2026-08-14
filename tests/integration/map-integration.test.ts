@@ -11,6 +11,7 @@ import {
 } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
 import { normalizeMap } from '../../src/core/map-adapter';
+import { extractMap } from '../../Webscripts/mapexporter.js';
 import { safeDestroy } from '../utils/test-helpers';
 import { loadMap, addAllBodies, getSpawnXY, getMapFiles } from '../utils/map-loader';
 
@@ -730,40 +731,37 @@ describe('MapIntegration', () => {
         );
 
         it.each([
-            ['polygon', {
-                bodyIndex: 0,
-                name: 'offset-polygon',
-                type: 'polygon',
-                x: 400,
-                y: 0,
-                // Polygon vertices are body-local coordinates, matching the
-                // MapBodyDef/PhysicsEngine contract.
-                vertices: [
-                    { x: -100, y: -20 },
-                    { x: 100, y: -20 },
-                    { x: 100, y: 20 },
-                    { x: -100, y: 20 },
-                ],
-                static: true,
-            }],
-            ['rect control', {
-                bodyIndex: 0,
-                name: 'offset-rect',
-                type: 'rect',
-                x: 400,
-                y: 0,
-                width: 200,
-                height: 40,
-                static: true,
-            }],
+            ['polygon', { type: 'po', c: [0, 0], a: 0, s: 1, v: [[-100, -20], [100, -20], [100, 20], [-100, 20]] }],
+            ['rect control', { type: 'bx', c: [0, 0], a: 0, w: 200, h: 40 }],
         ] as const)(
             '%s keeps the 850-unit OOB boundary centered on the authored geometry (#332)',
-            (_name, body) => {
-                const rawMap = {
-                    bodies: [body],
-                    spawns: [{ x: 0, y: -150, blue: true, red: true, ffa: true }],
-                };
-                const normalized = normalizeMap(rawMap as any);
+            (_name, shape) => {
+                // Round-trip through the real mapexporter so the fixture carries
+                // the exporter's actual world-space convention: a native body at
+                // (400, 0) with local vertices ±100 exports flat polygon
+                // vertices already translated to world coordinates
+                // (mapexporter.js:518-521 emits `x: bx + cx + v[0]`), i.e.
+                // 300..500, NOT body-local coordinates.
+                const rawMap = extractMap({
+                    physics: {
+                        ppm: 30,
+                        bodies: [{ p: [400, 0], a: 0, fx: [0], s: { type: 's', n: 'plat' } }],
+                        fixtures: [{ sh: 0, n: 'plat' }],
+                        shapes: [shape],
+                    },
+                    discs: [{ team: 1, x: 0, y: -150 }],
+                } as any);
+
+                // Pin the exporter convention on the round-tripped fixture: the
+                // flat polygon body is at x=400 and its vertices are world
+                // coordinates (300..500), so the true geometry center is 400.
+                const flat = rawMap.bodies[0];
+                expect(flat.x).toBe(400);
+                if (flat.type === 'polygon') {
+                    expect(flat.vertices.map((v: any) => v.x)).toEqual([300, 500, 500, 300]);
+                }
+
+                const normalized = normalizeMap(rawMap);
                 expect(normalized.physics?.deathCenter).toEqual({ x: 400, y: 0 });
 
                 const env = new BonkEnvironment({

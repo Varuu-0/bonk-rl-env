@@ -464,11 +464,16 @@ export function normalizeMap(raw: unknown): MapDef {
             if (b.type === 'circle' && b.radius) { bx0 = b.x - b.radius; bx1 = b.x + b.radius; by0 = b.y - b.radius; by1 = b.y + b.radius; }
             else if (b.type === 'rect' && b.width && b.height) { bx0 = b.x - b.width / 2; bx1 = b.x + b.width / 2; by0 = b.y - b.height / 2; by1 = b.y + b.height / 2; }
             else if (b.vertices && b.vertices.length) {
+                // Exported flat polygon vertices are already WORLD coordinates:
+                // mapexporter.js:518-521 emits `x: bx + cx + v[0]` (body
+                // position + shape center + local vertex), so the vertex span
+                // IS the polygon's world extent. Do NOT add the body offset
+                // again — b.x already equals bx + cx, and translating twice
+                // would displace the death circle by the polygon's own position
+                // on every exported polygon map (#332).
                 for (const v of b.vertices) {
-                    const vx = b.x + v.x;
-                    const vy = b.y + v.y;
-                    if (vx < bx0) bx0 = vx; if (vx > bx1) bx1 = vx;
-                    if (vy < by0) by0 = vy; if (vy > by1) by1 = vy;
+                    if (v.x < bx0) bx0 = v.x; if (v.x > bx1) bx1 = v.x;
+                    if (v.y < by0) by0 = v.y; if (v.y > by1) by1 = v.y;
                 }
             }
             if (bx0 < minX) minX = bx0; if (bx1 > maxX) maxX = bx1;
