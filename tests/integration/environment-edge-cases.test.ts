@@ -133,6 +133,35 @@ describe('BonkEnvironment edge cases', () => {
       expect(observation.arenaHalfHeight).toBeCloseTo(250, 10);
     });
 
+    it('reset survives a physics implementation without getScale (identity scale)', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+
+      // Simulate a partial physics implementation that provides setMapBounds
+      // but not getScale: reset() must not throw a TypeError and must pass
+      // the authored map-pixel bounds through unchanged (scale fallback 1).
+      const realPhysics = (env as any).physics;
+      const lastBounds: number[] = [];
+      const partial = new Proxy(realPhysics, {
+        get(target, prop) {
+          if (prop === 'getScale') return undefined;
+          if (prop === 'setMapBounds') {
+            return (width: number, height: number) => {
+              lastBounds.push(width, height);
+              return target.setMapBounds(width, height);
+            };
+          }
+          return Reflect.get(target, prop);
+        },
+      });
+      (env as any).physics = partial;
+
+      expect(() => env!.reset()).not.toThrow();
+      expect(lastBounds).toEqual([60, 40]);
+    });
+
     it('capZones empty array when no capZones in map', async () => {
       const mapData: MapDef = makeMap({});
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });

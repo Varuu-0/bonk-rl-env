@@ -546,8 +546,8 @@ export class BonkEnvironment {
         this.physics.setNoCollide(this.config.noCollide);
 
         // Set PPM before adding bodies
-        if (typeof (this.physics as any).setScale === 'function') {
-            (this.physics as any).setScale(this.ppm);
+        if (typeof (this.physics as any).setPpm === 'function') {
+            (this.physics as any).setPpm(this.ppm);
         }
 
         for (const body of this.config.mapData.bodies) {
@@ -704,8 +704,13 @@ export class BonkEnvironment {
         // dynamic bounds and would otherwise clobber the override every reset.
         if (this.mapBounds && typeof (this.physics as any).setMapBounds === 'function') {
             // MapDef physics bounds are authored in map pixels, while the
-            // engine's setMapBounds API stores world-unit dimensions.
-            const scale = this.physics.getScale();
+            // engine's setMapBounds API stores world-unit dimensions. Partial
+            // physics implementations without getScale() receive the authored
+            // values unchanged (identity scale), matching their pre-scale
+            // behaviour instead of throwing a TypeError.
+            const scale = typeof (this.physics as any).getScale === 'function'
+                ? (this.physics as any).getScale()
+                : 1;
             this.physics.setMapBounds(
                 this.mapBounds.width / scale,
                 this.mapBounds.height / scale,

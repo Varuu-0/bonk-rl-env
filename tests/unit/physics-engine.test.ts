@@ -32,6 +32,13 @@ describe('PhysicsEngine', () => {
       engine = new PhysicsEngine();
       expect(engine.getTickCount()).toBe(0);
     });
+
+    it('getScale reports the coordinate scale, unaffected by setPpm', () => {
+      engine = new PhysicsEngine();
+      expect(engine.getScale()).toBe(SCALE);
+      engine.setPpm(4);
+      expect(engine.getScale()).toBe(SCALE); // PPM shapes the disc radius, not the coordinate conversion
+    });
   });
 
   describe('player creation', () => {
@@ -69,7 +76,7 @@ describe('PhysicsEngine', () => {
 
     it('player disc density is radius-normalized for other ppm values too', () => {
       engine = new PhysicsEngine();
-      engine.setScale(6); // radius 6/30 = 0.2
+      engine.setPpm(6); // radius 6/30 = 0.2
       engine.addPlayer(0, 0, 0);
       const body = (engine as any).playerBodies.get(0);
       const shape = body.GetShapeList();
@@ -339,9 +346,9 @@ describe('PhysicsEngine', () => {
       expect(state.deathType).toBe(4);
     });
 
-    it('OOB radius is ppm-independent (same death circle after setScale)', () => {
+    it('OOB radius is ppm-independent (same death circle after setPpm)', () => {
       engine = new PhysicsEngine();
-      engine.setScale(4);
+      engine.setPpm(4);
       // 900 map units with ppm=4: the ppm must not widen the death circle.
       engine.addPlayer(0, 900, 0);
       engine.tick();
