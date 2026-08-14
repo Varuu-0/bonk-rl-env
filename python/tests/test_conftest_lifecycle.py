@@ -286,15 +286,30 @@ def test_posix_listener_pids_parses_lsof_output(monkeypatch):
     assert conftest._posix_listener_pids(5556) == {24156, 32832}
 
 
-def test_posix_listener_pids_empty_when_tools_report_no_listener(monkeypatch):
-    # Both tools run but report no match (e.g. lsof returncode 1/2 on a
-    # listenerless port): a genuine "no listener", not an inability to look.
+def test_posix_listener_pids_empty_when_no_listener(monkeypatch):
+    # Tools run successfully but no listener matches the port (ss exits 0
+    # with headers only, lsof exits 1 = documented "no match"): a genuine
+    # "no listener", not an inability to look.
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type("R", (), {"returncode": 0, "stdout": "LISTEN 0 4096\n"})()
+        return type("R", (), {"returncode": 1, "stdout": ""})()
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) == set()
+
+
+def test_posix_listener_pids_none_when_tools_error(monkeypatch):
+    # Both tools launch but fail (non-zero exit, e.g. permission-denied
+    # /proc): the check is inconclusive, not "no listener", so a host with a
+    # present-but-failing tool must not be misread as a listenerless port.
     def fake_run(argv, *args, **kwargs):
         return type("R", (), {"returncode": 2, "stdout": ""})()
 
     monkeypatch.setattr(conftest.subprocess, "run", fake_run)
 
-    assert conftest._posix_listener_pids(5556) == set()
+    assert conftest._posix_listener_pids(5556) is None
 
 
 def test_posix_listener_pids_none_when_tools_missing(monkeypatch):
@@ -302,6 +317,23 @@ def test_posix_listener_pids_none_when_tools_missing(monkeypatch):
     # cannot be identified at all, which must be distinguishable from "no
     # listener" so ownership-unverifiable hosts do not hard-fail fixtures.
     def fake_run(argv, *args, **kwargs):
+        raise OSError(f"no such tool: {argv[0]}")
+
+    monkeypatch.setattr(conftest.subprocess, "run", fake_run)
+
+    assert conftest._posix_listener_pids(5556) is None
+
+
+def test_posix_listener_pids_none_when_ss_errors_and_lsof_missing(
+    monkeypatch,
+):
+    # The review scenario: ss is installed but fails non-zero (e.g.
+    # permission-denied /proc) and lsof is not installed. Launch alone must
+    # not count as a successful check, so the port stays unverifiable (None)
+    # instead of being misread as "no listener".
+    def fake_run(argv, *args, **kwargs):
+        if argv[0] == "ss":
+            return type("R", (), {"returncode": 2, "stdout": ""})()
         raise OSError(f"no such tool: {argv[0]}")
 
     monkeypatch.setattr(conftest.subprocess, "run", fake_run)

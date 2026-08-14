@@ -46,38 +46,45 @@ def _lsof_listener_pids(lsof_output, port):
 
 def _posix_listener_pids(port):
     """Return PIDs listening on ``port`` on POSIX, or ``None`` when the
-    host has no tool with which to identify them.
+    listener cannot be identified.
 
     Uses ``ss -ltnp`` (Linux, iproute2) with an ``lsof`` fallback so the
     listener answering a connect probe can be identified on POSIX too,
     instead of blindly trusting that it belongs to the spawned server.
-    ``None`` (neither tool installed) lets callers distinguish "listener
-    cannot be identified" from a genuine "no listener found" (empty set),
-    so a host without iproute2/lsof does not hard-fail a fixture that can
-    never verify ownership.
+    ``None`` (no tool successfully checked — not installed, or installed
+    but failing) lets callers distinguish "listener cannot be identified"
+    from a genuine "no listener found" (empty set), so a host without a
+    working iproute2/lsof does not hard-fail a fixture that can never
+    verify ownership.
     """
+    # A tool counts as having checked only on a successful exit: ``ss``
+    # exits 0 (even with no matches, headers only); ``lsof`` exits 1 for a
+    # genuine "no match" and non-zero/2 only on error. A present-but-failing
+    # tool (e.g. permission-denied /proc) must not be misread as "no
+    # listener", so its non-zero exit leaves the port unverifiable.
     attempts = (
-        (["ss", "-ltnp"], _ss_listener_pids),
+        (["ss", "-ltnp"], _ss_listener_pids, (0,)),
         (
             ["lsof", "-nP", "-iTCP", f":{port}", "-sTCP:LISTEN", "-t"],
             _lsof_listener_pids,
+            (0, 1),
         ),
     )
-    tool_available = False
-    for argv, parse in attempts:
+    tool_checked = False
+    for argv, parse, success_codes in attempts:
         try:
             result = subprocess.run(
                 argv, capture_output=True, text=True, timeout=10
             )
         except (OSError, subprocess.TimeoutExpired):
             continue
-        tool_available = True
-        if result.returncode != 0:
+        if result.returncode not in success_codes:
             continue
+        tool_checked = True
         pids = parse(result.stdout, port)
         if pids:
             return pids
-    if not tool_available:
+    if not tool_checked:
         return None
     return set()
 
