@@ -6,6 +6,7 @@
 import { describe, it, expect } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { getDefaults } from '../../src/config/config-loader';
 
 const configPath = path.resolve(__dirname, '..', '..', 'config.example.json');
 const raw = fs.readFileSync(configPath, 'utf8');
@@ -54,7 +55,7 @@ describe('config.example.json verified physics values', () => {
     expect(typeof config.player.radius).toBe('number');
   });
 
-  it('documents the worker-pool and IPC configuration surfaces', () => {
+it('documents the worker-pool and IPC configuration surfaces', () => {
     expect(config.workerPool).toMatchObject({
       numWorkers: 0,
       maxWorkers: 8,
@@ -85,4 +86,15 @@ describe('config.example.json verified physics values', () => {
     expect(config.ipc._doc_rcvHwm).toContain('--rcv-hwm');
     expect(config.ipc._doc_lingerMs).toContain('--linger-ms');
   });
+
+  it('documents and ships the configured default map', () => {
+    // Dereference inside the test (not at module load) so a missing key
+    // fails this case instead of crashing the whole file at import.
+    expect(config.environment.defaultMapPath).toBe(getDefaults().environment.defaultMapPath);
+
+    const defaultMapPath = path.resolve(path.dirname(configPath), config.environment.defaultMapPath);
+    expect(fs.existsSync(defaultMapPath)).toBe(true);
+
+    const map = JSON.parse(fs.readFileSync(defaultMapPath, 'utf8'));
+    expect(map.metadata?.name).toBe('WDB (No Mapshake)');
 });

@@ -329,31 +329,32 @@ The server handles graceful shutdown across different platforms:
 
 ## Running Tests
 
-The test suite provides a consolidated CLI with multiple ways to run tests:
+The test suite uses Vitest. The legacy runner aliases remain available for
+interactive selection and listing:
 
 ```bash
 # Run all tests (default)
 npm test
 
-# Interactive test runner menu
+# Compatibility runner (interactive in a TTY, full suite otherwise)
 npm run test:runner
 
 # List all available tests
 npm run test:list
 
 # Run specific test categories
-npm run test:physics    # Physics engine tests
-npm run test:prng       # PRNG tests
-npm run test:env        # Environment tests
-npm run test:frameskip  # Frame skip tests
-npm run test:shared     # Shared memory tests
-npm run test:manager    # Env manager tests
-npm run test:map-types    # Map body type tests
-npm run test:collision    # Collision filtering tests  
-npm run test:nophysics    # noPhysics/friction tests
-npm run test:grapple      # Grapple mechanics tests
-npm run test:bounds       # Dynamic arena bounds tests
-npm run test:integration  # Map integration tests
+npm run test:physics      # tests/unit/physics-engine.test.ts
+npm run test:prng         # tests/unit/prng.test.ts
+npm run test:env          # tests/integration/bonk-env.test.ts
+npm run test:frameskip    # tests/integration/frame-skip.test.ts
+npm run test:shared       # tests/integration/shared-memory.test.ts
+npm run test:manager      # tests/integration/env-manager.test.ts
+npm run test:map-types    # tests/integration/map-body-types.test.ts
+npm run test:collision    # tests/integration/collision-filtering.test.ts
+npm run test:nophysics    # tests/integration/nophysics-friction.test.ts
+npm run test:grapple      # tests/integration/grapple-mechanics.test.ts
+npm run test:bounds       # tests/integration/dynamic-arena-bounds.test.ts
+npm run test:integration  # all tests/integration/ suites
 
 # Type check
 npm run typecheck
