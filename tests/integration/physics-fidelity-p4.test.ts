@@ -193,6 +193,57 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     ]);
     expect(parsed.trace.ticks).toEqual([{ t: 0, discs: [] }]);
   });
+
+  it('returns a validation error and drops field-invalid player entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ team: 1 }, { id: -1 }],
+      spawns: [],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual([
+      'player id must be a non-negative number',
+      'player id must be a non-negative number',
+    ]);
+    expect(parsed.trace.players).toEqual([]);
+  });
+
+  it('returns a validation error and drops field-invalid tick entries', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [],
+      ticks: [{ t: 0 }, { t: -1, discs: [] }],
+    });
+    expect(parsed.errors).toEqual([
+      'tick 0 has no discs array',
+      'tick index invalid: -1',
+    ]);
+    expect(parsed.trace.ticks).toEqual([]);
+  });
+
+  it('returns a validation error and drops null spawn entries, preserving valid spawns', () => {
+    const parsed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [],
+      spawns: [null, { id: 0, x: -100, y: -25 }],
+      ticks: [],
+    });
+    expect(parsed.errors).toEqual(['spawn entries must be objects']);
+    // buildTraceEnvironment re-seeds from spawn.id/spawn.x/spawn.y, so the
+    // parsed spawns must stay safe for downstream iteration when errors are
+    // ignored (the spawn-filtering path added with this PR).
+    expect(parsed.trace.spawns).toEqual([{ id: 0, x: -100, y: -25 }]);
+  });
 });
 
 describe('P4: differential validation — fixture/joint exact-match gates', () => {

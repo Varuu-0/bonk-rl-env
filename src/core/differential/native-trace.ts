@@ -106,11 +106,12 @@ export interface ParsedTrace {
 /**
  * Parse and validate a native trace object (from JSON). Returns the typed trace
  * plus a list of validation errors. Throws on a structurally-unsound input
- * (non-object, missing schema marker, non-array fields). Null/non-object
- * entries inside players, spawns, and ticks are reported as errors and omitted
- * from the returned trace, so downstream iteration stays safe even when a
- * caller ignores the errors. The embedded map is normalized by the replay
- * comparator (which owns the normalizeMap import).
+ * (non-object, missing schema marker, non-array fields). Entries that fail the
+ * per-entry shape/field contract (null, non-objects, or objects with missing or
+ * invalid required fields) inside players, spawns, and ticks are reported as
+ * errors and omitted from the returned trace, so downstream iteration stays
+ * safe even when a caller ignores the errors. The embedded map is normalized by
+ * the replay comparator (which owns the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -172,13 +173,22 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     map: t.map,
     settings: t.settings,
     players: Array.isArray(t.players)
-      ? t.players.filter((p): p is NativeTracePlayer => p !== null && typeof p === 'object' && !Array.isArray(p))
+      ? t.players.filter((p): p is NativeTracePlayer =>
+          p !== null && typeof p === 'object' && !Array.isArray(p) &&
+          typeof p.id === 'number' && p.id >= 0)
       : [],
     spawns: Array.isArray(t.spawns)
-      ? t.spawns.filter((s): s is NativeTraceSpawn => s !== null && typeof s === 'object' && !Array.isArray(s))
+      ? t.spawns.filter((s): s is NativeTraceSpawn =>
+          s !== null && typeof s === 'object' && !Array.isArray(s) &&
+          typeof s.id === 'number' && s.id >= 0 &&
+          typeof s.x === 'number' && Number.isFinite(s.x) &&
+          typeof s.y === 'number' && Number.isFinite(s.y))
       : [],
     ticks: Array.isArray(t.ticks)
-      ? t.ticks.filter((tk): tk is NativeTraceTick => tk !== null && typeof tk === 'object' && !Array.isArray(tk))
+      ? t.ticks.filter((tk): tk is NativeTraceTick =>
+          tk !== null && typeof tk === 'object' && !Array.isArray(tk) &&
+          typeof tk.t === 'number' && tk.t >= 0 &&
+          Array.isArray(tk.discs))
       : [],
   };
 
