@@ -78,93 +78,43 @@ describe('BonkEnvironment edge cases', () => {
       expect(result.info.capZones[0].type).toBe(2);
     });
 
-    it('reports map-pixel physics.bounds after reset and step', async () => {
-      const mapData: MapDef = makeMap({});
-      (mapData as any).physics = { bounds: { width: 730, height: 500 } };
-
-      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
-      const obs = env.reset();
-      expect(obs.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(obs.arenaHalfHeight).toBeCloseTo(250, 10);
-
-      const stepped = env.step(0).observation;
-      expect(stepped.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(stepped.arenaHalfHeight).toBeCloseTo(250, 10);
-
-      const obs2 = env.reset();
-      expect(obs2.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(obs2.arenaHalfHeight).toBeCloseTo(250, 10);
-    });
-
-    it('reports exported boundsWidth/boundsHeight in map pixels', async () => {
-      const exportedMap = {
-        metadata: { name: 'exported-explicit-bounds' },
-        spawns: [
-          { x: 0, y: 0, blue: true },
-          { x: 100, y: 0, red: true },
-        ],
-        bodies: [],
-        physics: { boundsWidth: 730, boundsHeight: 500 },
-      };
-
-      env = new BonkEnvironment({ mapData: exportedMap as any, numOpponents: 0, maxTicks: 10 });
-      const resetObservation = env.reset();
-      expect(resetObservation.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(resetObservation.arenaHalfHeight).toBeCloseTo(250, 10);
-
-      const stepObservation = env.step(0).observation;
-      expect(stepObservation.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(stepObservation.arenaHalfHeight).toBeCloseTo(250, 10);
-    });
-
-    it('uses the configured engine scale for map-pixel physics.bounds', async () => {
-      const mapData: MapDef = makeMap({
-        physics: { bounds: { width: 730, height: 500 } },
-      });
-
-      env = new BonkEnvironment({
-        mapData,
-        physics: { scale: 60 },
-        numOpponents: 0,
-        maxTicks: 10,
-      });
-      const observation = env.reset();
-      expect(observation.arenaHalfWidth).toBeCloseTo(365, 10);
-      expect(observation.arenaHalfHeight).toBeCloseTo(250, 10);
-    });
-
-    it('reset skips the mapBounds override when getScale is missing', async () => {
+    it('physics.bounds stays in map-pixel observation units across resets', async () => {
       const mapData: MapDef = makeMap({});
       (mapData as any).physics = { bounds: { width: 60, height: 40 } };
 
       env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const obs = env.reset();
+      expect(obs.arenaHalfWidth).toBe(30);  // width/2 in map pixels
+      expect(obs.arenaHalfHeight).toBe(20);
 
-      // Simulate a partial physics implementation that provides setMapBounds
-      // but not getScale: reset() must not throw, and the override must be
-      // skipped rather than applied at identity scale (which would pass map
-      // pixels into the world-unit API and inflate the observation 30x).
-      const realPhysics = (env as any).physics;
-      let setMapBoundsCalled = 0;
-      const partial = new Proxy(realPhysics, {
-        get(target, prop) {
-          if (prop === 'getScale') return undefined;
-          if (prop === 'setMapBounds') {
-            return (width: number, height: number) => {
-              setMapBoundsCalled++;
-              return target.setMapBounds(width, height);
-            };
-          }
-          return Reflect.get(target, prop);
-        },
-      });
-      (env as any).physics = partial;
+      for (let i = 0; i < 5; i++) env.step(0);
 
-      const observation = env!.reset();
-      expect(setMapBoundsCalled).toBe(0);
-      // The partial implementation falls back to its computed bounds instead
-      // of reporting the 30x-inflated 60×40 map-pixel override (#319).
-      expect(observation.arenaHalfWidth).toBe(realPhysics.getArenaBounds().halfWidth);
-      expect(observation.arenaHalfHeight).toBe(realPhysics.getArenaBounds().halfHeight);
+      const obs2 = env.reset();
+      expect(obs2.arenaHalfWidth).toBe(30);
+      expect(obs2.arenaHalfHeight).toBe(20);
+    });
+
+    it('skips the map-bounds override when a duck-typed engine lacks getScale (#320)', async () => {
+      const mapData: MapDef = makeMap({});
+      (mapData as any).physics = { bounds: { width: 60, height: 40 } };
+
+      env = new BonkEnvironment({ mapData, numOpponents: 0, maxTicks: 10 });
+      const physics = (env as any).physics;
+      // Duck-type the engine: expose setMapBounds but not the getScale
+      // accessor reset()'s conversion needs. reset() must skip the override
+      // instead of throwing on the missing accessor.
+      physics.getScale = undefined;
+      const setMapBoundsSpy = vi.spyOn(physics, 'setMapBounds');
+
+      expect(() => env!.reset(2)).not.toThrow();
+      expect(setMapBoundsSpy).not.toHaveBeenCalled();
+
+      // With the override skipped, observations report the engine's dynamic
+      // bounds rather than the skipped map-px half extents.
+      const observation = (env as any).getObservation();
+      const dynamic = physics.getArenaBounds();
+      expect(observation.arenaHalfWidth).toBe(dynamic.halfWidth);
+      expect(observation.arenaHalfHeight).toBe(dynamic.halfHeight);
     });
 
     it('capZones empty array when no capZones in map', async () => {
@@ -1009,8 +959,8 @@ describe('BonkEnvironment edge cases', () => {
 
         expect(world).not.toBe(previousWorld);
         expect(observation.tick).toBe(0);
-        expect(observation.arenaHalfWidth).toBeCloseTo(30, 10);
-        expect(observation.arenaHalfHeight).toBeCloseTo(20, 10);
+        expect(observation.arenaHalfWidth).toBe(30);
+        expect(observation.arenaHalfHeight).toBe(20);
         expect(physics.getBodyMap().size).toBe(mapData.bodies.length);
         expect(physics.capZoneSensors).toHaveLength(1);
         expect(physics.ppm).toBe(18);

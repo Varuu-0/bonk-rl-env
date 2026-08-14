@@ -26,7 +26,7 @@ import {
 import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
-import { assertValidAction } from './action-validation';
+import { assertValidAction, decodeEncodedAction } from './action-validation';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -137,7 +137,9 @@ export interface EnvironmentConfig {
      *  `noCollide` vs `settings.nc`). */
     flipped?: boolean;
     /** Native respawning mode (`re`): dead discs respawn at their spawn point
-     *  (default false). Explicit config wins over the map's `settings.re`. */
+     *  (default false). Explicit config wins over the map's `settings.re`.
+     *  Transient lethal/OOB deaths remain observable and rewarded but do not
+     *  terminate; permanent cap-zone eliminations (type 3) still terminate. */
     respawnEnabled?: boolean;
     /** Documented physics.* tuning forwarded to the PhysicsEngine (issue #217).
      *  Absent keys keep the engine's sanity defaults, so an env built without a
@@ -370,6 +372,8 @@ export class BonkEnvironment {
     private mapBounds: { width: number; height: number } | null = null;
     /** Map-relative OOB death-circle center (physics.deathCenter), if declared. */
     private mapDeathCenter: { x: number; y: number } | null = null;
+    /** Reused by getObservationArenaBounds so the fast observation path allocates nothing. */
+    private _obsArenaBoundsCache: { halfWidth: number; halfHeight: number } = { halfWidth: 0, halfHeight: 0 };
 
     constructor(config: Partial<EnvironmentConfig> = {}) {
         // Normalize config: accept both camelCase and snake_case. The
@@ -702,20 +706,16 @@ export class BonkEnvironment {
 
         // Re-apply explicit map bounds last — body re-adds above recomputed
         // dynamic bounds and would otherwise clobber the override every reset.
-        // A physics implementation without getScale() cannot convert the
-        // authored map-pixel bounds into the world-unit setMapBounds API, so
-        // the override is skipped rather than applied at the wrong scale
-        // (which would inflate the reported observation by the engine scale).
+// MapDef physics.bounds are map pixels, while setMapBounds consumes
+        // internal world metres; convert with the engine's resolved scale so
+        // custom physics.scale values preserve the observation's map-pixel unit.
+        // Both methods are duck-checked: an engine exposing setMapBounds but not
+        // getScale skips the override instead of throwing in reset().
         if (this.mapBounds
             && typeof (this.physics as any).setMapBounds === 'function'
             && typeof (this.physics as any).getScale === 'function') {
-            // MapDef physics bounds are authored in map pixels, while the
-            // engine's setMapBounds API stores world-unit dimensions.
             const scale = (this.physics as any).getScale();
-            this.physics.setMapBounds(
-                this.mapBounds.width / scale,
-                this.mapBounds.height / scale,
-            );
+            this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
         }
 
         // Re-apply the map's OOB death-circle center — like mapBounds it is a
@@ -783,6 +783,7 @@ export class BonkEnvironment {
                     scoreBlue: this.scoreBlue,
                     scoreRed: this.scoreRed,
                     aiTeam: this.aiTeam,
+                    terminal_observation: observation,
                 },
             };
         }
@@ -819,11 +820,22 @@ export class BonkEnvironment {
             this.previousAliveState.set(this.opponentIds[i], opponentStates[i].alive);
         }
 
-        // Check for terminal state (death or maxTicks). With zero opponents
-        // the empty-state check must not be vacuously true: an episode with
-        // no opponents can only end via the AI's death or truncation.
-        const allOpponentsDead = opponentStates.length > 0 && opponentStates.every(s => !s.alive);
-        const terminated = !aiState.alive || allOpponentsDead;
+        // Check for terminal state (permanent death or maxTicks). On a respawn
+        // map a lethal/OOB death is observable this step (aiAlive false,
+        // deathPenalty/killReward fire) but the engine queues the disc for its
+        // deferred respawn, so the death does NOT terminate the episode — the
+        // round continues with the respawned disc, matching native `re`
+        // semantics (issue #339, coordinated with the #341/#371 death
+        // contract). Only a permanent death terminates: cap-zone elimination
+        // (type 3), respawning disabled, or an invalid spawn point that
+        // detached immediately. With zero opponents the empty-state check
+        // must not be vacuously true: an episode with no opponents can only
+        // end via the AI's permanent death or truncation.
+        const aiPendingRespawn = this.physics.isPendingRespawn(this.aiPlayerId);
+        const allOpponentsPermanentlyDead = opponentStates.length > 0 && opponentStates.every((s, i) =>
+            !s.alive && !this.physics.isPendingRespawn(this.opponentIds[i]),
+        );
+        const terminated = (!aiState.alive && !aiPendingRespawn) || allOpponentsPermanentlyDead;
         const truncated = this.physics.getTickCount() >= this.config.maxTicks;
 
         // If terminal reached, set flag to report done immediately on subsequent ticks.
@@ -864,6 +876,7 @@ export class BonkEnvironment {
                 scoreBlue: this.scoreBlue,
                 scoreRed: this.scoreRed,
                 aiTeam: this.aiTeam,
+                ...(terminated || truncated ? { terminal_observation: observation } : {}),
             },
         };
     }
@@ -886,14 +899,7 @@ export class BonkEnvironment {
      */
     private decodeAction(action: Action): PlayerInput {
         if (typeof action === 'number') {
-            return {
-                left: !!(action & 1),
-                right: !!(action & 2),
-                up: !!(action & 4),
-                down: !!(action & 8),
-                heavy: !!(action & 16),
-                grapple: !!(action & 32),
-            };
+            return decodeEncodedAction(action);
         }
         return action;
     }
@@ -927,8 +933,11 @@ export class BonkEnvironment {
      * rewards elimination, negative discourages it); deathPenalty and
      * timePenalty are enforced non-positive so a "penalty" always reduces
      * reward and can never reward the event it names:
-     *   +killReward   — opponent knocked off the map (killed)
-     *   +deathPenalty — AI player knocked off the map (death; default -1.0)
+     *   +killReward   — opponent knocked off the map (killed; on respawn maps
+     *                   every transient respawn death is rewarded too)
+     *   +deathPenalty — AI player knocked off the map (death; default -1.0;
+     *                   on respawn maps every transient respawn death is
+     *                   penalized too)
      *   ±1.0  — cap-zone capture for/against the AI team (single reward for
      *           the event; cap-zone eliminations (deathType 3) do NOT also
      *           count as kills)
@@ -993,7 +1002,7 @@ export class BonkEnvironment {
             };
         });
 
-        const arenaBounds = this.physics.getArenaBounds();
+        const arenaBounds = this.getObservationArenaBounds();
 
         return {
             playerX: aiState.x,
@@ -1008,6 +1017,26 @@ export class BonkEnvironment {
             arenaHalfHeight: arenaBounds.halfHeight,
             tick: this.physics.getTickCount(),
         };
+    }
+
+    /**
+     * Arena half extents for the observation, in map pixels. When an exported
+     * map declares explicit physics.bounds, reset() stores world metres
+     * (bounds / scale) in the engine and getArenaBounds() converts back with
+     * × scale; that round trip can drift by 1 ulp (e.g. 500.00000000000006
+     * for a 1000px bound), so report the authoritative map pixels directly.
+     * Mirrors the reset() duck-check: an engine without setMapBounds or
+     * getScale keeps the engine-reported (dynamic) bounds.
+     */
+    private getObservationArenaBounds(): { halfWidth: number; halfHeight: number } {
+        if (this.mapBounds !== null
+            && typeof (this.physics as any).setMapBounds === 'function'
+            && typeof (this.physics as any).getScale === 'function') {
+            this._obsArenaBoundsCache.halfWidth = this.mapBounds.width / 2;
+            this._obsArenaBoundsCache.halfHeight = this.mapBounds.height / 2;
+            return this._obsArenaBoundsCache;
+        }
+        return this.physics.getArenaBounds();
     }
 
     /**
@@ -1044,7 +1073,7 @@ export class BonkEnvironment {
             this._obsBuffer[base + 5] = state.alive ? 1 : 0;
         }
 
-        const arenaBounds = this.physics.getArenaBounds();
+        const arenaBounds = this.getObservationArenaBounds();
         this._obsBuffer[13] = arenaBounds.halfWidth;
         this._obsBuffer[14] = arenaBounds.halfHeight;
         this._obsBuffer[15] = this.physics.getTickCount();

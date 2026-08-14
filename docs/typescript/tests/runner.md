@@ -2,106 +2,54 @@
 
 ## Module Overview
 
-The test runner (`tests/runner.ts`) is a CLI-based test execution framework that runs all 12 test suites and generates a consolidated summary report.
+The repository uses Vitest for TypeScript tests. `tests/runner.ts` is a small
+compatibility CLI retained for the legacy `test:runner`, `test:list`, and
+`test:legacy` npm scripts. It delegates execution to Vitest and returns
+Vitest's exit code.
 
-## Registered Test Suites
+## Current Suite Mappings
 
-| # | File | Description |
-|:--|:-----|:------------|
-| 1 | `physics-engine.test.ts` | Box2D physics simulation |
-| 2 | `prng.test.ts` | Deterministic RNG |
-| 3 | `bonk-env.test.ts` | Gymnasium API |
-| 4 | `frame-skip.test.ts` | Frame skip action repetition |
-| 5 | `shared-memory.ts` | SharedArrayBuffer IPC |
-| 6 | `env-manager.test.ts` | Environment pool management |
-| 7 | `map-body-types.test.ts` | Map body types (rect/circle/polygon) |
-| 8 | `collision-filtering.test.ts` | Collision group filtering |
-| 9 | `nophysics-friction.test.ts` | Sensor bodies and friction |
-| 10 | `grapple-mechanics.test.ts` | Grapple and slingshot mechanics |
-| 11 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds expansion |
-| 12 | `map-integration.test.ts` | Real map loading and integration |
+| npm script | Vitest target |
+|:-----------|:--------------|
+| `test:physics` | `tests/unit/physics-engine.test.ts` |
+| `test:prng` | `tests/unit/prng.test.ts` |
+| `test:env` | `tests/integration/bonk-env.test.ts` |
+| `test:frameskip` | `tests/integration/frame-skip.test.ts` |
+| `test:shared` | `tests/integration/shared-memory.test.ts` |
+| `test:manager` | `tests/integration/env-manager.test.ts` |
+| `test:map-types` | `tests/integration/map-body-types.test.ts` |
+| `test:collision` | `tests/integration/collision-filtering.test.ts` |
+| `test:nophysics` | `tests/integration/nophysics-friction.test.ts` |
+| `test:grapple` | `tests/integration/grapple-mechanics.test.ts` |
+| `test:bounds` | `tests/integration/dynamic-arena-bounds.test.ts` |
+| `test:integration` | `tests/integration/` |
 
 ## Usage
 
 ```bash
-# Run all tests
+# Run all tests in the default Vitest configuration
 npm test
-# or
-npx tsx tests/runner.ts all
 
-# Run a specific test suite by number
-npx tsx tests/runner.ts 3
+# Compatibility runner: interactive in a TTY, all default tests otherwise
+npm run test:runner
 
-# List all available tests
-npx tsx tests/runner.ts list
+# Run all tests through the legacy alias
+npm run test:legacy
 
-# Interactive menu mode
-npx tsx tests/runner.ts
+# List the compatibility suite mappings
+npm run test:list
+
+# Numeric runner arguments remain supported for existing users
+npx tsx tests/runner.ts 1
+npx tsx tests/runner.ts 12
 ```
 
-## Output Parsing
-
-The runner captures and parses stdout from each test file. Test files must use this output format:
-
-- `+ <test name>` — passed assertion
-- `X <test name>` or `X <test name>: <details>` — failed assertion
-- `✓ <test name>` — passed assertion (alternate format)
-- `✗ <test name>` — failed assertion (alternate format)
-- `RESULTS: <passed> passed, <failed> failed` — summary line at end
-
-## Consolidated Summary Report
-
-After all tests complete, the runner generates a detailed report containing:
-
-- **Overall summary** — total suites, total tests, passed/failed/skipped counts, pass rate, duration
-- **Suite-by-suite breakdown** — tests, pass, fail, duration, pass rate, status
-- **Timing analysis** — slowest/fastest/average/median suite, top 5 slowest
-- **Failure details** — test name, suite, error details
-
-## Data Structures
-
-```typescript
-interface TestResult {
-  name: string;
-  passed: boolean;
-  details?: string;
-}
-
-interface SuiteResult {
-  file: string;
-  description: string;
-  tests: TestResult[];
-  totalTests: number;
-  passed: number;
-  failed: number;
-  skipped: number;
-  duration: number;
-  passRate: number;
-  status: 'PASS' | 'FAIL' | 'ERROR' | 'TIMEOUT';
-  exitCode: number | null;
-  rawOutput: string;
-  error?: string;
-}
-```
+The numeric compatibility arguments map to the focused files listed by
+`npm run test:list`. New commands should use the direct Vitest npm scripts.
 
 ## Exit Codes
 
 | Code | Meaning |
 |:-----|:--------|
-| `0` | All tests passed |
-| `1` | One or more tests failed or errored |
-
-## Test File Contract
-
-All test files must:
-
-1. Maintain `testsPassed` and `testsFailed` counters
-2. Use the `test(name, passed, details?)` helper for each assertion
-3. Print `+ <name>` for pass, `X <name>` for fail
-4. Print `RESULTS: X passed, Y failed` at the end
-5. Call `process.exit(1)` if any tests failed
-
-## See Also
-
-- [test-env](../../python/tests/test_env.md) — Python integration tests
-- [benchmark](../../python/benchmarks/benchmark.md) — Performance benchmarks
+| `0` | All selected tests passed or the list command completed |
+| `1` | Vitest failed, the suite argument was invalid, or the runner could not start |

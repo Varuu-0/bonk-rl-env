@@ -1,9 +1,14 @@
 import type { PlayerInput } from './physics-engine';
 
 /**
- * The six discrete input fields of a PlayerInput action.
+ * The six discrete input fields of a PlayerInput action, in bit order:
+ * left=1, right=2, up=4, down=8, heavy=16, grapple=32. The single source of
+ * truth for the encoded-action layout: the bit flags and validation range
+ * below derive from it, and the encoders/decoders consume the same table, so
+ * a future field change cannot leave transports hardcoding a stale width
+ * (issue #330).
  */
-const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
+export const ACTION_FIELDS: ReadonlyArray<keyof PlayerInput> = [
     'left',
     'right',
     'up',
@@ -13,6 +18,56 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
 ];
 
 /**
+ * The number of bits used by the action encoders/decoders, which caps the
+ * encoded action space at [0, 63]. Derived from ACTION_FIELDS so the width
+ * always matches the shared bit table.
+ */
+export const ACTION_ENCODING_BITS = ACTION_FIELDS.length;
+
+/**
+ * Bit flag for each ACTION_FIELDS entry (left=1, right=2, up=4, down=8,
+ * heavy=16, grapple=32). Shared with the encoders/decoders so every transport
+ * applies the exact bit layout validated here.
+ */
+export const ACTION_BIT_FLAGS: ReadonlyArray<number> = ACTION_FIELDS.map(
+    (_, index) => 1 << index,
+);
+
+const MAX_ENCODED_ACTION = (1 << ACTION_ENCODING_BITS) - 1;
+
+/**
+ * Encodes a validated PlayerInput object into its shared six-bit number using
+ * ACTION_BIT_FLAGS, so every transport (WorkerPool shared-memory and
+ * message-passing) applies the exact bit layout validated here.
+ */
+export function encodePlayerInput(action: PlayerInput): number {
+    let encoded = 0;
+    for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
+        if (action[ACTION_FIELDS[i]]) encoded |= ACTION_BIT_FLAGS[i];
+    }
+    return encoded;
+}
+
+/**
+ * Decodes a shared six-bit encoded action number back into a PlayerInput
+ * object, mirroring encodePlayerInput (issue #330).
+ */
+export function decodeEncodedAction(bits: number): PlayerInput {
+    const decoded: PlayerInput = {
+        left: false,
+        right: false,
+        up: false,
+        down: false,
+        heavy: false,
+        grapple: false,
+    };
+    for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
+        decoded[ACTION_FIELDS[i]] = !!(bits & ACTION_BIT_FLAGS[i]);
+    }
+    return decoded;
+}
+
+/**
  * Validates an `Action` (PlayerInput | number) and throws a labeled
  * `Invalid action: ...` error for every malformed shape, so every transport
  * (direct BonkEnvironment.step, WorkerPool shared-memory and message-passing,
@@ -20,10 +75,7 @@ const PLAYER_INPUT_FIELDS: Array<keyof PlayerInput> = [
  * executing a different/no-op action (issue #278).
  *
  * A conforming value is either:
- *   - a finite encoded number (the documented contract is an integer in
- *     [0, 63]; the out-of-range integer rejection is covered separately by
- *     issue #261, and finite non-integer numbers remain accepted for backward
- *     compatibility with the pinned input-validation behavior), or
+ *   - an integer encoded number in [0, 63], or
  *   - a plain object whose own enumerable keys are exactly the six
  *     PlayerInput fields, each present field boolean, with at least one field
  *     set; missing fields default to false.
@@ -39,6 +91,11 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
                 `Invalid action: expected a finite encoded number, got ${String(action)}`,
             );
         }
+        if (!Number.isInteger(action) || action < 0 || action > MAX_ENCODED_ACTION) {
+            throw new Error(
+                `Invalid action: expected an encoded action in [0, ${MAX_ENCODED_ACTION}], got ${action}`,
+            );
+        }
         return;
     }
     if (action === null || typeof action !== 'object') {
@@ -51,7 +108,7 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
     }
     const record = action as Record<string, unknown>;
     let hasField = false;
-    for (const field of PLAYER_INPUT_FIELDS) {
+    for (const field of ACTION_FIELDS) {
         const value = record[field];
         if (value === undefined) continue;
         hasField = true;
@@ -62,11 +119,11 @@ export function assertValidAction(action: unknown): asserts action is PlayerInpu
         }
     }
     const unknownKey = Object.keys(record).find(
-        key => !PLAYER_INPUT_FIELDS.includes(key as keyof PlayerInput),
+        key => !ACTION_FIELDS.includes(key as keyof PlayerInput),
     );
     if (unknownKey !== undefined) {
         throw new Error(
-            `Invalid action: unknown field "${unknownKey}" (expected only ${PLAYER_INPUT_FIELDS.join(', ')})`,
+            `Invalid action: unknown field "${unknownKey}" (expected only ${ACTION_FIELDS.join(', ')})`,
         );
     }
     if (!hasField) {

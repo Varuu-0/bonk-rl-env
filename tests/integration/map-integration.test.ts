@@ -10,6 +10,8 @@ import {
     SCALE
 } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
+import { normalizeMap } from '../../src/core/map-adapter';
+import { extractMap } from '../../Webscripts/mapexporter.js';
 import { safeDestroy } from '../utils/test-helpers';
 import { loadMap, addAllBodies, getSpawnXY, getMapFiles } from '../utils/map-loader';
 
@@ -722,6 +724,81 @@ describe('MapIntegration', () => {
                         done = r.done;
                     }
                     expect(done).toBe(false);
+                } finally {
+                    env.close();
+                }
+            },
+        );
+
+        it.each([
+            ['polygon', { type: 'po', c: [0, 0], a: 0, s: 1, v: [[-100, -20], [100, -20], [100, 20], [-100, 20]] }],
+            ['rect control', { type: 'bx', c: [0, 0], a: 0, w: 200, h: 40 }],
+        ] as const)(
+            '%s keeps the 850-unit OOB boundary centered on the authored geometry (#332)',
+            (_name, shape) => {
+                // Round-trip through the real mapexporter so the fixture carries
+                // the exporter's actual world-space convention: a native body at
+                // (400, 0) with local vertices ±100 exports flat polygon
+                // vertices already translated to world coordinates
+                // (mapexporter.js:518-521 emits `x: bx + cx + v[0]`), i.e.
+                // 300..500, NOT body-local coordinates.
+                const rawMap = extractMap({
+                    physics: {
+                        ppm: 30,
+                        bodies: [{ p: [400, 0], a: 0, fx: [0], s: { type: 's', n: 'plat' } }],
+                        fixtures: [{ sh: 0, n: 'plat' }],
+                        shapes: [shape],
+                    },
+                    discs: [{ team: 1, x: 0, y: -150 }],
+                } as any);
+
+                // Pin the exporter convention on the round-tripped fixture: the
+                // flat polygon body is at x=400 and its vertices are world
+                // coordinates (300..500), so the true geometry center is 400.
+                const flat = rawMap.bodies[0];
+                expect(flat.x).toBe(400);
+                if (flat.type === 'polygon') {
+                    expect(flat.vertices.map((v: any) => v.x)).toEqual([300, 500, 500, 300]);
+                }
+
+                const normalized = normalizeMap(rawMap);
+                expect(normalized.physics?.deathCenter).toEqual({ x: 400, y: 0 });
+
+                // The adapter normalizes the exporter's world-space polygon
+                // vertices to body-local so the ENGINE places the shape at the
+                // authored world position (300..500), not double-translated.
+                // Verify the actual engine placement agrees with the death
+                // center (#318, #332 review).
+                const e = new PhysicsEngine();
+                try {
+                    addAllBodies(e, normalized);
+                    const plat = e.getBodyMap().get('plat') as any;
+                    expect(plat).toBeTruthy();
+                    const shape = plat.GetShapeList();
+                    const verts = shape.m_vertices || [];
+                    const worldXs = [];
+                    for (let i = 0; i < shape.m_vertexCount; i++) {
+                        worldXs.push(plat.GetWorldPoint(verts[i]).x * SCALE);
+                    }
+                    expect(Math.min(...worldXs)).toBeCloseTo(300, 1);
+                    expect(Math.max(...worldXs)).toBeCloseTo(500, 1);
+                } finally {
+                    safeDestroy(e);
+                }
+
+                const env = new BonkEnvironment({
+                    mapData: rawMap as any,
+                    numOpponents: 0,
+                    randomOpponent: false,
+                    seed: 1,
+                });
+                try {
+                    const physics: any = (env as any).physics;
+                    physics.playerBodies.get(0).SetXForm({ x: -500 / SCALE, y: -100 / SCALE }, 0);
+                    env.step(0);
+                    const state = physics.getPlayerState(0);
+                    expect(state.alive).toBe(false);
+                    expect(state.deathType).toBe(4);
                 } finally {
                     env.close();
                 }

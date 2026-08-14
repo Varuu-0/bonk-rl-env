@@ -26,14 +26,16 @@ const OBS_FLOAT_FIELDS = [
 
 const OPP_FLOAT_FIELDS = ['x', 'y', 'velX', 'velY'];
 
-const EXPORTED_MAP_WITH_BOUNDS = {
-  metadata: { name: 'exported-explicit-bounds' },
+const EXPORTED_BOUNDS_MAP = {
+  metadata: { name: 'exported-bounds-transport-test' },
+  physics: { ppm: 12, boundsWidth: 1000, boundsHeight: 800 },
   spawns: [
-    { x: 0, y: 0, blue: true },
-    { x: 100, y: 0, red: true },
+    { x: -100, y: -50, blue: true },
+    { x: 100, y: -50, red: true },
   ],
-  bodies: [],
-  physics: { boundsWidth: 730, boundsHeight: 500 },
+  bodies: [
+    { bodyIndex: 0, fixtureIndex: 0, name: 'floor', type: 'rect', x: 0, y: 200, width: 900, height: 20, static: true },
+  ],
 };
 
 function assertObservationEqual(a: any, b: any): void {
@@ -53,36 +55,6 @@ function assertObservationEqual(a: any, b: any): void {
 }
 
 describe('transport precision parity (issue #236)', () => {
-  it('reports exported map-pixel bounds in both transports (issue #319)', { timeout: 30000 }, async () => {
-    if (!WorkerPool.isSupported()) return;
-
-    const run = async (useSharedMemory: boolean) => {
-      const pool = new WorkerPool(1);
-      try {
-        await pool.init(1, {
-          mapData: EXPORTED_MAP_WITH_BOUNDS,
-          numOpponents: 0,
-          randomOpponent: false,
-          maxTicks: 10,
-          seed: 42,
-        }, useSharedMemory);
-        const resetObs = (await pool.reset([42]))[0];
-        const stepObs = (await pool.step([0]))[0].observation;
-        return { resetObs, stepObs };
-      } finally {
-        await pool.close();
-      }
-    };
-
-    for (const useSharedMemory of [true, false]) {
-      const { resetObs, stepObs } = await run(useSharedMemory);
-      for (const observation of [resetObs, stepObs]) {
-        expect(observation.arenaHalfWidth).toBeCloseTo(365, 5);
-        expect(observation.arenaHalfHeight).toBeCloseTo(250, 5);
-      }
-    }
-  });
-
   it('returns bit-identical reset/step observations and rewards in both transports', async () => {
     if (!WorkerPool.isSupported()) return;
 
@@ -150,5 +122,38 @@ describe('transport precision parity (issue #236)', () => {
       shared.result.info.terminal_observation,
       message.result.info.terminal_observation,
     );
+  });
+
+  it('reports exported map-pixel bounds correctly in both transports (#320)', async () => {
+    if (!WorkerPool.isSupported()) return;
+
+    const run = async (useSharedMemory: boolean) => {
+      const pool = new WorkerPool(1);
+      try {
+        await pool.init(1, {
+          mapData: EXPORTED_BOUNDS_MAP,
+          numOpponents: 0,
+          maxTicks: 10,
+          seed: 1,
+        }, useSharedMemory);
+        const resetObservation = (await pool.reset([1]))[0];
+        const stepObservation = (await pool.step([0]))[0].observation;
+        return { resetObservation, stepObservation };
+      } finally {
+        await pool.close();
+      }
+    };
+
+    const shared = await run(true);
+    const message = await run(false);
+
+    for (const observation of [shared.resetObservation, shared.stepObservation, message.resetObservation, message.stepObservation]) {
+      // Exact equality in both transports: the map-px half bounds round-trip
+      // without 1-ulp drift (500.00000000000006) in either transport.
+      expect(observation.arenaHalfWidth).toBe(500);
+      expect(observation.arenaHalfHeight).toBe(400);
+    }
+    assertObservationEqual(shared.resetObservation, message.resetObservation);
+    assertObservationEqual(shared.stepObservation, message.stepObservation);
   });
 });

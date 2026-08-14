@@ -24,6 +24,15 @@ function makeReader(state: Array<{ x: number; y: number; angle: number; isHeavy:
 const ALIVE0 = { x: 10, y: 20, angle: 0.5, isHeavy: false, alive: true };
 const DEAD1 = { x: -5, y: -8, angle: 0.1, isHeavy: true, alive: false };
 
+// Int32 seqlock markers after the process-wide writeGen counter wraps past 2^30.
+// writeSnapshot marks in progress with `writeGen * 2 + 1` (odd) and commits with
+// `writeGen * 2` (even); assigning those products to the Int32 header truncates
+// them modulo 2^32 into the negative markers below. Deriving them from the
+// writer's own arithmetic (instead of hardcoding the wrapped literals) keeps the
+// test in lockstep with the writer.
+const WRAPPED_IN_PROGRESS = new Int32Array([2 ** 31 + 1])[0]; // -2147483647 (odd)
+const WRAPPED_COMMITTED = new Int32Array([2 ** 31])[0]; // -2147483648 (even)
+
 describe('snapshot-ring (M4)', () => {
   it('round-trips a two-disc snapshot at a slot', () => {
     const buf = allocRing(8, 2);
@@ -105,6 +114,32 @@ describe('snapshot-ring (M4)', () => {
     const headerView = new Int32Array(buf, 0, 2);
     headerView[0] += 1; // even -> odd in-progress mark
     expect(readSnapshotCoherent(buf, 1, 0)).toBeNull();
+  });
+
+  it('readSnapshotCoherent rejects a wrapped negative odd seq', () => {
+    const buf = allocRing(4, 1);
+    writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
+    // Int32 seqlock markers become negative after the sequence wraps. The
+    // in-progress marker (writeGen * 2 + 1) remains odd and must still be
+    // treated as a torn write.
+    const headerView = new Int32Array(buf, 0, 2);
+    headerView[0] = WRAPPED_IN_PROGRESS;
+    expect(readSnapshotCoherent(buf, 1, 0)).toBeNull();
+  });
+
+  it('readSnapshotCoherent accepts a wrapped negative even seq', () => {
+    const buf = allocRing(4, 1);
+    writeSnapshot(buf, 1, 0, makeReader([ALIVE0], 5));
+    // The committed marker after the wrap (writeGen * 2) is negative but even.
+    // Parity is two's-complement: a negative-even seq is a stable committed
+    // frame and must be accepted, mirroring the positive-even case; only the
+    // negative-odd marker above must be rejected.
+    const headerView = new Int32Array(buf, 0, 2);
+    headerView[0] = WRAPPED_COMMITTED;
+    expect(headerView[0] & 1).toBe(0);
+    const c = readSnapshotCoherent(buf, 1, 0);
+    expect(c).not.toBeNull();
+    expect(c!.tick).toBe(5);
   });
 
   it('readSnapshotCoherent accepts a stable committed (even) slot', () => {
