@@ -556,8 +556,12 @@ export class BonkEnvironment {
         this.physics.setTeamsEnabled(this.config.teamsEnabled);
         this.physics.setNoCollide(this.config.noCollide);
 
-        // Set PPM before adding bodies
-        if (typeof (this.physics as any).setScale === 'function') {
+        // Set PPM before adding bodies. setPpm is the canonical setter; the
+        // legacy setScale alias (same PPM semantics) is accepted too so an
+        // engine exposing only the pre-#319 API still receives its PPM config.
+        if (typeof (this.physics as any).setPpm === 'function') {
+            (this.physics as any).setPpm(this.ppm);
+        } else if (typeof (this.physics as any).setScale === 'function') {
             (this.physics as any).setScale(this.ppm);
         }
 
@@ -710,14 +714,16 @@ export class BonkEnvironment {
         // internal world metres; convert with the engine's resolved scale so
         // custom physics.scale values preserve the observation's map-pixel unit.
         // Both methods are duck-checked: an engine exposing setMapBounds but not
-        // getScale skips the override instead of throwing in reset().
-        // Both methods are duck-checked: an engine exposing setMapBounds but not
-        // getScale skips the override instead of throwing in reset().
+        // getScale skips the override instead of throwing in reset(). The
+        // returned scale itself is also validated — a partial engine reporting
+        // 0/NaN would otherwise silently store Infinity/NaN bounds.
         if (this.mapBounds
             && typeof (this.physics as any).setMapBounds === 'function'
             && typeof (this.physics as any).getScale === 'function') {
             const scale = (this.physics as any).getScale();
-            this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
+            if (typeof scale === 'number' && Number.isFinite(scale) && scale > 0) {
+                this.physics.setMapBounds(this.mapBounds.width / scale, this.mapBounds.height / scale);
+            }
         }
 
         // Re-apply the map's OOB death-circle center — like mapBounds it is a

@@ -1113,16 +1113,18 @@ export class PhysicsEngine {
     return this._arenaBoundsCache;
   }
 
-  /** Resolved map-pixel to world-unit scale used by engine coordinate conversions. */
+/** Resolved map-pixel to world-unit scale used by engine coordinate conversions. */
   getScale(): number {
     return this.scale;
   }
 
   /**
-   * Sets the map's player-disc radius setting before players are created.
-   * Exported map coordinates are converted through this.scale for this Box2D port.
+   * Sets the map's pixels-per-metre setting before players are created.
+   * The PPM shapes the player disc radius (ppm / scale) and the native
+   * grapple target window, but never the coordinate conversion — getScale()
+   * always reports this.scale, so the two stay distinct.
    */
-  setScale(ppm: number): void {
+  setPpm(ppm: number): void {
     if (Number.isFinite(ppm) && ppm > 0) {
       this.ppm = ppm;
       // OOB stays 850/this.scale: the native 850/ppm rule is in native world units
@@ -1130,6 +1132,15 @@ export class PhysicsEngine {
       // map, so in this port's px/scale world the ppm cancels. (DEOBFUSCATION
       // §"Death Type 4", tracked in DEOBFUSCATION_FIX_TRACKER.)
     }
+  }
+
+  /**
+   * @deprecated Renamed to setPpm(). This alias sets the map's pixels-per-metre
+   * setting, not the coordinate scale (getScale() reports that). Kept for
+   * backwards compatibility with external consumers.
+   */
+  setScale(ppm: number): void {
+    this.setPpm(ppm);
   }
 
   /**

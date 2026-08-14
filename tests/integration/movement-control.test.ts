@@ -29,7 +29,7 @@ const TICKS = 25;
 function makeBoxEngine(ppm?: number): PhysicsEngine {
   const engine = new PhysicsEngine();
   if (ppm !== undefined) {
-    engine.setScale(ppm);
+    engine.setPpm(ppm);
   }
   engine.addPlayer(0, 0, 0);
   return engine;
