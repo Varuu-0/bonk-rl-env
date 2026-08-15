@@ -53,6 +53,36 @@ const SYNC_STATUS_OFFSET = 1;
 // the two cannot drift (#226).
 const MAX_SUPPORTED_RESET_SEED = 0xFFFFFFFE;
 
+/**
+ * Upper bound on the number of environments a single WorkerPool may run.
+ *
+ * Why a bound exists (#390): a huge-but-integer `numEnvs` previously passed
+ * validation and then either wedged the message-mode init loop for the full
+ * `messageTimeoutMs` (each environment is a full map load + Box2D world +
+ * fixtures, ~4-6 ms to construct) or threw an opaque
+ * `RangeError: Invalid array buffer length` from the shared-memory sizing.
+ * Both paths are proportional to `numEnvs` with no recovery, so out-of-range
+ * counts must be rejected before any worker spawns or any buffer is sized.
+ *
+ * Why 2048: the binding constraint is construction time versus the default
+ * 30 s `messageTimeoutMs` in message mode. Measured construction is
+ * ~4-6 ms/environment, so a single worker constructing 2048 environments
+ * takes roughly 8-12 s - safely inside the timeout even without the default
+ * worker fan-out - while the repo's own density benchmarks never exceed
+ * 64 environments per pool (python/tests/test_env.py,
+ * python/tests/test_profiler_load.py), making 2048 a 32x margin above any
+ * realistic use. Shared-memory sizing is nowhere near its limit at this cap:
+ * each environment costs ~220 record bytes (16-float observation, terminal
+ * observation, action-ring slot, info floats, control), so 2048 environments
+ * are ~450 KB of SharedArrayBuffer - several orders of magnitude below the
+ * V8 allocation ceiling that produced the `Invalid array buffer length`
+ * RangeError (which only appears past ~100k environments).
+ *
+ * Both transports enforce the same cap so shared and message mode can never
+ * diverge on what constitutes a valid count.
+ */
+export const MAX_NUM_ENVS = 2048;
+
 const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
@@ -207,6 +237,16 @@ export class WorkerPool {
     private async initInternal(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
         if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
             throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
+        }
+        // Reject oversized counts BEFORE any worker is spawned or any
+        // SharedArrayBuffer is sized: downstream work is proportional to
+        // `totalEnvs` in ways that cannot fail fast on their own (the worker
+        // construction loop would hang for the full messageTimeoutMs and the
+        // shared-memory sizing would throw an opaque RangeError, #390).
+        if (totalEnvs > MAX_NUM_ENVS) {
+            throw new Error(
+                `Invalid environment count: expected an integer in [1, ${MAX_NUM_ENVS}], got ${totalEnvs}`,
+            );
         }
         // A zero or negative numWorkers would otherwise silently produce a
         // 'ready' pool with no workers: reset() returns [] and step() rejects

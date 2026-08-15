@@ -10,6 +10,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
+import { MAX_NUM_ENVS } from '../../src/core/worker-pool';
 import { PortManager } from '../../src/utils/port-manager';
 
 describe('IpcBridge black-box E2E', () => {
@@ -66,6 +67,22 @@ describe('IpcBridge black-box E2E', () => {
     it('rejects non-numeric numEnvs', async () => {
       const result = await sendCommand({ command: 'init', numEnvs: 'abc' });
       expect(result.status).toBe('error');
+    });
+
+    it('rejects an oversized numEnvs promptly without stalling the serve loop (#390)', async () => {
+      const started = Date.now();
+      const oversized = await sendCommand({ command: 'init', numEnvs: 1000000 });
+      const elapsed = Date.now() - started;
+      expect(oversized.status).toBe('error');
+      expect(oversized.error).toBe(
+        `Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got 1000000`,
+      );
+      expect(elapsed).toBeLessThan(3000);
+
+      // The serial request loop must still serve later requests: the same
+      // client (with a corrected count) re-inits without a wedged bridge.
+      const recovered = await sendCommand({ command: 'init', numEnvs: 1 });
+      expect(recovered.status).toBe('ok');
     });
 
     it('accepts custom environment config', async () => {

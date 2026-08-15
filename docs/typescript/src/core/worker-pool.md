@@ -74,7 +74,18 @@ async init(totalEnvs: number, config?: any, useSharedMemory?: boolean): Promise<
 Initializes the worker pool with the specified number of environments.
 
 **Parameters**:
-- `totalEnvs`: Total number of parallel environments
+- `totalEnvs`: Total number of parallel environments. Must be an integer in
+  `[1, MAX_NUM_ENVS]` (`MAX_NUM_ENVS = 2048`). Anything outside the range is
+  rejected before any worker is spawned or any SharedArrayBuffer is sized:
+  non-positive/non-integer counts fail with
+  `Invalid environment count: expected a positive integer, got <n>`, and
+  counts above the cap fail with
+  `Invalid environment count: expected an integer in [1, 2048], got <n>`
+  (#390). The cap is derived from measured per-environment construction cost
+  (~4-6 ms/env, dominated by map load + Box2D world + fixtures) versus the
+  default 30 s `messageTimeoutMs`, with a wide margin over the repo's
+  density benchmarks (max 64 envs per pool); shared-memory sizing is
+  orders of magnitude below V8's SharedArrayBuffer limits at this cap.
 - `config`: Configuration object
 - `useSharedMemory`: Whether to use SharedArrayBuffer mode
 

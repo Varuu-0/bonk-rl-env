@@ -1,6 +1,6 @@
 import * as zmq from "zeromq";
 import * as net from "net";
-import { WorkerPool } from "../core/worker-pool";
+import { WorkerPool, MAX_NUM_ENVS } from "../core/worker-pool";
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from "../telemetry/profiler";
 import { isTelemetryEnabled as isTelemetryControllerEnabled, getTelemetryController } from '../telemetry/telemetry-controller';
 import { getConfig, type AppConfig, type DeepPartial, resolveEnvironmentConfig, DEFAULT_MAX_CLIENT_SESSIONS, mergeEngineSections } from '../config/config-loader';
@@ -513,6 +513,17 @@ export class IpcBridge {
                 }
                 if (typeof numEnvs !== 'number' || !Number.isInteger(numEnvs) || numEnvs < 1) {
                     response = { status: "error", error: "Invalid numEnvs: must be a positive integer" };
+                } else if (numEnvs > MAX_NUM_ENVS) {
+                    // Reject oversized counts up front so one malformed init
+                    // request can never stall the serial serve loop: a pool
+                    // init for a huge count would hang message mode for the
+                    // full messageTimeoutMs or throw an opaque RangeError in
+                    // shared mode (#390). Naming the bound tells the client
+                    // immediately that numEnvs (not the worker) was invalid.
+                    response = {
+                        status: "error",
+                        error: `Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got ${numEnvs}`,
+                    };
                 } else if (this._hostPool) {
                     // The pool was adopted from an enclosing BonkEnv and is
                     // already initialized with that env's numEnvs and config.
@@ -832,6 +843,9 @@ export class IpcBridge {
     async initEnv(numEnvs: number, config: any = {}, useSharedMemory?: boolean): Promise<void> {
         if (!Number.isInteger(numEnvs) || numEnvs < 1) {
             throw new Error('Invalid numEnvs: must be a positive integer');
+        }
+        if (numEnvs > MAX_NUM_ENVS) {
+            throw new Error(`Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got ${numEnvs}`);
         }
         await this.localSession.pool.init(numEnvs, config, useSharedMemory);
         this.localSession.initialized = true;

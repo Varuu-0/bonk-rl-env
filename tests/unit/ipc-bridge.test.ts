@@ -7,7 +7,7 @@
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
-import { WorkerPool } from '../../src/core/worker-pool';
+import { WorkerPool, MAX_NUM_ENVS } from '../../src/core/worker-pool';
 import { BonkEnvironment } from '../../src/core/environment';
 import { resetConfig } from '../../src/config/config-loader';
 
@@ -124,6 +124,29 @@ describe('IpcBridge handleRequest', () => {
       const response = JSON.parse(sentMessages[0]);
       expect(response.status).toBe('error');
       expect(response.error).toBe('Invalid numEnvs: must be a positive integer');
+    });
+
+    it('rejects an oversized numEnvs up front, naming the bound (#390)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      const started = Date.now();
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: 1000000 }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toBe(
+        `Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got 1000000`,
+      );
+      expect(Date.now() - started).toBeLessThan(1000);
+    });
+
+    it('rejects the MAX_NUM_ENVS + 1 boundary over the wire (#390)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({ command: 'init', numEnvs: MAX_NUM_ENVS + 1 }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain(`[1, ${MAX_NUM_ENVS}]`);
+      expect(response.error).toContain(`${MAX_NUM_ENVS + 1}`);
     });
 
     it('coerces a numeric-string numEnvs to a positive integer (#195)', async () => {
