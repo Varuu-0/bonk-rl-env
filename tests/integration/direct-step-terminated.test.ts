@@ -64,6 +64,18 @@ const truncationConfig: EnvironmentConfig = {
   randomOpponent: false,
 };
 
+// Death on the exact tick maxTicks fires: AI spawns beyond the OOB circle
+// and maxTicks=1, so the same step must report terminated=true AND
+// truncated=true (Gymnasium semantics, #208) — the flags are not mutually
+// exclusive and the top-level terminated must not degrade into a pure
+// truncation.
+const deathAtMaxTicksConfig: EnvironmentConfig = {
+  mapData: naturalDeathMap,
+  numOpponents: 1,
+  maxTicks: 1,
+  seed: 42,
+};
+
 describe('direct step() results carry a top-level terminated boolean (issue #391)', () => {
   it('natural death step reports terminated=true with truncated=false', () => {
     const env = new BonkEnvironment(deathConfig);
@@ -106,6 +118,22 @@ describe('direct step() results carry a top-level terminated boolean (issue #391
       expect(Object.prototype.hasOwnProperty.call(res, 'terminated')).toBe(true);
       expect(res.terminated).toBe(false);
       expect(res.terminated).toBe(res.info.terminated);
+    } finally {
+      env.close();
+    }
+  });
+
+  it('death on the same tick maxTicks fires reports both flags (issue #208)', () => {
+    const env = new BonkEnvironment(deathAtMaxTicksConfig);
+    try {
+      env.reset(42);
+      const res = env.step(0);
+      expect(res.done).toBe(true);
+      expect(res.truncated).toBe(true);
+      expect(Object.prototype.hasOwnProperty.call(res, 'terminated')).toBe(true);
+      expect(res.terminated).toBe(true);
+      expect(res.terminated).toBe(res.info.terminated);
+      expect(res.info.terminated).toBe(true);
     } finally {
       env.close();
     }
