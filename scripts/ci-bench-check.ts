@@ -17,7 +17,7 @@
  * executed directly.
  */
 
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as path from 'node:path';
 
 const ROOT = path.resolve(__dirname, '..');
@@ -191,6 +191,31 @@ function print(text: string, color?: string): void {
   else console.log(text);
 }
 
+/**
+ * Kill a shell-spawned process tree. `child.kill()` on a `shell: true` spawn
+ * only terminates the shell wrapper and orphans the npx/tsx benchmark
+ * grandchildren; on Windows, taskkill /T tears the whole tree down.
+ */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      /* best effort */
+    }
+  } else {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* best effort */
+    }
+  }
+}
+
 export function parseSuiteFromOutput(output: string): BenchmarkSuite | null {
   const startMarker = '__BENCH_JSON_START__';
   const endMarker = '__BENCH_JSON_END__';
@@ -215,13 +240,13 @@ export function parseSuiteFromOutput(output: string): BenchmarkSuite | null {
  * than on Linux) can tune the regression boundary without weakening the
  * default. Baseline values are never overridden.
  */
-const FAIL_LIMIT_ENV: Record<string, { layer: number; benchMatch?: RegExp }> = {
+const FAIL_LIMIT_ENV: Record<string, { layer: number; description?: string }> = {
   CI_BENCH_L1_FAIL_LATENCY_MS: { layer: 1 },
   CI_BENCH_L2_FAIL_TPS: { layer: 2 },
   CI_BENCH_L3_FAIL_SPS: { layer: 3 },
   CI_BENCH_L4_FAIL_ENV_SPS: { layer: 4 },
-  CI_BENCH_L5_FAIL_HEAP_MB: { layer: 5, benchMatch: /Memory stability/ },
-  CI_BENCH_L5_RESET_FAIL_MB: { layer: 5, benchMatch: /Reset cycles/ },
+  CI_BENCH_L5_FAIL_HEAP_MB: { layer: 5, description: '50K-step heap growth' },
+  CI_BENCH_L5_RESET_FAIL_MB: { layer: 5, description: '200-reset-cycle heap growth' },
   CI_BENCH_L6_FAIL_CV_PCT: { layer: 6 },
 };
 
@@ -234,7 +259,7 @@ export function applyEnvOverrides(checks: SlaCheck[]): SlaCheck[] {
 
     for (const check of checks) {
       if (check.layer !== target.layer) continue;
-      if (target.benchMatch && !target.benchMatch.test(check.benchMatch.source)) continue;
+      if (target.description !== undefined && check.description !== target.description) continue;
       check.failLimit = value;
     }
   }
@@ -275,7 +300,7 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, layer.timeoutMs);
 
     child.on('error', (err) => {
@@ -467,7 +492,7 @@ function runLayer7(verbose: boolean): Promise<Layer7Verdict> {
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, 300_000);
 
     child.on('error', (err) => {

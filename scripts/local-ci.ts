@@ -31,7 +31,7 @@
  * when this file is executed directly.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -102,19 +102,6 @@ function parseArgs(argv: string[]): Options {
     extraArgs: [],
   };
 
-  const KNOWN = new Set([
-    '--quick',
-    '-q',
-    '--standard',
-    '--full',
-    '--bench',
-    '--fix',
-    '--verbose',
-    '-v',
-    '--no-python',
-    '--layer7',
-  ]);
-
   for (const arg of argv) {
     switch (arg) {
       case '--quick':
@@ -144,9 +131,7 @@ function parseArgs(argv: string[]): Options {
         opts.extraArgs.push('--layer7');
         break;
       default:
-        if (!KNOWN.has(arg)) {
-          console.warn(colors.yellow + `  [local-ci] ignoring unknown flag: ${arg}` + colors.reset);
-        }
+        console.warn(colors.yellow + `  [local-ci] ignoring unknown flag: ${arg}` + colors.reset);
         break;
     }
   }
@@ -233,7 +218,7 @@ function spawnCapture(
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, timeoutMs);
 
     const finish = (result: SpawnResult): void => {
@@ -281,7 +266,7 @@ function spawnInherit(command: string, args: string[], timeoutMs: number): Promi
 
     const timeout = setTimeout(() => {
       timedOut = true;
-      child.kill('SIGKILL');
+      killTree(child);
     }, timeoutMs);
 
     child.on('error', (err) => {
@@ -314,6 +299,31 @@ function toolAvailable(command: string, args: string[]): boolean {
     windowsHide: true,
   });
   return result.status === 0;
+}
+
+/**
+ * Kill a shell-spawned process tree. `child.kill()` on a `shell: true` spawn
+ * only terminates the shell wrapper and orphans npx/tsx/vitest grandchildren;
+ * on Windows, taskkill /T tears the whole tree down.
+ */
+function killTree(child: ChildProcess): void {
+  if (!child.pid) return;
+  if (process.platform === 'win32') {
+    try {
+      spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], {
+        stdio: 'ignore',
+        windowsHide: true,
+      });
+    } catch {
+      /* best effort */
+    }
+  } else {
+    try {
+      child.kill('SIGKILL');
+    } catch {
+      /* best effort */
+    }
+  }
 }
 
 function tail(output: string, lines: number): string {
@@ -607,13 +617,14 @@ export function mergeRetryResults(
 /**
  * Resolve the tier status from post-retry evidence. Once per-file results are
  * available they are authoritative: a non-zero first-run exit code is
- * expected when the retry recovered flakes. A missing report or an empty
- * report with a non-zero exit code (e.g. "No test files found") still fails.
- * Pure and exported for unit tests.
+ * expected when the retry recovered flakes. A missing or unparseable report,
+ * or an empty report with a non-zero exit code (e.g. "No test files
+ * found") must never pass silently — they fail. Pure and exported for unit
+ * tests.
  */
 export function resolveVitestStatus(files: VitestFileResult[] | null, firstRunExitCode: number | null): CheckStatus {
   if (files === null) {
-    return firstRunExitCode !== 0 ? 'FAIL' : 'PASS';
+    return 'FAIL';
   }
   if (files.length === 0 && firstRunExitCode !== 0) {
     return 'FAIL';
@@ -621,21 +632,51 @@ export function resolveVitestStatus(files: VitestFileResult[] | null, firstRunEx
   return files.some((file) => file.status === 'failed') ? 'FAIL' : 'PASS';
 }
 
-async function runVitest(
-  label: string,
-  id: string,
-  configArgs: string[],
-  timeoutMs: number,
-): Promise<VitestRunOutcome> {
+export interface VitestRunSpec {
+  /** Flag-style arguments, e.g. ['--config', 'vitest.e2e.config.ts']. */
+  config?: string[];
+  /** Positional test filters, e.g. ['tests/unit/']. Ignored when extra files are given. */
+  include?: string[];
+  /** Test timeout override (ms). */
+  testTimeoutMs?: number;
+}
+
+/**
+ * Compose the vitest CLI arguments. The `include` directory filters apply
+ * only when no explicit files are supplied, so an isolation retry targets
+ * exactly the failed files instead of re-running the tier's whole filter.
+ * Pure and exported for unit tests.
+ */
+export function buildVitestArgs(spec: VitestRunSpec, extraFiles: string[], jsonPath: string): string[] {
+  const filters = extraFiles.length > 0 ? extraFiles : (spec.include ?? []);
+  const timeoutArgs = spec.testTimeoutMs !== undefined ? [`--testTimeout=${spec.testTimeoutMs}`] : [];
+  return [
+    'vitest',
+    'run',
+    ...(spec.config ?? []),
+    ...timeoutArgs,
+    ...filters,
+    '--reporter=dot',
+    '--reporter=json',
+    `--outputFile.json=${jsonPath}`,
+  ];
+}
+
+async function runVitest(label: string, id: string, spec: VitestRunSpec, timeoutMs: number): Promise<VitestRunOutcome> {
   const started = process.hrtime.bigint();
   const jsonDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bonk-ci-vitest-'));
   const jsonPath = path.join(jsonDir, 'results.json');
 
-  const args = ['vitest', 'run', ...configArgs, '--reporter=dot', '--reporter=json', `--outputFile.json=${jsonPath}`];
+  const args = buildVitestArgs(spec, [], jsonPath);
   const result = await spawnInherit('npx', args, timeoutMs);
 
   let files = parseVitestJson(jsonPath);
   let flakyFiles: string[] = [];
+
+  // First-run assertion totals, captured before the retry merge so the detail
+  // text stays truthful about what the first run actually saw.
+  const firstRunTotalTests = (files ?? []).reduce((sum, file) => sum + file.assertionCount, 0);
+  const firstRunFailedTests = (files ?? []).reduce((sum, file) => sum + file.failedCount, 0);
 
   // Flake mitigation: when a small set of files fails, re-run exactly those
   // files once. Tests that pass in isolation are reported as "flaky" instead
@@ -650,25 +691,33 @@ async function runVitest(
           colors.reset,
       );
       const retryJsonPath = path.join(jsonDir, 'retry-results.json');
-      const retryArgs = [
-        'vitest',
-        'run',
-        ...configArgs,
-        ...initialFailed.map((file) => file.file),
-        '--reporter=dot',
-        '--reporter=json',
-        `--outputFile.json=${retryJsonPath}`,
-      ];
-      await spawnInherit('npx', retryArgs, timeoutMs);
-      const retryFiles = parseVitestJson(retryJsonPath);
-      if (retryFiles !== null) {
-        const merged = mergeRetryResults(files, retryFiles);
-        files = merged.files;
-        flakyFiles = merged.flaky;
-      } else {
+      const retryArgs = buildVitestArgs(
+        spec,
+        initialFailed.map((file) => file.file),
+        retryJsonPath,
+      );
+      const retryStarted = process.hrtime.bigint();
+      const retryResult = await spawnInherit('npx', retryArgs, timeoutMs);
+      const retryDurationMs = Number(process.hrtime.bigint() - retryStarted) / 1e6;
+
+      if (retryResult.timedOut) {
         console.log(
-          colors.gray + '  \u2757 retry produced no parseable report — keeping first-run results' + colors.reset,
+          colors.yellow +
+            `  \u2757 isolation retry timed out after ${Math.round(timeoutMs / 1000)}s (` +
+            `${fmtDuration(retryDurationMs)}); keeping first-run results` +
+            colors.reset,
         );
+      } else {
+        const retryFiles = parseVitestJson(retryJsonPath);
+        if (retryFiles !== null) {
+          const merged = mergeRetryResults(files, retryFiles);
+          files = merged.files;
+          flakyFiles = merged.flaky;
+        } else {
+          console.log(
+            colors.gray + '  \u2757 retry produced no parseable report — keeping first-run results' + colors.reset,
+          );
+        }
       }
     }
   }
@@ -692,18 +741,18 @@ async function runVitest(
 
   const failedFiles = (files ?? []).filter((file) => file.status === 'failed');
   const passedFiles = (files ?? []).filter((file) => file.status === 'passed');
-  const totalTests = (files ?? []).reduce((sum, file) => sum + file.assertionCount, 0);
-  const failedTests = (files ?? []).reduce((sum, file) => sum + file.failedCount, 0);
 
   let detail = '';
   if (files) {
     detail = `${passedFiles.length} files passed${flakyFiles.length > 0 ? `, ${flakyFiles.length} flaky (passed on retry)` : ''}, ${failedFiles.length} failed`;
-    if (failedTests > 0) detail += ` (${failedTests}/${totalTests} assertions failed in the first run)`;
+    if (firstRunFailedTests > 0) {
+      detail += ` (${firstRunFailedTests}/${firstRunTotalTests} assertions failed in the first run)`;
+    }
     if (flakyFiles.length > 0) {
       detail += '\n' + flakyFiles.map((file) => `  \u26A0 ${file}`).join('\n');
     }
     if (failedFiles.length > 0) {
-      detail += '\n' + failedFiles.map((file) => `  \u2717 ${file}`).join('\n');
+      detail += '\n' + failedFiles.map((file) => `  \u2717 ${file.file}`).join('\n');
     }
   }
 
@@ -725,21 +774,40 @@ async function runVitest(
 
   const status: CheckStatus = resolveVitestStatus(files, result.exitCode);
   return {
-    result: { id, domain: id, label, status, durationMs, detail: files ? detail : undefined },
+    result: {
+      id,
+      domain: id,
+      label,
+      status,
+      durationMs,
+      detail: files !== null ? detail : 'vitest JSON report missing or unparseable — treated as failure',
+    },
     domainFiles,
   };
 }
 
 async function checkUnitTests(opts: Options): Promise<VitestRunOutcome> {
-  return runVitest('unit test suites (tests/unit/)', 'physics', ['tests/unit/'], 900_000);
+  return runVitest('unit test suites (tests/unit/)', 'physics', { include: ['tests/unit/'] }, 900_000);
 }
 
 async function checkAllSuites(opts: Options): Promise<VitestRunOutcome> {
-  return runVitest('all Vitest suites (unit+integration+perf+security+property)', 'all-suites', [], 1_500_000);
+  // testTimeout=120000: the perf suites need 120s and the security suites
+  // need 60s under load — the config's 30s default truncates them.
+  return runVitest(
+    'all Vitest suites (unit+integration+perf+security+property)',
+    'all-suites',
+    { testTimeoutMs: 120_000 },
+    1_500_000,
+  );
 }
 
 async function checkE2E(opts: Options): Promise<VitestRunOutcome> {
-  return runVitest('E2E live ZeroMQ server/client suites', 'e2e', ['--config', 'vitest.e2e.config.ts'], 1_200_000);
+  return runVitest(
+    'E2E live ZeroMQ server/client suites',
+    'e2e',
+    { config: ['--config', 'vitest.e2e.config.ts'] },
+    1_200_000,
+  );
 }
 
 async function checkPytest(opts: Options): Promise<CheckResult> {

@@ -61,12 +61,11 @@ fi
 
 echo ""
 echo "[LocalCI] Running Tier 2 (standard) CI..."
-npm run ci
-if [ $? -ne 0 ]; then
-  echo ""
-  echo "[LocalCI] ERROR: Tier 2 CI failed. Push rejected (bypass with 'git push --no-verify')."
-  exit 1
+if npm run ci; then
+  echo "[LocalCI] Tier 2 CI passed."
+  exit 0
 fi
 
-echo "[LocalCI] Tier 2 CI passed."
-exit 0
+echo ""
+echo "[LocalCI] ERROR: Tier 2 CI failed. Push rejected (bypass with 'git push --no-verify')."
+exit 1

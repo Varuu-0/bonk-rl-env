@@ -4,6 +4,7 @@ import * as os from 'node:os';
 import * as path from 'node:path';
 import {
   attributeDomain,
+  buildVitestArgs,
   changedFiles,
   mergeRetryResults,
   parseVitestJson,
@@ -107,9 +108,47 @@ describe('local-ci: resolveVitestStatus', () => {
     expect(resolveVitestStatus([], 0)).toBe('PASS');
   });
 
-  it('fails when no report could be parsed and the run failed', () => {
+  it('never passes silently when no report could be parsed', () => {
     expect(resolveVitestStatus(null, 1)).toBe('FAIL');
-    expect(resolveVitestStatus(null, 0)).toBe('PASS');
+    expect(resolveVitestStatus(null, 0)).toBe('FAIL');
+    expect(resolveVitestStatus(null, null)).toBe('FAIL');
+  });
+});
+
+describe('local-ci: buildVitestArgs filter composition', () => {
+  it('uses the include filters when no explicit files are given', () => {
+    const args = buildVitestArgs({ include: ['tests/unit/'] }, [], 'out.json');
+    expect(args).toContain('tests/unit/');
+    expect(args[0]).toBe('vitest');
+    expect(args[1]).toBe('run');
+  });
+
+  it('drops the directory include when retrying with explicit failed files', () => {
+    const args = buildVitestArgs(
+      { include: ['tests/unit/'] },
+      ['tests/unit/flaky-a.test.ts', 'tests/unit/flaky-b.test.ts'],
+      'retry.json',
+    );
+    expect(args).not.toContain('tests/unit/');
+    expect(args).toContain('tests/unit/flaky-a.test.ts');
+    expect(args).toContain('tests/unit/flaky-b.test.ts');
+  });
+
+  it('keeps config flags and emits the testTimeout override', () => {
+    const args = buildVitestArgs(
+      { config: ['--config', 'vitest.e2e.config.ts'], testTimeoutMs: 120_000 },
+      [],
+      'out.json',
+    );
+    expect(args).toContain('--config');
+    expect(args).toContain('vitest.e2e.config.ts');
+    expect(args).toContain('--testTimeout=120000');
+  });
+
+  it('always appends the json reporter with its output file', () => {
+    const args = buildVitestArgs({}, [], 'out.json');
+    expect(args[args.length - 1]).toBe('--outputFile.json=out.json');
+    expect(args).toContain('--reporter=json');
   });
 });
 

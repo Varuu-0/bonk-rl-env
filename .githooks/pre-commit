@@ -111,13 +111,12 @@ fi
 
 echo ""
 echo "[LocalCI] Running Tier 1 (quick) checks..."
-npm run ci:quick
-if [ $? -ne 0 ]; then
-  echo ""
-  echo "[LocalCI] Tier 1 checks failed. Fix the issues above (or run 'npm run ci -- --fix'),"
-  echo "          then retry the commit. Bypass with 'git commit --no-verify'."
-  exit 1
+if npm run ci:quick; then
+  echo "[LocalCI] Tier 1 checks passed."
+  exit 0
 fi
 
-echo "[LocalCI] Tier 1 checks passed."
-exit 0
+echo ""
+echo "[LocalCI] Tier 1 checks failed. Fix the issues above (or run 'npm run ci -- --fix'),"
+echo "          then retry the commit. Bypass with 'git commit --no-verify'."
+exit 1
