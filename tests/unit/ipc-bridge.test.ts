@@ -247,6 +247,75 @@ describe('IpcBridge handleRequest', () => {
       expect(response.error).toContain('Invalid maxTicks -3: expected a positive integer');
     });
 
+    it('rejects init with a zero frame_skip (#393)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: 0 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid frameSkip 0: expected an integer in [1, 100]');
+    });
+
+    it('rejects init with a negative frame_skip (#393)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: -2 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid frameSkip -2: expected an integer in [1, 100]');
+    });
+
+    it('rejects init with a fractional frame_skip (#393)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: 2.5 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid frameSkip 2.5: expected an integer in [1, 100]');
+    });
+
+    it('rejects init with a frame_skip past the cap (#393)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: 1000 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid frameSkip 1000: expected an integer in [1, 100]');
+    });
+
+    it('accepts init with frame_skip at the MAX_FRAME_SKIP boundary (#393)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        useSharedMemory: false,
+        config: { frame_skip: 100, maxTicks: 50 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('ok');
+    });
+
     it('forwards loader reward environment variables through IPC init to worker environments (#220)', { timeout: 30000 }, async () => {
       const rewardEnvKeys = ['KILL_REWARD', 'DEATH_PENALTY', 'TIME_PENALTY'] as const;
       const savedRewardEnv = Object.fromEntries(
