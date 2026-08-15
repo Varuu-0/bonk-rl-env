@@ -190,6 +190,21 @@ describe('IpcBridge handleRequest', () => {
       expect(response.status).toBe('ok');
     });
 
+    it('rejects init with num_opponents above the Box2D pair-table bound (#392)', async () => {
+      const { sentMessages } = captureSend(bridge);
+      await callHandleRequest(bridge, JSON.stringify({
+        command: 'init',
+        numEnvs: 1,
+        config: { num_opponents: 87 }
+      }));
+      expect(sentMessages).toHaveLength(1);
+      const response = JSON.parse(sentMessages[0]);
+      expect(response.status).toBe('error');
+      expect(response.error).toContain('Invalid numOpponents 87');
+      expect(response.error).toContain('expected at most 64 opponents');
+      expect(response.error).not.toContain("reading 'next'");
+    });
+
     it('forwards snake_case frame_skip through init to the worker (#204)', async () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({

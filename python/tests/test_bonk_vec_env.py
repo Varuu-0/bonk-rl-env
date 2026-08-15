@@ -421,3 +421,30 @@ class TestBonkVecEnvPythonConfigKeys:
             _, _, dones, infos = env.step_wait()
             assert bool(dones[0]) is False
             assert infos[0]["_episode"]["truncated"] is False
+
+    @pytest.mark.parametrize("bad_value", [65, 87, 1000])
+    def test_num_opponents_above_max_rejected_client_side(self, bad_value):
+        """#392: the client mirrors the backend's MAX_OPPONENTS bound and
+        rejects the count with an error naming num_opponents, instead of
+        sending an unsupportable init the backend used to answer with an
+        opaque Box2D pair-table TypeError."""
+        from envs.bonk_env import BonkVecEnv
+
+        with pytest.raises(
+            ValueError,
+            match=rf"Invalid num_opponents {bad_value}: expected at most 64 opponents",
+        ):
+            BonkVecEnv(num_envs=1, config={"num_opponents": bad_value})
+
+    def test_num_opponents_at_max_initializes_and_steps(self, bonk_vec_env_factory):
+        """#392 boundary: the documented maximum is accepted end to end by
+        the server and the observation stream still decodes."""
+        env = bonk_vec_env_factory(
+            num_envs=1, config={"num_opponents": 64, "max_ticks": 5, "frame_skip": 1}
+        )
+        obs = env.reset(seeds=[1])
+        assert obs.shape == (1, 14)
+
+        env.step_async(np.array([0]))
+        _, _, dones, _ = env.step_wait()
+        assert dones.shape == (1,)

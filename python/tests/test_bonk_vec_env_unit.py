@@ -759,3 +759,44 @@ def test_reset_clears_server_frame_skip_restoring_client_fallback(monkeypatch):
         socket.recv_json.side_effect = None
         socket.recv_json.return_value = {"status": "ok"}
         env.close()
+
+
+@pytest.mark.parametrize(
+    ("bad_value", "reported"),
+    [
+        (65, "65"),
+        (87, "87"),
+        (65.5, "65"),
+        (1000, "1000"),
+        (10**30, "1000000000000000000000000000000"),
+    ],
+)
+def test_num_opponents_above_max_rejected_before_connecting(
+    monkeypatch, bad_value, reported
+):
+    """#392: the client mirrors the backend's MAX_OPPONENTS bound and rejects
+    an unsupportable count before creating any transport, so the error names
+    the parameter instead of surfacing the opaque backend init failure."""
+    context_factory = MagicMock()
+    monkeypatch.setattr(bonk_env.zmq, "Context", context_factory)
+
+    with pytest.raises(
+        ValueError,
+        match=rf"Invalid num_opponents {reported}: expected at most 64 opponents",
+    ):
+        bonk_env.BonkVecEnv(num_envs=1, config={"num_opponents": bad_value})
+
+    context_factory.assert_not_called()
+
+
+def test_num_opponents_within_bound_forwards_verbatim(monkeypatch):
+    """#392: counts at or below the bound (including integral floats, which
+    the backend floors) pass client-side validation and are forwarded
+    verbatim in the init request."""
+    for value in (0, 1, 64, 64.9):
+        env, _, socket = _make_mocked_env(
+            monkeypatch, num_envs=1, config={"num_opponents": value}
+        )
+        payload = socket.send_json.call_args.args[0]
+        assert payload["config"]["num_opponents"] == value
+        env.close()

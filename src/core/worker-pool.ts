@@ -263,6 +263,11 @@ export class WorkerPool {
     if (!Number.isInteger(this.numWorkers) || this.numWorkers < 1) {
       throw new Error(`Invalid worker count: expected a positive integer, got ${this.numWorkers}`);
     }
+    // Validate before teardown or worker spawning (#392), keeping an
+    // oversized count from reaching Box2D world construction.
+    const numOpponents = SharedMemoryManager.normalizeNumOpponents(
+      config?.numOpponents ?? (config as any)?.num_opponents,
+    );
     await this.closeInternal(); // Clean up existing if re-initialized
     this.state = 'initializing';
     this.failure = null;
@@ -283,9 +288,6 @@ export class WorkerPool {
     // snake_case num_opponents alias resolves here exactly as it does in
     // BonkEnvironment, so a snake_case-only config sizes the SAB record
     // for every spawned opponent instead of the default 1 (#262).
-    const numOpponents = SharedMemoryManager.normalizeNumOpponents(
-      config?.numOpponents ?? (config as any)?.num_opponents,
-    );
     this._obsNumOpponents = numOpponents;
     this._obsFloatsPerEnv = 16 + 6 * Math.max(0, numOpponents - 1);
 
