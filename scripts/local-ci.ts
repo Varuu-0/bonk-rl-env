@@ -362,8 +362,15 @@ function installSignalHandlers(): void {
     if (handled) return;
     handled = true;
     terminateActiveChildren(signal);
-    // The SIGKILL/taskkill lands asynchronously; force-exit shortly after.
-    setTimeout(() => process.exit(128 + (signal === 'SIGINT' ? 2 : 15)), 500).unref();
+    // The kill lands asynchronously and a new child may be registered in the
+    // interim. The exit code must be 130/143, so this timer is intentionally
+    // NOT unref'd — it is the guarantee the interrupted run reports the
+    // interrupt instead of whatever code the pipeline computed meanwhile.
+    const exitCode = 128 + (signal === 'SIGINT' ? 2 : 15);
+    setTimeout(() => {
+      terminateActiveChildren(signal);
+      process.exit(exitCode);
+    }, 500);
   };
   process.on('SIGINT', () => handle('SIGINT'));
   process.on('SIGTERM', () => handle('SIGTERM'));

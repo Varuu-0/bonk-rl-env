@@ -240,13 +240,29 @@ function terminateActiveChildren(signal: string): void {
   }
 }
 
+/**
+ * Set when a termination signal arrives; layer dispatch consults it so no new
+ * benchmark process is spawned during the shutdown grace window.
+ */
+let shutdownRequested = false;
+
 function installSignalHandlers(): void {
   let handled = false;
   const handle = (signal: string): void => {
     if (handled) return;
     handled = true;
+    shutdownRequested = true;
     terminateActiveChildren(signal);
-    setTimeout(() => process.exit(128 + (signal === 'SIGINT' ? 2 : 15)), 500).unref();
+    // The kill lands asynchronously and a new layer may be registered in
+    // the interim. The exit code must be 130/143, so this timer is
+    // intentionally NOT unref'd — it is the guarantee the interrupted
+    // run reports the interrupt instead of whatever code the pipeline
+    // computed meanwhile.
+    const exitCode = 128 + (signal === 'SIGINT' ? 2 : 15);
+    setTimeout(() => {
+      terminateActiveChildren(signal);
+      process.exit(exitCode);
+    }, 500);
   };
   process.on('SIGINT', () => handle('SIGINT'));
   process.on('SIGTERM', () => handle('SIGTERM'));
@@ -307,6 +323,18 @@ export function applyEnvOverrides(checks: SlaCheck[]): SlaCheck[] {
 
 function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
   return new Promise((resolve) => {
+    if (shutdownRequested) {
+      resolve({
+        layer: +layerKey,
+        name: LAYERS[layerKey].name,
+        suite: null,
+        durationMs: 0,
+        status: 'ERROR',
+        error: 'shutdown requested — benchmark not started',
+        rawOutput: '',
+      });
+      return;
+    }
     const layer = LAYERS[layerKey];
     const benchPath = path.join(ROOT, layer.file);
     const startHr = process.hrtime.bigint();
@@ -508,6 +536,10 @@ export function parseLayer7(output: string): Layer7Verdict {
 
 function runLayer7(verbose: boolean): Promise<Layer7Verdict> {
   return new Promise((resolve) => {
+    if (shutdownRequested) {
+      resolve({ status: 'ERROR', measuredMs: null, detail: 'shutdown requested — benchmark not started' });
+      return;
+    }
     const scriptPath = path.join(ROOT, 'python', 'benchmarks', 'layer7-ipc-latency.py');
     print('  Running Layer 7: Python IPC roundtrip latency ...', colors.cyan);
 
