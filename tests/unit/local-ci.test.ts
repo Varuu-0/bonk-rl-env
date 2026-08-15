@@ -2,7 +2,13 @@ import { describe, it, expect } from 'vitest';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
-import { attributeDomain, changedFiles, parseVitestJson } from '../../scripts/local-ci';
+import {
+  attributeDomain,
+  changedFiles,
+  mergeRetryResults,
+  parseVitestJson,
+  resolveVitestStatus,
+} from '../../scripts/local-ci';
 
 describe('local-ci: attributeDomain file classification', () => {
   it('maps fidelity suites to the differential fidelity domain', () => {
@@ -34,6 +40,76 @@ describe('local-ci: attributeDomain file classification', () => {
     expect(attributeDomain('tests/unit/physics-engine.test.ts')).toBe('physics');
     expect(attributeDomain('tests/integration/map-body-types.test.ts')).toBe('physics');
     expect(attributeDomain('tests/integration/frame-skip.test.ts')).toBe('physics');
+  });
+});
+
+describe('local-ci: mergeRetryResults flake handling', () => {
+  const file = (name: string, status: 'passed' | 'failed', failedCount: number) => ({
+    file: name,
+    status,
+    assertionCount: 4,
+    failedCount,
+    durationMs: 100,
+  });
+
+  it('marks files that pass on retry as flaky and zeroes their failure counts', () => {
+    const firstRun = [file('tests/flaky-a.test.ts', 'failed', 1), file('tests/stable.test.ts', 'passed', 0)];
+    const retryRun = [file('tests/flaky-a.test.ts', 'passed', 0)];
+
+    const merged = mergeRetryResults(firstRun, retryRun);
+    expect(merged.flaky).toEqual(['tests/flaky-a.test.ts']);
+    expect(merged.files[0].status).toBe('passed');
+    expect(merged.files[0].failedCount).toBe(0);
+    expect(merged.files[1].status).toBe('passed');
+  });
+
+  it('keeps files that fail on both runs as failed', () => {
+    const firstRun = [file('tests/broken.test.ts', 'failed', 2)];
+    const retryRun = [file('tests/broken.test.ts', 'failed', 2)];
+
+    const merged = mergeRetryResults(firstRun, retryRun);
+    expect(merged.flaky).toEqual([]);
+    expect(merged.files[0].status).toBe('failed');
+    expect(merged.files[0].failedCount).toBe(2);
+  });
+
+  it('treats a failed first run with no retry report as still failed', () => {
+    const firstRun = [file('tests/crashed.test.ts', 'failed', 1)];
+    const merged = mergeRetryResults(firstRun, []);
+    expect(merged.flaky).toEqual([]);
+    expect(merged.files[0].status).toBe('failed');
+  });
+});
+
+describe('local-ci: resolveVitestStatus', () => {
+  const file = (name: string, status: 'passed' | 'failed') => ({
+    file: name,
+    status,
+    assertionCount: 1,
+    failedCount: status === 'failed' ? 1 : 0,
+    durationMs: 1,
+  });
+
+  it('passes when all files passed, even with a non-zero first-run exit (flake recovered)', () => {
+    const files = [file('tests/a.test.ts', 'passed')];
+    expect(resolveVitestStatus(files, 1)).toBe('PASS');
+    expect(resolveVitestStatus(files, 0)).toBe('PASS');
+  });
+
+  it('fails when any file still failed', () => {
+    const files = [file('tests/a.test.ts', 'passed'), file('tests/b.test.ts', 'failed')];
+    expect(resolveVitestStatus(files, 1)).toBe('FAIL');
+    expect(resolveVitestStatus(files, 0)).toBe('FAIL');
+  });
+
+  it('fails on an empty report with a non-zero exit code (e.g. no test files found)', () => {
+    expect(resolveVitestStatus([], 1)).toBe('FAIL');
+    expect(resolveVitestStatus([], 0)).toBe('PASS');
+  });
+
+  it('fails when no report could be parsed and the run failed', () => {
+    expect(resolveVitestStatus(null, 1)).toBe('FAIL');
+    expect(resolveVitestStatus(null, 0)).toBe('PASS');
   });
 });
 

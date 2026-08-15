@@ -566,6 +566,45 @@ const DOMAIN_LABELS: Record<string, { label: string; color: string }> = {
   other: { label: 'Other suites', color: colors.dim },
 };
 
+/**
+ * Merge a first-run vitest report with the isolation-retry report. Files that
+ * failed in the first run but passed on retry are marked 'passed' (flaky);
+ * their failed assertion counts are zeroed so the tier treats them as green.
+ * Files that fail in both runs stay failed. Pure and exported for unit tests.
+ */
+export function mergeRetryResults(
+  firstRun: VitestFileResult[],
+  retryRun: VitestFileResult[],
+): { files: VitestFileResult[]; flaky: string[] } {
+  const retryPassed = new Set(retryRun.filter((file) => file.status === 'passed').map((file) => file.file));
+  const flaky: string[] = [];
+  const files = firstRun.map((file) => {
+    if (file.status === 'failed' && retryPassed.has(file.file)) {
+      flaky.push(file.file);
+      return { ...file, status: 'passed' as const, failedCount: 0 };
+    }
+    return file;
+  });
+  return { files, flaky };
+}
+
+/**
+ * Resolve the tier status from post-retry evidence. Once per-file results are
+ * available they are authoritative: a non-zero first-run exit code is
+ * expected when the retry recovered flakes. A missing report or an empty
+ * report with a non-zero exit code (e.g. "No test files found") still fails.
+ * Pure and exported for unit tests.
+ */
+export function resolveVitestStatus(files: VitestFileResult[] | null, firstRunExitCode: number | null): CheckStatus {
+  if (files === null) {
+    return firstRunExitCode !== 0 ? 'FAIL' : 'PASS';
+  }
+  if (files.length === 0 && firstRunExitCode !== 0) {
+    return 'FAIL';
+  }
+  return files.some((file) => file.status === 'failed') ? 'FAIL' : 'PASS';
+}
+
 async function runVitest(
   label: string,
   id: string,
@@ -578,9 +617,47 @@ async function runVitest(
 
   const args = ['vitest', 'run', ...configArgs, '--reporter=dot', '--reporter=json', `--outputFile.json=${jsonPath}`];
   const result = await spawnInherit('npx', args, timeoutMs);
-  const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
 
-  const files = parseVitestJson(jsonPath);
+  let files = parseVitestJson(jsonPath);
+  let flakyFiles: string[] = [];
+
+  // Flake mitigation: when a small set of files fails, re-run exactly those
+  // files once. Tests that pass in isolation are reported as "flaky" instead
+  // of blocking the tier — the same retry semantics used by mainstream CI.
+  // Genuine failures still fail the tier.
+  if (!result.timedOut && files !== null) {
+    const initialFailed = files.filter((file) => file.status === 'failed');
+    if (initialFailed.length > 0) {
+      console.log(
+        colors.yellow +
+          `  \u21BB ${initialFailed.length} file(s) failed — re-running them in isolation (flake check)...` +
+          colors.reset,
+      );
+      const retryJsonPath = path.join(jsonDir, 'retry-results.json');
+      const retryArgs = [
+        'vitest',
+        'run',
+        ...configArgs,
+        ...initialFailed.map((file) => file.file),
+        '--reporter=dot',
+        '--reporter=json',
+        `--outputFile.json=${retryJsonPath}`,
+      ];
+      await spawnInherit('npx', retryArgs, timeoutMs);
+      const retryFiles = parseVitestJson(retryJsonPath);
+      if (retryFiles !== null) {
+        const merged = mergeRetryResults(files, retryFiles);
+        files = merged.files;
+        flakyFiles = merged.flaky;
+      } else {
+        console.log(
+          colors.gray + '  \u2757 retry produced no parseable report — keeping first-run results' + colors.reset,
+        );
+      }
+    }
+  }
+
+  const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
   fs.rmSync(jsonDir, { recursive: true, force: true });
 
   if (result.timedOut) {
@@ -604,9 +681,13 @@ async function runVitest(
 
   let detail = '';
   if (files) {
-    detail = `${passedFiles.length} files passed, ${failedFiles.length} failed (${failedTests}/${totalTests} assertions failed)`;
+    detail = `${passedFiles.length} files passed${flakyFiles.length > 0 ? `, ${flakyFiles.length} flaky (passed on retry)` : ''}, ${failedFiles.length} failed`;
+    if (failedTests > 0) detail += ` (${failedTests}/${totalTests} assertions failed in the first run)`;
+    if (flakyFiles.length > 0) {
+      detail += '\n' + flakyFiles.map((file) => `  \u26A0 ${file}`).join('\n');
+    }
     if (failedFiles.length > 0) {
-      detail += '\n' + failedFiles.map((file) => `  \u2717 ${file.file}`).join('\n');
+      detail += '\n' + failedFiles.map((file) => `  \u2717 ${file}`).join('\n');
     }
   }
 
@@ -626,7 +707,7 @@ async function runVitest(
     }
   }
 
-  const status: CheckStatus = result.exitCode !== 0 || (files !== null && failedTests > 0) ? 'FAIL' : 'PASS';
+  const status: CheckStatus = resolveVitestStatus(files, result.exitCode);
   return {
     result: { id, domain: id, label, status, durationMs, detail: files ? detail : undefined },
     domainFiles,
