@@ -23,10 +23,10 @@ let cachedFlags: TelemetryFlags | null = null;
 let initializationComplete = false;
 
 /**
- * Cached result of the first argv scan. Once the controller is initialized
- * this is unused (cachedFlags takes over), but the fallback path must not
- * rescan process.argv on every physics tick when no one has initialized the
- * controller (issue #237).
+ * Cached result of the first activation scan. Once the controller is
+ * initialized this is unused (cachedFlags takes over), but the fallback path
+ * must not rescan process.argv or process.env on every physics tick when no
+ * one has initialized the controller (issues #237, #389).
  */
 let fallbackEnabled: boolean | null = null;
 
@@ -157,8 +157,11 @@ export class TelemetryController {
       return cachedFlags.enableTelemetry;
     }
 
-    // Fallback: scan argv at most once and cache the result so the hot path
-    // never rescans process.argv on every physics tick (issue #237).
+    // Fallback: resolve activation (argv + env) at most once and cache the
+    // result so the hot path never rescans process.argv or process.env on
+    // every physics tick (issue #237). isAnyTelemetryEnabled() is env-aware
+    // (issue #389), so worker threads and embedded usage honor MANIFOLD_*
+    // here exactly like the initialized server path does.
     if (fallbackEnabled === null) {
       fallbackEnabled = isAnyTelemetryEnabled();
     }

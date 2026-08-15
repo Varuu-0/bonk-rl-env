@@ -706,5 +706,50 @@ describe('Flags uncovered paths', () => {
       process.argv = ['node', 'script.js'];
       expect(isAnyTelemetryEnabled()).toBe(false);
     });
+
+    it('returns true when only MANIFOLD_PROFILE=standard is set (no argv flags)', () => {
+      process.env.MANIFOLD_PROFILE = 'standard';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true when only MANIFOLD_DEBUG=error is set (no argv flags)', () => {
+      process.env.MANIFOLD_DEBUG = 'error';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true when only MANIFOLD_TELEMETRY=1 is set', () => {
+      process.env.MANIFOLD_TELEMETRY = '1';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false when MANIFOLD_TELEMETRY=false overrides a valid MANIFOLD_PROFILE', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when MANIFOLD_TELEMETRY=false overrides a valid MANIFOLD_DEBUG', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.env.MANIFOLD_DEBUG = 'verbose';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when MANIFOLD_TELEMETRY=false overrides argv --telemetry (env wins over CLI)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--telemetry'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false for invalid env values only', () => {
+      process.env.MANIFOLD_PROFILE = 'extreme';
+      process.env.MANIFOLD_DEBUG = 'trace';
+      process.env.MANIFOLD_TELEMETRY = 'maybe';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when only MANIFOLD_TELEMETRY_OUTPUT=file is set', () => {
+      process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
   });
 });
