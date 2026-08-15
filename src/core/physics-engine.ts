@@ -21,6 +21,7 @@ const {
   b2World,
   b2AABB,
   b2Vec2,
+  b2Settings,
   b2BodyDef,
   b2CircleDef,
   b2PolygonDef,
@@ -34,6 +35,21 @@ const {
   b2XForm,
   b2Distance,
 } = box2d;
+
+import { MAX_OPPONENTS } from './opponent-capacity';
+
+/**
+ * Signature of the library-internal TypeError thrown when the bundled Box2D
+ * broadphase pair table is exhausted: b2PairManager.AddPair dereferences the
+ * drained free list (`pair = this.m_pairs[pIndex]` is undefined) with no
+ * bounds check (#392).
+ */
+const PAIR_TABLE_EXHAUSTION_TYPE_ERROR = "Cannot read properties of undefined (reading 'next')";
+
+function isPairTableExhaustionError(err: unknown): boolean {
+    return err instanceof TypeError &&
+        String((err as TypeError).message).includes(PAIR_TABLE_EXHAUSTION_TYPE_ERROR);
+}
 
 // ─── Constants ───────────────────────────────────────────────────────
 /** bonk.io runs at 30 ticks per second */
@@ -1657,10 +1673,41 @@ export class PhysicsEngine {
   private createdJoints: Map<string, any> = new Map();
 
   /**
+   * The bundled Box2D port allocates fixed broadphase capacity at world
+   * creation (b2Settings.b2_maxProxies = 512 proxy slots, b2_maxPairs = 4096
+   * pair slots) and drains both free lists with no bounds check: once
+   * exhausted, AddPair/CreateProxy dereference undefined and throw the
+   * opaque 'Cannot read properties of undefined (reading "next")' TypeError
+   * (#392). The upstream MAX_OPPONENTS validation keeps bundled-map configs
+   * clear of the limit; this guard converts any residual exhaustion (e.g.
+   * custom mapData dense enough to drain the table) into a descriptive error
+   * that names the capacity and the remedy. The overloaded free-list heads
+   * (world.m_broadPhase.m_freeProxy, ...m_pairManager.m_freePair) are array
+   * indexes that read 0..capacity while slots remain and the USHRT_MAX
+   * sentinel (65535) once drained, so `>= capacity` detects both states.
+   */
+  private assertBroadphaseCapacity(context: string): void {
+    const world: any = this.world;
+    const broadPhase: any = world?.m_broadPhase;
+    const pairManager: any = broadPhase?.m_pairManager;
+    const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
+    const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
+    if ((pairManager && pairManager.m_freePair >= maxPairs) ||
+        (broadPhase && broadPhase.m_freeProxy >= maxProxies)) {
+      throw new Error(
+        `PhysicsEngine broadphase capacity exhausted (b2_maxProxies = ${maxProxies}, ` +
+        `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
+        `(at most ${MAX_OPPONENTS}) or the number of collidable map fixtures.`,
+      );
+    }
+  }
+
+  /**
    * Add a dynamic circular player body.
    * Returns the player ID (0-indexed).
    */
   addPlayer(id: number, x: number, y: number): void {
+    this.assertBroadphaseCapacity(`cannot add player ${id}`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
 
@@ -1684,7 +1731,24 @@ export class PhysicsEngine {
     filter.maskBits = 0xFFFF; // Collide with everything by default
     circleDef.filter = filter;
 
-    body.CreateShape(circleDef);
+    try {
+      body.CreateShape(circleDef);
+    } catch (err) {
+      // CreateShape drains pair-table slots mid-add (CreateProxy buffers one
+      // pair per overlapping proxy), so the last free slot can be consumed
+      // inside this very call after the pre-check above passed. Convert the
+      // library's opaque free-list TypeError into the same descriptive
+      // capacity error instead of letting it escape (#392).
+      if (isPairTableExhaustionError(err)) {
+        throw new Error(
+          `PhysicsEngine broadphase pair table exhausted (b2_maxPairs = ` +
+          `${b2Settings?.b2_maxPairs ?? 4096}) while adding the disc shape ` +
+          `for player ${id}. Reduce numOpponents (at most ${MAX_OPPONENTS}) ` +
+          `or the number of collidable map fixtures.`,
+        );
+      }
+      throw err;
+    }
     body.SetMassFromShapes();
 
     // Allow rotation (bonk players spin)

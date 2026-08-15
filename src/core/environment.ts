@@ -29,6 +29,10 @@ import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { assertValidAction, decodeEncodedAction } from './action-validation';
 
+// Re-exported so programmatic consumers of BonkEnvironment can reference the
+// documented numOpponents bound without reaching into the internal module.
+export { MAX_OPPONENTS } from './opponent-capacity';
+
 // ─── Constants ───────────────────────────────────────────────────────
 
 /**
@@ -103,7 +107,13 @@ export interface StepResult {
 }
 
 export interface EnvironmentConfig {
-    /** Number of opponents (default 1) */
+    /**
+     * Number of opponents (default 1). Bounded by MAX_OPPONENTS (see
+     * src/core/opponent-capacity.ts): values above it are rejected at
+     * construction because the bundled Box2D broadphase pair table (4096
+     * slots) is exhausted by the quadratic pairs of co-located disc spawns
+     * (#392).
+     */
     numOpponents?: number;
     /** Maximum ticks per episode (default 900) */
     maxTicks?: number;
@@ -419,6 +429,17 @@ export class BonkEnvironment {
         const rawConfig = config as any;
         const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
+        // Validate numOpponents before any map load or world construction:
+        // normalizeNumOpponents rejects finite values above MAX_OPPONENTS
+        // with a labeled error (#392). Without this, counts of ~87 opponents
+        // on the default map exhaust the bundled Box2D broadphase pair table
+        // (4096 slots) from the quadratic pairs of co-located disc spawns and
+        // reset()/addPlayer crashed with the library-internal TypeError
+        // 'Cannot read properties of undefined (reading next)'.
+        const numOpponents = SharedMemoryManager.normalizeNumOpponents(
+            config.numOpponents ?? rawConfig.num_opponents ?? 1,
+        );
+
         // Load map from file or use provided config. `mapData` (programmatic)
         // wins; otherwise the documented map-path surface is honored end to
         // end: the config-loader resolves `--map` / `DEFAULT_MAP_PATH` /
@@ -478,7 +499,7 @@ export class BonkEnvironment {
         };
 
         this.config = {
-            numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
+            numOpponents,
             maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
             randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
             mapData: mapDef,

@@ -1,6 +1,9 @@
 /**
  * SharedMemoryManager - Zero-Copy IPC using SharedArrayBuffer
  */
+
+import { MAX_OPPONENTS, numOpponentsError } from '../core/opponent-capacity';
+
 export class SharedMemoryManager {
     private observationFloats: number;
     private buffer: SharedArrayBuffer;
@@ -142,12 +145,21 @@ export class SharedMemoryManager {
      * and other non-finite values fall back to the documented default of 1
      * (matching the historical `numOpponents ?? 1` semantics); a finite
      * number is floored and clamped to >= 0 so the environment's spawned
-     * opponent count always matches the SAB record size.
+     * opponent count always matches the SAB record size. Finite values above
+     * MAX_OPPONENTS are rejected with a labeled error (#392): the bundled
+     * Box2D broadphase pair table (4096 slots) is exhausted by the quadratic
+     * pairs from co-located disc spawns long before such counts work, and an
+     * unvalidated value used to crash deep inside the physics library with an
+     * opaque TypeError.
      */
     static normalizeNumOpponents(value: unknown): number {
         const n = Number(value);
         if (value == null || !Number.isFinite(n)) return 1;
-        return Math.max(0, Math.floor(n));
+        const normalized = Math.max(0, Math.floor(n));
+        if (normalized > MAX_OPPONENTS) {
+            throw numOpponentsError(normalized);
+        }
+        return normalized;
     }
 
     /**

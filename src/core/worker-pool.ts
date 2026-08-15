@@ -254,6 +254,16 @@ export class WorkerPool {
         if (!Number.isInteger(this.numWorkers) || this.numWorkers < 1) {
             throw new Error(`Invalid worker count: expected a positive integer, got ${this.numWorkers}`);
         }
+        // Validate the opponent count before tearing down any existing pool
+        // or spawning workers (#392): normalizeNumOpponents rejects values
+        // above MAX_OPPONENTS with a labeled error, so an unsupportable
+        // numOpponents can never reach the worker's world construction. The
+        // unvalidated path previously exhausted the bundled Box2D broadphase
+        // pair table during reset(), failed every worker with the library's
+        // opaque TypeError, and left the pool unusable.
+        const numOpponents = SharedMemoryManager.normalizeNumOpponents(
+            config?.numOpponents ?? (config as any)?.num_opponents,
+        );
         await this.closeInternal(); // Clean up existing if re-initialized
         this.state = 'initializing';
         this.failure = null;
@@ -266,16 +276,14 @@ export class WorkerPool {
         this.ringSize = getConfig().workerPool.ringBufferSize;
 
         // The shared-memory observation layout is sized from the configured
-        // opponent count (mirroring BonkEnvironment's normalization) so every
-        // opponent's state fits in the per-env record. All writers and
-        // readers (this pool, the workers, the SharedMemoryManager) derive
-        // the same layout from the same config object. The documented
-        // snake_case num_opponents alias resolves here exactly as it does in
-        // BonkEnvironment, so a snake_case-only config sizes the SAB record
-        // for every spawned opponent instead of the default 1 (#262).
-        const numOpponents = SharedMemoryManager.normalizeNumOpponents(
-            config?.numOpponents ?? (config as any)?.num_opponents,
-        );
+        // opponent count (mirroring BonkEnvironment's normalization, applied
+        // as validation above) so every opponent's state fits in the per-env
+        // record. All writers and readers (this pool, the workers, the
+        // SharedMemoryManager) derive the same layout from the same config
+        // object. The documented snake_case num_opponents alias resolves here
+        // exactly as it does in BonkEnvironment, so a snake_case-only config
+        // sizes the SAB record for every spawned opponent instead of the
+        // default 1 (#262).
         this._obsNumOpponents = numOpponents;
         this._obsFloatsPerEnv = 16 + 6 * Math.max(0, numOpponents - 1);
 
