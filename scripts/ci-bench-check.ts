@@ -218,6 +218,43 @@ function killTree(child: ChildProcess): void {
   }
 }
 
+/**
+ * Live-child registry. `detached` POSIX children sit in their own process
+ * groups and would otherwise survive the checker's Ctrl+C, so every spawn
+ * registers here and the signal handlers below take the whole tree down
+ * before exiting.
+ */
+const activeChildren = new Set<ChildProcess>();
+
+function registerChild(child: ChildProcess): void {
+  activeChildren.add(child);
+  child.once('close', () => {
+    activeChildren.delete(child);
+  });
+}
+
+function terminateActiveChildren(signal: string): void {
+  print(`[ci-bench-check] ${signal} — terminating benchmark process trees...`, colors.yellow);
+  for (const child of [...activeChildren]) {
+    killTree(child);
+  }
+}
+
+function installSignalHandlers(): void {
+  let handled = false;
+  const handle = (signal: string): void => {
+    if (handled) return;
+    handled = true;
+    terminateActiveChildren(signal);
+    setTimeout(() => process.exit(128 + (signal === 'SIGINT' ? 2 : 15)), 500).unref();
+  };
+  process.on('SIGINT', () => handle('SIGINT'));
+  process.on('SIGTERM', () => handle('SIGTERM'));
+  if (process.platform === 'win32') {
+    process.on('SIGBREAK', () => handle('SIGBREAK'));
+  }
+}
+
 export function parseSuiteFromOutput(output: string): BenchmarkSuite | null {
   const startMarker = '__BENCH_JSON_START__';
   const endMarker = '__BENCH_JSON_END__';
@@ -288,6 +325,7 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
+    registerChild(child);
 
     child.stdout.on('data', (chunk: Buffer) => {
       const text = chunk.toString();
@@ -480,6 +518,7 @@ function runLayer7(verbose: boolean): Promise<Layer7Verdict> {
       windowsHide: true,
       detached: process.platform !== 'win32',
     });
+    registerChild(child);
 
     let rawOutput = '';
     let timedOut = false;
@@ -656,6 +695,7 @@ function printSlaReport(verdicts: SlaVerdict[], layer7: Layer7Verdict | null, in
 }
 
 async function main(): Promise<number> {
+  installSignalHandlers();
   const args = process.argv.slice(2);
   const includeLayer7 = args.includes('--layer7');
   const verbose = args.includes('--verbose');

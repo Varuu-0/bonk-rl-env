@@ -190,6 +190,7 @@ function spawnCapture(
       env: { ...process.env, FORCE_COLOR: '1' },
       detached: process.platform !== 'win32',
     });
+    registerChild(child);
 
     // Live elapsed spinner for captured checks (TTY only) so long-running
     // typecheck/pytest runs never look hung.
@@ -265,6 +266,7 @@ function spawnInherit(command: string, args: string[], timeoutMs: number): Promi
       env: { ...process.env, FORCE_COLOR: '1' },
       detached: process.platform !== 'win32',
     });
+    registerChild(child);
 
     const timeout = setTimeout(() => {
       timedOut = true;
@@ -327,6 +329,46 @@ function killTree(child: ChildProcess): void {
     } catch {
       /* best effort */
     }
+  }
+}
+
+/**
+ * Live-child registry. `detached` POSIX children sit in their own process
+ * groups and would otherwise survive the orchestrator's Ctrl+C, so every
+ * spawn registers here and the signal handlers below take the whole tree
+ * down before exiting.
+ */
+const activeChildren = new Set<ChildProcess>();
+
+function registerChild(child: ChildProcess): void {
+  activeChildren.add(child);
+  child.once('close', () => {
+    activeChildren.delete(child);
+  });
+}
+
+function terminateActiveChildren(signal: string): void {
+  process.stderr.write(
+    colors.yellow + `[local-ci] ${signal} — terminating child process trees...` + colors.reset + '\n',
+  );
+  for (const child of [...activeChildren]) {
+    killTree(child);
+  }
+}
+
+function installSignalHandlers(): void {
+  let handled = false;
+  const handle = (signal: string): void => {
+    if (handled) return;
+    handled = true;
+    terminateActiveChildren(signal);
+    // The SIGKILL/taskkill lands asynchronously; force-exit shortly after.
+    setTimeout(() => process.exit(128 + (signal === 'SIGINT' ? 2 : 15)), 500).unref();
+  };
+  process.on('SIGINT', () => handle('SIGINT'));
+  process.on('SIGTERM', () => handle('SIGTERM'));
+  if (process.platform === 'win32') {
+    process.on('SIGBREAK', () => handle('SIGBREAK'));
   }
 }
 
@@ -1113,6 +1155,7 @@ function printSummary(results: CheckResult[], domainFiles: DomainFiles[], wallMs
 }
 
 async function main(): Promise<void> {
+  installSignalHandlers();
   const argv = process.argv.slice(2);
 
   if (argv.includes('--help') || argv.includes('-h')) {
