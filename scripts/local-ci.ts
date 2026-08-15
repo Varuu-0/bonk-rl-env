@@ -347,6 +347,13 @@ function registerChild(child: ChildProcess): void {
   });
 }
 
+/**
+ * Set when a termination signal arrives; `main()` consults it so the final
+ * `process.exit` reports the interrupt code (130/143) instead of whatever
+ * verdict the tier computed while draining.
+ */
+let interruptExitCode: number | null = null;
+
 function terminateActiveChildren(signal: string): void {
   process.stderr.write(
     colors.yellow + `[local-ci] ${signal} — terminating child process trees...` + colors.reset + '\n',
@@ -361,12 +368,13 @@ function installSignalHandlers(): void {
   const handle = (signal: string): void => {
     if (handled) return;
     handled = true;
+    interruptExitCode = 128 + (signal === 'SIGINT' ? 2 : 15);
     terminateActiveChildren(signal);
     // The kill lands asynchronously and a new child may be registered in the
     // interim. The exit code must be 130/143, so this timer is intentionally
     // NOT unref'd — it is the guarantee the interrupted run reports the
     // interrupt instead of whatever code the pipeline computed meanwhile.
-    const exitCode = 128 + (signal === 'SIGINT' ? 2 : 15);
+    const exitCode = interruptExitCode;
     setTimeout(() => {
       terminateActiveChildren(signal);
       process.exit(exitCode);
@@ -1187,7 +1195,9 @@ async function main(): Promise<void> {
 
   const opts = parseArgs(argv);
   const exitCode = await runAll(opts);
-  process.exit(exitCode);
+  // A termination signal that was handled mid-run takes precedence over the
+  // tier verdict: the shell/CI must see 130/143, not 0/1.
+  process.exit(interruptExitCode !== null ? interruptExitCode : exitCode);
 }
 
 if (require.main === module) {
