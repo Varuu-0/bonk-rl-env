@@ -31,6 +31,8 @@ export interface StepResult {
     reward: number;
     done: boolean;
     truncated: boolean;
+    /** Terminal (natural-death) flag normalized by the worker pool (#391). */
+    terminated: boolean;
     info: Record<string, any>;
 }
 

@@ -83,6 +83,15 @@ export interface StepResult {
     reward: number;
     done: boolean;
     truncated: boolean;
+    /**
+     * Whether the episode ended by a terminal condition (permanent
+     * death/elimination) rather than by truncation. Top-level mirror of
+     * `info.terminated` with the same truth semantics the pooled/IPC/Python
+     * surfaces normalize (#391): true on a natural death (even when the
+     * maxTicks boundary fires on the same tick), false on a pure truncation
+     * and on non-terminal steps.
+     */
+    terminated: boolean;
     info: Record<string, any>;
 }
 
@@ -794,6 +803,7 @@ export class BonkEnvironment {
                 reward: 0,
                 done: true,
                 truncated: this.terminalTruncated,
+                terminated: this.terminalTerminated,
                 info: {
                     tick: this.physics.getTickCount(),
                     aiAlive: this.getVisiblePlayerState(this.aiPlayerId).alive,
@@ -898,6 +908,7 @@ export class BonkEnvironment {
             reward,
             done: terminated || truncated,
             truncated,
+            terminated,
             info: {
                 tick: this.physics.getTickCount(),
                 aiAlive: aiState.alive,
