@@ -60,6 +60,16 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       expect(isTelemetryEnabled()).toBe(true);
     });
 
+    it('uppercase MANIFOLD_TELEMETRY=TRUE alone enables telemetry (case-insensitive, like config-loader)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'TRUE';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('uppercase MANIFOLD_TELEMETRY=NO alone leaves telemetry disabled', () => {
+      process.env.MANIFOLD_TELEMETRY = 'NO';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
     it('invalid MANIFOLD_PROFILE/MANIFOLD_DEBUG values do not enable telemetry', () => {
       process.env.MANIFOLD_PROFILE = 'extreme';
       process.env.MANIFOLD_DEBUG = 'trace';
@@ -82,6 +92,12 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
     it('disables telemetry even when MANIFOLD_DEBUG is set', () => {
       process.env.MANIFOLD_TELEMETRY = 'false';
       process.env.MANIFOLD_DEBUG = 'verbose';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('uppercase MANIFOLD_TELEMETRY=FALSE disables telemetry even when MANIFOLD_PROFILE is set', () => {
+      process.env.MANIFOLD_TELEMETRY = 'FALSE';
+      process.env.MANIFOLD_PROFILE = 'standard';
       expect(isTelemetryEnabled()).toBe(false);
     });
 

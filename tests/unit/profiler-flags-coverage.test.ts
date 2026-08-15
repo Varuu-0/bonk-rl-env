@@ -459,6 +459,18 @@ describe('Flags uncovered paths', () => {
       expect(flags.enableTelemetry).toBe(true);
     });
 
+    it('overrides enableTelemetry with uppercase MANIFOLD_TELEMETRY=TRUE (case-insensitive, like config-loader)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'TRUE';
+      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('disables enableTelemetry with uppercase MANIFOLD_TELEMETRY=NO', () => {
+      process.env.MANIFOLD_TELEMETRY = 'NO';
+      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
     it('disables enableTelemetry with MANIFOLD_TELEMETRY=false', () => {
       process.env.MANIFOLD_TELEMETRY = 'false';
       const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
@@ -749,6 +761,22 @@ describe('Flags uncovered paths', () => {
 
     it('returns false when only MANIFOLD_TELEMETRY_OUTPUT=file is set', () => {
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for uppercase MANIFOLD_TELEMETRY=TRUE (case-insensitive, like config-loader)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'TRUE';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for uppercase MANIFOLD_TELEMETRY=NO', () => {
+      process.env.MANIFOLD_TELEMETRY = 'NO';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when uppercase MANIFOLD_TELEMETRY=FALSE overrides a valid MANIFOLD_PROFILE', () => {
+      process.env.MANIFOLD_TELEMETRY = 'FALSE';
+      process.env.MANIFOLD_PROFILE = 'detailed';
       expect(isAnyTelemetryEnabled()).toBe(false);
     });
   });

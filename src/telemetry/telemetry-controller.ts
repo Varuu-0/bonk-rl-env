@@ -161,7 +161,8 @@ export class TelemetryController {
     // result so the hot path never rescans process.argv or process.env on
     // every physics tick (issue #237). isAnyTelemetryEnabled() is env-aware
     // (issue #389), so worker threads and embedded usage honor MANIFOLD_*
-    // here exactly like the initialized server path does.
+    // here the same way the initialized server does on its CLI/env path
+    // (config-file-only activation remains an initialize() concern).
     if (fallbackEnabled === null) {
       fallbackEnabled = isAnyTelemetryEnabled();
     }
