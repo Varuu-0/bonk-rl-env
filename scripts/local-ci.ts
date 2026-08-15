@@ -102,6 +102,19 @@ function parseArgs(argv: string[]): Options {
     extraArgs: [],
   };
 
+  const KNOWN = new Set([
+    '--quick',
+    '-q',
+    '--standard',
+    '--full',
+    '--bench',
+    '--fix',
+    '--verbose',
+    '-v',
+    '--no-python',
+    '--layer7',
+  ]);
+
   for (const arg of argv) {
     switch (arg) {
       case '--quick':
@@ -131,6 +144,9 @@ function parseArgs(argv: string[]): Options {
         opts.extraArgs.push('--layer7');
         break;
       default:
+        if (!KNOWN.has(arg)) {
+          console.warn(colors.yellow + `  [local-ci] ignoring unknown flag: ${arg}` + colors.reset);
+        }
         break;
     }
   }
