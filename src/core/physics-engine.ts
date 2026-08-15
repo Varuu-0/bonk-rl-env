@@ -259,6 +259,19 @@ export interface MapBodyDef {
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
   angularVelocity?: number;      // Starting rotational velocity
   aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
+  /** Export provenance used to rebuild one Box2D body per native bodyIndex. */
+  nativeBody?: { index: number; x: number; y: number; angle: number };
+  /** Exported fixture-local geometry used when nativeBody is present. */
+  nativeFixture?: {
+    type?: 'rect' | 'circle' | 'polygon';
+    center?: { x: number; y: number };
+    angle?: number;
+    width?: number;
+    height?: number;
+    radius?: number;
+    scale?: number;
+    vertices?: { x: number; y: number }[];
+  };
 }
 
 export interface MapSpawnPoints {
@@ -430,6 +443,8 @@ export class PhysicsEngine {
   private instantGoalResolved: boolean = false;
   private platformBodies: any[] = [];
   private platformBodyMap: Map<string, any> = new Map();
+  /** Native exported bodyIndex -> the single grouped Box2D body. */
+  private nativeBodyMap: Map<number, any> = new Map();
   private tickCount: number = 0;
   private arenaHalfWidth: number = ARENA_HALF_WIDTH;
   private arenaHalfHeight: number = ARENA_HALF_HEIGHT;
@@ -624,8 +639,8 @@ export class PhysicsEngine {
 
     // Reused scratch object — the listener callbacks are sequential and
     // synchronous within a Step, so a single allocation serves every contact.
-    const scratch = { ud1: null as any, ud2: null as any };
-    const extractContact = (contact: any): { ud1: any; ud2: any } | null => {
+    const scratch = { ud1: null as any, ud2: null as any, sud1: null as any, sud2: null as any };
+    const extractContact = (contact: any): { ud1: any; ud2: any; sud1: any; sud2: any } | null => {
       const shape1 = contact.shape1 || (contact.GetShape1 ? contact.GetShape1() : contact.GetFixtureA?.());
       const shape2 = contact.shape2 || (contact.GetShape2 ? contact.GetShape2() : contact.GetFixtureB?.());
       if (!shape1 || !shape2) return null;
@@ -634,6 +649,8 @@ export class PhysicsEngine {
       if (!body1 || !body2) return null;
       scratch.ud1 = body1.GetUserData() || {};
       scratch.ud2 = body2.GetUserData() || {};
+      scratch.sud1 = typeof shape1.GetUserData === 'function' ? shape1.GetUserData() || {} : scratch.ud1;
+      scratch.sud2 = typeof shape2.GetUserData === 'function' ? shape2.GetUserData() || {} : scratch.ud2;
       return scratch;
     };
 
@@ -642,10 +659,10 @@ export class PhysicsEngine {
         globalProfiler.increment('collision_events');
         const info = extractContact(contact);
         if (!info) return;
-        const { ud1, ud2 } = info;
+        const { ud1, ud2, sud1, sud2 } = info;
 
-        this.checkLethalCollision(ud1, ud2);
-        this.checkLethalCollision(ud2, ud1);
+        this.checkLethalCollision(ud1, sud2);
+        this.checkLethalCollision(ud2, sud1);
         this.registerCapZoneContact(ud1, ud2, true);
         this.registerDiscContact(ud1, ud2);
       } catch (e) {
@@ -840,37 +857,182 @@ export class PhysicsEngine {
    */
   addBody(def: MapBodyDef): void {
     const bodyDef = new b2BodyDef();
-    bodyDef.position.Set(def.x / this.scale, def.y / this.scale);
-    if (def.angle) bodyDef.angle = def.angle;
+    const nativeBody = def.nativeBody;
+    const nativeFixture = def.nativeFixture;
+    const existingNativeBody = nativeBody ? this.nativeBodyMap.get(nativeBody.index) : undefined;
+    const isNewNativeBody = !!nativeBody && !existingNativeBody;
+    if (nativeBody) {
+      bodyDef.position.Set(nativeBody.x / this.scale, nativeBody.y / this.scale);
+      bodyDef.angle = nativeBody.angle;
+    } else {
+      bodyDef.position.Set(def.x / this.scale, def.y / this.scale);
+      if (def.angle) bodyDef.angle = def.angle;
+    }
     bodyDef.linearDamping = def.linearDamping ?? 0;
     bodyDef.angularDamping = def.angularDamping ?? 0;
 
-    const body = this.world.CreateBody(bodyDef);
+    // Structured exports describe one native body followed by several
+    // fixtures. Reuse the first Box2D body for every fixture in that group;
+    // flat legacy MapDefs still create one body per entry.
+    const body = existingNativeBody ?? this.world.CreateBody(bodyDef);
+
+    // A native body may arrive paired with an unresolvable structured fixture
+    // (null placeholder in physicsFixtures, a flat body whose fixture entry is
+    // missing, or a resolved fixture that carries no shape geometry). Deriving
+    // the fixture-local placement from the flat (world) coordinates keeps the
+    // two conventions consistent instead of silently mixing the native body
+    // position with flat geometry — the shape lands at exactly def.x/def.y
+    // like the legacy flat path.
+    const fixture = (nativeFixture && nativeFixture.type)
+      ? nativeFixture
+      : (nativeBody && (def.type === 'rect' || def.type === 'circle' || def.type === 'polygon')
+        ? (() => {
+            const cosA = Math.cos(-nativeBody.angle);
+            const sinA = Math.sin(-nativeBody.angle);
+            const offX = (def.x ?? 0) - nativeBody.x;
+            const offY = (def.y ?? 0) - nativeBody.y;
+            if (def.type === 'polygon') {
+              // Convention (single, enforced by the map adapter): MapDef
+              // polygon vertices are shape-LOCAL and pre-scaled (world vertex
+              // = def.x/y + R(def.angle)·v), and def.x/y is the world-space
+              // shape center. Both the flattened-native facade and the
+              // exporter's flat view (whose world-baked vertices the adapter
+              // rebases onto def.x/y) satisfy this, so feeding the vertices
+              // through a center+rotation transform here would double-shift
+              // and double-rotate them. Bake the world → body local transform
+              // into the vertices themselves (center 0 / angle 0) so the
+              // polygon builder places the shape at def.x + R(def.angle)·v
+              // without re-translating/rotating vertices that already carry
+              // the placement.
+              const cosD = Math.cos(def.angle ?? 0);
+              const sinD = Math.sin(def.angle ?? 0);
+              const vertices = (def.vertices ?? []).map((v) => {
+                const wx = (def.x ?? 0) + v.x * cosD - v.y * sinD;
+                const wy = (def.y ?? 0) + v.x * sinD + v.y * cosD;
+                return {
+                  x: (wx - nativeBody.x) * cosA - (wy - nativeBody.y) * sinA,
+                  y: (wx - nativeBody.x) * sinA + (wy - nativeBody.y) * cosA,
+                };
+              });
+              return { type: def.type, center: { x: 0, y: 0 }, angle: 0, scale: 1, vertices };
+            }
+            return {
+              type: def.type,
+              center: { x: offX * cosA - offY * sinA, y: offX * sinA + offY * cosA },
+              angle: (def.angle ?? 0) - nativeBody.angle,
+              width: def.width,
+              height: def.height,
+              radius: def.radius,
+              scale: 1,
+              vertices: def.vertices,
+            };
+          })()
+        : undefined);
+
+    // A fixture that cannot produce a shape (invalid polygon, or a missing /
+    // unsupported shape type) must NOT destroy a native grouped body: the
+    // alias stays registered so later fixtures of the same bodyIndex still
+    // group onto it and joints / cap zones on this alias keep resolving.
+    // Flat legacy bodies keep the prior destroy-and-skip behavior.
+    const skipBody = (reason: string): void => {
+      console.warn(reason);
+      if (nativeBody) {
+        if (isNewNativeBody) {
+          this.nativeBodyMap.set(nativeBody.index, body);
+          this.platformBodies.push(body);
+        }
+        if (def.name) this.platformBodyMap.set(def.name, body);
+        setBodyUserData();
+      } else {
+        this.world.DestroyBody(body);
+      }
+    };
+
+    // Native bodies keep one merged user-data record across all their fixture
+    // aliases: the FIRST alias owns the identity/geometry and only isLethal is
+    // OR-accumulated, so a later alias cannot silently overwrite name, static,
+    // or position fields that name-based consumers may rely on.
+    const setBodyUserData = (): void => {
+      if (!nativeBody) {
+        // Preserve the existing direct-MapDef contract: callers may mutate the
+        // definition after addBody(), and body user data intentionally observes
+        // that same object (cap-zone tests rely on this).
+        body.SetUserData(def);
+        return;
+      }
+      const previousUserData = typeof body.GetUserData === 'function' ? body.GetUserData() : undefined;
+      if (isNewNativeBody || !previousUserData) {
+        body.SetUserData({ ...def, isLethal: !!def.isLethal, static: def.static });
+      } else {
+        body.SetUserData({
+          ...previousUserData,
+          isLethal: !!(previousUserData.isLethal || def.isLethal),
+        });
+      }
+    };
 
     let shapeDef: any;
-    if (def.type === 'rect') {
+    const shapeType = fixture?.type ?? def.type;
+    if (shapeType === 'rect') {
       shapeDef = new b2PolygonDef();
       const hw = (def.width || 0) / 2;
       const hh = (def.height || 0) / 2;
-      shapeDef.SetAsBox(hw / this.scale, hh / this.scale);
-     } else if (def.type === 'circle') {
+      if (fixture) {
+        const center = fixture.center ?? { x: 0, y: 0 };
+        shapeDef.SetAsOrientedBox(
+          hw / this.scale,
+          hh / this.scale,
+          new b2Vec2(center.x / this.scale, center.y / this.scale),
+          fixture.angle ?? 0,
+        );
+      } else {
+        shapeDef.SetAsBox(hw / this.scale, hh / this.scale);
+      }
+     } else if (shapeType === 'circle') {
        shapeDef = new b2CircleDef();
        shapeDef.radius = (def.radius || 0) / this.scale;
-     } else if (def.type === 'polygon') {
-       if (!def.vertices || def.vertices.length < 3) {
-         console.warn(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
-         this.world.DestroyBody(body);
-         return; // Skip invalid polygon
+       if (fixture) {
+         const center = fixture.center ?? { x: 0, y: 0 };
+         shapeDef.localPosition.Set(center.x / this.scale, center.y / this.scale);
        }
-       shapeDef = new b2PolygonDef();
-       // Box2D supports max 8 vertices for convex polygons
-       const maxVertices = Math.min(def.vertices.length, 8);
-       for (let i = 0; i < maxVertices; i++) {
-         const v = def.vertices[i];
-         shapeDef.vertices[i].Set(v.x / this.scale, v.y / this.scale);
+     } else if (shapeType === 'polygon') {
+        const polygonVertices = fixture?.vertices ?? def.vertices;
+        if (!polygonVertices || polygonVertices.length < 3) {
+          skipBody(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
+          return; // Skip invalid polygon
+        }
+        shapeDef = new b2PolygonDef();
+        // Box2D supports max 8 vertices for convex polygons
+        const maxVertices = Math.min(polygonVertices.length, 8);
+        if (fixture) {
+          const center = fixture.center ?? { x: 0, y: 0 };
+          const angle = fixture.angle ?? 0;
+          const vertexScale = fixture.scale ?? 1;
+          for (let i = 0; i < maxVertices; i++) {
+            const v = polygonVertices[i];
+           const rotated = new b2Vec2(
+             v.x * vertexScale * Math.cos(angle) - v.y * vertexScale * Math.sin(angle),
+             v.x * vertexScale * Math.sin(angle) + v.y * vertexScale * Math.cos(angle),
+           );
+           shapeDef.vertices[i].Set(
+             (center.x + rotated.x) / this.scale,
+             (center.y + rotated.y) / this.scale,
+           );
+         }
+       } else {
+         for (let i = 0; i < maxVertices; i++) {
+           const v = polygonVertices[i];
+           shapeDef.vertices[i].Set(v.x / this.scale, v.y / this.scale);
+         }
        }
        shapeDef.vertexCount = maxVertices;
-     }
+      } else {
+        // Normalization skips unknown shape types with a warning (no more
+        // silent 0×0 rects); keep the loud guard here for direct callers that
+        // bypass the adapter.
+        skipBody(`Unsupported body shape type "${shapeType}" for "${def.name}"`);
+        return;
+      }
 
      // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): a non-finite
      // or sub-0.0001 authored dynamic density is raised to the 0.0001 floor so a
@@ -944,12 +1106,13 @@ export class PhysicsEngine {
         shapeDef.filter = filter;
       }
 
-    body.CreateShape(shapeDef);
+    const shape = body.CreateShape(shapeDef);
+    if (shape && typeof shape.SetUserData === 'function') shape.SetUserData(def);
     body.SetMassFromShapes();
-    body.SetUserData(def); // Stores isLethal and other map passthrough fields
+    setBodyUserData();
 
     // Set initial velocity for dynamic bodies
-    if (!def.static) {
+    if (!def.static && (!nativeBody || isNewNativeBody)) {
       if (def.linearVelocity) {
         body.SetLinearVelocity(new b2Vec2(def.linearVelocity.x, def.linearVelocity.y));
       }
@@ -958,7 +1121,14 @@ export class PhysicsEngine {
       }
     }
 
-    this.platformBodies.push(body);
+    if (nativeBody) {
+      if (isNewNativeBody) {
+        this.nativeBodyMap.set(nativeBody.index, body);
+        this.platformBodies.push(body);
+      }
+    } else {
+      this.platformBodies.push(body);
+    }
     if (def.name) this.platformBodyMap.set(def.name, body);
 
     // Fold this body's AABB into the running arena extents instead of
@@ -967,9 +1137,12 @@ export class PhysicsEngine {
     this.extendArenaExtents(body);
   }
 
-  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number): void {
+  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number, angle = 0): void {
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
+    // Rotate the sensor body to match an angle-rotated fixture so the sensor
+    // covers exactly the rect (not its enlarged axis-aligned AABB).
+    if (angle) bodyDef.angle = angle;
 
     const body = this.world.CreateBody(bodyDef);
 
@@ -1628,13 +1801,14 @@ export class PhysicsEngine {
     const candidates: Array<{ d: number; shape: any; body: any; point: { x: number; y: number } }> = [];
     const shapeAabb = new b2AABB();
     for (const pBody of this.platformBodies) {
-      const ud = pBody.GetUserData() || {};
-      // Native query filter (lines 8148-8161): noGrapple surfaces excluded;
-      // players and capzones are never in platformBodies so never grappleable.
-      if (ud.noGrapple) continue;
-
       const xf = pBody.GetXForm();
       for (let shape = pBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
+        const ud = typeof shape.GetUserData === 'function'
+          ? shape.GetUserData() || pBody.GetUserData() || {}
+          : pBody.GetUserData() || {};
+        // Native query filter (lines 8148-8161): noGrapple surfaces excluded;
+        // players and capzones are never in platformBodies so never grappleable.
+        if (ud.noGrapple) continue;
         shape.ComputeAABB(shapeAabb, xf);
         if (shapeAabb.lowerBound.x > queryAabb.upperBound.x || shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
             shapeAabb.lowerBound.y > queryAabb.upperBound.y || shapeAabb.upperBound.y < queryAabb.lowerBound.y) {
@@ -1656,7 +1830,9 @@ export class PhysicsEngine {
     // innerGrapple or does NOT contain the disc center wins.
     let chosen: typeof candidates[number] | null = null;
     for (const c of candidates) {
-      const ud = c.body.GetUserData() || {};
+      const ud = typeof c.shape.GetUserData === 'function'
+        ? c.shape.GetUserData() || c.body.GetUserData() || {}
+        : c.body.GetUserData() || {};
       if (ud.innerGrapple || !c.shape.TestPoint(c.body.GetXForm(), playerPos)) {
         chosen = c;
         break;
@@ -2281,6 +2457,7 @@ export class PhysicsEngine {
     this.lastHitTicks.clear();
     this.platformBodies = [];
     this.platformBodyMap = new Map();
+    this.nativeBodyMap = new Map();
     // Running arena extents belong to the fresh world; bodies re-added after
     // reset() rebuild them incrementally.
     this.arenaMinX = Infinity;

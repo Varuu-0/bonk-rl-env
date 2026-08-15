@@ -177,11 +177,19 @@ describe('MapBodyTypes', () => {
       });
     });
 
-    it('rebuilds a rotated exported polygon at its authored world vertices (#318, #344)', () => {
-      const authoredVertices = [
-        { x: 300, y: 150 },
+    it('rebuilds a rotated exported polygon with exactly one rotation applied at def.x + R(def.angle)·v (#318, #344 review)', () => {
+      // The exporter bakes ONLY the placement (`bx + cx + v`,
+      // mapexporter.js:518-521) into absolute polygon vertices; the rotation
+      // is carried by def.angle and applied exactly once by the engine's
+      // def.x + R(def.angle)·v placement. A triangle with raw local vertices
+      // (0,-50),(50,0),(0,50) at (300,200) rotated 90° therefore lands at
+      // (350,200),(300,250),(250,200) — NOT back at the unrotated
+      // pos + local vertices (an R(-angle) inverse would cancel the forward
+      // rotation and render the polygon unrotated).
+      const expectedWorldVertices = [
         { x: 350, y: 200 },
         { x: 300, y: 250 },
+        { x: 250, y: 200 },
       ];
       const map = normalizeMap({
         bodies: [{
@@ -192,7 +200,11 @@ describe('MapBodyTypes', () => {
           y: 200,
           angle: Math.PI / 2,
           vertexFrame: 'absolute',
-          vertices: authoredVertices,
+          vertices: [
+            { x: 300, y: 150 },
+            { x: 350, y: 200 },
+            { x: 300, y: 250 },
+          ],
           static: true,
         }],
         spawns: [{ x: 0, y: 0, blue: true, red: true }],
@@ -208,10 +220,10 @@ describe('MapBodyTypes', () => {
         return { x: point.x * SCALE, y: point.y * SCALE };
       });
 
-      expect(worldVertices).toHaveLength(authoredVertices.length);
+      expect(worldVertices).toHaveLength(expectedWorldVertices.length);
       worldVertices.forEach((actual, i) => {
-        expect(actual.x).toBeCloseTo(authoredVertices[i].x, 4);
-        expect(actual.y).toBeCloseTo(authoredVertices[i].y, 4);
+        expect(actual.x).toBeCloseTo(expectedWorldVertices[i].x, 4);
+        expect(actual.y).toBeCloseTo(expectedWorldVertices[i].y, 4);
       });
     });
 

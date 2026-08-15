@@ -17,12 +17,14 @@ import { MapDef, GROUND_BODY_NAME } from './physics-engine';
 
 interface FlatBody {
     bodyIndex?: number;
-    fixtureIndex: number;
+    fixtureIndex?: number;
     name?: string;
     type?: string;
     bodyType?: string;
     x?: number;
     y?: number;
+    /** Position-keyed flat bodies use this instead of (or in addition to) x/y. */
+    position?: { x?: number; y?: number } | null;
     angle?: number;
     linearVelocity?: { x: number; y: number };
     angularVelocity?: number;
@@ -44,7 +46,7 @@ interface FlatBody {
     collidesPlayers?: boolean;
     color?: number;
     ppm?: number;
-    shapeIndex?: number;
+    shapeIndex?: number | null;
     width?: number;
     height?: number;
     radius?: number;
@@ -68,6 +70,48 @@ interface FlatBody {
         vertices?: { x: number; y: number }[];
         scale?: number;
     };
+}
+
+interface NativeShape {
+    type?: string;
+    typeName?: string;
+    center?: { x: number; y: number } | null;
+    angle?: number;
+    width?: number;
+    height?: number;
+    radius?: number;
+    scale?: number;
+    vertices?: { x: number; y: number }[];
+}
+
+interface NativeFixture extends FlatBody {
+    shapeIndex?: number | null;
+    shape?: NativeShape | null;
+    death?: boolean;
+}
+
+interface NativeBody {
+    index?: number;
+    name?: string | null;
+    type?: string;
+    typeName?: string;
+    position?: { x: number; y: number } | null;
+    angle?: number;
+    linearVelocity?: { x: number; y: number } | null;
+    angularVelocity?: number;
+    friction?: number;
+    restitution?: number;
+    density?: number;
+    linearDamping?: number;
+    angularDamping?: number;
+    collisionGroup?: number;
+    collidesGroup1?: boolean;
+    collidesGroup2?: boolean;
+    collidesGroup3?: boolean;
+    collidesGroup4?: boolean;
+    fricPlayers?: boolean | number;
+    fixtureIndices?: number[];
+    fixtures?: (NativeFixture | null)[];
 }
 
 interface FlatSpawn {
@@ -135,11 +179,12 @@ interface ExportedMap {
     capZones?: FlatCapZone[];
     bodies?: FlatBody[];
     // The exporter (Webscripts/mapexporter.js) preserves raw-array indices with
-    // literal null placeholders for unsupported bodies and joints.
-    physicsBodies?: (FlatBody | null)[];
+    // literal null placeholders for unsupported bodies, so entries may be null
+    // as well as FlatBody/NativeBody.
+    physicsBodies?: (FlatBody | NativeBody | null)[];
     physicsJoints?: (FlatJoint | null)[];
-    physicsFixtures?: unknown[];
-    physicsShapes?: unknown[];
+    physicsFixtures?: (NativeFixture | null)[];
+    physicsShapes?: (NativeShape | null)[];
 }
 
 /**
@@ -176,43 +221,232 @@ function isInternalMapDef(raw: any): raw is MapDef {
                 || (typeof b === 'object' && !('collidesGroup1' in b))));
 }
 
-/** Convert a flat body into a MapBodyDef, preserving facade metadata. */
-function toBodyDef(body: FlatBody, index: number): any {
-const x = body.x ?? 0;
-    const y = body.y ?? 0;
-    // The exporter's flat polygon view stores vertices in map/world pixels
-    // (`bx + cx + v`), while MapBodyDef vertices are body-local for Box2D and
-    // the normalized renderer/cap-zone consumers. The flat format declares its
-    // vertex frame explicitly via `vertexFrame`: 'absolute' (exporter output,
-    // and the backward-compatible default when the marker is absent) or
-    // 'local' (already body-local input, which must NOT be shifted a second
-    // time). The absolute→local conversion inverts the body transform exactly
-    // (pos + R(angle) · local reproduces the authored absolute vertex), so
-    // rotated polygons also land where the exporter authored them. Only
-    // polygons are converted; rects and circles already express their extent
-    // around x/y.
-    const vertices = body.type === 'polygon' && body.vertices && body.vertexFrame !== 'local'
-        ? body.vertices.map(v => {
-            const dx = v.x - x;
-            const dy = v.y - y;
-            const angle = body.angle ?? 0;
-            const cosA = Math.cos(angle);
-            const sinA = Math.sin(angle);
-            // R(-angle) · (v - pos): the inverse of the engine's body transform.
-            return { x: dx * cosA + dy * sinA, y: -dx * sinA + dy * cosA };
-        })
-        : body.vertices;
+interface NativeBodyRef {
+    index: number;
+    x: number;
+    y: number;
+    angle: number;
+}
+
+interface NativeFixtureRef {
+    type?: 'rect' | 'circle' | 'polygon';
+    center?: { x: number; y: number };
+    angle?: number;
+    width?: number;
+    height?: number;
+    radius?: number;
+    scale?: number;
+    vertices?: { x: number; y: number }[];
+}
+
+function isNativeBody(value: unknown): value is NativeBody {
+    if (!value || typeof value !== 'object') return false;
+    const body = value as Record<string, unknown>;
+    // A native body is defined by its structured fixture hierarchy, not by a
+    // `position` or `x` key: programmatic/exporter flat bodies may also carry
+    // a `position` (position-keyed flat bodies) or `x` (the exporter flat
+    // compatibility view), and treating them as native would silently drop
+    // them (they flatten to nothing without fixtures). The fixture list must
+    // be non-empty to count: an object that carries flat markers (x/width)
+    // alongside an empty fixtures/fixtureIndices list is a flat body with a
+    // stray structured key, not a native body.
+    return (Array.isArray(body.fixtures) && body.fixtures.length > 0)
+        || (Array.isArray(body.fixtureIndices) && body.fixtureIndices.length > 0);
+}
+
+function isFlatBody(value: unknown): value is FlatBody {
+    return !!value
+        && typeof value === 'object'
+        && !isNativeBody(value)
+        // Require a positive flat marker; the complement of isNativeBody is
+        // too broad for arbitrary objects riding along in physicsBodies. A
+        // `position` key is a valid flat marker for position-keyed bodies.
+        && ('x' in value || 'width' in value || 'vertices' in value
+            || 'radius' in value || 'collidesGroup1' in value || 'position' in value);
+}
+
+function nativeShapeType(shape: NativeShape | null | undefined): string | undefined {
+    if (!shape) return undefined;
+    if (shape.type === 'bx' || shape.typeName === 'rect') return 'rect';
+    if (shape.type === 'ci' || shape.typeName === 'circle') return 'circle';
+    if (shape.type === 'po' || shape.typeName === 'polygon') return 'polygon';
+    return undefined;
+}
+
+function nativeFixtureFor(
+    body: NativeBody | undefined,
+    fixtureIndex: number | undefined,
+    map: ExportedMap,
+): NativeFixture | undefined {
+    const bodyFixture = fixtureIndex === undefined
+        ? undefined
+        : body?.fixtures?.find((fixture) => fixture !== null && fixture.fixtureIndex === fixtureIndex);
+    const rawFixture = bodyFixture ?? (fixtureIndex !== undefined ? map.physicsFixtures?.[fixtureIndex] : undefined);
+    if (!rawFixture) return undefined;
+
+    const shape = rawFixture.shape
+        ?? (rawFixture.shapeIndex !== undefined && rawFixture.shapeIndex !== null
+            ? map.physicsShapes?.[rawFixture.shapeIndex] ?? undefined
+            : undefined);
+    return shape ? { ...rawFixture, shape } : rawFixture;
+}
+
+function nativeBodyRef(body: NativeBody, index: number): NativeBodyRef {
     return {
-        name: body.name ?? body.bodyType ?? `body_${index}`,
-        type: (body.type === 'rect' || body.type === 'circle'
-            || body.type === 'polygon') ? body.type : 'rect',
-        x,
-        y,
-        width: body.width,
-        height: body.height,
-        radius: body.radius,
-        vertices,
-        static: body.static ?? body.bodyType === 'static',
+        index: body.index ?? index,
+        x: body.position?.x ?? 0,
+        y: body.position?.y ?? 0,
+        angle: body.angle ?? 0,
+    };
+}
+
+function nativeFixtureRef(fixture: NativeFixture | undefined): NativeFixtureRef | undefined {
+    const shape = fixture?.shape;
+    if (!shape) return undefined;
+    return {
+        type: nativeShapeType(shape) as NativeFixtureRef['type'],
+        center: shape.center ?? undefined,
+        angle: shape.angle ?? 0,
+        width: shape.width,
+        height: shape.height,
+        radius: shape.radius,
+        scale: shape.scale,
+        vertices: shape.vertices,
+    };
+}
+
+function rotatePoint(x: number, y: number, angle: number): { x: number; y: number } {
+    const cos = Math.cos(angle);
+    const sin = Math.sin(angle);
+    return { x: x * cos - y * sin, y: x * sin + y * cos };
+}
+
+/** Flatten structured native bodies when an exporter omits its compatibility view. */
+function flattenNativeBodies(map: ExportedMap, nativeBodies: NativeBody[]): FlatBody[] {
+    const flat: FlatBody[] = [];
+    nativeBodies.forEach((nativeBody, bodyArrayIndex) => {
+        const bodyIndex = nativeBody.index ?? bodyArrayIndex;
+        const bodyPosition = nativeBody.position ?? { x: 0, y: 0 };
+        const bodyAngle = nativeBody.angle ?? 0;
+        // Prefer the authoritative `fixtureIndices` list, but never let an
+        // empty `[]` shadow a populated `fixtures` array (an omitted or
+        // placeholder list must not silently drop every fixture). When the
+        // index list is absent, derive indices from the fixtures themselves:
+        // index-less fixtures fall back to their RAW array position — the
+        // physicsFixtures index convention — so a null placeholder cannot
+        // shift the derived index into a different fixture slot.
+        const fixtureIndexes = (nativeBody.fixtureIndices && nativeBody.fixtureIndices.length > 0)
+            ? nativeBody.fixtureIndices
+            : (nativeBody.fixtures ?? [])
+                .map((fixture, i) => (fixture === null || fixture === undefined ? null : (fixture.fixtureIndex ?? i)))
+                .filter((idx): idx is number => idx !== null);
+
+        fixtureIndexes.forEach((fixtureIndex) => {
+            const fixture = nativeFixtureFor(nativeBody, fixtureIndex, map);
+            const shape = fixture?.shape;
+            const type = shape ? nativeShapeType(shape) : undefined;
+            const bodyType = nativeBody.typeName
+                ?? (nativeBody.type === 's' ? 'static' : nativeBody.type === 'd' ? 'dynamic' : nativeBody.type);
+            // Shape-less fixtures are still materialized as aliases so cap
+            // zones and joints can resolve their names, but they carry no
+            // geometry — the engine warns and skips shape creation while
+            // keeping the native-body alias registered.
+            const center = shape?.center ?? { x: 0, y: 0 };
+            const worldCenter = shape ? rotatePoint(center.x, center.y, bodyAngle) : { x: 0, y: 0 };
+            if (!shape) {
+                console.warn(
+                    `[map-adapter] Fixture ${fixtureIndex} of native body ${bodyIndex} has no shape; `
+                    + 'keeping the alias without geometry',
+                );
+            } else if (!type) {
+                console.warn(
+                    `[map-adapter] Skipping unsupported shape type for fixture ${fixtureIndex} `
+                    + `of native body ${bodyIndex} (type "${shape.type ?? ''}" / "${shape.typeName ?? ''}")`,
+                );
+            }
+            const flatBody: FlatBody = {
+                bodyIndex,
+                fixtureIndex,
+                name: fixture?.name ?? nativeBody.name ?? undefined,
+                type,
+                bodyType,
+                x: bodyPosition.x + worldCenter.x,
+                y: bodyPosition.y + worldCenter.y,
+                angle: bodyAngle + (shape?.angle ?? 0),
+                linearVelocity: nativeBody.linearVelocity ?? undefined,
+                angularVelocity: nativeBody.angularVelocity,
+                static: bodyType === 'static',
+                isLethal: fixture?.isLethal ?? fixture?.death,
+                noPhysics: fixture?.noPhysics,
+                noGrapple: fixture?.noGrapple,
+                innerGrapple: fixture?.innerGrapple,
+                friction: fixture?.friction ?? nativeBody.friction,
+                restitution: fixture?.restitution ?? nativeBody.restitution,
+                density: fixture?.density ?? nativeBody.density,
+                fricPlayers: fixture?.fricPlayers ?? nativeBody.fricPlayers,
+                collisionGroup: fixture?.collisionGroup ?? nativeBody.collisionGroup,
+                collidesGroup1: fixture?.collidesGroup1 ?? nativeBody.collidesGroup1,
+                collidesGroup2: fixture?.collidesGroup2 ?? nativeBody.collidesGroup2,
+                collidesGroup3: fixture?.collidesGroup3 ?? nativeBody.collidesGroup3,
+                collidesGroup4: fixture?.collidesGroup4 ?? nativeBody.collidesGroup4,
+                color: fixture?.color,
+            };
+            if (type === 'rect') {
+                flatBody.width = shape?.width;
+                flatBody.height = shape?.height;
+            } else if (type === 'circle') {
+                flatBody.radius = shape?.radius;
+            } else if (type === 'polygon') {
+                flatBody.scale = shape?.scale;
+                // The flat facade's polygon vertices feed getCapZoneSensorSize,
+                // which rotates them by fixtureDef.angle about fixtureDef.x —
+                // i.e. they must stay the shape's raw local vertices (scaled),
+                // NOT world-transformed, or the sensor picks up an extra
+                // translation and a second rotation. deathCenter (below) adds
+                // the body offset back when the source was flattened.
+                const vertexScale = shape?.scale ?? 1;
+                flatBody.vertices = (shape?.vertices ?? []).map((vertex) => ({
+                    x: vertex.x * vertexScale,
+                    y: vertex.y * vertexScale,
+                }));
+            }
+            flat.push(flatBody);
+        });
+    });
+    return flat;
+}
+
+/** Convert a flat fixture into a MapBodyDef, preserving native body metadata. */
+function toBodyDef(
+    body: FlatBody,
+    index: number,
+    name: string,
+    nativeBody?: NativeBody,
+    nativeFixture?: NativeFixture,
+): any {
+    const bodyType = nativeBody?.typeName
+        ?? (nativeBody?.type === 's' ? 'static' : nativeBody?.type === 'd' ? 'dynamic' : nativeBody?.type);
+    const shape = nativeFixture?.shape;
+    const type = (body.type === 'rect' || body.type === 'circle' || body.type === 'polygon')
+        ? body.type
+        : nativeShapeType(shape);
+    // Cap-zone sensors and the death-center AABB consume the flat facade's
+    // x/y. When this fixture is rebuilt from a native body, the engine places
+    // the shape at nativeBody.x/y + R(angle)·shapeCenter, so emit that exact
+    // world-space center here instead of an un-rotated bodyPos + center —
+    // otherwise sensors land off the actual Box2D shape for rotated or
+    // off-center fixtures.
+    const fixtureCenter = nativeFixture?.shape?.center;
+    const worldCenter = fixtureCenter && nativeBody
+        ? rotatePoint(fixtureCenter.x, fixtureCenter.y, nativeBody.angle ?? 0)
+        : undefined;
+    return {
+        name,
+        type,
+        x: worldCenter && nativeBody ? (nativeBody.position?.x ?? 0) + worldCenter.x : body.x ?? body.position?.x ?? 0,
+        y: worldCenter && nativeBody ? (nativeBody.position?.y ?? 0) + worldCenter.y : body.y ?? body.position?.y ?? 0,
+        vertices: body.vertices ?? shape?.vertices,
+        static: body.static ?? (body.bodyType === 'static' || bodyType === 'static'),
         density: body.density,
         restitution: body.restitution,
         angle: body.angle,
@@ -243,7 +477,16 @@ const x = body.x ?? 0;
         color: body.color,
         linearVelocity: body.linearVelocity,
         angularVelocity: body.angularVelocity,
-        surfaceName: body.bodyType,
+        surfaceName: body.bodyType ?? bodyType,
+        linearDamping: nativeBody?.linearDamping,
+        angularDamping: nativeBody?.angularDamping,
+        nativeBody: nativeBody ? nativeBodyRef(nativeBody, body.bodyIndex ?? index) : undefined,
+        nativeFixture: nativeFixtureRef(nativeFixture),
+        // Keep the structured shape's dimensions available when the flat view
+        // omitted them. The engine still uses the flat values for legacy maps.
+        width: body.width ?? shape?.width,
+        height: body.height ?? shape?.height,
+        radius: body.radius ?? shape?.radius,
         renderBodyIndex: body.bodyIndex ?? index,
         renderShape: body.renderShape,
     };
@@ -297,8 +540,155 @@ export function normalizeMap(raw: unknown): MapDef {
     // `bodies: [null]`, valid JSON): filter them out so toBodyDef never
     // receives a null body and the filtered list stays index-aligned with
     // `bodies` downstream (#273).
-    const flatSource = (flatBodies || map.physicsBodies || [])
-        .filter((b): b is FlatBody => b !== null && b !== undefined);
+// Prefer the native-body fixture-owner mapping as the authority for body
+    // grouping (issue #307): a flat bodyIndex can point at a null placeholder
+    // slot or a different body, so key everything the engine groups by the
+    // resolved native body index instead of the raw flat index.
+    const nativeBodies = (map.physicsBodies || []).reduce<NativeBody[]>((out, body, i) => {
+        if (isNativeBody(body)) {
+            out.push(body.index === undefined ? { ...body, index: i } : body);
+        }
+        return out;
+    }, []);
+    const nativeBodiesByIndex = new Map<number, NativeBody>();
+    const nativeBodyByFixture = new Map<number, NativeBody>();
+    nativeBodies.forEach((body, i) => {
+        nativeBodiesByIndex.set(body.index ?? i, body);
+        for (const fixtureIndex of body.fixtureIndices ?? []) {
+            nativeBodyByFixture.set(fixtureIndex, body);
+        }
+        for (const fixture of body.fixtures ?? []) {
+            if (fixture?.fixtureIndex !== undefined) nativeBodyByFixture.set(fixture.fixtureIndex, body);
+        }
+    });
+    const nativeBodyFor = (body: FlatBody): NativeBody | undefined => {
+        // A fixture belongs to exactly one native body; prefer that owner when
+        // it is known so a stale/misaligned flat `bodyIndex` (e.g. pointing at
+        // a null slot or a different body) cannot group the fixture under the
+        // wrong native body. The fixtureIndex fallback still resolves when the
+        // flat view omits bodyIndex entirely.
+if (body.fixtureIndex !== undefined) {
+            const owner = nativeBodyByFixture.get(body.fixtureIndex);
+            if (owner) return owner;
+        }
+        return body.bodyIndex !== undefined ? nativeBodiesByIndex.get(body.bodyIndex) : undefined;
+    };
+
+    // Prefer the exporter's flat compatibility view when it exists. If an
+    // export contains only the structured hierarchy, flatten its fixtures for
+    // the existing MapDef facade while retaining nativeBody/nativeFixture
+    // metadata so PhysicsEngine can rebuild one Box2D body per bodyIndex.
+    const flatSource = (flatBodies || (map.physicsBodies || []).filter(isFlatBody))
+        .filter((b): b is FlatBody => b !== null && b !== undefined)
+        .map((b) => ({ ...b }));
+    // The exporter's flat compatibility view bakes the fixture's world
+    // position (bodyPos + center, mapexporter.js:518-521) into every polygon
+    // vertex and emits the shape scale separately. Every geometry consumer
+    // (the cap-zone sensor AABB, the derived-fixture polygon baking in
+    // PhysicsEngine, deathCenter) uses the shape-LOCAL convention — world
+    // vertex = def.x/y + R(def.angle)·(scaled v) — so rebase the world-baked
+    // vertices onto def.x/y and bake the scale in. Flat-source polygons then
+    // carry exactly the same convention as flattened-native polygons, and a
+    // rotated/off-center native fixture lands correctly whether or not its
+    // structured fixture resolves.
+    if (flatBodies) {
+        // When the structured hierarchy carries real native bodies / fixtures /
+        // shapes, the flat bodies[] view is unambiguously the exporter's
+        // compatibility view, whose polygon vertices are ALWAYS world-baked
+        // (mapexporter.js:518-521) — rebase them unconditionally. A distance
+        // heuristic here misclassifies one-sided/wedge polygons whose bake
+        // center is near the world origin (the bake offset can partially cancel
+        // the shape extent, so the vertices' greatest distance from the bake
+        // center exceeds their greatest distance from the world origin),
+        // leaving them double-offset with `scale` dropped. Only NATIVE bodies
+        // count as structured: flat (position-keyed, fixture-less) physicsBodies
+        // entries belong to the same legacy hand-authored map, not the exporter.
+        const hasStructured =
+            (Array.isArray(map.physicsBodies) && map.physicsBodies.some((b) => isNativeBody(b)))
+            || (Array.isArray(map.physicsFixtures) && map.physicsFixtures.some((f) => {
+                if (f === null || f === undefined) return false;
+                return !!(f.shape || typeof f.shapeIndex === 'number');
+            }))
+            || (Array.isArray(map.physicsShapes) && map.physicsShapes.some((s) => {
+                if (s === null || s === undefined) return false;
+                return !!(s.type || s.typeName);
+            }));
+        // The exporter flat view always emits its identity keys, while a bare
+        // hand-authored legacy polygon carries only name/type/x/y/vertices.
+        // These keys are a deterministic world-baked signal that works even
+        // when the structured arrays are absent or all-null (a trimmed/corrupt
+        // export): the exporter world-bakes every flat polygon vertex, so no
+        // distance signature is needed — and no distance heuristic that can
+        // misfire for near-origin wedges.
+        const fromExporterFlatView = (body: FlatBody): boolean =>
+            body.bodyIndex !== undefined
+            || body.fixtureIndex !== undefined
+            || body.shapeIndex !== undefined
+            || body.bodyType !== undefined
+            || body.collidesGroup1 !== undefined
+            || body.collidesGroup2 !== undefined
+            || body.collidesGroup3 !== undefined
+            || body.collidesGroup4 !== undefined;
+        for (const b of flatSource) {
+            if (b.type !== 'polygon' || !Array.isArray(b.vertices) || b.vertices.length === 0) continue;
+            // #344/#318: a polygon whose vertices are DECLARED body-local
+            // (`vertexFrame: 'local'`) must never be shifted again — it is
+            // already in the shape-local frame every consumer expects, so the
+            // world-baked rebase would silently move it by -placement·scale.
+            // normalizeMap flips the marker to 'local' after rebasing (below),
+            // so a re-run of this loop on already-converted vertices also
+            // short-circuits here: the rebase is idempotent without relying on
+            // the isInternalMapDef early return alone.
+            if (b.vertexFrame === 'local') continue;
+            // Resolve the bake center exactly like toBodyDef resolves the
+            // placement (b.x ?? b.position?.x ?? 0), so a position-keyed flat
+            // polygon is rebased about the point it will actually be placed
+            // at — rebasing about (0,0) would silently shift every vertex by
+            // -position·scale.
+            const cx = b.x ?? b.position?.x ?? 0;
+            const cy = b.y ?? b.position?.y ?? 0;
+            // Without an authored placement there is nothing baked into the
+            // vertices to rebase: leave them untouched (def.x/y default to 0
+            // downstream, so the shape-local reading is the only one that
+            // makes sense).
+            if ((b.x === undefined && b.position?.x === undefined)
+                && (b.y === undefined && b.position?.y === undefined)) continue;
+            // Rebase only world-baked vertices. A bare hand-authored legacy
+            // polygon (no structured hierarchy AND no exporter flat identity
+            // keys) follows the shape-local convention — world = def.x/y +
+            // R(def.angle)·v — which every consumer already handles as-is;
+            // rebasing it would silently shift the shape.
+            if (!hasStructured && !fromExporterFlatView(b)) continue;
+            const vertexScale = b.scale ?? 1;
+            // The exporter's flat view bakes ONLY the placement into every
+            // polygon vertex (`bx + cx + v`, mapexporter.js:518-521); the body
+            // and shape rotations are carried by the flat `angle` field
+            // (emitted as `vertexFrame: 'absolute'` since #344), not by the
+            // vertices. So the absolute→local conversion subtracts the
+            // placement and bakes the separately-emitted scale in — the
+            // rotation stays on def.angle and the engine's single placement
+            // transform def.x + R(def.angle)·v applies it exactly once. No
+            // R(-angle) inverse: that would cancel the engine's forward
+            // rotation, and angled polygons (including rotating dynamic
+            // bodies) would render unrotated on reload. This matches the
+            // flattened-native path (flattenNativeBodies), which already emits
+            // shape-local scaled vertices with the rotation on def.angle, so
+            // both exporter paths share one placement convention.
+            b.vertices = b.vertices.map((v) => ({
+                x: (v.x - cx) * vertexScale,
+                y: (v.y - cy) * vertexScale,
+            }));
+            // The vertices are now shape-local and pre-scaled. Declare the
+            // frame so this loop (or a re-import of the processed flat bodies)
+            // never rebases them a second time, and drop the consumed scale
+            // marker so it cannot re-apply.
+            b.vertexFrame = 'local';
+            b.scale = undefined;
+        }
+    }
+    // Render enrichment (renderShape/renderBodyIndex) resolves the structured
+    // fixture shape for each flat export body so renderers can redraw it
+    // faithfully without re-deriving placement from physicsBodies.
     const sourceBodies: any[] = Array.isArray(map.physicsBodies) ? map.physicsBodies : [];
     const sourceBodiesByFlatPosition = sourceBodies.filter((body) => body !== null && body !== undefined);
     const sourceShapes: any[] = Array.isArray(map.physicsShapes) ? map.physicsShapes : [];
@@ -333,35 +723,45 @@ export function normalizeMap(raw: unknown): MapDef {
         };
     };
     const renderSource = flatSource.map(withRenderShape);
-    const bodies = renderSource.map(toBodyDef);
+    const source = flatSource.length > 0
+        ? renderSource
+        : flattenNativeBodies(map, nativeBodies);
 
-    // Build a fixture-index -> body-name map so cap zones can resolve their
-    // platform body. Export fixtures all share the name "Unnamed Shape", so a
-    // body looked up by name alone resolves to the first match. Give each
-    // cap-zone-referenced body a fixture-unique name (e.g. "Unnamed Shape#13")
-    // so the engine's `bodies.find(b => b.name === zone.fixture)` selects the
-    // actual platform rather than the first "Unnamed Shape."
-    const nameByFixture = new Map<number, string>();
-    const capFriendlyNames = new Map<number, string>();
-    renderSource.forEach((b, i) => {
-        if (b && b.fixtureIndex !== undefined) {
-            nameByFixture.set(b.fixtureIndex, b.name ?? `body_${i}`);
-        }
+    // Exported fixtures frequently use the shared default name "Unnamed Shape"
+    // even when their structured parent body has a meaningful name. Use the
+    // native body name as the alias base in that case, then make every fixture
+    // alias unique. The unique aliases are still backed by one grouped engine
+    // body when they share a native bodyIndex.
+    const baseNames = source.map((body, i) => {
+        const nativeBody = nativeBodyFor(body);
+        const fixtureName = body.name;
+        return fixtureName && fixtureName !== 'Unnamed Shape'
+            ? fixtureName
+            : nativeBody?.name ?? fixtureName ?? body.bodyType ?? `body_${i}`;
     });
-    // Pre-rename every cap-zone-referenced fixture to a unique friendly name,
-    // mutating the exported bodies list we already derived `bodies` from so
-    // find-by-name is unambiguous. Flat bodies carry the fixtureIndex on the
-    // body, so we match by that.
-    const capFixtureIndexes = new Set<number>(
-        (map.capZones || []).map(z => z.fixtureIndex).filter((x): x is number => typeof x === 'number'),
-    );
-    bodies.forEach((b, i) => {
-        const fxIdx = renderSource[i]?.fixtureIndex;
-        if (fxIdx !== undefined && capFixtureIndexes.has(fxIdx)) {
-            const uniqueName = `${b.name ?? `body_${i}`}#${fxIdx}`;
-            b.name = uniqueName;
-            capFriendlyNames.set(fxIdx, uniqueName);
+    const nameCounts = new Map<string, number>();
+    for (const name of baseNames) nameCounts.set(name, (nameCounts.get(name) ?? 0) + 1);
+    const usedNames = new Set<string>();
+    const names = baseNames.map((baseName, i) => {
+        const suffix = source[i].fixtureIndex ?? i;
+        let name = (nameCounts.get(baseName) ?? 0) > 1 ? `${baseName}#${suffix}` : baseName;
+        if (usedNames.has(name)) {
+            let collision = 1;
+            while (usedNames.has(`${name}#${collision}`)) collision++;
+            name = `${name}#${collision}`;
         }
+        usedNames.add(name);
+        return name;
+    });
+    const nameByFixture = new Map<number, string>();
+    source.forEach((body, i) => {
+        if (body.fixtureIndex !== undefined) nameByFixture.set(body.fixtureIndex, names[i]);
+    });
+
+    const bodies = source.map((body, i) => {
+        const nativeBody = nativeBodyFor(body);
+        const nativeFixture = nativeFixtureFor(nativeBody, body.fixtureIndex, map);
+        return toBodyDef(body, i, names[i], nativeBody, nativeFixture);
     });
 
     // Map-mode default spawn resolution: pick blue/red-capable spawn points
@@ -399,7 +799,27 @@ export function normalizeMap(raw: unknown): MapDef {
         }
     }
 
-    // Cap zones: resolve fixtureIndex -> the unique named platform body.
+    // Cap zones: resolve fixtureIndex -> the unique named fixture alias.
+    // Cap-zone-referenced fixtures additionally get a fixture-unique friendly
+    // name (e.g. "Unnamed Shape#13") so find-by-name selects the actual
+    // platform rather than the first same-named fixture.
+    const capFixtureIndexes = new Set<number>(
+        (map.capZones || []).map(z => z.fixtureIndex).filter((x): x is number => typeof x === 'number'),
+    );
+    const capFriendlyNames = new Map<number, string>();
+    // Friendly renames apply only to the flat-export path (main-line render
+    // contract); structured-only maps keep the shape-less alias names authored
+    // by flattenNativeBodies, which names[] already deduplicates.
+    if (flatSource.length > 0) {
+        bodies.forEach((b, i) => {
+            const fxIdx = source[i]?.fixtureIndex;
+            if (fxIdx !== undefined && capFixtureIndexes.has(fxIdx) && !b.name.endsWith(`#${fxIdx}`)) {
+                const uniqueName = `${b.name}#${fxIdx}`;
+                b.name = uniqueName;
+                capFriendlyNames.set(fxIdx, uniqueName);
+            }
+        });
+    }
     const capZones = (map.capZones || []).map((zone, i) => {
         const fixtureName = zone.fixtureIndex !== undefined
             ? capFriendlyNames.get(zone.fixtureIndex) ?? nameByFixture.get(zone.fixtureIndex)
@@ -415,12 +835,21 @@ export function normalizeMap(raw: unknown): MapDef {
     });
 
     // Joints: the exporter stores body references as integer indices into
-    // physicsBodies; the engine resolves them by NAME via the body map. Map
-    // index -> name using the derived bodies[] (which carries the unique
-    // cap-zone names), keyed by the flat body's bodyIndex or array position.
+    // physicsBodies; the engine resolves them by NAME via the body map. Each
+    // native body may have several flat fixture aliases, so retain only the
+    // first alias for each bodyIndex. PhysicsEngine maps all aliases back to
+    // that one grouped Box2D body.
     const bodiesByName = new Map<number, string>();
-    renderSource.forEach((b, i) => {
-        if (b) bodiesByName.set(b.bodyIndex ?? i, bodies[i]?.name ?? b.name ?? `body_${i}`);
+    source.forEach((b, i) => {
+        const nativeBody = nativeBodyFor(b);
+        // Key joints by the resolved native body index (where the engine
+        // actually groups fixtures) before the flat bodyIndex, so a flat
+        // bodyIndex that hits a null slot or belongs to a different native
+        // body cannot mis-wire the joint to the wrong grouped body.
+        const bodyIndex = nativeBody?.index
+            ?? b.bodyIndex
+            ?? i;
+        if (!bodiesByName.has(bodyIndex)) bodiesByName.set(bodyIndex, bodies[i]?.name ?? names[i]);
     });
     // The exporter (Webscripts/mapexporter.js) emits a literal `null` for any
     // joint it cannot export to keep raw-array indices stable, so `physicsJoints`

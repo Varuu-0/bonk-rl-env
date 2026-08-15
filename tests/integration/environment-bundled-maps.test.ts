@@ -55,9 +55,15 @@ describe('bundled maps never corrupt episodes with NaN physics (#271)', () => {
                 lastObs = { playerX: o.playerX, playerY: o.playerY };
             }
             // The disc must be *moving* (gravity applies), not frozen at spawn.
+            // Compound platforms and their corrected joints may hold the disc
+            // close to its spawn point, so use its finite velocity as the
+            // movement signal instead of relying on a one-pixel displacement.
+            const finalState = (env as any).physics.getPlayerState(0);
             const moved =
-                Math.abs(lastObs!.playerX - firstObs!.playerX) > 1 ||
-                Math.abs(lastObs!.playerY - firstObs!.playerY) > 1;
+                Math.abs(lastObs!.playerX - firstObs!.playerX) > 0.1 ||
+                Math.abs(lastObs!.playerY - firstObs!.playerY) > 0.1 ||
+                Math.abs(finalState.velX) > 0.1 ||
+                Math.abs(finalState.velY) > 0.1;
             expect(moved).toBe(true);
         } finally {
             env.close();
