@@ -194,7 +194,9 @@ function print(text: string, color?: string): void {
 /**
  * Kill a shell-spawned process tree. `child.kill()` on a `shell: true` spawn
  * only terminates the shell wrapper and orphans the npx/tsx benchmark
- * grandchildren; on Windows, taskkill /T tears the whole tree down.
+ * grandchildren, so the children are spawned `detached` on POSIX (their own
+ * process group, signalled here via the negative pid) and Windows uses
+ * `taskkill /T` to tear the whole tree down.
  */
 function killTree(child: ChildProcess): void {
   if (!child.pid) return;
@@ -209,7 +211,7 @@ function killTree(child: ChildProcess): void {
     }
   } else {
     try {
-      child.kill('SIGKILL');
+      process.kill(-child.pid, 'SIGKILL');
     } catch {
       /* best effort */
     }
@@ -284,6 +286,7 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
       shell: true,
       cwd: ROOT,
       windowsHide: true,
+      detached: process.platform !== 'win32',
     });
 
     child.stdout.on('data', (chunk: Buffer) => {
@@ -475,6 +478,7 @@ function runLayer7(verbose: boolean): Promise<Layer7Verdict> {
       shell: true,
       cwd: ROOT,
       windowsHide: true,
+      detached: process.platform !== 'win32',
     });
 
     let rawOutput = '';

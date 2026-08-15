@@ -188,6 +188,7 @@ function spawnCapture(
       stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
       env: { ...process.env, FORCE_COLOR: '1' },
+      detached: process.platform !== 'win32',
     });
 
     // Live elapsed spinner for captured checks (TTY only) so long-running
@@ -262,6 +263,7 @@ function spawnInherit(command: string, args: string[], timeoutMs: number): Promi
       stdio: 'inherit',
       windowsHide: true,
       env: { ...process.env, FORCE_COLOR: '1' },
+      detached: process.platform !== 'win32',
     });
 
     const timeout = setTimeout(() => {
@@ -303,8 +305,10 @@ function toolAvailable(command: string, args: string[]): boolean {
 
 /**
  * Kill a shell-spawned process tree. `child.kill()` on a `shell: true` spawn
- * only terminates the shell wrapper and orphans npx/tsx/vitest grandchildren;
- * on Windows, taskkill /T tears the whole tree down.
+ * only terminates the shell wrapper and orphans npx/tsx/vitest grandchildren,
+ * so the children are spawned `detached` on POSIX (their own process group,
+ * signalled here via the negative pid) and Windows uses `taskkill /T` to
+ * tear the whole tree down.
  */
 function killTree(child: ChildProcess): void {
   if (!child.pid) return;
@@ -319,7 +323,7 @@ function killTree(child: ChildProcess): void {
     }
   } else {
     try {
-      child.kill('SIGKILL');
+      process.kill(-child.pid, 'SIGKILL');
     } catch {
       /* best effort */
     }
