@@ -41,7 +41,7 @@ elapsed = time.time() - start
 print(f"  send+recv total: {elapsed:.3f}s = {STEPS/elapsed:.0f} SPS")
 
 # Phase 2: Detailed breakdown of ONE step
-print(f"\n=== Phase 2: Detailed single step breakdown ===")
+print("\n=== Phase 2: Detailed single step breakdown ===")
 
 # 2a: send_json
 t0 = time.time()
@@ -99,7 +99,7 @@ print(f"  array building:  {arrays_ms:.2f} ms")
 print(f"  TOTAL:           {total_ms:.2f} ms ({1000/total_ms:.0f} SPS)")
 
 # Phase 3: Run 100 steps with timing
-print(f"\n=== Phase 3: 100 steps with per-step timing ===")
+print("\n=== Phase 3: 100 steps with per-step timing ===")
 step_times = []
 for i in range(100):
     t0 = time.time()
@@ -139,7 +139,7 @@ print(f"  Max: {step_times.max():.2f} ms")
 print(f"  SPS: {1000/step_times.mean():.0f}")
 
 # Phase 4: recv_json timing only (no processing)
-print(f"\n=== Phase 4: Raw send/recv timing (no response processing) ===")
+print("\n=== Phase 4: Raw send/recv timing (no response processing) ===")
 recv_times = []
 for i in range(100):
     t0 = time.time()

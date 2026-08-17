@@ -57,12 +57,13 @@ extraction, reward calculation, and action decoding. No worker threads or IPC.
 Tests both default and frame-skip configurations.
 
 ### Layer 4 — Worker Pool (`layer4-worker-pool.ts`)
-Tests `WorkerPool.step()` with SharedArrayBuffer IPC across exactly 1, 2, 4, and
-8 workers, with one environment per worker. Each worker count runs in a single
-reused pool; eight balanced-order samples of 2,000 steps report per-step median,
-P25, and P75 latency plus aggregate environment throughput. A seeded
+Tests `WorkerPool.step()` with SharedArrayBuffer IPC across exactly 1, 2, 4, 8,
+and 16 workers, with one environment per worker. Each worker count runs in a
+single reused pool; ten balanced-order samples of 2,000 steps report per-step
+median, P25, and P75 latency plus aggregate environment throughput. A seeded
 deterministic pseudo-random action workload keeps runs reproducible, and worker
-startup and warmup are excluded from measurements.
+startup and warmup are excluded from measurements. The N=16 aggregate is the
+SLA regression metric enforced by `npm run ci:bench`.
 
 ### Layer 5 — Memory (`layer5-memory.ts`)
 Runs 50K steps and monitors heap growth, peak RSS, and GC effectiveness.

@@ -1,12 +1,16 @@
 #!/usr/bin/env bash
 # DSP pre-commit hook — deterministic consistency check
+# + Local CI/CD Engine Tier 1 (staged-file prettier, webscript IDs, ruff,
+#   tsc --noEmit, unit tests).
 set -euo pipefail
 
 DSP_MODE="${DSP_PRECOMMIT_MODE:-warn}"
 DSP_ROOT="$(git rev-parse --show-toplevel)"
 
+DSP_CLI=""
 for candidate in \
   "$DSP_ROOT/dsp-cli.py" \
+  "$DSP_ROOT/scripts/dsp-cli.py" \
   "$DSP_ROOT/.cursor/skills/data-structure-protocol/scripts/dsp-cli.py" \
   "$DSP_ROOT/.claude/skills/data-structure-protocol/scripts/dsp-cli.py" \
   "$DSP_ROOT/.codex/skills/data-structure-protocol/scripts/dsp-cli.py" \
@@ -17,90 +21,102 @@ for candidate in \
   fi
 done
 
-DSP_CLI="${DSP_CLI:-}"
-if [[ -z "$DSP_CLI" ]]; then
-  echo "[DSP] CLI not found. Skipping DSP check."
-  exit 0
+DSP_AVAILABLE=0
+if [[ -n "$DSP_CLI" && -d "$DSP_ROOT/.dsp" ]]; then
+  DSP_AVAILABLE=1
 fi
 
-if [[ ! -d "$DSP_ROOT/.dsp" ]]; then
-  exit 0
-fi
+if [[ "$DSP_AVAILABLE" == "1" ]]; then
+  SKIP_PATTERNS="${DSP_SKIP_PATTERNS:-*.md,*.txt,*.json,*.yml,*.yaml,*.lock,*.log}"
 
-SKIP_PATTERNS="${DSP_SKIP_PATTERNS:-*.md,*.txt,*.json,*.yml,*.yaml,*.lock,*.log}"
+  WARNINGS=()
+  ERRORS=()
 
-WARNINGS=()
-ERRORS=()
+  should_track() {
+    local file="$1"
+    for pattern in ${SKIP_PATTERNS//,/ }; do
+      case "$file" in $pattern) return 1 ;; esac
+    done
+    [[ "$file" == *.ts || "$file" == *.tsx || "$file" == *.js || "$file" == *.jsx || \
+       "$file" == *.py || "$file" == *.go || "$file" == *.rs || "$file" == *.java || \
+       "$file" == *.rb || "$file" == *.vue || "$file" == *.svelte ]]
+  }
 
-should_track() {
-  local file="$1"
-  for pattern in ${SKIP_PATTERNS//,/ }; do
-    case "$file" in $pattern) return 1 ;; esac
-  done
-  [[ "$file" == *.ts || "$file" == *.tsx || "$file" == *.js || "$file" == *.jsx || \
-     "$file" == *.py || "$file" == *.go || "$file" == *.rs || "$file" == *.java || \
-     "$file" == *.rb || "$file" == *.vue || "$file" == *.svelte ]]
-}
-
-while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-  if should_track "$file"; then
-    result=$($DSP_CLI --root "$DSP_ROOT" find-by-source "$file" 2>/dev/null || true)
-    if [[ -z "$result" ]]; then
-      WARNINGS+=("  NEW/MODIFIED file not in DSP: $file")
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    if should_track "$file"; then
+      result=$($DSP_CLI --root "$DSP_ROOT" find-by-source "$file" 2>/dev/null || true)
+      if [[ -z "$result" ]]; then
+        WARNINGS+=("  NEW/MODIFIED file not in DSP: $file")
+      fi
     fi
+  done < <(git diff --cached --name-only --diff-filter=ACMR)
+
+  while IFS= read -r file; do
+    [[ -z "$file" ]] && continue
+    result=$($DSP_CLI --root "$DSP_ROOT" find-by-source "$file" 2>/dev/null || true)
+    if [[ -n "$result" ]]; then
+      ERRORS+=("  DELETED file still in DSP: $file")
+    fi
+  done < <(git diff --cached --name-only --diff-filter=D)
+
+  orphans=$($DSP_CLI --root "$DSP_ROOT" get-orphans 2>/dev/null || true)
+  if [[ -n "$orphans" && "$orphans" != *"No orphans"* && "$orphans" != *"0 orphan"* ]]; then
+    WARNINGS+=("  Orphaned DSP entities detected. Run: dsp-cli get-orphans")
   fi
-done < <(git diff --cached --name-only --diff-filter=ACMR)
 
-while IFS= read -r file; do
-  [[ -z "$file" ]] && continue
-  result=$($DSP_CLI --root "$DSP_ROOT" find-by-source "$file" 2>/dev/null || true)
-  if [[ -n "$result" ]]; then
-    ERRORS+=("  DELETED file still in DSP: $file")
-  fi
-done < <(git diff --cached --name-only --diff-filter=D)
+  if [[ ${#ERRORS[@]} -gt 0 || ${#WARNINGS[@]} -gt 0 ]]; then
+    echo ""
+    echo "[DSP] Consistency check results:"
+    echo ""
 
-orphans=$($DSP_CLI --root "$DSP_ROOT" get-orphans 2>/dev/null || true)
-if [[ -n "$orphans" && "$orphans" != *"No orphans"* && "$orphans" != *"0 orphan"* ]]; then
-  WARNINGS+=("  Orphaned DSP entities detected. Run: dsp-cli get-orphans")
-fi
+    if [[ ${#ERRORS[@]} -gt 0 ]]; then
+      echo "ERRORS (DSP graph is inconsistent):"
+      printf '%s\n' "${ERRORS[@]}"
+      echo ""
+    fi
 
-if [[ ${#ERRORS[@]} -gt 0 || ${#WARNINGS[@]} -gt 0 ]]; then
-  echo ""
-  echo "[DSP] Consistency check results:"
-  echo ""
+    if [[ ${#WARNINGS[@]} -gt 0 ]]; then
+      echo "WARNINGS (DSP may need updating):"
+      printf '%s\n' "${WARNINGS[@]}"
+      echo ""
+    fi
 
-  if [[ ${#ERRORS[@]} -gt 0 ]]; then
-    echo "ERRORS (DSP graph is inconsistent):"
-    printf '%s\n' "${ERRORS[@]}"
+    if [[ "$DSP_MODE" == "block" && ${#ERRORS[@]} -gt 0 ]]; then
+      echo "Commit blocked. Fix DSP errors first, or set DSP_PRECOMMIT_MODE=warn to allow."
+      exit 1
+    fi
+
+    echo "Tip: Run './hooks/dsp-agent-review.sh' for deep agent-assisted review."
     echo ""
   fi
-
-  if [[ ${#WARNINGS[@]} -gt 0 ]]; then
-    echo "WARNINGS (DSP may need updating):"
-    printf '%s\n' "${WARNINGS[@]}"
-    echo ""
-  fi
-
-  if [[ "$DSP_MODE" == "block" && ${#ERRORS[@]} -gt 0 ]]; then
-    echo "Commit blocked. Fix DSP errors first, or set DSP_PRECOMMIT_MODE=warn to allow."
-    exit 1
-  fi
-
-  echo "Tip: Run './hooks/dsp-agent-review.sh' for deep agent-assisted review."
-  echo ""
 fi
 
-# Run fast unit test subset
-echo "Running fast test subset..."
-npx vitest run tests/unit/ --reporter=dot 2>/dev/null
-if [ $? -ne 0 ]; then
-  echo ""
-  echo "WARNING: Unit tests failed. Commit anyway? (y/n)"
-  read -r answer
-  if [ "$answer" != "y" ]; then
-    exit 1
-  fi
+# ─── Local CI/CD Engine — Tier 1 (pre-commit quick) ────────────────────────
+# Staged-file prettier check, webscript ID validation, ruff, tsc --noEmit,
+# and the unit test suites. Bypass with --no-verify or LOCAL_CI_SKIP=1.
+if [[ "${LOCAL_CI_SKIP:-0}" == "1" ]]; then
+  echo "[LocalCI] LOCAL_CI_SKIP=1 — skipping Tier 1 quick checks."
+  exit 0
 fi
 
-exit 0
+if ! command -v npm >/dev/null 2>&1; then
+  echo "[LocalCI] npm not found on PATH — skipping Tier 1 quick checks."
+  exit 0
+fi
+
+if [[ ! -f "$DSP_ROOT/package.json" ]]; then
+  exit 0
+fi
+
+echo ""
+echo "[LocalCI] Running Tier 1 (quick) checks..."
+if npm run ci:quick; then
+  echo "[LocalCI] Tier 1 checks passed."
+  exit 0
+fi
+
+echo ""
+echo "[LocalCI] Tier 1 checks failed. Fix the issues above (or run 'npm run ci -- --fix'),"
+echo "          then retry the commit. Bypass with 'git commit --no-verify'."
+exit 1
