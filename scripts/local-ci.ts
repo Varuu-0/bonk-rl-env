@@ -130,6 +130,10 @@ function parseArgs(argv: string[]): Options {
       case '--layer7':
         opts.extraArgs.push('--layer7');
         break;
+      case '--help':
+      case '-h':
+      case '--list':
+        break;
       default:
         console.warn(colors.yellow + `  [local-ci] ignoring unknown flag: ${arg}` + colors.reset);
         break;
@@ -470,11 +474,27 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
     };
   }
 
-  const args = ['prettier', opts.fix ? '--write' : '--check', '--config', '.prettierrc', ...files];
-  const result = await spawnCapture('npx', args, 180_000, opts.verbose, 'prettier');
+  const CHUNK_SIZE = 50;
+  let combinedOutput = '';
+  let failed = false;
+  let timedOut = false;
+
+  for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+    const chunk = files.slice(i, i + CHUNK_SIZE);
+    const args = ['prettier', opts.fix ? '--write' : '--check', '--config', '.prettierrc', ...chunk];
+    const result = await spawnCapture('npx', args, 180_000, opts.verbose, 'prettier');
+    combinedOutput += (combinedOutput ? '\n' : '') + result.output;
+    if (result.timedOut) {
+      timedOut = true;
+      break;
+    }
+    if (result.exitCode !== 0) {
+      failed = true;
+    }
+  }
   const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
 
-  if (result.timedOut) {
+  if (timedOut) {
     return {
       id: 'prettier',
       domain: 'static',
@@ -484,14 +504,14 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
       detail: 'timed out after 180s',
     };
   }
-  if (result.exitCode !== 0) {
+  if (failed) {
     return {
       id: 'prettier',
       domain: 'static',
       label: `prettier (${files.length} files)`,
       status: 'FAIL',
       durationMs,
-      detail: `run 'npm run ci -- --fix' to auto-format\n${tail(result.output, 30)}`,
+      detail: `run 'npm run ci -- --fix' to auto-format\n${tail(combinedOutput, 30)}`,
     };
   }
   return { id: 'prettier', domain: 'static', label: `prettier (${files.length} files)`, status: 'PASS', durationMs };
@@ -1029,18 +1049,10 @@ async function runAll(opts: Options): Promise<number> {
   const results: CheckResult[] = [];
   const domainFiles: DomainFiles[] = [];
   const totalStarted = process.hrtime.bigint();
-  let aborted = false;
-
-  const onSigint = (): void => {
-    aborted = true;
-    process.stderr.write('\n\n\u26A0 Aborted by user (SIGINT).\n');
-    process.exit(130);
-  };
-  process.on('SIGINT', onSigint);
 
   printHeader(opts);
 
-  for (let i = 0; i < checks.length && !aborted; i++) {
+  for (let i = 0; i < checks.length && interruptExitCode === null; i++) {
     const task = checks[i];
     console.log(colors.bright + `  \u2192 [${i + 1}/${checks.length}] ${task.label} ...` + colors.reset);
     const outcome = await task.fn();
@@ -1055,9 +1067,7 @@ async function runAll(opts: Options): Promise<number> {
     console.log();
   }
 
-  process.removeListener('SIGINT', onSigint);
-
-  if (!aborted) {
+  if (interruptExitCode === null) {
     printSummary(results, domainFiles, Number(process.hrtime.bigint() - totalStarted) / 1e6);
   }
 

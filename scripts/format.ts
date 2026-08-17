@@ -102,18 +102,25 @@ function main(): void {
     process.exit(0);
   }
 
-  console.log(`${write ? 'Formatting' : 'Checking'} ${files.length} ${scopeName} ...`);
+  const CHUNK_SIZE = 50;
+  let anyFailed = false;
 
-  const args = ['prettier', write ? '--write' : '--check', '--config', '.prettierrc', ...files];
-  const result = spawnSync('npx', args, {
-    cwd: ROOT,
-    shell: true,
-    stdio: 'inherit',
-    windowsHide: true,
-    env: { ...process.env, FORCE_COLOR: '1' },
-  });
+  for (let i = 0; i < files.length; i += CHUNK_SIZE) {
+    const chunk = files.slice(i, i + CHUNK_SIZE);
+    const args = ['prettier', write ? '--write' : '--check', '--config', '.prettierrc', ...chunk];
+    const result = spawnSync('npx', args, {
+      cwd: ROOT,
+      shell: true,
+      stdio: 'inherit',
+      windowsHide: true,
+      env: { ...process.env, FORCE_COLOR: '1' },
+    });
+    if (result.status !== 0) {
+      anyFailed = true;
+    }
+  }
 
-  if (result.status !== 0) {
+  if (anyFailed) {
     console.log('');
     console.log(
       write
