@@ -499,7 +499,14 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
       const lines = result.output
         .trim()
         .split(/\r?\n/)
-        .filter((line) => line.startsWith('[warn]') || line.includes('Code style issues found'));
+        .filter((line) => {
+          const stripped = line.replace(/\x1b\[[0-9;]*m/g, '').trim();
+          return (
+            stripped.startsWith('[warn]') ||
+            stripped.startsWith('[error]') ||
+            stripped.includes('Code style issues found')
+          );
+        });
       if (lines.length > 0) {
         failedLines.push(...lines);
       } else {
