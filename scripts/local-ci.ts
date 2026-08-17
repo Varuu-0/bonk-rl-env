@@ -90,6 +90,8 @@ interface Options {
   fix: boolean;
   verbose: boolean;
   noPython: boolean;
+  help: boolean;
+  list: boolean;
   extraArgs: string[];
 }
 
@@ -99,6 +101,8 @@ function parseArgs(argv: string[]): Options {
     fix: false,
     verbose: false,
     noPython: false,
+    help: false,
+    list: false,
     extraArgs: [],
   };
 
@@ -132,7 +136,10 @@ function parseArgs(argv: string[]): Options {
         break;
       case '--help':
       case '-h':
+        opts.help = true;
+        break;
       case '--list':
+        opts.list = true;
         break;
       default:
         console.warn(colors.yellow + `  [local-ci] ignoring unknown flag: ${arg}` + colors.reset);
@@ -475,7 +482,7 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
   }
 
   const CHUNK_SIZE = 50;
-  let combinedOutput = '';
+  const failedLines: string[] = [];
   let failed = false;
   let timedOut = false;
 
@@ -483,13 +490,21 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
     const chunk = files.slice(i, i + CHUNK_SIZE);
     const args = ['prettier', opts.fix ? '--write' : '--check', '--config', '.prettierrc', ...chunk];
     const result = await spawnCapture('npx', args, 180_000, opts.verbose, 'prettier');
-    combinedOutput += (combinedOutput ? '\n' : '') + result.output;
     if (result.timedOut) {
       timedOut = true;
       break;
     }
     if (result.exitCode !== 0) {
       failed = true;
+      const lines = result.output
+        .trim()
+        .split(/\r?\n/)
+        .filter((line) => line.startsWith('[warn]') || line.includes('Code style issues found'));
+      if (lines.length > 0) {
+        failedLines.push(...lines);
+      } else {
+        failedLines.push(tail(result.output, 10));
+      }
     }
   }
   const durationMs = Number(process.hrtime.bigint() - started) / 1e6;
@@ -505,13 +520,14 @@ async function checkPrettier(opts: Options): Promise<CheckResult> {
     };
   }
   if (failed) {
+    const detailOutput = failedLines.length > 0 ? failedLines.slice(-30).join('\n') : 'formatting issues detected';
     return {
       id: 'prettier',
       domain: 'static',
       label: `prettier (${files.length} files)`,
       status: 'FAIL',
       durationMs,
-      detail: `run 'npm run ci -- --fix' to auto-format\n${tail(combinedOutput, 30)}`,
+      detail: `run 'npm run ci -- --fix' to auto-format\n${detailOutput}`,
     };
   }
   return { id: 'prettier', domain: 'static', label: `prettier (${files.length} files)`, status: 'PASS', durationMs };
@@ -1182,13 +1198,14 @@ function printSummary(results: CheckResult[], domainFiles: DomainFiles[], wallMs
 async function main(): Promise<void> {
   installSignalHandlers();
   const argv = process.argv.slice(2);
+  const opts = parseArgs(argv);
 
-  if (argv.includes('--help') || argv.includes('-h')) {
+  if (opts.help) {
     printHelp();
     process.exit(0);
   }
 
-  if (argv.includes('--list')) {
+  if (opts.list) {
     console.log('Checks and their tiers:');
     console.log('  [quick]     prettier (staged files)');
     console.log('  [quick]     webscript DOM ID validation');
@@ -1203,7 +1220,6 @@ async function main(): Promise<void> {
     process.exit(0);
   }
 
-  const opts = parseArgs(argv);
   const exitCode = await runAll(opts);
   // A termination signal that was handled mid-run takes precedence over the
   // tier verdict: the shell/CI must see 130/143, not 0/1.
