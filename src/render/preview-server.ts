@@ -32,8 +32,10 @@ interface SseFrame {
  * Per-client SSE delivery state. When a client stops draining the socket
  * (`res.write()` returns false / `writableNeedDrain`), subsequent frames are
  * dropped for that client instead of buffered indefinitely; `backedUpSince`
- * starts a bounded eviction clock so a client that never drains is severed
- * rather than retained forever.
+ * arms a bounded eviction clock so a persistently stalled client is severed
+ * rather than retained forever. The clock is monotonic: a `drain` alone never
+ * re-arms it — only a fully flushed write (`writableLength === 0` while
+ * flowing) counts as true recovery and clears it.
  */
 interface SseClientState {
   backedUp: boolean;
@@ -119,8 +121,9 @@ function broadcast(event: string, payload: unknown): void {
     }
     if (state.backedUp) {
       // Not draining: drop this frame rather than buffer it. The client
-      // reconnects to `latestFrame`, so skipping is safe; evict after the
-      // bounded grace period so a stalled client is never retained forever.
+      // reconnects to `latestFrame`, so skipping is safe; evict once the
+      // monotonic deadline elapses so a stalled client is never retained
+      // forever.
       if (now - (state.backedUpSince ?? now) >= SSE_STALL_EVICT_MS) {
         sseClients.delete(res);
         res.destroy();
@@ -132,7 +135,11 @@ function broadcast(event: string, payload: unknown): void {
     // of letting Node's write buffer grow without bound.
     if (!sseSend(res, event, payload) || res.writableNeedDrain) {
       state.backedUp = true;
-      state.backedUpSince = now;
+      if (state.backedUpSince === null) state.backedUpSince = now;
+    } else if (res.writableLength === 0) {
+      // True recovery: the write flushed end-to-end while flowing, so a
+      // previous stall is over — clear the eviction deadline.
+      state.backedUpSince = null;
     }
   }
 }
@@ -142,10 +149,10 @@ function registerSseClient(res: http.ServerResponse, req: http.IncomingMessage):
   sseClients.set(res, state);
   const onDrain = (): void => {
     const current = sseClients.get(res);
-    if (current) {
-      current.backedUp = false;
-      current.backedUpSince = null;
-    }
+    // A drain only means the socket became writable again — the client may
+    // still be trailing, so it must NOT re-arm the eviction deadline.
+    // Recovery is confirmed in broadcast when a write fully flushes.
+    if (current) current.backedUp = false;
   };
   res.on('drain', onDrain);
   req.on('close', () => {
