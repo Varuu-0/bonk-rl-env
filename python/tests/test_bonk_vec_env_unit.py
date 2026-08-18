@@ -1,5 +1,6 @@
 from collections import UserDict
 from collections.abc import Mapping
+from pathlib import Path
 from unittest.mock import MagicMock
 import json
 import os
@@ -831,3 +832,17 @@ def test_num_opponents_non_finite_defaults_to_one_like_backend(
     assert original["num_opponents"] is non_finite
 
     env.close()
+
+
+def test_max_frame_skip_matches_backend_ts_constant():
+    """#393 follow-up: the Python client's MAX_FRAME_SKIP must stay pinned to
+    the backend's exported MAX_FRAME_SKIP (src/core/environment.ts), the single
+    source of truth for the validated [1, MAX_FRAME_SKIP] window, so the two
+    languages cannot drift (review suggestion on PR #396)."""
+    ts_source = Path(__file__).resolve().parents[2] / "src" / "core" / "environment.ts"
+    match = re.search(
+        r"export const MAX_FRAME_SKIP = (\d+);",
+        ts_source.read_text(encoding="utf-8"),
+    )
+    assert match is not None, f"exported MAX_FRAME_SKIP not found in {ts_source}"
+    assert int(match.group(1)) == bonk_env.MAX_FRAME_SKIP

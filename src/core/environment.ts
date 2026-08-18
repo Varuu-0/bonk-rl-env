@@ -37,8 +37,11 @@ const MAX_TICKS_DEFAULT = 30 * TPS;
  * Upper bound of the validated frame-skip window, mirroring the Python
  * client's MAX_FRAME_SKIP (python/envs/bonk_env.py) so the backend never
  * accepts a window that client would reject when coalescing terminal holds.
+ * Exported as the single source of truth for the [1, MAX_FRAME_SKIP] contract
+ * so tests (unit, IPC, and the Python parity test) reference the same value
+ * instead of hardcoded literals (PR #396 follow-up).
  */
-const MAX_FRAME_SKIP = 100;
+export const MAX_FRAME_SKIP = 100;
 
 // SPAWN_POSITIONS removed, now read dynamically from map
 

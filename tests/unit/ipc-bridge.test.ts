@@ -8,7 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { WorkerPool, MAX_NUM_ENVS } from '../../src/core/worker-pool';
-import { BonkEnvironment } from '../../src/core/environment';
+import { BonkEnvironment, MAX_FRAME_SKIP } from '../../src/core/environment';
 import { resetConfig } from '../../src/config/config-loader';
 
 describe('IpcBridge handleRequest', () => {
@@ -319,7 +319,7 @@ describe('IpcBridge handleRequest', () => {
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
       expect(response.status).toBe('error');
-      expect(response.error).toContain('Invalid frameSkip 0: expected an integer in [1, 100]');
+      expect(response.error).toContain(`Invalid frameSkip 0: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
     });
 
     it('rejects init with a negative frame_skip (#393)', async () => {
@@ -336,7 +336,7 @@ describe('IpcBridge handleRequest', () => {
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
       expect(response.status).toBe('error');
-      expect(response.error).toContain('Invalid frameSkip -2: expected an integer in [1, 100]');
+      expect(response.error).toContain(`Invalid frameSkip -2: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
     });
 
     it('rejects init with a fractional frame_skip (#393)', async () => {
@@ -353,7 +353,7 @@ describe('IpcBridge handleRequest', () => {
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
       expect(response.status).toBe('error');
-      expect(response.error).toContain('Invalid frameSkip 2.5: expected an integer in [1, 100]');
+      expect(response.error).toContain(`Invalid frameSkip 2.5: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
     });
 
     it('rejects init with a frame_skip past the cap (#393)', async () => {
@@ -364,13 +364,15 @@ describe('IpcBridge handleRequest', () => {
           command: 'init',
           numEnvs: 1,
           useSharedMemory: false,
-          config: { frame_skip: 1000 },
+          config: { frame_skip: MAX_FRAME_SKIP * 10 },
         }),
       );
       expect(sentMessages).toHaveLength(1);
       const response = JSON.parse(sentMessages[0]);
       expect(response.status).toBe('error');
-      expect(response.error).toContain('Invalid frameSkip 1000: expected an integer in [1, 100]');
+      expect(response.error).toContain(
+        `Invalid frameSkip ${MAX_FRAME_SKIP * 10}: expected an integer in [1, ${MAX_FRAME_SKIP}]`,
+      );
     });
 
     it('accepts init with frame_skip at the MAX_FRAME_SKIP boundary (#393)', async () => {
@@ -381,7 +383,7 @@ describe('IpcBridge handleRequest', () => {
           command: 'init',
           numEnvs: 1,
           useSharedMemory: false,
-          config: { frame_skip: 100, maxTicks: 50 },
+          config: { frame_skip: MAX_FRAME_SKIP, maxTicks: 50 },
         }),
       );
       expect(sentMessages).toHaveLength(1);
