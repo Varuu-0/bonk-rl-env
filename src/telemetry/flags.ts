@@ -234,12 +234,54 @@ export function parseFlags(): TelemetryFlags {
 }
 
 /**
- * Check if any telemetry flags are set.
+ * Check if any telemetry activation is requested.
  * Used for fast-path optimization.
+ *
+ * Mirrors the CLI + env activation surface that parseFlags() +
+ * applyEnvOverrides() resolve inside initialize(), so workers and embedded
+ * consumers — which never call initialize() and never load config.json —
+ * honor MANIFOLD_PROFILE / MANIFOLD_DEBUG / MANIFOLD_TELEMETRY the same way
+ * the standalone server does on its CLI/env path (issue #389):
+ * - The explicit MANIFOLD_TELEMETRY master switch wins over everything,
+ *   including argv flags, exactly like applyEnvOverrides().
+ * - A valid MANIFOLD_PROFILE / MANIFOLD_DEBUG selection implies telemetry,
+ *   exactly like the equivalent --profile/--debug CLI flags.
+ * The config-file layer (config telemetry.enabled, reportIntervalMs, ...) is
+ * an initialize()-path concern and is intentionally not consulted here.
  *
  * @returns true if any telemetry is enabled
  */
 export function isAnyTelemetryEnabled(): boolean {
+  // Environment activation is evaluated first so an explicit master switch
+  // always wins over argv, matching the initialize() pipeline where env
+  // overrides CLI flags. MANIFOLD_TELEMETRY is matched case-insensitively,
+  // exactly like config-loader.ts, so uppercase values (TRUE/NO/...) mean the
+  // same thing on the server path and on this fallback path.
+  const envTelemetry = process.env.MANIFOLD_TELEMETRY;
+  if (envTelemetry !== undefined) {
+    const telemetryValue = envTelemetry.toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
+      return true;
+    }
+    if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
+      return false;
+    }
+  }
+
+  // Selecting a profile level implies telemetry, exactly like the CLI
+  // --profile/-l flags in parseFlags() (issue #385).
+  const envProfile = process.env.MANIFOLD_PROFILE;
+  if (envProfile === 'minimal' || envProfile === 'standard' || envProfile === 'detailed') {
+    return true;
+  }
+
+  // Selecting a debug level implies telemetry, exactly like the CLI
+  // --debug/-d flags in parseFlags() (issue #385).
+  const envDebug = process.env.MANIFOLD_DEBUG;
+  if (envDebug === 'none' || envDebug === 'error' || envDebug === 'verbose') {
+    return true;
+  }
+
   const argv = process.argv;
 
   for (let i = 2; i < argv.length; i++) {
@@ -317,13 +359,16 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
 
   // Check for environment variable: MANIFOLD_TELEMETRY. Applied after the
   // level selectors so an explicit master-switch value always wins over the
-  // implied activation above (issue #385).
+  // implied activation above (issue #385). Matched case-insensitively so it
+  // means the same thing here and in config-loader.ts (and therefore in the
+  // un-initialized fallback of isAnyTelemetryEnabled()).
   const envTelemetry = process.env.MANIFOLD_TELEMETRY;
   if (envTelemetry !== undefined) {
-    if (envTelemetry === 'true' || envTelemetry === '1' || envTelemetry === 'yes') {
+    const telemetryValue = envTelemetry.toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
       flags.enableTelemetry = true;
       _explicitFlagKeys.add('enableTelemetry');
-    } else if (envTelemetry === 'false' || envTelemetry === '0' || envTelemetry === 'no') {
+    } else if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
       flags.enableTelemetry = false;
       _explicitFlagKeys.add('enableTelemetry');
     }
