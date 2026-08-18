@@ -126,6 +126,39 @@ def test_transport_options_require_bounded_integer_values(kwargs):
         bonk_env.BonkVecEnv(**kwargs)
 
 
+@pytest.mark.parametrize(
+    "num_envs",
+    [
+        0,
+        -1,
+        1.5,
+        True,
+        "8",
+        2 ** 40,
+        bonk_env.MAX_NUM_ENVS + 1,
+    ],
+)
+def test_num_envs_validation_rejects_out_of_range_counts(monkeypatch, num_envs):
+    """num_envs must be an integer in [1, MAX_NUM_ENVS]; the client rejects
+    malformed counts before opening the socket or sending an init request."""
+    context_factory = MagicMock()
+    monkeypatch.setattr(bonk_env.zmq, "Context", context_factory)
+
+    with pytest.raises(
+        ValueError,
+        match=f"num_envs must be an integer between 1 and {bonk_env.MAX_NUM_ENVS}",
+    ):
+        bonk_env.BonkVecEnv(num_envs=num_envs)
+
+    context_factory.assert_not_called()
+
+
+def test_num_envs_accepts_the_maximum_bound(monkeypatch):
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=bonk_env.MAX_NUM_ENVS)
+    assert env.num_envs == bonk_env.MAX_NUM_ENVS
+    env.close()
+
+
 def test_reset_receive_timeout_invalidates_session_and_rejects_later_requests(monkeypatch):
     env, context, socket = _make_mocked_env(monkeypatch, timeout_ms=123, linger_ms=0)
     socket.recv_json.side_effect = zmq.Again()

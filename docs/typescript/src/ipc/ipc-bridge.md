@@ -73,8 +73,12 @@ Starts the IPC bridge and begins listening for requests.
 `numEnvs` must be a positive integer. Numeric strings consisting of decimal
 digits only (e.g. `"2"`) are coerced; fractional numbers, `0`/negatives,
 non-decimal strings, and missing values are rejected with
-`Invalid numEnvs: must be a positive integer` (#195). The same validation
-applies to `IpcBridge.initEnv`.
+`Invalid numEnvs: must be a positive integer` (#195). Values above
+`MAX_NUM_ENVS` (2048, see [Worker Pool](worker-pool.md)) are rejected up
+front with `Invalid numEnvs: expected an integer in [1, 2048], got <n>`
+(#390), so an oversized count can never hang the serial request loop for the
+message timeout or produce an opaque `Invalid array buffer length` RangeError.
+The same validation applies to `IpcBridge.initEnv`.
 
 #### Reset Request
 ```json

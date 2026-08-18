@@ -67,9 +67,15 @@ vi.mock('../../src/telemetry/telemetry-controller', () => ({
   isTelemetryEnabled: mocks.isTelemetryEnabled,
   getTelemetryController: () => mocks.controller,
 }));
-vi.mock('../../src/core/worker-pool', () => ({
-  WorkerPool: mocks.WorkerPool,
-}));
+vi.mock('../../src/core/worker-pool', async (importOriginal) => {
+  // MAX_NUM_ENVS must stay the real constant: ipc-bridge.ts compares
+  // numEnvs against it before touching the (mocked) pool.
+  const actual = await importOriginal<typeof import('../../src/core/worker-pool')>();
+  return {
+    WorkerPool: mocks.WorkerPool,
+    MAX_NUM_ENVS: actual.MAX_NUM_ENVS,
+  };
+});
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: mocks.getConfig,
   DEFAULT_MAX_CLIENT_SESSIONS: 32,

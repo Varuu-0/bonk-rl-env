@@ -202,7 +202,7 @@ vi.mock('../../src/config/config-loader', () => ({
   }),
 }));
 
-import { WorkerPool } from '../../src/core/worker-pool';
+import { WorkerPool, MAX_NUM_ENVS } from '../../src/core/worker-pool';
 
 describe('WorkerPool failure state', () => {
   let pool: WorkerPool | undefined;
@@ -588,6 +588,69 @@ describe('WorkerPool failure state', () => {
 
       await expect(pool.init(0, {}, true)).rejects.toThrow(
         'Invalid environment count: expected a positive integer, got 0',
+      );
+
+      await pool.init(1, {}, true);
+      expect((pool as any).state).toBe('ready');
+      const results = await pool.step([0]);
+      expect(results).toHaveLength(1);
+    });
+  });
+
+  describe('init upper-bound validation (#390)', () => {
+    it('rejects MAX_NUM_ENVS + 1 in message mode with a clear error and no workers', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(MAX_NUM_ENVS + 1, {}, false)).rejects.toThrow(
+        `Invalid environment count: expected an integer in [1, ${MAX_NUM_ENVS}], got ${MAX_NUM_ENVS + 1}`,
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects MAX_NUM_ENVS + 1 in shared-memory mode with the same error and no buffers', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(MAX_NUM_ENVS + 1, {}, true)).rejects.toThrow(
+        `Invalid environment count: expected an integer in [1, ${MAX_NUM_ENVS}], got ${MAX_NUM_ENVS + 1}`,
+      );
+
+      expect(fakes.FakeWorker.instances).toHaveLength(0);
+      expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(0);
+      expect((pool as any).state).toBe('idle');
+    });
+
+    it('rejects huge-but-integer counts in both transports with the bound, not a RangeError or timeout', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(1);
+        for (const oversized of [1e6, 2 ** 40]) {
+          const started = Date.now();
+          await expect(p.init(oversized, {}, useShared)).rejects.toThrow(
+            `Invalid environment count: expected an integer in [1, ${MAX_NUM_ENVS}], got ${oversized}`,
+          );
+          expect(Date.now() - started).toBeLessThan(1000);
+        }
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        expect((p as any).state).toBe('idle');
+        await p.close();
+      }
+    });
+
+    it('accepts exactly MAX_NUM_ENVS in shared mode and keeps the pool usable', async () => {
+      pool = new WorkerPool(1);
+      await pool.init(MAX_NUM_ENVS, {}, true);
+
+      expect((pool as any).state).toBe('ready');
+      const results = await pool.step(new Array(MAX_NUM_ENVS).fill(0));
+      expect(results).toHaveLength(MAX_NUM_ENVS);
+    });
+
+    it('keeps the pool usable after a rejected oversized init', async () => {
+      pool = new WorkerPool(1);
+
+      await expect(pool.init(MAX_NUM_ENVS + 1, {}, true)).rejects.toThrow(
+        'Invalid environment count',
       );
 
       await pool.init(1, {}, true);

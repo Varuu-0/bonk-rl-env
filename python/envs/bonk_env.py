@@ -16,6 +16,12 @@ MAX_RESET_SEED = 0xFFFFFFFE
 # far below this (default 1, tests 4); the cap only rejects malformed or
 # hostile values so a bogus server report cannot inflate the hold window.
 MAX_FRAME_SKIP = 100
+# Mirrors WorkerPool.MAX_NUM_ENVS (src/core/worker-pool.ts): the upper bound
+# on environments per pool. It keeps a valid request well inside the Node
+# side's auth of construction cost and shared-memory sizing (see the constant
+# rationale there, issue #390), and lets the client reject a misconfigured
+# count before any request is sent instead of waiting out the 30 s timeout.
+MAX_NUM_ENVS = 2048
 
 
 def _frame_skip_window(value):
@@ -80,6 +86,19 @@ class BonkVecEnv(VecEnv):
         ):
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
+
+        # Fail before the socket is created (and thus before any init request
+        # is sent): the Node side enforces the same [1, MAX_NUM_ENVS] range,
+        # but validating here surfaces the error without a server round trip.
+        if isinstance(num_envs, bool) or not isinstance(num_envs, Integral):
+            raise ValueError(
+                f"num_envs must be an integer between 1 and {MAX_NUM_ENVS}, got {num_envs}"
+            )
+        if not 1 <= num_envs <= MAX_NUM_ENVS:
+            raise ValueError(
+                f"num_envs must be an integer between 1 and {MAX_NUM_ENVS}, got {num_envs}"
+            )
+        num_envs = int(num_envs)
 
         self._timeout_ms = int(timeout_ms)
         self._close_timeout_ms = int(close_timeout_ms)

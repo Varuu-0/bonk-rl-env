@@ -14,7 +14,7 @@ Stable-baselines3-compatible environment wrappers that bridge the Node.js Bonk.i
 from envs.bonk_env import BonkVecEnv
 
 env = BonkVecEnv(
-    num_envs=8,       # Number of parallel environments
+    num_envs=8,       # Number of parallel environments (integer in [1, 2048])
     port=5555,        # ZMQ port (must match Node.js backend)
     config={          # Optional simulation config
         "frame_skip": 1,
