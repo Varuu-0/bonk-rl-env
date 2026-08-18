@@ -849,9 +849,14 @@ export class BonkEnvironment {
             };
         }
 
-        // If starting a new frame skip cycle, update the stored action
+        // If starting a new frame skip cycle, update the stored action. The
+        // decoded action must be snapshotted BY VALUE: decodeAction() returns
+        // object actions as the caller's own reference, and this.lastAction is
+        // re-applied on every intermediate tick of the hold window, so a
+        // caller that reuses/mutates one PlayerInput dict between step() calls
+        // would otherwise silently change the held inputs mid-cycle (#399).
         if (this.frameSkipTicks === 0) {
-            this.lastAction = this.decodeAction(action);
+            this.lastAction = { ...this.decodeAction(action) };
         }
 
         const aiInput = this.lastAction;
