@@ -33,13 +33,17 @@ function startServer(args: string[]): ServerHandle {
   let stdout = '';
   let stderr = '';
   let resolvePort!: (port: number) => void;
-  const portPromise = new Promise<number>((resolve) => { resolvePort = resolve; });
+  const portPromise = new Promise<number>((resolve) => {
+    resolvePort = resolve;
+  });
   child.stdout.on('data', (chunk: Buffer) => {
     stdout += chunk.toString();
     const match = /localhost:(\d+)/.exec(stdout);
     if (match) resolvePort(Number(match[1]));
   });
-  child.stderr.on('data', (chunk: Buffer) => { stderr += chunk.toString(); });
+  child.stderr.on('data', (chunk: Buffer) => {
+    stderr += chunk.toString();
+  });
   const exitPromise = new Promise<number | null>((resolve) => {
     child.on('exit', (code) => resolve(code));
   });
@@ -86,9 +90,11 @@ describe('preview-server SSE shutdown', () => {
     const server = startServer(['--ticks', '6', '--fps', '2', '--port', '0']);
     const port = await Promise.race([
       server.waitForPort(),
-      server.waitForExit().then((code) => Promise.reject(
-        new Error(`Server exited before listening (code ${code}): ${server.stderrText()}`),
-      )),
+      server
+        .waitForExit()
+        .then((code) =>
+          Promise.reject(new Error(`Server exited before listening (code ${code}): ${server.stderrText()}`)),
+        ),
     ]);
     const events = await readSseUntilDone(port);
 
@@ -107,4 +113,116 @@ describe('preview-server SSE shutdown', () => {
     expect(await server.waitForExit()).toBe(1);
     expect(server.stderrText()).toMatch(/expected a positive number/);
   }, 20000);
+});
+
+/** Parse a chunk of SSE bytes and return the number of complete `frame` events
+ *  it contains. */
+function countSseFrames(chunk: Uint8Array): number {
+  const text = new TextDecoder().decode(chunk);
+  return (text.match(/event:\s*frame/g) ?? []).length;
+}
+
+interface HealthySseClient {
+  frames: Array<{ tick: number; svg: string }>;
+  close(): void;
+}
+
+/** Open /frames and continuously drain it, recording every complete frame. */
+async function openSseReader(port: number): Promise<HealthySseClient> {
+  const res = await fetch(`http://127.0.0.1:${port}/frames`);
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  const frames: Array<{ tick: number; svg: string }> = [];
+  let buffer = '';
+  let closed = false;
+  const pump = async (): Promise<void> => {
+    while (!closed) {
+      const { done, value } = await reader.read();
+      if (done) return;
+      buffer += decoder.decode(value, { stream: true });
+      for (;;) {
+        const split = buffer.indexOf('\n\n');
+        if (split === -1) break;
+        const block = buffer.slice(0, split);
+        buffer = buffer.slice(split + 2);
+        const event = /^event:\s*(\S+)/m.exec(block)?.[1];
+        const data = /^data:\s*(.*)$/m.exec(block)?.[1] ?? '';
+        if (event === 'frame') {
+          try {
+            frames.push(JSON.parse(data) as { tick: number; svg: string });
+          } catch {
+            // Ignore malformed payloads.
+          }
+        }
+      }
+    }
+  };
+  pump().catch(() => {});
+  return {
+    frames,
+    close: () => {
+      closed = true;
+      void reader.cancel().catch(() => {});
+    },
+  };
+}
+
+describe('preview-server SSE backpressure', () => {
+  it('drops and then evicts a non-draining client while a healthy client still gets every frame', async () => {
+    const server = startServer(['--ticks', '0', '--fps', '100', '--port', '0']);
+    const port = await Promise.race([
+      server.waitForPort(),
+      server
+        .waitForExit()
+        .then((code) =>
+          Promise.reject(new Error(`Server exited before listening (code ${code}): ${server.stderrText()}`)),
+        ),
+    ]);
+
+    const healthy = await openSseReader(port);
+    await new Promise((r) => setTimeout(r, 400));
+    expect(healthy.frames.length).toBeGreaterThan(5);
+
+    // Non-draining client: connects to /frames but never reads the body,
+    // simulating a throttled/backgrounded tab.
+    const stalled = await fetch(`http://127.0.0.1:${port}/frames`);
+    const stalledReader = stalled.body!.getReader();
+
+    // Let the server stream for longer than the 5s eviction grace period
+    // before touching the stalled socket.
+    await new Promise((r) => setTimeout(r, 6200));
+
+    let stalledFrames = 0;
+    let stalledState: 'ended' | 'error' | 'open' = 'open';
+    try {
+      for (;;) {
+        const { done, value } = await stalledReader.read();
+        if (done) {
+          stalledState = 'ended';
+          break;
+        }
+        stalledFrames += countSseFrames(value);
+      }
+    } catch {
+      stalledState = 'error';
+    }
+
+    // The stalled connection must have been severed by the server rather than
+    // retained forever.
+    expect(stalledState).not.toBe('open');
+    // Frames were coalesced, not buffered without bound: the stalled client
+    // only ever saw the pre-backpressure burst, far fewer than the frames the
+    // healthy client received over the same window.
+    expect(stalledFrames).toBeLessThan(healthy.frames.length);
+
+    // A draining client keeps receiving frames with no gaps while the
+    // stalled client's frames are being dropped.
+    const ticks = healthy.frames.map((f) => f.tick);
+    expect(ticks.length).toBeGreaterThan(60);
+    for (let i = 1; i < ticks.length; i += 1) {
+      expect(ticks[i]).toBe(ticks[i - 1] + 1);
+    }
+
+    healthy.close();
+  }, 60000);
 });

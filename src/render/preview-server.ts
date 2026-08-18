@@ -28,7 +28,22 @@ interface SseFrame {
   svg: string;
 }
 
-const sseClients = new Set<http.ServerResponse>();
+/**
+ * Per-client SSE delivery state. When a client stops draining the socket
+ * (`res.write()` returns false / `writableNeedDrain`), subsequent frames are
+ * dropped for that client instead of buffered indefinitely; `backedUpSince`
+ * starts a bounded eviction clock so a client that never drains is severed
+ * rather than retained forever.
+ */
+interface SseClientState {
+  backedUp: boolean;
+  backedUpSince: number | null;
+}
+
+/** Max time a client may remain backed up before the server severs it. */
+const SSE_STALL_EVICT_MS = 5000;
+
+const sseClients = new Map<http.ServerResponse, SseClientState>();
 let latestFrame: SseFrame | null = null;
 
 const HTML_PAGE = `<!doctype html>
@@ -91,17 +106,57 @@ const HTML_PAGE = `<!doctype html>
 </body>
 </html>`;
 
-function sseSend(res: http.ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+function sseSend(res: http.ServerResponse, event: string, payload: unknown): boolean {
+  return res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function broadcast(event: string, payload: unknown): void {
-  for (const res of sseClients) sseSend(res, event, payload);
+  const now = Date.now();
+  for (const [res, state] of sseClients) {
+    if (!res.writable || res.writableEnded || res.destroyed) {
+      sseClients.delete(res);
+      continue;
+    }
+    if (state.backedUp) {
+      // Not draining: drop this frame rather than buffer it. The client
+      // reconnects to `latestFrame`, so skipping is safe; evict after the
+      // bounded grace period so a stalled client is never retained forever.
+      if (now - (state.backedUpSince ?? now) >= SSE_STALL_EVICT_MS) {
+        sseClients.delete(res);
+        res.destroy();
+      }
+      continue;
+    }
+    // Honor write() backpressure: when the socket high-water mark is hit,
+    // stop sending to this client (coalescing to the latest frame) instead
+    // of letting Node's write buffer grow without bound.
+    if (!sseSend(res, event, payload) || res.writableNeedDrain) {
+      state.backedUp = true;
+      state.backedUpSince = now;
+    }
+  }
+}
+
+function registerSseClient(res: http.ServerResponse, req: http.IncomingMessage): void {
+  const state: SseClientState = { backedUp: false, backedUpSince: null };
+  sseClients.set(res, state);
+  const onDrain = (): void => {
+    const current = sseClients.get(res);
+    if (current) {
+      current.backedUp = false;
+      current.backedUpSince = null;
+    }
+  };
+  res.on('drain', onDrain);
+  req.on('close', () => {
+    res.removeListener('drain', onDrain);
+    sseClients.delete(res);
+  });
 }
 
 function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): void {
   if (env) env.close();
-  for (const res of sseClients) res.end();
+  for (const res of sseClients.keys()) res.end();
   sseClients.clear();
   server.close(() => process.exit(code));
   // Give the graceful SSE flush (final frame + 'done') a brief window, then
@@ -135,8 +190,7 @@ function handleRequest(
     });
     sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height });
     if (latestFrame) sseSend(res, 'frame', latestFrame);
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+    registerSseClient(res, req);
     return;
   }
   if (url === '/favicon.ico') {
@@ -161,11 +215,16 @@ async function main(): Promise<void> {
   const deps = { width, height, map };
 
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
-  server.on('error', (e) => { console.error(e); shutdown(env, server, 1); });
+  server.on('error', (e) => {
+    console.error(e);
+    shutdown(env, server, 1);
+  });
   server.listen(port, () => {
     const bound = server.address();
     const boundPort = typeof bound === 'object' && bound ? bound.port : port;
-    console.log(`bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
+    console.log(
+      `bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`,
+    );
   });
 
   const intervalMs = Math.max(1, Math.round(1000 / fps));
@@ -195,4 +254,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSigint);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
