@@ -40,6 +40,13 @@ import { assertValidAction, decodeEncodedAction } from './action-validation';
  */
 const MAX_TICKS_DEFAULT = 30 * TPS;
 
+/**
+ * Upper bound of the validated frame-skip window, mirroring the Python
+ * client's MAX_FRAME_SKIP (python/envs/bonk_env.py) so the backend never
+ * accepts a window that client would reject when coalescing terminal holds.
+ */
+const MAX_FRAME_SKIP = 100;
+
 // SPAWN_POSITIONS removed, now read dynamically from map
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -522,6 +529,27 @@ export class BonkEnvironment {
         if (!Number.isInteger(this.config.maxTicks) || this.config.maxTicks < 1) {
             throw new Error(
                 `Invalid maxTicks ${this.config.maxTicks}: expected a positive integer`,
+            );
+        }
+
+        // frameSkip is the per-cycle tick window the frame-skip machinery
+        // compares against directly: NaN freezes action input forever
+        // (`frameSkipTicks >= NaN` is never true, so the counter never resets
+        // to 0 and lastAction is never re-decoded), a fractional value
+        // silently widens the terminal-hold window to ceil(frameSkip) done
+        // steps — which the Python client's `_frame_skip_window` rejects and
+        // then misclassifies as extra episode boundaries — and a non-positive
+        // value disables the terminal hold entirely (#393). Fail loudly here,
+        // at the choke point every forwarding surface converges on
+        // (programmatic, config.json, worker init, IPC), mirroring the
+        // maxTicks guard and the Python client's [1, MAX_FRAME_SKIP] contract.
+        if (
+            !Number.isInteger(this.config.frameSkip)
+            || this.config.frameSkip < 1
+            || this.config.frameSkip > MAX_FRAME_SKIP
+        ) {
+            throw new Error(
+                `Invalid frameSkip ${this.config.frameSkip}: expected an integer in [1, ${MAX_FRAME_SKIP}]`,
             );
         }
 

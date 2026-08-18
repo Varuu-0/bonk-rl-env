@@ -80,7 +80,7 @@
     "randomOppGrappleProb": 0.05,
     "_doc_randomOppGrappleProb": "Probability opponent fires grapple. Type: float. Range: 0.0-1.0. Default: 0.05. Env: RANDOM_OPP_GRAPPLE_PROB. CLI: --random-opp-grapple-prob",
     "frameSkip": 1,
-    "_doc_frameSkip": "Number of physics ticks per observation. Type: int. Range: 1+. Default: 1. Env: FRAME_SKIP. CLI: --frame-skip",
+    "_doc_frameSkip": "Number of physics ticks per observation. Type: int. Range: 1-100 (validated, #393). Default: 1. Env: FRAME_SKIP. CLI: --frame-skip",
     "seed": 0,
     "_doc_seed": "RNG seed for reproducibility; 0 uses random seed. Type: int. Default: 0. Env: SEED. CLI: --seed",
     "defaultMapPath": "maps/bonk_WDB__No_Mapshake__716916.json",
