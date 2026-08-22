@@ -42,8 +42,8 @@ export const MAX_OPPONENTS = 64;
  * and the supported range instead of the library-internal TypeError.
  */
 export function numOpponentsError(value: number): Error {
-    return new Error(
-        `Invalid numOpponents ${value}: expected at most ${MAX_OPPONENTS} opponents ` +
-        `(the bundled Box2D broadphase pair table is limited to ${BOX2D_MAX_PAIRS} pairs)`,
-    );
+  return new Error(
+    `Invalid numOpponents ${value}: expected at most ${MAX_OPPONENTS} opponents ` +
+      `(the bundled Box2D broadphase pair table is limited to ${BOX2D_MAX_PAIRS} pairs)`,
+  );
 }

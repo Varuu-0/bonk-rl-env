@@ -769,3 +769,27 @@ def test_num_opponents_within_bound_forwards_verbatim(monkeypatch):
         payload = socket.send_json.call_args.args[0]
         assert payload["config"]["num_opponents"] == value
         env.close()
+
+
+@pytest.mark.parametrize(
+    "non_finite",
+    [float("inf"), float("-inf"), float("nan")],
+)
+def test_num_opponents_non_finite_defaults_to_one_like_backend(
+    monkeypatch, non_finite
+):
+    """#398 review: non-finite num_opponents is not a misconfiguration on
+    either surface — the backend's normalizeNumOpponents defaults NaN/±inf to
+    1, so the client mirrors that by coercing the forwarded config value to 1
+    (which also keeps the payload spec-valid JSON; Infinity/NaN are not valid
+    JSON) instead of raising or forwarding the raw float."""
+    original = {"num_opponents": non_finite}
+    env, _, socket = _make_mocked_env(monkeypatch, num_envs=1, config=original)
+
+    payload = socket.send_json.call_args.args[0]
+    assert payload["config"]["num_opponents"] == 1
+
+    # The caller's dict is untouched: the coercion happens on a shallow copy.
+    assert original["num_opponents"] is non_finite
+
+    env.close()
