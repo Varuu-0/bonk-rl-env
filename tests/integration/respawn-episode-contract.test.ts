@@ -22,7 +22,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
-import { PhysicsEngine, GRAVITY_Y, DT } from '../../src/core/physics-engine';
+import { PhysicsEngine, GRAVITY_Y, DT, SCALE, TPS } from '../../src/core/physics-engine';
 import { WorkerPool } from '../../src/core/worker-pool';
 import type { MapDef } from '../../src/core/physics-engine';
 import type { EnvironmentConfig } from '../../src/core/environment';
@@ -467,14 +467,18 @@ describe('worker transports surface respawn deaths (issue #339)', () => {
   // of a magic step count (#409 review): the AI falls from its spawn onto the
   // lethal floor below, so the budget scales with distance/gravity and a stale
   // tuning change fails with an explanation instead of a bare alive assertion.
-  // Kinematics in observation px: each tick adds GRAVITY_Y px/s of velocity,
-  // so the drop after n ticks is GRAVITY_Y*DT*n(n+1)/2 (verified against the
-  // engine trajectory); solve the quadratic for n and add a small margin for
-  // the disc radius and discretization.
+  // Exact px-space kinematics: Box2D integrates in world units (map px /
+  // SCALE) with a per-tick velocity gain of GRAVITY_Y*DT world-units/s, so in
+  // observation px the drop after n ticks is SCALE*GRAVITY_Y*DT^2*n(n+1)/2
+  // (verified against the engine trajectory). Do NOT simplify SCALE*DT^2 to
+  // DT — that identity only holds while SCALE === TPS (#409 review). Solve
+  // the quadratic for n and add a small margin for the disc radius and
+  // discretization.
   const lethalFloor = poolInputMap.bodies[0]!;
   const blueSpawn = poolInputMap.spawnPoints.team_blue!;
   const fallPx = lethalFloor.y - (lethalFloor.height ?? 0) / 2 - blueSpawn.y;
-  const ticksToFloor = Math.ceil((-1 + Math.sqrt(1 + (8 * fallPx) / (GRAVITY_Y * DT))) / 2);
+  const pxPerTickQuadratic = SCALE * GRAVITY_Y * DT * DT;
+  const ticksToFloor = Math.ceil((-1 + Math.sqrt(1 + (8 * fallPx) / pxPerTickQuadratic)) / 2);
   const maxFallSteps = ticksToFloor + 4;
 
   const runToRespawnTickThenStep = async (useSharedMemory: boolean, respawnAction: number) => {
@@ -490,7 +494,7 @@ describe('worker transports surface respawn deaths (issue #339)', () => {
       expect(
         res.info.aiAlive,
         `AI did not reach the lethal floor within ${maxFallSteps} no-op steps ` +
-          `(fall ${fallPx} px at ${GRAVITY_Y} px/s-per-tick gravity) — ` +
+          `(fall ${fallPx} px at gravity ${GRAVITY_Y}, scale ${SCALE}, ${TPS} tps) — ` +
           'the budget assumes the default physics tuning',
       ).toBe(false);
       const [respawnTick] = await pool.step([respawnAction]);
