@@ -22,7 +22,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
-import { PhysicsEngine } from '../../src/core/physics-engine';
+import { PhysicsEngine, GRAVITY_Y, DT } from '../../src/core/physics-engine';
 import { WorkerPool } from '../../src/core/worker-pool';
 import type { MapDef } from '../../src/core/physics-engine';
 import type { EnvironmentConfig } from '../../src/core/environment';
@@ -463,17 +463,36 @@ describe('worker transports surface respawn deaths (issue #339)', () => {
     frameSkip: 1,
   };
 
+  // Upper-bound the fall duration from geometry and engine constants instead
+  // of a magic step count (#409 review): the AI falls from its spawn onto the
+  // lethal floor below, so the budget scales with distance/gravity and a stale
+  // tuning change fails with an explanation instead of a bare alive assertion.
+  // Kinematics in observation px: each tick adds GRAVITY_Y px/s of velocity,
+  // so the drop after n ticks is GRAVITY_Y*DT*n(n+1)/2 (verified against the
+  // engine trajectory); solve the quadratic for n and add a small margin for
+  // the disc radius and discretization.
+  const lethalFloor = poolInputMap.bodies[0]!;
+  const blueSpawn = poolInputMap.spawnPoints.team_blue!;
+  const fallPx = lethalFloor.y - (lethalFloor.height ?? 0) / 2 - blueSpawn.y;
+  const ticksToFloor = Math.ceil((-1 + Math.sqrt(1 + (8 * fallPx) / (GRAVITY_Y * DT))) / 2);
+  const maxFallSteps = ticksToFloor + 4;
+
   const runToRespawnTickThenStep = async (useSharedMemory: boolean, respawnAction: number) => {
     const pool = new WorkerPool(1);
     try {
       await pool.init(1, poolInputConfig, useSharedMemory);
       await pool.reset([42]);
       let res = (await pool.step([0]))[0];
-      for (let i = 0; i < 30 && res.info.aiAlive; i++) {
+      for (let i = 0; i < maxFallSteps && res.info.aiAlive; i++) {
         res = (await pool.step([0]))[0];
       }
       expect(res.done).toBe(false);
-      expect(res.info.aiAlive).toBe(false);
+      expect(
+        res.info.aiAlive,
+        `AI did not reach the lethal floor within ${maxFallSteps} no-op steps ` +
+          `(fall ${fallPx} px at ${GRAVITY_Y} px/s-per-tick gravity) — ` +
+          'the budget assumes the default physics tuning',
+      ).toBe(false);
       const [respawnTick] = await pool.step([respawnAction]);
       return respawnTick;
     } finally {
