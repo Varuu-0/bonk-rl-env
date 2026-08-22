@@ -21,6 +21,7 @@ const {
   b2World,
   b2AABB,
   b2Vec2,
+  b2Settings,
   b2BodyDef,
   b2CircleDef,
   b2PolygonDef,
@@ -34,6 +35,20 @@ const {
   b2XForm,
   b2Distance,
 } = box2d;
+
+import { MAX_OPPONENTS } from './opponent-capacity';
+
+/**
+ * Signature of the library-internal TypeError thrown when the bundled Box2D
+ * broadphase pair table is exhausted: b2PairManager.AddPair dereferences the
+ * drained free list (`pair = this.m_pairs[pIndex]` is undefined) with no
+ * bounds check (#392).
+ */
+const PAIR_TABLE_EXHAUSTION_TYPE_ERROR = "Cannot read properties of undefined (reading 'next')";
+
+function isPairTableExhaustionError(err: unknown): boolean {
+  return err instanceof TypeError && String((err as TypeError).message).includes(PAIR_TABLE_EXHAUSTION_TYPE_ERROR);
+}
 
 // ─── Constants ───────────────────────────────────────────────────────
 /** bonk.io runs at 30 ticks per second */
@@ -105,8 +120,8 @@ export const HEAVY_FORCE_MULTIPLIER = 0.7;
  */
 /** Native QueryAABB half-extent (native world units). Consumed as `* ppm / SCALE`. */
 export const GRAPPLE_TARGET_WINDOW = 10.0;
-export const GRAPPLE_FREQUENCY_HZ = 2.0;   // native swingF
-export const GRAPPLE_DAMPING_RATIO = 0.0;  // native swingD
+export const GRAPPLE_FREQUENCY_HZ = 2.0; // native swingF
+export const GRAPPLE_DAMPING_RATIO = 0.0; // native swingD
 export const GRAPPLE_SLACK_FREQUENCY_HZ = 0.01;
 export const A1A_SPAWN = 1000;
 export const A1A_MAX = 1000;
@@ -205,9 +220,9 @@ export interface MapBodyDef {
   type: 'rect' | 'circle' | 'polygon';
   x: number;
   y: number;
-  width?: number;    // For rect
-  height?: number;   // For rect
-  radius?: number;   // For circle
+  width?: number; // For rect
+  height?: number; // For rect
+  radius?: number; // For circle
   vertices?: { x: number; y: number }[]; // Body-local map-px vertices for polygons
   /** Omitted static defaults to a dynamic body. */
   static?: boolean;
@@ -219,24 +234,25 @@ export interface MapBodyDef {
   grappleMultiplier?: number;
   frequencyHz?: number;
   dampingRatio?: number;
-  noPhysics?: boolean;           // When true, body should be a sensor (no collision response)
-  noGrapple?: boolean;           // When true, cannot be grappled
-  innerGrapple?: boolean;        // When true, grappable from inside the shape (§32.1 gate); outside grappling is unaffected
-  friction?: number;             // Surface friction coefficient
+  noPhysics?: boolean; // When true, body should be a sensor (no collision response)
+  noGrapple?: boolean; // When true, cannot be grappled
+  innerGrapple?: boolean; // When true, grappable from inside the shape (§32.1 gate); outside grappling is unaffected
+  friction?: number; // Surface friction coefficient
   /** Native `f_p` (fricp): when true the friction is signed negative to select
    *  velocity-independent friction (DEOBFUSCATION §33.4). */
   fricPolarity?: boolean;
   /** Native `f_c` collision-group passthrough (provenance only; the engine
    *   filter is driven by `collides.gN`). */
   collisionGroup?: number;
-  collides?: {                   // Collision group filtering
+  collides?: {
+    // Collision group filtering
     g1: boolean;
     g2: boolean;
     g3: boolean;
     g4: boolean;
   };
-  color?: number;                // Visual color (RGB as integer)
-  surfaceName?: string;          // Surface type name
+  color?: number; // Visual color (RGB as integer)
+  surfaceName?: string; // Surface type name
   /** Original `physics.bodies` index from an exported Bonk map. Render-only
    * provenance used with MapDef.bodyRenderOrder; ignored by physics. */
   renderBodyIndex?: number;
@@ -254,11 +270,20 @@ export interface MapBodyDef {
     vertices?: { x: number; y: number }[];
     scale?: number;
   };
-  linearDamping?: number;        // Body linear velocity drag
-  angularDamping?: number;       // Body angular velocity drag
+  linearDamping?: number; // Body linear velocity drag
+  angularDamping?: number; // Body angular velocity drag
   linearVelocity?: { x: number; y: number }; // Starting velocity for dynamic bodies
-  angularVelocity?: number;      // Starting rotational velocity
-  aabb?: { minX: number; maxX: number; minY: number; maxY: number; width: number; height: number; cx: number; cy: number }; // Pre-calculated AABB for polygons
+  angularVelocity?: number; // Starting rotational velocity
+  aabb?: {
+    minX: number;
+    maxX: number;
+    minY: number;
+    maxY: number;
+    width: number;
+    height: number;
+    cx: number;
+    cy: number;
+  }; // Pre-calculated AABB for polygons
   /** Export provenance used to rebuild one Box2D body per native bodyIndex. */
   nativeBody?: { index: number; x: number; y: number; angle: number };
   /** Exported fixture-local geometry used when nativeBody is present. */
@@ -287,20 +312,34 @@ export interface MapDef {
   bodyRenderOrder?: number[];
   capZones?: Array<{ index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }>;
   joints?: Array<{
-    type: string; bodyA: string; bodyB: string;
-    anchorA?: { x: number; y: number }; anchorB?: { x: number; y: number };
-    localAnchorA?: { x: number; y: number }; localAnchorB?: { x: number; y: number };
-    length?: number; frequencyHz?: number; dampingRatio?: number; collideConnected?: boolean;
+    type: string;
+    bodyA: string;
+    bodyB: string;
+    anchorA?: { x: number; y: number };
+    anchorB?: { x: number; y: number };
+    localAnchorA?: { x: number; y: number };
+    localAnchorB?: { x: number; y: number };
+    length?: number;
+    frequencyHz?: number;
+    dampingRatio?: number;
+    collideConnected?: boolean;
     // Native joint fields (§33.8) forwarded for exact construction:
-    enableLimit?: boolean; lowerAngle?: number; upperAngle?: number;
-    enableMotor?: boolean; motorSpeed?: number; maxMotorTorque?: number; maxMotorForce?: number;
-    lowerTranslation?: number; upperTranslation?: number;
+    enableLimit?: boolean;
+    lowerAngle?: number;
+    upperAngle?: number;
+    enableMotor?: boolean;
+    motorSpeed?: number;
+    maxMotorTorque?: number;
+    maxMotorForce?: number;
+    lowerTranslation?: number;
+    upperTranslation?: number;
     axis?: { x: number; y: number };
     // Native indices: bodyA/bodyB are already resolved to names by the adapter,
     // bodyB === '' (or bodyB === GROUND_BODY_NAME) means the joint is ground-anchored.
-    ratio?: number;               // gear (g) joint ratio
-    jointA?: string; jointB?: string;  // gear referent joint names
-    referenceAngle?: number;      // prismatic reference angle
+    ratio?: number; // gear (g) joint ratio
+    jointA?: string;
+    jointB?: string; // gear referent joint names
+    referenceAngle?: number; // prismatic reference angle
     // ground: when bodyB is the synthetic ground body
     isGround?: boolean;
   }>;
@@ -347,55 +386,55 @@ export interface MapDef {
  * exact behaviour it always had.
  */
 export interface PhysicsEngineOptions {
-    /** Fixed physics update rate (ticks/second); dt = 1 / this value. Default: TPS (30). */
-    ticksPerSecond?: number;
-    /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2),
-     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
-    velocityIterations?: number;
-    /** Position constraint solver iterations per tick. Default: POSITION_ITERATIONS (6),
-     *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
-    positionIterations?: number;
-    /** Native map setting `pq` (physics quality): 1 = low (2 velocity / 6 position
-     *  iterations), 2 = high (15 / 15). Explicit `velocityIterations` /
-     *  `positionIterations` always win over the pq-derived defaults. */
-    physicsQuality?: number;
-    /** Pixels-per-metre conversion for exported map coordinates. Default: SCALE (30). */
-    scale?: number;
-    /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
-    gravityX?: number;
-    /** Vertical world gravity (m/s², positive down). Default: GRAVITY_Y (20).
-     *  NOTE: cross-referenced with `moveForce` / `heavyForceMultiplier` for the
-     *  #234 ascent invariant — outweighing moveForce (or moveForce × heavy)
-     *  silently makes pure-up or up+heavy descend; see warnAscentInvariantBreak. */
-    gravityY?: number;
-    /** Allow inactive bodies to sleep. Default: true (native). */
-    enableSleeping?: boolean;
-    /** Half-extent of the world broadphase AABB. Default: WORLD_AABB_EXTENT (5000). */
-    worldAabbExtent?: number;
-    /** Fallback arena half-width (metres) when no map body defines the bounds. Default: ARENA_HALF_WIDTH (25). */
-    arenaHalfWidth?: number;
-    /** Fallback arena half-height (metres) when no map body defines the bounds. Default: ARENA_HALF_HEIGHT (20). */
-    arenaHalfHeight?: number;
-    /** Extra margin (metres) added to arena extents derived from map bodies. Default: ARENA_BOUNDS_MARGIN (5). */
-    arenaBoundsMargin?: number;
-    /** Movement-force base applied to all directions (× heavy for heavy). Default: MOVE_FORCE (30).
-     *  Must exceed `gravityY` (pure up lifts) — see #234 and warnAscentInvariantBreak. */
-    moveForce?: number;
-    /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7).
-     *  `moveForce × heavyForceMultiplier` must exceed `gravityY` for up+heavy to lift. */
-    heavyForceMultiplier?: number;
-    /** Native map setting `fl` (flipped): when true the movement-force base is
-     *  `flippedMoveForce` instead of `moveForce` (native 12 → 20, §11). */
-    flipped?: boolean;
-    /** Move-force base used while `flipped` is true. Default: MOVE_FORCE ×
-     *  MOVE_FORCE_FLIP_MULTIPLIER (30 × 20/12 = 50), preserving the native
-     *  12 → 20 ratio on the port's tuned base. */
-    flippedMoveForce?: number;
-    /** Native map setting `re` (respawning): when true a disc that dies
-     *  (except the permanent cap-zone elimination, death type 3) respawns
-     *  immediately at its spawn point with cleared grapple (native state-sync
-     *  branch, readable 8595-8606). */
-    respawnEnabled?: boolean;
+  /** Fixed physics update rate (ticks/second); dt = 1 / this value. Default: TPS (30). */
+  ticksPerSecond?: number;
+  /** Velocity constraint solver iterations per tick. Default: VELOCITY_ITERATIONS (2),
+   *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
+  velocityIterations?: number;
+  /** Position constraint solver iterations per tick. Default: POSITION_ITERATIONS (6),
+   *  or 15 when `physicsQuality` is 2 (native `pq` "high"). */
+  positionIterations?: number;
+  /** Native map setting `pq` (physics quality): 1 = low (2 velocity / 6 position
+   *  iterations), 2 = high (15 / 15). Explicit `velocityIterations` /
+   *  `positionIterations` always win over the pq-derived defaults. */
+  physicsQuality?: number;
+  /** Pixels-per-metre conversion for exported map coordinates. Default: SCALE (30). */
+  scale?: number;
+  /** Horizontal world gravity (m/s²). Default: GRAVITY_X (0). */
+  gravityX?: number;
+  /** Vertical world gravity (m/s², positive down). Default: GRAVITY_Y (20).
+   *  NOTE: cross-referenced with `moveForce` / `heavyForceMultiplier` for the
+   *  #234 ascent invariant — outweighing moveForce (or moveForce × heavy)
+   *  silently makes pure-up or up+heavy descend; see warnAscentInvariantBreak. */
+  gravityY?: number;
+  /** Allow inactive bodies to sleep. Default: true (native). */
+  enableSleeping?: boolean;
+  /** Half-extent of the world broadphase AABB. Default: WORLD_AABB_EXTENT (5000). */
+  worldAabbExtent?: number;
+  /** Fallback arena half-width (metres) when no map body defines the bounds. Default: ARENA_HALF_WIDTH (25). */
+  arenaHalfWidth?: number;
+  /** Fallback arena half-height (metres) when no map body defines the bounds. Default: ARENA_HALF_HEIGHT (20). */
+  arenaHalfHeight?: number;
+  /** Extra margin (metres) added to arena extents derived from map bodies. Default: ARENA_BOUNDS_MARGIN (5). */
+  arenaBoundsMargin?: number;
+  /** Movement-force base applied to all directions (× heavy for heavy). Default: MOVE_FORCE (30).
+   *  Must exceed `gravityY` (pure up lifts) — see #234 and warnAscentInvariantBreak. */
+  moveForce?: number;
+  /** Force multiplier applied while heavy. Default: HEAVY_FORCE_MULTIPLIER (0.7).
+   *  `moveForce × heavyForceMultiplier` must exceed `gravityY` for up+heavy to lift. */
+  heavyForceMultiplier?: number;
+  /** Native map setting `fl` (flipped): when true the movement-force base is
+   *  `flippedMoveForce` instead of `moveForce` (native 12 → 20, §11). */
+  flipped?: boolean;
+  /** Move-force base used while `flipped` is true. Default: MOVE_FORCE ×
+   *  MOVE_FORCE_FLIP_MULTIPLIER (30 × 20/12 = 50), preserving the native
+   *  12 → 20 ratio on the port's tuned base. */
+  flippedMoveForce?: number;
+  /** Native map setting `re` (respawning): when true a disc that dies
+   *  (except the permanent cap-zone elimination, death type 3) respawns
+   *  immediately at its spawn point with cleared grapple (native state-sync
+   *  branch, readable 8595-8606). */
+  respawnEnabled?: boolean;
 }
 
 /** Frozen final transforms of a dead disc, snapshotted when its body is detached
@@ -485,7 +524,7 @@ export class PhysicsEngine {
   private ppm: number = DEFAULT_PPM;
   private _tempForce = new b2Vec2(0, 0);
   private playerDeathType: Map<number, number> = new Map();
-/** Death causes collected during the current tick, before respawn. */
+  /** Death causes collected during the current tick, before respawn. */
   private tickDeathCauses: Map<number, number> = new Map();
   /** Deaths from the most recent tick, consumed by the environment. */
   private deathEvents: DeathEvent[] = [];
@@ -497,7 +536,8 @@ export class PhysicsEngine {
    *  tick later, preserving the native "disc returns to spawn" behavior
    *  without erasing the episode-level death event. */
   private pendingRespawns: Set<number> = new Set();
-  private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> = new Map();
+  private capZoneState: Map<number, { ty: number; p: number; l: number; i: number; o: number; ot: string; f: number }> =
+    new Map();
   private capZoneTouches: Array<{ zoneIndex: number; playerId: number; team: string }> = [];
   /** True when the game has teams enabled (native game setting `tea`). */
   private teamsEnabled: boolean = false;
@@ -547,7 +587,10 @@ export class PhysicsEngine {
     this.moveForce = PhysicsEngine.sanitizePositive(options.moveForce, MOVE_FORCE);
     this.heavyForceMultiplier = PhysicsEngine.sanitizeNonNegative(options.heavyForceMultiplier, HEAVY_FORCE_MULTIPLIER);
     this.flipped = PhysicsEngine.sanitizeBoolean(options.flipped, false);
-    this.flippedMoveForce = PhysicsEngine.sanitizePositive(options.flippedMoveForce, this.moveForce * MOVE_FORCE_FLIP_MULTIPLIER);
+    this.flippedMoveForce = PhysicsEngine.sanitizePositive(
+      options.flippedMoveForce,
+      this.moveForce * MOVE_FORCE_FLIP_MULTIPLIER,
+    );
     this.respawnEnabled = PhysicsEngine.sanitizeBoolean(options.respawnEnabled, false);
     this.oobRadiusSquared = Math.pow(OUT_OF_BOUNDS_DISTANCE / this.scale, 2);
     this.warnAscentInvariantBreak();
@@ -715,20 +758,20 @@ export class PhysicsEngine {
     const filter = new b2FilterData();
     if (this.noCollide) {
       filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
-      filter.maskBits = 0xFFFF & ~PhysicsEngine.ALL_PLAYER_BITS;
+      filter.maskBits = 0xffff & ~PhysicsEngine.ALL_PLAYER_BITS;
     } else if (this.teamsEnabled) {
       const team = this.playerTeams.get(playerId);
       const teamBit = team !== undefined ? PhysicsEngine.PLAYER_TEAM_BITS[team] : undefined;
       if (teamBit !== undefined) {
         filter.categoryBits = teamBit;
-        filter.maskBits = 0xFFFF & ~teamBit;
+        filter.maskBits = 0xffff & ~teamBit;
       } else {
         filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
-        filter.maskBits = 0xFFFF;
+        filter.maskBits = 0xffff;
       }
     } else {
       filter.categoryBits = playerId === this.aiSlot ? 0x0002 : 0x0004;
-      filter.maskBits = 0xFFFF;
+      filter.maskBits = 0xffff;
     }
     shape.SetFilterData(filter);
     this.world.Refilter(shape);
@@ -789,7 +832,10 @@ export class PhysicsEngine {
     this.playerAlive.set(playerId, false);
 
     const previous = this.tickDeathCauses.get(playerId);
-    if (previous !== undefined && PhysicsEngine.deathCausePriority(previous) >= PhysicsEngine.deathCausePriority(deathType)) {
+    if (
+      previous !== undefined &&
+      PhysicsEngine.deathCausePriority(previous) >= PhysicsEngine.deathCausePriority(deathType)
+    ) {
       return;
     }
     this.tickDeathCauses.set(playerId, deathType);
@@ -797,18 +843,27 @@ export class PhysicsEngine {
 
   private static deathCausePriority(deathType: number): number {
     switch (deathType) {
-      case 1: return 3; // lethal surface
-      case 4: return 2; // out of bounds
-      case 3: return 1; // cap-zone elimination
-      default: return 0;
+      case 1:
+        return 3; // lethal surface
+      case 4:
+        return 2; // out of bounds
+      case 3:
+        return 1; // cap-zone elimination
+      default:
+        return 0;
     }
   }
 
   private registerCapZoneContact(ud1: any, ud2: any, isBegin: boolean): void {
     let zoneUd: any = null;
     let otherUd: any = null;
-    if (ud1.isCapZone) { zoneUd = ud1; otherUd = ud2; }
-    else if (ud2.isCapZone) { zoneUd = ud2; otherUd = ud1; }
+    if (ud1.isCapZone) {
+      zoneUd = ud1;
+      otherUd = ud2;
+    } else if (ud2.isCapZone) {
+      zoneUd = ud2;
+      otherUd = ud1;
+    }
     if (!zoneUd) return;
 
     if (zoneUd.zoneType === 1) {
@@ -829,11 +884,16 @@ export class PhysicsEngine {
 
   private capTypeToTeam(capType: number): string | null {
     switch (capType) {
-      case 2: return 'red';
-      case 3: return 'blue';
-      case 4: return 'green';
-      case 5: return 'yellow';
-      default: return null;
+      case 2:
+        return 'red';
+      case 3:
+        return 'blue';
+      case 4:
+        return 'green';
+      case 5:
+        return 'yellow';
+      default:
+        return null;
     }
   }
 
@@ -856,6 +916,10 @@ export class PhysicsEngine {
    * Add a static or dynamic body from a MapBodyDef to the world.
    */
   addBody(def: MapBodyDef): void {
+    // Fixture creation consumes broadphase capacity too, so a dense custom
+    // mapData must fail with the labeled capacity error instead of the
+    // library's opaque TypeError mid-build (#392).
+    this.assertBroadphaseCapacity(`cannot add map body${def.name ? ` '${def.name}'` : ''}`);
     const bodyDef = new b2BodyDef();
     const nativeBody = def.nativeBody;
     const nativeFixture = def.nativeFixture;
@@ -883,51 +947,52 @@ export class PhysicsEngine {
     // two conventions consistent instead of silently mixing the native body
     // position with flat geometry — the shape lands at exactly def.x/def.y
     // like the legacy flat path.
-    const fixture = (nativeFixture && nativeFixture.type)
-      ? nativeFixture
-      : (nativeBody && (def.type === 'rect' || def.type === 'circle' || def.type === 'polygon')
-        ? (() => {
-            const cosA = Math.cos(-nativeBody.angle);
-            const sinA = Math.sin(-nativeBody.angle);
-            const offX = (def.x ?? 0) - nativeBody.x;
-            const offY = (def.y ?? 0) - nativeBody.y;
-            if (def.type === 'polygon') {
-              // Convention (single, enforced by the map adapter): MapDef
-              // polygon vertices are shape-LOCAL and pre-scaled (world vertex
-              // = def.x/y + R(def.angle)·v), and def.x/y is the world-space
-              // shape center. Both the flattened-native facade and the
-              // exporter's flat view (whose world-baked vertices the adapter
-              // rebases onto def.x/y) satisfy this, so feeding the vertices
-              // through a center+rotation transform here would double-shift
-              // and double-rotate them. Bake the world → body local transform
-              // into the vertices themselves (center 0 / angle 0) so the
-              // polygon builder places the shape at def.x + R(def.angle)·v
-              // without re-translating/rotating vertices that already carry
-              // the placement.
-              const cosD = Math.cos(def.angle ?? 0);
-              const sinD = Math.sin(def.angle ?? 0);
-              const vertices = (def.vertices ?? []).map((v) => {
-                const wx = (def.x ?? 0) + v.x * cosD - v.y * sinD;
-                const wy = (def.y ?? 0) + v.x * sinD + v.y * cosD;
-                return {
-                  x: (wx - nativeBody.x) * cosA - (wy - nativeBody.y) * sinA,
-                  y: (wx - nativeBody.x) * sinA + (wy - nativeBody.y) * cosA,
-                };
-              });
-              return { type: def.type, center: { x: 0, y: 0 }, angle: 0, scale: 1, vertices };
-            }
-            return {
-              type: def.type,
-              center: { x: offX * cosA - offY * sinA, y: offX * sinA + offY * cosA },
-              angle: (def.angle ?? 0) - nativeBody.angle,
-              width: def.width,
-              height: def.height,
-              radius: def.radius,
-              scale: 1,
-              vertices: def.vertices,
-            };
-          })()
-        : undefined);
+    const fixture =
+      nativeFixture && nativeFixture.type
+        ? nativeFixture
+        : nativeBody && (def.type === 'rect' || def.type === 'circle' || def.type === 'polygon')
+          ? (() => {
+              const cosA = Math.cos(-nativeBody.angle);
+              const sinA = Math.sin(-nativeBody.angle);
+              const offX = (def.x ?? 0) - nativeBody.x;
+              const offY = (def.y ?? 0) - nativeBody.y;
+              if (def.type === 'polygon') {
+                // Convention (single, enforced by the map adapter): MapDef
+                // polygon vertices are shape-LOCAL and pre-scaled (world vertex
+                // = def.x/y + R(def.angle)·v), and def.x/y is the world-space
+                // shape center. Both the flattened-native facade and the
+                // exporter's flat view (whose world-baked vertices the adapter
+                // rebases onto def.x/y) satisfy this, so feeding the vertices
+                // through a center+rotation transform here would double-shift
+                // and double-rotate them. Bake the world → body local transform
+                // into the vertices themselves (center 0 / angle 0) so the
+                // polygon builder places the shape at def.x + R(def.angle)·v
+                // without re-translating/rotating vertices that already carry
+                // the placement.
+                const cosD = Math.cos(def.angle ?? 0);
+                const sinD = Math.sin(def.angle ?? 0);
+                const vertices = (def.vertices ?? []).map((v) => {
+                  const wx = (def.x ?? 0) + v.x * cosD - v.y * sinD;
+                  const wy = (def.y ?? 0) + v.x * sinD + v.y * cosD;
+                  return {
+                    x: (wx - nativeBody.x) * cosA - (wy - nativeBody.y) * sinA,
+                    y: (wx - nativeBody.x) * sinA + (wy - nativeBody.y) * cosA,
+                  };
+                });
+                return { type: def.type, center: { x: 0, y: 0 }, angle: 0, scale: 1, vertices };
+              }
+              return {
+                type: def.type,
+                center: { x: offX * cosA - offY * sinA, y: offX * sinA + offY * cosA },
+                angle: (def.angle ?? 0) - nativeBody.angle,
+                width: def.width,
+                height: def.height,
+                radius: def.radius,
+                scale: 1,
+                vertices: def.vertices,
+              };
+            })()
+          : undefined;
 
     // A fixture that cannot produce a shape (invalid polygon, or a missing /
     // unsupported shape type) must NOT destroy a native grouped body: the
@@ -988,125 +1053,125 @@ export class PhysicsEngine {
       } else {
         shapeDef.SetAsBox(hw / this.scale, hh / this.scale);
       }
-     } else if (shapeType === 'circle') {
-       shapeDef = new b2CircleDef();
-       shapeDef.radius = (def.radius || 0) / this.scale;
-       if (fixture) {
-         const center = fixture.center ?? { x: 0, y: 0 };
-         shapeDef.localPosition.Set(center.x / this.scale, center.y / this.scale);
-       }
-     } else if (shapeType === 'polygon') {
-        const polygonVertices = fixture?.vertices ?? def.vertices;
-        if (!polygonVertices || polygonVertices.length < 3) {
-          skipBody(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
-          return; // Skip invalid polygon
+    } else if (shapeType === 'circle') {
+      shapeDef = new b2CircleDef();
+      shapeDef.radius = (def.radius || 0) / this.scale;
+      if (fixture) {
+        const center = fixture.center ?? { x: 0, y: 0 };
+        shapeDef.localPosition.Set(center.x / this.scale, center.y / this.scale);
+      }
+    } else if (shapeType === 'polygon') {
+      const polygonVertices = fixture?.vertices ?? def.vertices;
+      if (!polygonVertices || polygonVertices.length < 3) {
+        skipBody(`Polygon body "${def.name}" has insufficient vertices (need >= 3)`);
+        return; // Skip invalid polygon
+      }
+      shapeDef = new b2PolygonDef();
+      // Box2D supports max 8 vertices for convex polygons
+      const maxVertices = Math.min(polygonVertices.length, 8);
+      if (fixture) {
+        const center = fixture.center ?? { x: 0, y: 0 };
+        const angle = fixture.angle ?? 0;
+        const vertexScale = fixture.scale ?? 1;
+        for (let i = 0; i < maxVertices; i++) {
+          const v = polygonVertices[i];
+          const rotated = new b2Vec2(
+            v.x * vertexScale * Math.cos(angle) - v.y * vertexScale * Math.sin(angle),
+            v.x * vertexScale * Math.sin(angle) + v.y * vertexScale * Math.cos(angle),
+          );
+          shapeDef.vertices[i].Set((center.x + rotated.x) / this.scale, (center.y + rotated.y) / this.scale);
         }
-        shapeDef = new b2PolygonDef();
-        // Box2D supports max 8 vertices for convex polygons
-        const maxVertices = Math.min(polygonVertices.length, 8);
-        if (fixture) {
-          const center = fixture.center ?? { x: 0, y: 0 };
-          const angle = fixture.angle ?? 0;
-          const vertexScale = fixture.scale ?? 1;
-          for (let i = 0; i < maxVertices; i++) {
-            const v = polygonVertices[i];
-           const rotated = new b2Vec2(
-             v.x * vertexScale * Math.cos(angle) - v.y * vertexScale * Math.sin(angle),
-             v.x * vertexScale * Math.sin(angle) + v.y * vertexScale * Math.cos(angle),
-           );
-           shapeDef.vertices[i].Set(
-             (center.x + rotated.x) / this.scale,
-             (center.y + rotated.y) / this.scale,
-           );
-         }
-       } else {
-         for (let i = 0; i < maxVertices; i++) {
-           const v = polygonVertices[i];
-           shapeDef.vertices[i].Set(v.x / this.scale, v.y / this.scale);
-         }
-       }
-       shapeDef.vertexCount = maxVertices;
       } else {
-        // Normalization skips unknown shape types with a warning (no more
-        // silent 0×0 rects); keep the loud guard here for direct callers that
-        // bypass the adapter.
-        skipBody(`Unsupported body shape type "${shapeType}" for "${def.name}"`);
-        return;
+        for (let i = 0; i < maxVertices; i++) {
+          const v = polygonVertices[i];
+          shapeDef.vertices[i].Set(v.x / this.scale, v.y / this.scale);
+        }
       }
+      shapeDef.vertexCount = maxVertices;
+    } else {
+      // Normalization skips unknown shape types with a warning (no more
+      // silent 0×0 rects); keep the loud guard here for direct callers that
+      // bypass the adapter.
+      skipBody(`Unsupported body shape type "${shapeType}" for "${def.name}"`);
+      return;
+    }
 
-     // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): a non-finite
-     // or sub-0.0001 authored dynamic density is raised to the 0.0001 floor so a
-     // dynamic body never ends up massless. `Math.max(NaN, ...)` is NaN, so guard
-     // non-finite values explicitly. Static bodies keep density 0 (static bodies
-     // contribute no mass in Box2D regardless of this value).
-     const authoredDensity = def.density;
-     let dynamicDensity: number;
-     if (authoredDensity === undefined) {
-       // No authored density: default to the native surface default 1.0.
-       // Do NOT floor to 0.0001 here.
-       dynamicDensity = 1.0;
-     } else if (Number.isFinite(authoredDensity)) {
-       // Finite authored value, clamped up to the 0.0001 floor (§33.4).
-       dynamicDensity = Math.max(authoredDensity, 0.0001);
-     } else {
-       // NaN/Infinity would poison mass; floor per the clamp guard.
-       dynamicDensity = 0.0001;
-     }
-     shapeDef.density = def.static ? 0 : dynamicDensity;
-      // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`. Native
-      // line 3267 makes `f_p` (fricPolarity) surfaces NEGATIVE to get
-      // "velocity-independent friction" — but that trick only works because the
-      // native disc friction is 0 (b2MixFriction = sqrt(f1*f2) => sqrt(-f*0) =
-      // -0). This port's disc friction is positive (PLAYER_FRICTION =
-      // 0.001337), so a negative surface friction makes the mix NaN and
-      // poisons the contact impulse and then the disc position on the first
-      // contact tick (#276). Reproduce the native frictionless effect as
-      // friction 0, and clamp authored negative/non-finite friction up to 0 so
-      // the sqrt mix can never see a negative product (map-vs-map divergence
-      // from the native negative mix is documented in DEOBFUSCATION §33.4).
-      const authoredFriction = def.friction;
-      const baseFriction = authoredFriction === undefined
-        ? 0.3
-        : (Number.isFinite(authoredFriction) ? Math.max(authoredFriction, 0) : 0);
-      shapeDef.friction = def.fricPolarity ? 0 : baseFriction;
-      const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
-     shapeDef.restitution = restitutionValue;
+    // Native fixture density clamp (DEOBFUSCATION §33.4, line 3269): a non-finite
+    // or sub-0.0001 authored dynamic density is raised to the 0.0001 floor so a
+    // dynamic body never ends up massless. `Math.max(NaN, ...)` is NaN, so guard
+    // non-finite values explicitly. Static bodies keep density 0 (static bodies
+    // contribute no mass in Box2D regardless of this value).
+    const authoredDensity = def.density;
+    let dynamicDensity: number;
+    if (authoredDensity === undefined) {
+      // No authored density: default to the native surface default 1.0.
+      // Do NOT floor to 0.0001 here.
+      dynamicDensity = 1.0;
+    } else if (Number.isFinite(authoredDensity)) {
+      // Finite authored value, clamped up to the 0.0001 floor (§33.4).
+      dynamicDensity = Math.max(authoredDensity, 0.0001);
+    } else {
+      // NaN/Infinity would poison mass; floor per the clamp guard.
+      dynamicDensity = 0.0001;
+    }
+    shapeDef.density = def.static ? 0 : dynamicDensity;
+    // Native friction (DEOBFUSCATION §33.4): `fix.fr ?? body.s.fric`. Native
+    // line 3267 makes `f_p` (fricPolarity) surfaces NEGATIVE to get
+    // "velocity-independent friction" — but that trick only works because the
+    // native disc friction is 0 (b2MixFriction = sqrt(f1*f2) => sqrt(-f*0) =
+    // -0). This port's disc friction is positive (PLAYER_FRICTION =
+    // 0.001337), so a negative surface friction makes the mix NaN and
+    // poisons the contact impulse and then the disc position on the first
+    // contact tick (#276). Reproduce the native frictionless effect as
+    // friction 0, and clamp authored negative/non-finite friction up to 0 so
+    // the sqrt mix can never see a negative product (map-vs-map divergence
+    // from the native negative mix is documented in DEOBFUSCATION §33.4).
+    const authoredFriction = def.friction;
+    const baseFriction =
+      authoredFriction === undefined ? 0.3 : Number.isFinite(authoredFriction) ? Math.max(authoredFriction, 0) : 0;
+    shapeDef.friction = def.fricPolarity ? 0 : baseFriction;
+    const restitutionValue = def.restitution === -1 ? 0.8 : (def.restitution ?? 0.8);
+    shapeDef.restitution = restitutionValue;
 
-      // Handle noPhysics: true → make body a sensor (no collision response, but still triggers contact events)
-      if (def.noPhysics) {
-        shapeDef.isSensor = true;
-      }
+    // Handle noPhysics: true → make body a sensor (no collision response, but still triggers contact events)
+    if (def.noPhysics) {
+      shapeDef.isSensor = true;
+    }
 
-      // Apply collision filtering: `collides` gates only the player-group bits
-      // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010), mirroring the
-      // native mask construction (DEOBFUSCATION §33.4) where maskBits starts at
-      // the full mask and only false group flags subtract their bit — the map
-      // category is never subtracted. Here that means the map category 0x0001
-      // stays in maskBits whenever at least one player group is enabled, so map
-      // geometry stays solid to other map bodies. An all-false `collides` body
-      // (legacy "ghost geometry" such as visual/no-Physics-style barriers)
-      // keeps its fully-ghost mask 0x0000 so third-party-map behavior is
-      // unchanged. (The bundled exports also carry a "collidesWithPlayers"
-      // key on every fixture; it is not part of MapBodyDef and has no native
-      // player-collision effect — native `f_p` clears only bit 0, this port's
-      // map category — so it is deliberately ignored and platforms stay solid
-      // to players.)
-      if (def.collides) {
-        const filter = new b2FilterData();
-        filter.categoryBits = 0x0001; // Map bodies are category 1
-        filter.maskBits =
-          (def.collides.g1 || def.collides.g2 || def.collides.g3 || def.collides.g4)
-            ? 0x0001 // Map bodies always collide with each other
-            : 0x0000; // All-false legacy ghost geometry
-        if (def.collides.g1) filter.maskBits |= 0x0002;
-        if (def.collides.g2) filter.maskBits |= 0x0004;
-        if (def.collides.g3) filter.maskBits |= 0x0008;
-        if (def.collides.g4) filter.maskBits |= 0x0010;
+    // Apply collision filtering: `collides` gates only the player-group bits
+    // (g1-g4 = the disc team slots 0x0002/0x0004/0x0008/0x0010), mirroring the
+    // native mask construction (DEOBFUSCATION §33.4) where maskBits starts at
+    // the full mask and only false group flags subtract their bit — the map
+    // category is never subtracted. Here that means the map category 0x0001
+    // stays in maskBits whenever at least one player group is enabled, so map
+    // geometry stays solid to other map bodies. An all-false `collides` body
+    // (legacy "ghost geometry" such as visual/no-Physics-style barriers)
+    // keeps its fully-ghost mask 0x0000 so third-party-map behavior is
+    // unchanged. (The bundled exports also carry a "collidesWithPlayers"
+    // key on every fixture; it is not part of MapBodyDef and has no native
+    // player-collision effect — native `f_p` clears only bit 0, this port's
+    // map category — so it is deliberately ignored and platforms stay solid
+    // to players.)
+    if (def.collides) {
+      const filter = new b2FilterData();
+      filter.categoryBits = 0x0001; // Map bodies are category 1
+      filter.maskBits =
+        def.collides.g1 || def.collides.g2 || def.collides.g3 || def.collides.g4
+          ? 0x0001 // Map bodies always collide with each other
+          : 0x0000; // All-false legacy ghost geometry
+      if (def.collides.g1) filter.maskBits |= 0x0002;
+      if (def.collides.g2) filter.maskBits |= 0x0004;
+      if (def.collides.g3) filter.maskBits |= 0x0008;
+      if (def.collides.g4) filter.maskBits |= 0x0010;
 
-        shapeDef.filter = filter;
-      }
+      shapeDef.filter = filter;
+    }
 
-    const shape = body.CreateShape(shapeDef);
+    const shape = this.createShapeGuarded(
+      body,
+      shapeDef,
+      `adding the fixture for map body${def.name ? ` '${def.name}'` : ''}`,
+    );
     if (shape && typeof shape.SetUserData === 'function') shape.SetUserData(def);
     body.SetMassFromShapes();
     setBodyUserData();
@@ -1137,7 +1202,16 @@ export class PhysicsEngine {
     this.extendArenaExtents(body);
   }
 
-  addCapZone(zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number }, x: number, y: number, width: number, height: number, angle = 0): void {
+  addCapZone(
+    zone: { index: number; owner: string; type: number; fixture: string; shapeType: string; l?: number },
+    x: number,
+    y: number,
+    width: number,
+    height: number,
+    angle = 0,
+  ): void {
+    // Sensor fixtures consume broadphase capacity like any other (#392).
+    this.assertBroadphaseCapacity(`cannot add cap-zone ${zone.index} sensor`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
     // Rotate the sensor body to match an angle-rotated fixture so the sensor
@@ -1147,11 +1221,11 @@ export class PhysicsEngine {
     const body = this.world.CreateBody(bodyDef);
 
     const shapeDef = new b2PolygonDef();
-    shapeDef.SetAsBox((width / 2) / this.scale, (height / 2) / this.scale);
+    shapeDef.SetAsBox(width / 2 / this.scale, height / 2 / this.scale);
     shapeDef.density = 0;
     shapeDef.isSensor = true;
 
-    body.CreateShape(shapeDef);
+    this.createShapeGuarded(body, shapeDef, `adding the cap-zone ${zone.index} sensor`);
     body.SetUserData({ isCapZone: true, zoneType: zone.type, zoneIndex: zone.index, owner: zone.owner });
     this.capZoneSensors.push(body);
 
@@ -1286,7 +1360,7 @@ export class PhysicsEngine {
     return this._arenaBoundsCache;
   }
 
-/** Resolved map-pixel to world-unit scale used by engine coordinate conversions. */
+  /** Resolved map-pixel to world-unit scale used by engine coordinate conversions. */
   getScale(): number {
     return this.scale;
   }
@@ -1377,8 +1451,7 @@ export class PhysicsEngine {
     // map is consulted FIRST so a user-authored body that happens to be named
     // `__ground__` still resolves; the synthetic ground body is only the
     // fallback when that name is absent.
-    const bodyA = bodyMap.get(def.bodyA)
-      ?? (def.bodyA === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
+    const bodyA = bodyMap.get(def.bodyA) ?? (def.bodyA === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
     // A joint is ground-anchored ONLY when explicitly marked `isGround` (the
     // adapter sets it for bodyB = -1). `bodyB` being empty/undefined for any
     // OTHER reason is a malformed reference and must warn+skip, NOT silently
@@ -1388,8 +1461,7 @@ export class PhysicsEngine {
     if (isGround) {
       bodyB = this.ensureGroundBody();
     } else {
-      bodyB = bodyMap.get(def.bodyB)
-        ?? (def.bodyB === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
+      bodyB = bodyMap.get(def.bodyB) ?? (def.bodyB === GROUND_BODY_NAME ? this.ensureGroundBody() : undefined);
       if (!bodyB) {
         console.warn(`Joint references unknown body "${def.bodyB}" (bodyA="${def.bodyA}")`);
         return;
@@ -1409,13 +1481,11 @@ export class PhysicsEngine {
     // A bare `?? 0` does not coerce NaN (`NaN ?? 0` is still NaN). Returns the
     // pair in world units (map px / this.scale).
     const anchorPair = (a?: { x: number; y: number }): [number, number] =>
-      a && Number.isFinite(a.x) && Number.isFinite(a.y)
-        ? [a.x / this.scale, a.y / this.scale]
-        : [0, 0];
+      a && Number.isFinite(a.x) && Number.isFinite(a.y) ? [a.x / this.scale, a.y / this.scale] : [0, 0];
     const makeAnchorA = (a?: { x: number; y: number }) =>
       a && Number.isFinite(a.x) && Number.isFinite(a.y)
         ? new b2Vec2(a.x / this.scale, a.y / this.scale)
-        : (bodyA.GetPosition().Copy());
+        : bodyA.GetPosition().Copy();
     // §33.8 d normalization divides the exported aa/ab anchors by ppm exactly
     // like the length (`aa, ab /= ppm`), so the distance branch converts them
     // with `* ppm / scale` (native world units → this port's map-px / scale
@@ -1429,9 +1499,7 @@ export class PhysicsEngine {
         : [0, 0];
     const dMakeAnchorA = (a?: { x: number; y: number }) => {
       const [x, y] = dAnchorPair(a);
-      return a && Number.isFinite(a.x) && Number.isFinite(a.y)
-        ? new b2Vec2(x, y)
-        : (bodyA.GetPosition().Copy());
+      return a && Number.isFinite(a.x) && Number.isFinite(a.y) ? new b2Vec2(x, y) : bodyA.GetPosition().Copy();
     };
 
     const type = def.type;
@@ -1443,12 +1511,7 @@ export class PhysicsEngine {
         // natively applied `ab += [365/ppm, 250/ppm]` canvas-center offset
         // already baked into the exported value (§33.8 d).
         const [abx, aby] = dAnchorPair(def.anchorB);
-        jd.Initialize(
-          bodyA,
-          bodyB,
-          dMakeAnchorA(def.anchorA),
-          new b2Vec2(abx, aby),
-        );
+        jd.Initialize(bodyA, bodyB, dMakeAnchorA(def.anchorA), new b2Vec2(abx, aby));
       } else {
         // §33.8 d: aa/ab are body-relative local anchors, set directly in the
         // connected bodies' frames (Initialize would subtract each body's
@@ -1473,9 +1536,7 @@ export class PhysicsEngine {
       // uses map px / this.scale. Preserve the native zero-length floor while
       // converting between those unit systems (§33.8 d: len→0.01-floor).
       if (typeof def.length === 'number' && Number.isFinite(def.length)) {
-        const nativeLength = def.length === 0
-          ? NATIVE_DISTANCE_JOINT_MIN_LENGTH
-          : def.length;
+        const nativeLength = def.length === 0 ? NATIVE_DISTANCE_JOINT_MIN_LENGTH : def.length;
         jd.length = (nativeLength * this.ppm) / this.scale;
       } else if (jd.length === 0) {
         // The fallback anchor-distance path also needs the native floor when
@@ -1525,9 +1586,9 @@ export class PhysicsEngine {
       // rotation. mapexporter emits `angle` (pa), never `axis`.
       const axis = def.axis
         ? new b2Vec2(def.axis.x, def.axis.y)
-        : (typeof def.angle === 'number' && Number.isFinite(def.angle)
-            ? new b2Vec2(Math.cos(def.angle), Math.sin(def.angle))
-            : new b2Vec2(1, 0));
+        : typeof def.angle === 'number' && Number.isFinite(def.angle)
+          ? new b2Vec2(Math.cos(def.angle), Math.sin(def.angle))
+          : new b2Vec2(1, 0);
       jd.Initialize(bodyA, bodyB, makeAnchorA(def.anchorA), axis);
       jd.collideConnected = cd;
       // Native §33.8: lpj and lsj both set def.referenceAngle = -bodyA.GetAngle()
@@ -1550,8 +1611,8 @@ export class PhysicsEngine {
       const lenLimit = typeof def.length === 'number' && Number.isFinite(def.length) && def.length > 0;
       // Map definitions store prismatic travel in map pixels; Box2D reads
       // translations in this engine's world units (map pixels / scale).
-      const lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : (lenLimit ? -def.length : 0);
-      const upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : (lenLimit ? +def.length : 0);
+      const lowerTranslation = def.lowerTranslation !== undefined ? def.lowerTranslation : lenLimit ? -def.length : 0;
+      const upperTranslation = def.upperTranslation !== undefined ? def.upperTranslation : lenLimit ? +def.length : 0;
       jd.lowerTranslation = lowerTranslation / this.scale;
       jd.upperTranslation = upperTranslation / this.scale;
       jd.enableMotor = !!def.enableMotor;
@@ -1588,9 +1649,10 @@ export class PhysicsEngine {
       // near-zero, or non-finite lengths keep the fallback here.
       if (type === 'lsj') {
         const sf = Number.isFinite(def.maxMotorForce) ? def.maxMotorForce : 0;
-        const slen = typeof def.length === 'number' && Number.isFinite(def.length) && def.length !== 0
-          ? def.length / this.scale
-          : 0;
+        const slen =
+          typeof def.length === 'number' && Number.isFinite(def.length) && def.length !== 0
+            ? def.length / this.scale
+            : 0;
         const anchorValid = def.anchorA && Number.isFinite(def.anchorA.x) && Number.isFinite(def.anchorA.y);
         let motor = 300; // native hardcodes 300, then signs it when k > 0
         let force = sf;
@@ -1634,7 +1696,8 @@ export class PhysicsEngine {
         j.m_type === box2d.b2Joint.e_revoluteJoint || j.m_type === box2d.b2Joint.e_prismaticJoint;
       if (!gearOk(j1) || !gearOk(j2)) {
         console.warn(
-          `Gear joint referents must be revolute or prismatic (${def.jointA}:${j1.m_type}, ${def.jointB}:${j2.m_type}) — skipping joint`);
+          `Gear joint referents must be revolute or prismatic (${def.jointA}:${j1.m_type}, ${def.jointB}:${j2.m_type}) — skipping joint`,
+        );
         return;
       }
       gd.joint1 = j1;
@@ -1657,10 +1720,66 @@ export class PhysicsEngine {
   private createdJoints: Map<string, any> = new Map();
 
   /**
+   * The bundled Box2D port allocates fixed broadphase capacity at world
+   * creation (b2Settings.b2_maxProxies = 512 proxy slots, b2_maxPairs = 4096
+   * pair slots) and drains both free lists with no bounds check: once
+   * exhausted, AddPair/CreateProxy dereference undefined and throw the
+   * opaque 'Cannot read properties of undefined (reading "next")' TypeError
+   * (#392). The upstream MAX_OPPONENTS validation keeps bundled-map configs
+   * clear of the limit; this guard converts any residual exhaustion (e.g.
+   * custom mapData dense enough to drain the table) into a descriptive error
+   * that names the capacity and the remedy. The overloaded free-list heads
+   * (world.m_broadPhase.m_freeProxy, ...m_pairManager.m_freePair) are array
+   * indexes that read 0..capacity while slots remain and the USHRT_MAX
+   * sentinel (65535) once drained, so `>= capacity` detects both states.
+   */
+  private assertBroadphaseCapacity(context: string): void {
+    const world: any = this.world;
+    const broadPhase: any = world?.m_broadPhase;
+    const pairManager: any = broadPhase?.m_pairManager;
+    const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
+    const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
+    if ((pairManager && pairManager.m_freePair >= maxPairs) || (broadPhase && broadPhase.m_freeProxy >= maxProxies)) {
+      throw new Error(
+        `PhysicsEngine broadphase capacity exhausted (b2_maxProxies = ${maxProxies}, ` +
+          `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
+          `(at most ${MAX_OPPONENTS}) or the number of collidable map fixtures.`,
+      );
+    }
+  }
+
+  /**
+   * Create a fixture shape on `body`, converting a broadphase pair-table
+   * exhaustion raised inside the library into the same descriptive capacity
+   * error as the pre-check above. CreateShape drains pair-table slots mid-add
+   * (CreateProxy buffers one pair per overlapping proxy), so the last free
+   * slot can be consumed inside the call itself after any pre-check passed.
+   * Every fixture-creation path (map bodies, cap-zone sensors, player discs)
+   * goes through this helper so dense custom mapData fails with the labeled
+   * validation error instead of the library's opaque TypeError (#392).
+   */
+  private createShapeGuarded(body: any, shapeDef: any, context: string): any {
+    try {
+      return body.CreateShape(shapeDef);
+    } catch (err) {
+      if (isPairTableExhaustionError(err)) {
+        throw new Error(
+          `PhysicsEngine broadphase pair table exhausted (b2_maxPairs = ` +
+            `${b2Settings?.b2_maxPairs ?? 4096}) while ${context}. Reduce ` +
+            `numOpponents (at most ${MAX_OPPONENTS}) or the number of collidable ` +
+            `map fixtures.`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Add a dynamic circular player body.
    * Returns the player ID (0-indexed).
    */
   addPlayer(id: number, x: number, y: number): void {
+    this.assertBroadphaseCapacity(`cannot add player ${id}`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
 
@@ -1681,10 +1800,10 @@ export class PhysicsEngine {
     // id 0, so a nonzero aiPlayerId keeps the g1 mapping on the AI (#221).
     const filter = new b2FilterData();
     filter.categoryBits = id === this.aiSlot ? 0x0002 : 0x0004;
-    filter.maskBits = 0xFFFF; // Collide with everything by default
+    filter.maskBits = 0xffff; // Collide with everything by default
     circleDef.filter = filter;
 
-    body.CreateShape(circleDef);
+    this.createShapeGuarded(body, circleDef, `adding the disc shape for player ${id}`);
     body.SetMassFromShapes();
 
     // Allow rotation (bonk players spin)
@@ -1803,15 +1922,20 @@ export class PhysicsEngine {
     for (const pBody of this.platformBodies) {
       const xf = pBody.GetXForm();
       for (let shape = pBody.GetShapeList(); shape !== null; shape = shape.GetNext()) {
-        const ud = typeof shape.GetUserData === 'function'
-          ? shape.GetUserData() || pBody.GetUserData() || {}
-          : pBody.GetUserData() || {};
+        const ud =
+          typeof shape.GetUserData === 'function'
+            ? shape.GetUserData() || pBody.GetUserData() || {}
+            : pBody.GetUserData() || {};
         // Native query filter (lines 8148-8161): noGrapple surfaces excluded;
         // players and capzones are never in platformBodies so never grappleable.
         if (ud.noGrapple) continue;
         shape.ComputeAABB(shapeAabb, xf);
-        if (shapeAabb.lowerBound.x > queryAabb.upperBound.x || shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
-            shapeAabb.lowerBound.y > queryAabb.upperBound.y || shapeAabb.upperBound.y < queryAabb.lowerBound.y) {
+        if (
+          shapeAabb.lowerBound.x > queryAabb.upperBound.x ||
+          shapeAabb.upperBound.x < queryAabb.lowerBound.x ||
+          shapeAabb.lowerBound.y > queryAabb.upperBound.y ||
+          shapeAabb.upperBound.y < queryAabb.lowerBound.y
+        ) {
           continue; // broadphase window miss — cannot satisfy d < window
         }
         const surface = this.closestSurfacePoint(shape, pBody, playerPos);
@@ -1828,11 +1952,12 @@ export class PhysicsEngine {
 
     // §32.1 final gate (lines 8297-8306): the first candidate that is
     // innerGrapple or does NOT contain the disc center wins.
-    let chosen: typeof candidates[number] | null = null;
+    let chosen: (typeof candidates)[number] | null = null;
     for (const c of candidates) {
-      const ud = typeof c.shape.GetUserData === 'function'
-        ? c.shape.GetUserData() || c.body.GetUserData() || {}
-        : c.body.GetUserData() || {};
+      const ud =
+        typeof c.shape.GetUserData === 'function'
+          ? c.shape.GetUserData() || c.body.GetUserData() || {}
+          : c.body.GetUserData() || {};
       if (ud.innerGrapple || !c.shape.TestPoint(c.body.GetXForm(), playerPos)) {
         chosen = c;
         break;
@@ -2094,34 +2219,34 @@ export class PhysicsEngine {
    * Advance the physics simulation by exactly one tick (1/30s).
    * This is the core synchronous step — no real-time clock involved.
    */
-    tick(): void {
-        if (!this.world) return;
-// Dying-step snapshots live for exactly one tick (plus any terminal
-        // hold that skips physics): drop the previous tick's pre-respawn
-        // snapshots so respawned discs become visible again on this step.
-        this.lastDeathStates.clear();
+  tick(): void {
+    if (!this.world) return;
+    // Dying-step snapshots live for exactly one tick (plus any terminal
+    // hold that skips physics): drop the previous tick's pre-respawn
+    // snapshots so respawned discs become visible again on this step.
+    this.lastDeathStates.clear();
 
-        // Deferred P3b respawns (issue #339): a disc that died on the previous
-        // tick with respawning enabled stays dead for that tick so the
-        // environment observes the death (reward, alive flags, termination);
-        // this tick starts by returning it to its spawn, keeping the native
-        // respawn mechanics (teleport, cleared grapple, fresh velocity) one
-        // tick after the death instead of inside the same pass.
-        if (this.pendingRespawns.size > 0) {
-          for (const id of this.pendingRespawns) {
-            const body = this.playerBodies.get(id);
-            if (body) this.respawnPlayer(id, body);
-          }
-          this.pendingRespawns.clear();
-        }
-        // This bundled Box2D v2.0 port accepts only one iteration count and
-        // ignores the third argument; the second argument carries the resolved
-        // velocity iterations. The native client uses Step(dt, velIter, posIter)
-        // — 2/6 low, 15/15 high (pq, DEOBFUSCATION §Solver Iterations) — so the
-        // position count cannot be expressed exactly in this port. The engine
-        // still resolves and exposes both counts (positionIterations) so callers
-        // and tests see the pq contract; the port limitation is tracked for the
-        // P4 differential gate.
+    // Deferred P3b respawns (issue #339): a disc that died on the previous
+    // tick with respawning enabled stays dead for that tick so the
+    // environment observes the death (reward, alive flags, termination);
+    // this tick starts by returning it to its spawn, keeping the native
+    // respawn mechanics (teleport, cleared grapple, fresh velocity) one
+    // tick after the death instead of inside the same pass.
+    if (this.pendingRespawns.size > 0) {
+      for (const id of this.pendingRespawns) {
+        const body = this.playerBodies.get(id);
+        if (body) this.respawnPlayer(id, body);
+      }
+      this.pendingRespawns.clear();
+    }
+    // This bundled Box2D v2.0 port accepts only one iteration count and
+    // ignores the third argument; the second argument carries the resolved
+    // velocity iterations. The native client uses Step(dt, velIter, posIter)
+    // — 2/6 low, 15/15 high (pq, DEOBFUSCATION §Solver Iterations) — so the
+    // position count cannot be expressed exactly in this port. The engine
+    // still resolves and exposes both counts (positionIterations) so callers
+    // and tests see the pq contract; the port limitation is tracked for the
+    // P4 differential gate.
     // Count down last-hit attribution timers (native lht) before the step so
     // contacts created during this Step keep their full 120-tick window.
     for (const [id, ticks] of this.lastHitTicks) {
@@ -2138,7 +2263,7 @@ export class PhysicsEngine {
     this.updateGrappleEnergy();
     this.updateGrappleJointTuning();
 
-        this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
+    this.world.Step(this.dt, this.velocityIterations, this.positionIterations);
     this.tickCount++;
 
     // Detect OOB before cap completion can eliminate survivors so a same-tick
@@ -2289,7 +2414,10 @@ export class PhysicsEngine {
     const touchesByZone = new Map<number, Array<{ playerId: number; team: string }>>();
     for (const touch of this.capZoneTouches) {
       let arr = touchesByZone.get(touch.zoneIndex);
-      if (!arr) { arr = []; touchesByZone.set(touch.zoneIndex, arr); }
+      if (!arr) {
+        arr = [];
+        touchesByZone.set(touch.zoneIndex, arr);
+      }
       arr.push({ playerId: touch.playerId, team: touch.team });
     }
 
@@ -2300,7 +2428,10 @@ export class PhysicsEngine {
       const touchesByTeam = new Map<string, number[]>();
       for (const t of touches) {
         let arr = touchesByTeam.get(t.team);
-        if (!arr) { arr = []; touchesByTeam.set(t.team, arr); }
+        if (!arr) {
+          arr = [];
+          touchesByTeam.set(t.team, arr);
+        }
         arr.push(t.playerId);
       }
 
@@ -2359,9 +2490,15 @@ export class PhysicsEngine {
     const body = this.playerBodies.get(playerId);
     if (!body) {
       return {
-        x: 0, y: 0, velX: 0, velY: 0,
-        angle: 0, angularVel: 0,
-        isHeavy: false, alive: false, deathType: 0,
+        x: 0,
+        y: 0,
+        velX: 0,
+        velY: 0,
+        angle: 0,
+        angularVel: 0,
+        isHeavy: false,
+        alive: false,
+        deathType: 0,
       };
     }
 
@@ -2493,17 +2630,14 @@ let hooksEnabled = false;
 
 function enablePhysicsHooks(): void {
   if (hooksEnabled) return;
-  
+
   if (!isTelemetryEnabled()) {
     return; // Skip wrapping when telemetry is disabled for performance
   }
-  
+
   physicsProto.tick = wrap(TelemetryIndices.PHYSICS_TICK, physicsProto.tick);
   physicsProto.fireGrapple = wrap(TelemetryIndices.RAYCAST_CALL, physicsProto.fireGrapple);
-  physicsProto.checkLethalCollision = wrap(
-    TelemetryIndices.COLLISION_RESOLVE,
-    physicsProto.checkLethalCollision,
-  );
+  physicsProto.checkLethalCollision = wrap(TelemetryIndices.COLLISION_RESOLVE, physicsProto.checkLethalCollision);
   hooksEnabled = true;
 }
 
@@ -2517,7 +2651,7 @@ function ensureHooks(): void {
 
 // Wrap tick() to ensure hooks are enabled before first physics step
 const originalTick = physicsProto.tick;
-physicsProto.tick = function(...args: any[]) {
+physicsProto.tick = function (...args: any[]) {
   ensureHooks();
   return originalTick.apply(this, args);
 };
