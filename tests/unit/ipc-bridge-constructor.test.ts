@@ -674,6 +674,37 @@ describe('IpcBridge start()/close() race (#402)', () => {
 
     await closePromise;
   });
+
+  it('a genuine bind failure on a restart after close() keeps its real error and cleans up the recreated socket', async () => {
+    const bridge = new IpcBridge({ server: { port: 12388 } });
+    // Complete one open->close cycle so _closed is stale-true for the
+    // restart, exactly like the #263/#316 restart flows.
+    await bridge.close();
+
+    const closeCallsBeforeRestart = closeSpy.mock.calls.length;
+    bindSpy.mockRejectedValueOnce(new Error('bind failed: address already in use'));
+
+    const startOutcome = await bridge.start().then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    // The stale _closed from the previous cycle must NOT misclassify this
+    // genuine failure as BridgeClosedDuringStart (#402 review).
+    expect(startOutcome).toBe('Error: bind failed: address already in use');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bind failed: address already in use');
+
+    // The #326 cleanup must still run on the recreated Router so the native
+    // handle cannot leak before the next start() recreates it again.
+    expect(closeSpy.mock.calls.length).toBe(closeCallsBeforeRestart + 1);
+  });
 });
 
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {

@@ -350,6 +350,16 @@ export class IpcBridge {
       this.sock = this.createSocket();
       this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
+    // Snapshot BEFORE awaiting bind: on a restart after close() (#263/#316)
+    // _closed is still true from the previous cycle until the post-bind reset
+    // below, so testing _closed alone would misclassify every genuine restart
+    // bind failure (e.g. EADDRINUSE) as a cancelled start AND skip the #326
+    // cleanup, leaking the freshly recreated Router. During a restart's
+    // in-flight bind a concurrent close() is itself a no-op (the teardown
+    // early-returns while _closed is set), so only a close that FLIPS _closed
+    // during THIS cycle (first starts) or an externally destroyed socket
+    // (sock.closed) is a cancellation; every other rejection here is genuine.
+    const closedBeforeBind = this._closed;
     try {
       await this.sock.bind(addr);
     } catch (err) {
@@ -363,7 +373,7 @@ export class IpcBridge {
       // library internals never leak to callers; the concurrent close()
       // already destroyed (or is destroying) the handle, so skip the #326
       // failed-bind cleanup here.
-      if (this._closed || this.sock.closed) {
+      if ((this._closed && !closedBeforeBind) || this.sock.closed) {
         const closedDuringStart = this.closedDuringStartError();
         this.markBindFailed(closedDuringStart);
         throw closedDuringStart;
@@ -404,7 +414,11 @@ export class IpcBridge {
     try {
       endpoint = this.sock.lastEndpoint ?? addr;
     } catch (err) {
-      if (this._closed || this.sock.closed) {
+      // Same snapshot discipline as the bind catch above: only a close that
+      // flipped _closed during THIS cycle (or a destroyed socket) is a
+      // cancellation; on a restart the stale _closed must not swallow a
+      // genuine read failure (#402).
+      if ((this._closed && !closedBeforeBind) || this.sock.closed) {
         const closedDuringStart = this.closedDuringStartError();
         this.markBindFailed(closedDuringStart);
         throw closedDuringStart;
