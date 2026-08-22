@@ -30,6 +30,9 @@ const mocks = vi.hoisted(() => {
     step: vi.fn().mockResolvedValue([]),
     close: vi.fn(),
     getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
+    // The idle reaper probes this to proactively evict failed pools; the
+    // fake models a healthy pool.
+    isFailed: vi.fn(() => false),
   };
   const controller = {
     tick: vi.fn(() => false),
@@ -39,8 +42,12 @@ const mocks = vi.hoisted(() => {
     sock,
     pool,
     controller,
-    Router: function Router() { return sock; },
-    WorkerPool: vi.fn(function WorkerPool() { return pool; }),
+    Router: function Router() {
+      return sock;
+    },
+    WorkerPool: vi.fn(function WorkerPool() {
+      return pool;
+    }),
     getConfig: vi.fn(),
     isTelemetryEnabled: vi.fn(),
     gpTick: vi.fn(),
@@ -140,7 +147,9 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
 
   it('reports ok for a completed step when recordMemory throws', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    mocks.gpRecordMemory.mockImplementationOnce(() => { throw new Error('synthetic memory failure'); });
+    mocks.gpRecordMemory.mockImplementationOnce(() => {
+      throw new Error('synthetic memory failure');
+    });
 
     await initAndStepAtBoundary(12363);
 
@@ -200,10 +209,13 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
   it('sends the step reply before the telemetry snapshot fetch completes (issue #229)', async () => {
     const events: string[] = [];
     let resolveSnapshots!: (value: BigUint64Array[]) => void;
-    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
-      events.push('snapshot-start');
-      resolveSnapshots = res;
-    }));
+    mocks.pool.getTelemetrySnapshots.mockImplementation(
+      () =>
+        new Promise<BigUint64Array[]>((res) => {
+          events.push('snapshot-start');
+          resolveSnapshots = res;
+        }),
+    );
     sendSpy.mockImplementation(async () => {
       events.push('send');
     });
@@ -222,14 +234,17 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
 
     // Unblock the detached telemetry task so it settles cleanly.
     resolveSnapshots([]);
-    await new Promise(r => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
   });
 
   it('does not reap a pool while detached telemetry is still reading it', async () => {
     let resolveSnapshots!: (value: BigUint64Array[]) => void;
-    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
-      resolveSnapshots = res;
-    }));
+    mocks.pool.getTelemetrySnapshots.mockImplementation(
+      () =>
+        new Promise<BigUint64Array[]>((res) => {
+          resolveSnapshots = res;
+        }),
+    );
 
     const bridge = await initAndStepAtBoundary(12368);
     const session = (bridge as any).sessions.get(Buffer.from('identity').toString('hex'));
@@ -240,7 +255,7 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     expect((bridge as any).sessions.get(Buffer.from('identity').toString('hex'))).toBe(session);
 
     resolveSnapshots([]);
-    await new Promise(r => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
     session.lastActivityAt = Date.now() - 5 * 60 * 1000;
 
     await (bridge as any).reapExpiredSessions();
@@ -257,9 +272,12 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
 
     let resolveSnapshots!: (value: BigUint64Array[]) => void;
-    mocks.pool.getTelemetrySnapshots.mockImplementation(() => new Promise<BigUint64Array[]>(res => {
-      resolveSnapshots = res;
-    }));
+    mocks.pool.getTelemetrySnapshots.mockImplementation(
+      () =>
+        new Promise<BigUint64Array[]>((res) => {
+          resolveSnapshots = res;
+        }),
+    );
 
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     // First boundary step: the snapshot fetch starts and hangs unresolved.
@@ -271,7 +289,7 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(1);
 
     resolveSnapshots([]);
-    await new Promise(r => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
 
     expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);
     expect(mocks.controller.reportNow).toHaveBeenCalledTimes(1);
@@ -293,7 +311,7 @@ describe('IpcBridge step reply integrity when telemetry fails (issue #185)', () 
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
     // Second boundary step: now the default fetch resolves.
     await handleRequest(Buffer.from('identity'), JSON.stringify({ command: 'step', actions: [0] }));
-    await new Promise(r => setImmediate(r));
+    await new Promise((r) => setImmediate(r));
 
     expect(mocks.pool.getTelemetrySnapshots).toHaveBeenCalledTimes(2);
     expect(mocks.setLatestWorkerTelemetry).toHaveBeenCalledTimes(1);

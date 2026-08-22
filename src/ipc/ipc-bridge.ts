@@ -452,12 +452,27 @@ export class IpcBridge {
 
     const expiredSessions: PoolSession[] = [];
     for (const [sessionKey, session] of this.sessions) {
-      if (session.activeRequests === 0 && now - session.lastActivityAt >= CLIENT_SESSION_IDLE_TIMEOUT_MS) {
+      // A pool that failed asynchronously (worker crash/exit or a post-signal
+      // error between requests) can never serve again, so reap its session
+      // proactively instead of holding the maxClientSessions slot until the
+      // idle timeout or the next request's reactive drop. Healthy sessions
+      // keep the idle-timeout policy, and an in-flight request keeps its
+      // session alive until it settles (and runs its own reactive cleanup).
+      const failed = session.pool.isFailed();
+      if (session.activeRequests === 0 && (failed || now - session.lastActivityAt >= CLIENT_SESSION_IDLE_TIMEOUT_MS)) {
         // Remove before awaiting close so a returning client must
         // explicitly re-init rather than racing a closing pool.
         this.sessions.delete(sessionKey);
         expiredSessions.push(session);
       }
+    }
+
+    // The adopted HOST session is not in the sessions map, so the loop above
+    // can never see it. A dead host pool wedges every sharing IPC client
+    // forever ("worker pool is in failed state"), so the reaper performs the
+    // same proactive recovery here that map sessions got above.
+    if (this._hostPool && this.localSession.activeRequests === 0 && this.localSession.pool.isFailed()) {
+      await this.recoverFailedHostPool();
     }
 
     const reaping = Promise.all(
@@ -501,6 +516,18 @@ export class IpcBridge {
    * local/bypass pool.
    */
   private async dropFailedPoolSession(sessionKey: string, session: PoolSession): Promise<void> {
+    if (session === this.localSession) {
+      // An adopted host pool never enters the sessions map and the host owns
+      // its lifecycle, so the map-based eviction below cannot apply — but a
+      // failed host pool wedges every sharing IPC client forever. Recover
+      // the bridge instead of leaving it pinned to a corpse. A non-host
+      // local/bypass failure stays untouched: programmatic callers own that
+      // lifecycle and may be driving it directly.
+      if (this._hostPool) {
+        await this.recoverFailedHostPool();
+      }
+      return;
+    }
     if (this.sessions.get(sessionKey) !== session) {
       return;
     }
@@ -513,6 +540,47 @@ export class IpcBridge {
     } catch (closeError) {
       console.error('[IPC] Error closing failed client session:', closeError);
     }
+  }
+
+  /**
+   * Recover the bridge from an adopted HOST pool that failed after init
+   * (worker timeout, crash/exit, or a post-signal error). The host session is
+   * not in the sessions map, so neither the reactive map eviction nor the
+   * idle reaper can free it: every sharing IPC client would fail forever with
+   * "worker pool is in failed state" until the process restarts. A failed
+   * pool's workers are already terminated by its own failure cleanup, so
+   * closing it here cannot steal a live lifecycle from the host BonkEnv —
+   * unlike close(), which must never close a healthy adopted pool. After
+   * closing the corpse, un-adopt so the next matching-count init builds a
+   * fresh bridge-owned pool and shared clients recover with a plain re-init.
+   * The stale check keeps concurrent recovery passes idempotent: the reaper
+   * and a request's reactive cleanup can interleave at await points, and only
+   * a pass that still observes the original pool may flip the adoption state.
+   */
+  private async recoverFailedHostPool(): Promise<void> {
+    const session = this.localSession;
+    const pool = session.pool;
+    if (!pool.isFailed()) {
+      return;
+    }
+    try {
+      await pool.close();
+    } catch (closeError) {
+      console.error('[IPC] Error closing failed host pool:', closeError);
+    }
+    if (session.pool !== pool) {
+      // Another recovery pass (or a rebuild) got here first; do not clobber
+      // whatever now occupies the host slot.
+      return;
+    }
+    session.initialized = false;
+    session.numEnvs = 0;
+    session.lastActivityAt = Date.now();
+    this._hostPool = false;
+    this._hostConfig = null;
+    this._hostUseSharedMemory = undefined;
+    this.localSessionIdentity = undefined;
+    session.pool = new WorkerPool();
   }
 
   async handleRequest(identity: Buffer, rawMsg: string) {
