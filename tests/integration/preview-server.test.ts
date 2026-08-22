@@ -127,6 +127,13 @@ interface PreviewFramePayload {
   svg: string;
 }
 
+interface PreviewMetaPayload {
+  map: string;
+  width: number;
+  height: number;
+  episode: number;
+}
+
 function framePayloads(events: SseEvent[]): PreviewFramePayload[] {
   return events
     .filter((entry) => entry.event === 'frame')
@@ -195,6 +202,14 @@ describe('preview episode auto-reset', () => {
     for (let i = 1; i < postTerminalFrames.length; i++) {
       expect(postTerminalFrames[i].svg).not.toBe(postTerminalFrames[i - 1].svg);
     }
+
+    const reconnectEvents = await readSseUntil(
+      port,
+      (entries) => entries.some((entry) => entry.event === 'meta') && entries.some((entry) => entry.event === 'frame'),
+      true,
+    );
+    const meta = JSON.parse(reconnectEvents.find((entry) => entry.event === 'meta')!.data) as PreviewMetaPayload;
+    expect(meta.episode).toBe(2);
   }, 20000);
 
   it('keeps a finite stream advancing beyond its first reset', async () => {
