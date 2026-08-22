@@ -241,9 +241,14 @@ describe('preview-server SSE backpressure', () => {
     expect(severedObserved).toBe(true);
 
     // Severance must come from the eviction path, not from the preview
-    // server dying: only a still-running server can satisfy this test.
-    const exited = await Promise.race([server.waitForExit(), new Promise<null>((r) => setTimeout(() => r(null), 250))]);
-    expect(exited).toBeNull();
+    // server dying: only a still-running server can satisfy this test. The
+    // sentinel is a string because Node's exit code is null on signal death,
+    // which must also count as "the server died".
+    const exited = await Promise.race([
+      server.waitForExit(),
+      new Promise<'alive'>((r) => setTimeout(() => r('alive'), 250)),
+    ]);
+    expect(exited).toBe('alive');
 
     const stalledBytes = stalled.bytesRead;
     expect(stalledBytes).toBeGreaterThan(0);
