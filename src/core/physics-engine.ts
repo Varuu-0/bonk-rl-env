@@ -47,8 +47,7 @@ import { MAX_OPPONENTS } from './opponent-capacity';
 const PAIR_TABLE_EXHAUSTION_TYPE_ERROR = "Cannot read properties of undefined (reading 'next')";
 
 function isPairTableExhaustionError(err: unknown): boolean {
-    return err instanceof TypeError &&
-        String((err as TypeError).message).includes(PAIR_TABLE_EXHAUSTION_TYPE_ERROR);
+  return err instanceof TypeError && String((err as TypeError).message).includes(PAIR_TABLE_EXHAUSTION_TYPE_ERROR);
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -917,6 +916,10 @@ export class PhysicsEngine {
    * Add a static or dynamic body from a MapBodyDef to the world.
    */
   addBody(def: MapBodyDef): void {
+    // Fixture creation consumes broadphase capacity too, so a dense custom
+    // mapData must fail with the labeled capacity error instead of the
+    // library's opaque TypeError mid-build (#392).
+    this.assertBroadphaseCapacity(`cannot add map body${def.name ? ` '${def.name}'` : ''}`);
     const bodyDef = new b2BodyDef();
     const nativeBody = def.nativeBody;
     const nativeFixture = def.nativeFixture;
@@ -1164,7 +1167,11 @@ export class PhysicsEngine {
       shapeDef.filter = filter;
     }
 
-    const shape = body.CreateShape(shapeDef);
+    const shape = this.createShapeGuarded(
+      body,
+      shapeDef,
+      `adding the fixture for map body${def.name ? ` '${def.name}'` : ''}`,
+    );
     if (shape && typeof shape.SetUserData === 'function') shape.SetUserData(def);
     body.SetMassFromShapes();
     setBodyUserData();
@@ -1203,6 +1210,8 @@ export class PhysicsEngine {
     height: number,
     angle = 0,
   ): void {
+    // Sensor fixtures consume broadphase capacity like any other (#392).
+    this.assertBroadphaseCapacity(`cannot add cap-zone ${zone.index} sensor`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
     // Rotate the sensor body to match an angle-rotated fixture so the sensor
@@ -1216,7 +1225,7 @@ export class PhysicsEngine {
     shapeDef.density = 0;
     shapeDef.isSensor = true;
 
-    body.CreateShape(shapeDef);
+    this.createShapeGuarded(body, shapeDef, `adding the cap-zone ${zone.index} sensor`);
     body.SetUserData({ isCapZone: true, zoneType: zone.type, zoneIndex: zone.index, owner: zone.owner });
     this.capZoneSensors.push(body);
 
@@ -1730,13 +1739,38 @@ export class PhysicsEngine {
     const pairManager: any = broadPhase?.m_pairManager;
     const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
     const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
-    if ((pairManager && pairManager.m_freePair >= maxPairs) ||
-        (broadPhase && broadPhase.m_freeProxy >= maxProxies)) {
+    if ((pairManager && pairManager.m_freePair >= maxPairs) || (broadPhase && broadPhase.m_freeProxy >= maxProxies)) {
       throw new Error(
         `PhysicsEngine broadphase capacity exhausted (b2_maxProxies = ${maxProxies}, ` +
-        `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
-        `(at most ${MAX_OPPONENTS}) or the number of collidable map fixtures.`,
+          `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
+          `(at most ${MAX_OPPONENTS}) or the number of collidable map fixtures.`,
       );
+    }
+  }
+
+  /**
+   * Create a fixture shape on `body`, converting a broadphase pair-table
+   * exhaustion raised inside the library into the same descriptive capacity
+   * error as the pre-check above. CreateShape drains pair-table slots mid-add
+   * (CreateProxy buffers one pair per overlapping proxy), so the last free
+   * slot can be consumed inside the call itself after any pre-check passed.
+   * Every fixture-creation path (map bodies, cap-zone sensors, player discs)
+   * goes through this helper so dense custom mapData fails with the labeled
+   * validation error instead of the library's opaque TypeError (#392).
+   */
+  private createShapeGuarded(body: any, shapeDef: any, context: string): any {
+    try {
+      return body.CreateShape(shapeDef);
+    } catch (err) {
+      if (isPairTableExhaustionError(err)) {
+        throw new Error(
+          `PhysicsEngine broadphase pair table exhausted (b2_maxPairs = ` +
+            `${b2Settings?.b2_maxPairs ?? 4096}) while ${context}. Reduce ` +
+            `numOpponents (at most ${MAX_OPPONENTS}) or the number of collidable ` +
+            `map fixtures.`,
+        );
+      }
+      throw err;
     }
   }
 
@@ -1769,24 +1803,7 @@ export class PhysicsEngine {
     filter.maskBits = 0xffff; // Collide with everything by default
     circleDef.filter = filter;
 
-    try {
-      body.CreateShape(circleDef);
-    } catch (err) {
-      // CreateShape drains pair-table slots mid-add (CreateProxy buffers one
-      // pair per overlapping proxy), so the last free slot can be consumed
-      // inside this very call after the pre-check above passed. Convert the
-      // library's opaque free-list TypeError into the same descriptive
-      // capacity error instead of letting it escape (#392).
-      if (isPairTableExhaustionError(err)) {
-        throw new Error(
-          `PhysicsEngine broadphase pair table exhausted (b2_maxPairs = ` +
-          `${b2Settings?.b2_maxPairs ?? 4096}) while adding the disc shape ` +
-          `for player ${id}. Reduce numOpponents (at most ${MAX_OPPONENTS}) ` +
-          `or the number of collidable map fixtures.`,
-        );
-      }
-      throw err;
-    }
+    this.createShapeGuarded(body, circleDef, `adding the disc shape for player ${id}`);
     body.SetMassFromShapes();
 
     // Allow rotation (bonk players spin)
