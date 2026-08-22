@@ -1,6 +1,8 @@
 from collections import UserDict
 from collections.abc import Mapping
 from unittest.mock import MagicMock
+import os
+import re
 import warnings
 
 import numpy as np
@@ -157,6 +159,31 @@ def test_num_envs_accepts_the_maximum_bound(monkeypatch):
     env, _, socket = _make_mocked_env(monkeypatch, num_envs=bonk_env.MAX_NUM_ENVS)
     assert env.num_envs == bonk_env.MAX_NUM_ENVS
     env.close()
+
+
+def test_max_num_envs_matches_typescript_source_of_truth():
+    """MAX_NUM_ENVS is a hand-copied mirror of the TS export in
+    src/core/worker-pool.ts, and the two transports must never disagree on a
+    valid count. Reading the declaration directly ties the Python constant to
+    the TS source of truth: any drift (or a renamed/missing export) fails
+    here instead of silently splitting client and server acceptance ranges.
+    """
+    project_root = os.path.abspath(
+        os.path.join(os.path.dirname(__file__), "..", "..")
+    )
+    worker_pool_ts = os.path.join(project_root, "src", "core", "worker-pool.ts")
+    if not os.path.isfile(worker_pool_ts):
+        pytest.skip("src/core/worker-pool.ts not found next to the python package")
+    with open(worker_pool_ts, encoding="utf-8") as ts_file:
+        source = ts_file.read()
+    match = re.search(r"export const MAX_NUM_ENVS = (\d+)", source)
+    assert match is not None, (
+        "`export const MAX_NUM_ENVS` not found in src/core/worker-pool.ts"
+    )
+    assert int(match.group(1)) == bonk_env.MAX_NUM_ENVS, (
+        f"python MAX_NUM_ENVS={bonk_env.MAX_NUM_ENVS} drifted from the TypeScript "
+        f"source of truth ({match.group(1)} in src/core/worker-pool.ts)"
+    )
 
 
 def test_reset_receive_timeout_invalidates_session_and_rejects_later_requests(monkeypatch):
