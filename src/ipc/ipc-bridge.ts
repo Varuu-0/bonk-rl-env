@@ -370,12 +370,13 @@ export class IpcBridge {
         if (this._closed) break;
         const identity = frames[0];
         const msg = frames[frames.length - 1];
-        // A 3-frame request ([identity, "", payload]) comes from a REQ
-        // peer: libzmq's REQ state machine silently discards any reply
-        // that does not re-echo the empty delimiter, so mirror the
-        // request envelope on every reply (#410). DEALER peers send
-        // 2-frame requests and keep the plain [identity, payload].
-        const reqEnvelope = frames.length >= 3;
+        // Exactly 3 frames with an empty middle frame is REQ's wire
+        // signature ([identity, "", payload]): libzmq's REQ state
+        // machine silently discards any reply that does not re-echo
+        // that empty delimiter, so mirror the request envelope on
+        // every reply (#410). Anything else — DEALER peers including
+        // multi-frame payloads — keeps the plain [identity, payload].
+        const reqEnvelope = frames.length === 3 && frames[1].length === 0;
         await this.handleRequest(identity, msg.toString(), { reqEnvelope });
       }
     } catch (err: any) {

@@ -28,14 +28,19 @@ describe('IpcBridge ZMQ REQ-socket envelope mirroring (issue #410)', () => {
   let bridge: IpcBridge;
   let portManager: PortManager;
   let port: number;
+  let trailingCapturePort: number;
+  let eagerCapturePort: number;
 
   beforeAll(async () => {
-    portManager = new PortManager({ startPort: 15900, endPort: 15999 });
+    // Dedicated range so concurrent vitest forks cannot collide with other
+    // ipc-bridge suites (e.g. ipc-bridge-options.test.ts).
+    portManager = new PortManager({ startPort: 16000, endPort: 16099 });
     port = portManager.allocate();
     bridge = new IpcBridge({ server: { port } } as any);
-    // start() runs the serve loop until close(), so do not await it.
+    // start() runs the serve loop until close(), so do not await it;
+    // await ready instead of a fixed sleep so bind failures surface here.
     void bridge.start();
-    await new Promise((r) => setTimeout(r, 300));
+    await bridge.ready;
   }, 30000);
 
   afterAll(async () => {
@@ -45,6 +50,8 @@ describe('IpcBridge ZMQ REQ-socket envelope mirroring (issue #410)', () => {
       /* ignore */
     }
     portManager.release(port);
+    if (trailingCapturePort !== undefined) portManager.release(trailingCapturePort);
+    if (eagerCapturePort !== undefined) portManager.release(eagerCapturePort);
   }, 10000);
 
   it('REQ client receives replies for init, reset and step', async () => {
@@ -109,7 +116,8 @@ describe('IpcBridge ZMQ REQ-socket envelope mirroring (issue #410)', () => {
     });
 
     it('mirrors the REQ envelope at the trailing reply site', async () => {
-      const captureBridge = new IpcBridge({ server: { port: port + 90 } } as any);
+      trailingCapturePort = portManager.allocate();
+      const captureBridge = new IpcBridge({ server: { port: trailingCapturePort } } as any);
       const sentFrames: any[][] = [];
       (captureBridge as any)._wrappedSend = async (frames: any[]) => {
         sentFrames.push(frames);
@@ -140,7 +148,8 @@ describe('IpcBridge ZMQ REQ-socket envelope mirroring (issue #410)', () => {
     }, 30000);
 
     it('mirrors the REQ envelope at the eager telemetry-window reply site', async () => {
-      const captureBridge = new IpcBridge({ server: { port: port + 91 } } as any);
+      eagerCapturePort = portManager.allocate();
+      const captureBridge = new IpcBridge({ server: { port: eagerCapturePort } } as any);
       const sentFrames: any[][] = [];
       (captureBridge as any)._wrappedSend = async (frames: any[]) => {
         sentFrames.push(frames);
