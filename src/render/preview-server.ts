@@ -93,15 +93,16 @@ const HTML_PAGE = `<!doctype html>
     es.addEventListener('meta', (e) => {
       const m = JSON.parse(e.data);
       mapName = m.map;
-      document.getElementById('meta').textContent = mapName;
+      episode = m.episode;
+      document.getElementById('meta').textContent = mapName + ' · episode ' + episode;
     });
     es.addEventListener('frame', (e) => {
       const f = JSON.parse(e.data);
       stage.innerHTML = f.svg;
       tickEl.textContent = String(f.tick);
     });
-    es.addEventListener('episode-end', () => {
-      episode += 1;
+    es.addEventListener('episode-end', (e) => {
+      episode = JSON.parse(e.data).episode;
       document.getElementById('meta').textContent = mapName + ' · episode ' + episode;
     });
     es.addEventListener('done', () => {
@@ -197,7 +198,7 @@ function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): v
 function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  deps: { width: number; height: number; map: string },
+  deps: { width: number; height: number; map: string; episode: number },
 ): void {
   const url = req.url ?? '/';
   if (url === '/') {
@@ -217,7 +218,7 @@ function handleRequest(
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height });
+    sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height, episode: deps.episode });
     if (latestFrame) sseSend(res, 'frame', latestFrame);
     registerSseClient(res, req);
     return;
@@ -241,7 +242,7 @@ async function main(): Promise<void> {
   const tickCap = parseIntArg(args.ticks, 0, 'ticks'); // 0 = stream until stopped
 
   const env = new BonkEnvironment({ mapPath: map, numOpponents: 1, randomOpponent: false, seed: 42 });
-  const deps = { width, height, map };
+  const deps = { width, height, map, episode: 1 };
 
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
   server.on('error', (e) => {
@@ -267,7 +268,10 @@ async function main(): Promise<void> {
       const frame = { tick, simTick: step.result.observation.tick, svg: step.frame };
       latestFrame = frame;
       broadcast('frame', frame);
-      if (step.episodeEnded) broadcast('episode-end', { tick, simTick: frame.simTick });
+      if (step.episodeEnded) {
+        deps.episode += 1;
+        broadcast('episode-end', { tick, simTick: frame.simTick, episode: deps.episode });
+      }
       tick += 1;
     }
     if (tickCap > 0 && tick >= tickCap) {
