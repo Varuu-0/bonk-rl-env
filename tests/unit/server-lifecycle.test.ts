@@ -33,13 +33,13 @@ async function listenOnEphemeralPort(): Promise<ListeningServer> {
 
 async function closeServer(server: net.Server): Promise<void> {
   if (!server.listening) return;
-  await new Promise<void>(resolve => server.close(() => resolve()));
+  await new Promise<void>((resolve) => server.close(() => resolve()));
 }
 
 async function waitForServerPort(port: number, timeoutMs = 5000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    const reachable = await new Promise<boolean>(resolve => {
+    const reachable = await new Promise<boolean>((resolve) => {
       const socket = net.connect({ host: '127.0.0.1', port });
       socket.once('connect', () => {
         socket.destroy();
@@ -51,7 +51,7 @@ async function waitForServerPort(port: number, timeoutMs = 5000): Promise<void> 
       });
     });
     if (reachable) return;
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`server port ${port} never became reachable`);
 }
@@ -60,14 +60,14 @@ async function waitForPortAvailable(port: number, timeoutMs = 5000): Promise<voi
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     const probe = net.createServer();
-    const available = await new Promise<boolean>(resolve => {
+    const available = await new Promise<boolean>((resolve) => {
       probe.once('error', () => resolve(false));
       probe.listen(port, '127.0.0.1', () => {
         probe.close(() => resolve(true));
       });
     });
     if (available) return;
-    await new Promise(resolve => setTimeout(resolve, 50));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(`port ${port} did not become available`);
 }
@@ -122,7 +122,17 @@ describe('standalone server bind-failure lifecycle (issue #326)', () => {
       expect(isServerRunning()).toBe(true);
     } finally {
       await stopServer();
-      await serverStart;
+      // The kernel listener exists before start()'s continuation runs, so
+      // stopServer() can land inside startup's post-bind window. That
+      // cancelled cycle now rejects deterministically with the clear
+      // closed-during-start error (#402) instead of an opaque libzmq
+      // failure or a hang; a cycle that already entered its serve loop
+      // exits normally on shutdown. Both outcomes are valid here.
+      await serverStart.then(undefined, (err: unknown) => {
+        if (!(err instanceof Error) || !/closed during start/i.test(err.message)) {
+          throw err;
+        }
+      });
     }
     expect(isServerRunning()).toBe(false);
   });
@@ -133,7 +143,9 @@ describe('standalone server bind-failure lifecycle (issue #326)', () => {
     await closeServer(dashboard.server);
 
     try {
-      await expect(startServer(makeConfig(blocker.port, true, dashboard.port))).rejects.toThrow(/address already in use|eaddrinuse/i);
+      await expect(startServer(makeConfig(blocker.port, true, dashboard.port))).rejects.toThrow(
+        /address already in use|eaddrinuse/i,
+      );
       expect(isServerRunning()).toBe(false);
       await waitForPortAvailable(dashboard.port);
     } finally {

@@ -608,24 +608,24 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
 });
 
 describe('IpcBridge start()/close() race (#402)', () => {
-  it('start() without awaiting then immediate close(): never throws "Socket operation on non-socket"; ready settles', async () => {
+  it('start() without awaiting then immediate close(): start and ready reject identically with BridgeClosedDuringStart', async () => {
     const bridge = new IpcBridge({ server: { port: 12386 } });
     // The exact race from issue #402: close() runs synchronously up to the
     // socket destroy while start() is still suspended at the bind await.
     const startPromise = bridge.start();
     const closePromise = bridge.close();
 
+    // Exactly ONE deterministic outcome: a cancelled start rejects with the
+    // clear named error — never resolves silently and never surfaces the
+    // opaque libzmq error from reading a destroyed socket.
     const startOutcome = await startPromise.then(
       () => 'resolved',
-      (e: any) => `rejected: ${e?.message ?? e}`,
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
     );
-    // start() must resolve or reject with a clear "closed during start" error,
-    // never with the opaque libzmq error from reading a destroyed socket.
-    expect(startOutcome).not.toContain('Socket operation on non-socket');
-    expect(startOutcome === 'resolved' || /closed during start/i.test(startOutcome)).toBe(true);
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
 
-    // bridge.ready must settle within a short timeout; it must never remain
-    // pending after the race (or surface the opaque libzmq error).
+    // bridge.ready must settle within a short timeout, rejecting with the
+    // SAME error so awaiting callers observe one consistent contract.
     const readyOutcome = await Promise.race([
       (bridge as any).ready.then(
         () => 'ready resolved',
@@ -633,8 +633,44 @@ describe('IpcBridge start()/close() race (#402)', () => {
       ),
       new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
     ]);
-    expect(readyOutcome).not.toContain('Socket operation on non-socket');
-    expect(readyOutcome).toMatch(/^ready (resolved|rejected)/);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    await closePromise;
+  });
+
+  it('close() while bind is still pending converts an opaque bind rejection into BridgeClosedDuringStart', async () => {
+    // The second race window: close() destroys the ROUTER before the native
+    // bind settles, so the pending bind promise itself rejects with the
+    // opaque libzmq error. That rejection must be normalized into the same
+    // clear error on both start() and ready (#402).
+    let rejectBind!: (err: Error) => void;
+    bindSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectBind = reject;
+        }),
+    );
+
+    const bridge = new IpcBridge({ server: { port: 12387 } });
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    rejectBind(new Error('Socket operation on non-socket'));
+
+    const startOutcome = await startPromise.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
 
     await closePromise;
   });

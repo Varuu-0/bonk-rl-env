@@ -244,6 +244,18 @@ export class IpcBridge {
   }
 
   /**
+   * The canonical error for a start() cancelled by a concurrent close():
+   * rejected on BOTH the start() promise and the current ready signal so
+   * awaiting callers observe one consistent outcome instead of a resolved
+   * start wedged against a rejected ready (#402).
+   */
+  private closedDuringStartError(): Error {
+    const err = new Error('bridge was closed during start');
+    err.name = 'BridgeClosedDuringStart';
+    return err;
+  }
+
+  /**
    * Normalize a configured bind address into a ZMQ endpoint-ready host.
    * Empty/whitespace values fall back to the loopback default; `*` (the
    * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
@@ -341,6 +353,21 @@ export class IpcBridge {
     try {
       await this.sock.bind(addr);
     } catch (err) {
+      // A concurrent close()/stopServer() can destroy the ROUTER while the
+      // bind is still in flight: close() sees boundEndpoint === null, skips
+      // unbind, and closes the socket synchronously. The pending native bind
+      // then rejects with libzmq's opaque "Socket operation on non-socket"
+      // (EBADF-equivalent) — an intentional shutdown misreported as a
+      // startup failure (#402). Surface the same distinguishable error as
+      // the post-bind guard below so start() and ready always agree and
+      // library internals never leak to callers; the concurrent close()
+      // already destroyed (or is destroying) the handle, so skip the #326
+      // failed-bind cleanup here.
+      if (this._closed || this.sock.closed) {
+        const closedDuringStart = this.closedDuringStartError();
+        this.markBindFailed(closedDuringStart);
+        throw closedDuringStart;
+      }
       this.markBindFailed(err);
       // A bind that never succeeded leaves the ROUTER handle open. Close
       // it for both first starts and restart attempts; a later start()
@@ -363,25 +390,24 @@ export class IpcBridge {
     // suspended at the bind await. Reading lastEndpoint on the destroyed
     // socket makes libzmq throw "Socket operation on non-socket"
     // (EBADF-equivalent), and because that happens outside the bind
-    // try/catch above, start() would reject with an opaque error and
-    // bridge.ready would stay pending forever (#402). On shutdown-during-
-    // start, settle ready with a clear, distinguishable "closed during
-    // start" error and finish the cycle without claiming it ever bound.
+    // try/catch above, start() would reject with an opaque error while
+    // bridge.ready stayed pending forever (#402). On shutdown-during-start,
+    // reject BOTH start() and ready with the same clear, distinguishable
+    // error so awaiting callers observe one consistent outcome and the
+    // cancelled cycle never claims it ever bound.
     if (this.sock.closed) {
-      const closedDuringStart = new Error('bridge was closed during start');
-      closedDuringStart.name = 'BridgeClosedDuringStart';
+      const closedDuringStart = this.closedDuringStartError();
       this.markBindFailed(closedDuringStart);
-      return;
+      throw closedDuringStart;
     }
     let endpoint: string;
     try {
       endpoint = this.sock.lastEndpoint ?? addr;
     } catch (err) {
       if (this._closed || this.sock.closed) {
-        const closedDuringStart = new Error('bridge was closed during start');
-        closedDuringStart.name = 'BridgeClosedDuringStart';
+        const closedDuringStart = this.closedDuringStartError();
         this.markBindFailed(closedDuringStart);
-        return;
+        throw closedDuringStart;
       }
       this.markBindFailed(err);
       throw err;
