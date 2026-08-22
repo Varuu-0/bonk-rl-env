@@ -240,6 +240,11 @@ describe('preview-server SSE backpressure', () => {
     clearTimeout(fallback);
     expect(severedObserved).toBe(true);
 
+    // Severance must come from the eviction path, not from the preview
+    // server dying: only a still-running server can satisfy this test.
+    const exited = await Promise.race([server.waitForExit(), new Promise<null>((r) => setTimeout(() => r(null), 250))]);
+    expect(exited).toBeNull();
+
     const stalledBytes = stalled.bytesRead;
     expect(stalledBytes).toBeGreaterThan(0);
     // Only the finite socket-buffer burst ever reached the stalled client,
