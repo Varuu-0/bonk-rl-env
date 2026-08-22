@@ -19,12 +19,14 @@
  */
 import * as http from 'http';
 import { BonkEnvironment } from '../core/environment';
+import { createPreviewFrameStepper } from './preview-loop';
 import { renderEnvFrameSvg } from './render-wiring';
 import { parseArgs, parseIntArg, parsePositiveIntArg, selectPreviewMap } from './preview-shared';
 
 /** One streamed frame. The server keeps only the latest for late joins. */
 interface SseFrame {
   tick: number;
+  simTick: number;
   svg: string;
 }
 
@@ -58,18 +60,25 @@ const HTML_PAGE = `<!doctype html>
   const tickEl = document.getElementById('tick');
   const pauseBtn = document.getElementById('pause');
   let paused = false;
+  let mapName = '';
+  let episode = 1;
 
   function connect() {
     if (paused) return;
     es = new EventSource('/frames');
     es.addEventListener('meta', (e) => {
       const m = JSON.parse(e.data);
-      document.getElementById('meta').textContent = m.map;
+      mapName = m.map;
+      document.getElementById('meta').textContent = mapName;
     });
     es.addEventListener('frame', (e) => {
       const f = JSON.parse(e.data);
       stage.innerHTML = f.svg;
       tickEl.textContent = String(f.tick);
+    });
+    es.addEventListener('episode-end', () => {
+      episode += 1;
+      document.getElementById('meta').textContent = mapName + ' · episode ' + episode;
     });
     es.addEventListener('done', () => {
       if (es) es.close();
@@ -161,23 +170,32 @@ async function main(): Promise<void> {
   const deps = { width, height, map };
 
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
-  server.on('error', (e) => { console.error(e); shutdown(env, server, 1); });
+  server.on('error', (e) => {
+    console.error(e);
+    shutdown(env, server, 1);
+  });
   server.listen(port, () => {
     const bound = server.address();
     const boundPort = typeof bound === 'object' && bound ? bound.port : port;
-    console.log(`bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
+    console.log(
+      `bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`,
+    );
   });
 
   const intervalMs = Math.max(1, Math.round(1000 / fps));
+  const stepPreview = createPreviewFrameStepper(env, () =>
+    renderEnvFrameSvg(env, { width, height, title: `bonk-rl-env live (${map})` }),
+  );
   let tick = 0;
   const timer = setInterval(() => {
-    // Step the sim normally first, then pull the (already-materialized) state
-    // for the frame — exactly the one-shot render path the frame-dump CLI uses.
-    env.step(0);
-    const svg = renderEnvFrameSvg(env, { width, height, title: `bonk-rl-env live (${map})` });
-    latestFrame = { tick, svg };
-    broadcast('frame', { tick, svg });
-    tick += 1;
+    const step = stepPreview();
+    if (step.frame !== null) {
+      const frame = { tick, simTick: step.result.observation.tick, svg: step.frame };
+      latestFrame = frame;
+      broadcast('frame', frame);
+      if (step.episodeEnded) broadcast('episode-end', { tick, simTick: frame.simTick });
+      tick += 1;
+    }
     if (tickCap > 0 && tick >= tickCap) {
       clearInterval(timer);
       broadcast('done', { tick });
@@ -195,4 +213,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSigint);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
