@@ -14,6 +14,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { BonkEnvironment } from '../core/environment';
+import { createPreviewFrameStepper } from './preview-loop';
 import { renderEnvFrameSvg } from './render-wiring';
 import { parseArgs, parseIntArg, resolvePreviewMap } from './preview-shared';
 
@@ -29,12 +30,15 @@ async function main(): Promise<void> {
 
   const env = new BonkEnvironment({ mapPath: map, numOpponents: 1, randomOpponent: false, seed: 42 });
   try {
-    for (let t = 0; t < ticks; t++) {
-      const svg = renderEnvFrameSvg(env, { width, height, title: 'bonk-rl-env frame' });
+    const stepPreview = createPreviewFrameStepper(env, () =>
+      renderEnvFrameSvg(env, { width, height, title: 'bonk-rl-env frame' }),
+    );
+    for (let t = 0; t < ticks;) {
+      const step = stepPreview();
+      if (step.frame === null) continue;
       const fname = path.join(outDir, `frame_${String(t).padStart(4, '0')}.svg`);
-      fs.writeFileSync(fname, svg);
-      // Step the sim normally (the only place the hot path runs).
-      env.step(0);
+      fs.writeFileSync(fname, step.frame);
+      t += 1;
     }
     console.log(`Wrote ${ticks} SVG frames to ${outDir}/frame_*.svg (map=${map})`);
   } finally {
@@ -42,4 +46,7 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
