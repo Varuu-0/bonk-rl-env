@@ -31,19 +31,26 @@ interface SseFrame {
 /**
  * Per-client SSE delivery state. When a client stops draining the socket
  * (`res.write()` returns false / `writableNeedDrain`), subsequent frames are
- * dropped for that client instead of buffered indefinitely; `backedUpSince`
- * arms a bounded eviction clock so a persistently stalled client is severed
- * rather than retained forever. The clock is monotonic: a `drain` alone never
- * re-arms it — only a fully flushed write (`writableLength === 0` while
- * flowing) counts as true recovery and clears it.
+ * dropped for that client instead of buffered indefinitely, and a bounded
+ * eviction clock is armed so a persistently stalled client is severed rather
+ * than retained forever. The clock is monotonic against passive signals: a
+ * bare `drain` never re-arms it and never clears it. Recovery is state-based
+ * instead of instant-sampled — it takes sustained clean delivery (a run of
+ * consecutive accepted writes, or an observed full buffer flush) to clear the
+ * clock, while a fresh failed write re-arms it from that new observation.
  */
 interface SseClientState {
   backedUp: boolean;
   backedUpSince: number | null;
+  /** Consecutive fully-accepted writes since the last backpressure signal. */
+  cleanWrites: number;
 }
 
 /** Max time a client may remain backed up before the server severs it. */
 const SSE_STALL_EVICT_MS = 5000;
+
+/** Consecutive accepted writes that confirm a backed-up client recovered. */
+const SSE_RECOVERY_WRITES = 3;
 
 const sseClients = new Map<http.ServerResponse, SseClientState>();
 let latestFrame: SseFrame | null = null;
@@ -132,20 +139,26 @@ function broadcast(event: string, payload: unknown): void {
     }
     // Honor write() backpressure: when the socket high-water mark is hit,
     // stop sending to this client (coalescing to the latest frame) instead
-    // of letting Node's write buffer grow without bound.
+    // of letting Node's write buffer grow without bound. A fresh failure is
+    // a new observation of backpressure, so it re-arms the eviction clock.
     if (!sseSend(res, event, payload) || res.writableNeedDrain) {
       state.backedUp = true;
-      if (state.backedUpSince === null) state.backedUpSince = now;
-    } else if (res.writableLength === 0) {
-      // True recovery: the write flushed end-to-end while flowing, so a
-      // previous stall is over — clear the eviction deadline.
+      state.cleanWrites = 0;
+      state.backedUpSince = now;
+    } else if (++state.cleanWrites >= SSE_RECOVERY_WRITES || res.writableLength === 0) {
+      // State-based recovery: sustained clean delivery — or an observed full
+      // flush — proves the client is draining again, so the eviction deadline
+      // clears. Sampling a single instant is not enough: a draining client
+      // whose buffer never happens to be empty at a broadcast tick must not
+      // be severed mid-recovery.
+      state.cleanWrites = SSE_RECOVERY_WRITES;
       state.backedUpSince = null;
     }
   }
 }
 
 function registerSseClient(res: http.ServerResponse, req: http.IncomingMessage): void {
-  const state: SseClientState = { backedUp: false, backedUpSince: null };
+  const state: SseClientState = { backedUp: false, backedUpSince: null, cleanWrites: 0 };
   sseClients.set(res, state);
   const onDrain = (): void => {
     const current = sseClients.get(res);

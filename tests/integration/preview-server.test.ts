@@ -189,6 +189,17 @@ describe('preview-server SSE backpressure', () => {
     );
     const stalledStart = Date.now();
 
+    // Arm sever-detection BEFORE any waiting so eviction is observed whenever
+    // it fires — during the plateau wait or the grace sleep alike. Only
+    // terminal-event listeners go on now: adding a 'data' listener would set
+    // the socket flowing and defeat the backpressure under test.
+    const severed = new Promise<boolean>((resolve) => {
+      const settled = (): void => resolve(true);
+      stalled.once('end', settled);
+      stalled.once('close', settled);
+      stalled.once('error', settled);
+    });
+
     // Wait (adaptively, not with a blind sleep) until the server's deliveries
     // actually stall: `bytesRead` stops growing once its write() backs up, so
     // a plateau with no new bytes proves the backpressure condition was
@@ -212,28 +223,22 @@ describe('preview-server SSE backpressure', () => {
     }
     expect(plateauAt).not.toBeNull();
 
-    // Give the 5s eviction grace window time to elapse after the stall, then
-    // start consuming the socket. The server only severs a response socket
-    // through the backed-up eviction path, so once the buffered burst drains,
-    // 'end'/'close' proves the stalled client was actually evicted.
+    // Give the 5s eviction grace window time to elapse after the stall.
     await new Promise((r) => setTimeout(r, 6000));
-    const severed = await new Promise<boolean>((resolve) => {
-      const deadline = setTimeout(() => resolve(false), 10000);
-      stalled.on('data', () => {});
-      stalled.on('end', () => {
-        clearTimeout(deadline);
-        resolve(true);
-      });
-      stalled.on('close', () => {
-        clearTimeout(deadline);
-        resolve(true);
-      });
-      stalled.on('error', () => {
-        clearTimeout(deadline);
-        resolve(true);
-      });
-    });
-    expect(severed).toBe(true);
+
+    // Now start consuming the socket: the buffered burst flushes and the
+    // eviction FIN/RST surfaces as 'end'/'close'/'error' on the promise armed
+    // before the waits — whether the sever fired during them or fires now.
+    stalled.on('data', () => {});
+    let fallback!: ReturnType<typeof setTimeout>;
+    const severedObserved = await Promise.race([
+      severed,
+      new Promise<boolean>((resolve) => {
+        fallback = setTimeout(() => resolve(false), 20000);
+      }),
+    ]);
+    clearTimeout(fallback);
+    expect(severedObserved).toBe(true);
 
     const stalledBytes = stalled.bytesRead;
     expect(stalledBytes).toBeGreaterThan(0);
