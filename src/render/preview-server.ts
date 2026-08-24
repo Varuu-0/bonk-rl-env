@@ -19,16 +19,42 @@
  */
 import * as http from 'http';
 import { BonkEnvironment } from '../core/environment';
+import { createPreviewFrameStepper } from './preview-loop';
 import { renderEnvFrameSvg } from './render-wiring';
 import { parseArgs, parseIntArg, parsePositiveIntArg, selectPreviewMap } from './preview-shared';
 
 /** One streamed frame. The server keeps only the latest for late joins. */
 interface SseFrame {
   tick: number;
+  simTick: number;
   svg: string;
 }
 
-const sseClients = new Set<http.ServerResponse>();
+/**
+ * Per-client SSE delivery state. When a client stops draining the socket
+ * (`res.write()` returns false / `writableNeedDrain`), subsequent frames are
+ * dropped for that client instead of buffered indefinitely, and a bounded
+ * eviction clock is armed so a persistently stalled client is severed rather
+ * than retained forever. The clock is monotonic against passive signals: a
+ * bare `drain` never re-arms it and never clears it. Recovery is state-based
+ * instead of instant-sampled — it takes sustained clean delivery (a run of
+ * consecutive accepted writes, or an observed full buffer flush) to clear the
+ * clock, while a fresh failed write re-arms it from that new observation.
+ */
+interface SseClientState {
+  backedUp: boolean;
+  backedUpSince: number | null;
+  /** Consecutive fully-accepted writes since the last backpressure signal. */
+  cleanWrites: number;
+}
+
+/** Max time a client may remain backed up before the server severs it. */
+const SSE_STALL_EVICT_MS = 5000;
+
+/** Consecutive accepted writes that confirm a backed-up client recovered. */
+const SSE_RECOVERY_WRITES = 3;
+
+const sseClients = new Map<http.ServerResponse, SseClientState>();
 let latestFrame: SseFrame | null = null;
 
 const HTML_PAGE = `<!doctype html>
@@ -58,18 +84,26 @@ const HTML_PAGE = `<!doctype html>
   const tickEl = document.getElementById('tick');
   const pauseBtn = document.getElementById('pause');
   let paused = false;
+  let mapName = '';
+  let episode = 1;
 
   function connect() {
     if (paused) return;
     es = new EventSource('/frames');
     es.addEventListener('meta', (e) => {
       const m = JSON.parse(e.data);
-      document.getElementById('meta').textContent = m.map;
+      mapName = m.map;
+      episode = m.episode;
+      document.getElementById('meta').textContent = mapName + ' · episode ' + episode;
     });
     es.addEventListener('frame', (e) => {
       const f = JSON.parse(e.data);
       stage.innerHTML = f.svg;
       tickEl.textContent = String(f.tick);
+    });
+    es.addEventListener('episode-end', (e) => {
+      episode = JSON.parse(e.data).episode;
+      document.getElementById('meta').textContent = mapName + ' · episode ' + episode;
     });
     es.addEventListener('done', () => {
       if (es) es.close();
@@ -91,17 +125,68 @@ const HTML_PAGE = `<!doctype html>
 </body>
 </html>`;
 
-function sseSend(res: http.ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+function sseSend(res: http.ServerResponse, event: string, payload: unknown): boolean {
+  return res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function broadcast(event: string, payload: unknown): void {
-  for (const res of sseClients) sseSend(res, event, payload);
+  const now = Date.now();
+  for (const [res, state] of sseClients) {
+    if (!res.writable || res.writableEnded || res.destroyed) {
+      sseClients.delete(res);
+      continue;
+    }
+    if (state.backedUp) {
+      // Not draining: drop this frame rather than buffer it. The client
+      // reconnects to `latestFrame`, so skipping is safe; evict once the
+      // monotonic deadline elapses so a stalled client is never retained
+      // forever.
+      if (now - (state.backedUpSince ?? now) >= SSE_STALL_EVICT_MS) {
+        sseClients.delete(res);
+        res.destroy();
+      }
+      continue;
+    }
+    // Honor write() backpressure: when the socket high-water mark is hit,
+    // stop sending to this client (coalescing to the latest frame) instead
+    // of letting Node's write buffer grow without bound. A fresh failure is
+    // a new observation of backpressure, so it re-arms the eviction clock.
+    if (!sseSend(res, event, payload) || res.writableNeedDrain) {
+      state.backedUp = true;
+      state.cleanWrites = 0;
+      state.backedUpSince = now;
+    } else if (++state.cleanWrites >= SSE_RECOVERY_WRITES || res.writableLength === 0) {
+      // State-based recovery: sustained clean delivery — or an observed full
+      // flush — proves the client is draining again, so the eviction deadline
+      // clears. Sampling a single instant is not enough: a draining client
+      // whose buffer never happens to be empty at a broadcast tick must not
+      // be severed mid-recovery.
+      state.cleanWrites = SSE_RECOVERY_WRITES;
+      state.backedUpSince = null;
+    }
+  }
+}
+
+function registerSseClient(res: http.ServerResponse, req: http.IncomingMessage): void {
+  const state: SseClientState = { backedUp: false, backedUpSince: null, cleanWrites: 0 };
+  sseClients.set(res, state);
+  const onDrain = (): void => {
+    const current = sseClients.get(res);
+    // A drain only means the socket became writable again — the client may
+    // still be trailing, so it must NOT re-arm the eviction deadline.
+    // Recovery is confirmed in broadcast when a write fully flushes.
+    if (current) current.backedUp = false;
+  };
+  res.on('drain', onDrain);
+  req.on('close', () => {
+    res.removeListener('drain', onDrain);
+    sseClients.delete(res);
+  });
 }
 
 function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): void {
   if (env) env.close();
-  for (const res of sseClients) res.end();
+  for (const res of sseClients.keys()) res.end();
   sseClients.clear();
   server.close(() => process.exit(code));
   // Give the graceful SSE flush (final frame + 'done') a brief window, then
@@ -113,7 +198,7 @@ function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): v
 function handleRequest(
   req: http.IncomingMessage,
   res: http.ServerResponse,
-  deps: { width: number; height: number; map: string },
+  deps: { width: number; height: number; map: string; episode: number },
 ): void {
   const url = req.url ?? '/';
   if (url === '/') {
@@ -133,10 +218,9 @@ function handleRequest(
       Connection: 'keep-alive',
       'X-Accel-Buffering': 'no',
     });
-    sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height });
+    sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height, episode: deps.episode });
     if (latestFrame) sseSend(res, 'frame', latestFrame);
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+    registerSseClient(res, req);
     return;
   }
   if (url === '/favicon.ico') {
@@ -158,26 +242,38 @@ async function main(): Promise<void> {
   const tickCap = parseIntArg(args.ticks, 0, 'ticks'); // 0 = stream until stopped
 
   const env = new BonkEnvironment({ mapPath: map, numOpponents: 1, randomOpponent: false, seed: 42 });
-  const deps = { width, height, map };
+  const deps = { width, height, map, episode: 1 };
 
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
-  server.on('error', (e) => { console.error(e); shutdown(env, server, 1); });
+  server.on('error', (e) => {
+    console.error(e);
+    shutdown(env, server, 1);
+  });
   server.listen(port, () => {
     const bound = server.address();
     const boundPort = typeof bound === 'object' && bound ? bound.port : port;
-    console.log(`bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
+    console.log(
+      `bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`,
+    );
   });
 
   const intervalMs = Math.max(1, Math.round(1000 / fps));
+  const stepPreview = createPreviewFrameStepper(env, () =>
+    renderEnvFrameSvg(env, { width, height, title: `bonk-rl-env live (${map})` }),
+  );
   let tick = 0;
   const timer = setInterval(() => {
-    // Step the sim normally first, then pull the (already-materialized) state
-    // for the frame — exactly the one-shot render path the frame-dump CLI uses.
-    env.step(0);
-    const svg = renderEnvFrameSvg(env, { width, height, title: `bonk-rl-env live (${map})` });
-    latestFrame = { tick, svg };
-    broadcast('frame', { tick, svg });
-    tick += 1;
+    const step = stepPreview();
+    if (step.frame !== null) {
+      const frame = { tick, simTick: step.result.observation.tick, svg: step.frame };
+      latestFrame = frame;
+      broadcast('frame', frame);
+      if (step.episodeEnded) {
+        deps.episode += 1;
+        broadcast('episode-end', { tick, simTick: frame.simTick, episode: deps.episode });
+      }
+      tick += 1;
+    }
     if (tickCap > 0 && tick >= tickCap) {
       clearInterval(timer);
       broadcast('done', { tick });
@@ -195,4 +291,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSigint);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
