@@ -850,16 +850,15 @@ export class BonkEnvironment {
         }
 
         // If starting a new frame skip cycle, update the stored action.
-        // Object actions must be snapshotted BY VALUE: decodeAction() returns
-        // them as the caller's own reference, and this.lastAction is
-        // re-applied on every intermediate tick of the hold window, so a
-        // caller that reuses/mutates one PlayerInput dict between step()
-        // calls would otherwise silently change the held inputs mid-cycle
-        // (#399). Encoded numbers need no extra copy: decodeEncodedAction
-        // already builds a fresh object.
+        // Object actions must be snapshotted BY VALUE: they are supplied as
+        // the caller's own reference, and this.lastAction is re-applied on
+        // every intermediate tick of the hold window, so a caller that
+        // reuses/mutates one PlayerInput dict between step() calls would
+        // otherwise silently change the held inputs mid-cycle (#399).
+        // Encoded numbers need no extra copy: decodeEncodedAction already
+        // builds a fresh object.
         if (this.frameSkipTicks === 0) {
-            const decoded = this.decodeAction(action);
-            this.lastAction = typeof action === 'number' ? decoded : { ...decoded };
+            this.lastAction = typeof action === 'number' ? this.decodeAction(action) : { ...action };
         }
 
         const aiInput = this.lastAction;

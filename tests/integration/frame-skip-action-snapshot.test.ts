@@ -10,7 +10,7 @@ import { BonkEnvironment } from '../../src/core/environment';
  * step() argument entirely.
  */
 describe('frameSkip hold must snapshot the action', () => {
-  function runBranch(mutate: boolean, frameSkip: number, ignoredArg: unknown = 0): any[] {
+  function runBranch(mutate: boolean, frameSkip: number, ignoredArg: unknown = 0, startWithLeft = true): any[] {
     const env = new BonkEnvironment({
       frameSkip,
       numOpponents: 0,
@@ -21,7 +21,7 @@ describe('frameSkip hold must snapshot the action', () => {
     try {
       env.reset();
       const action = {
-        left: true,
+        left: startWithLeft,
         right: false,
         up: false,
         down: false,
@@ -64,12 +64,13 @@ describe('frameSkip hold must snapshot the action', () => {
     assertHoldByValue(3);
   });
 
-  it('intermediate ticks ignore the step() argument entirely (frameSkip=3)', () => {
-    // Pins "held at all": if the cycle stopped holding and re-applied fresh
-    // arguments every tick, these sentinels would each steer physics their
-    // own way and diverge from the no-op baseline instead of matching it.
-    const noopBaseline = runBranch(false, 3, 0);
-    expect(JSON.stringify(runBranch(false, 3, 63))).toEqual(JSON.stringify(noopBaseline));
+  it('intermediate ticks hold the cycle-start input and ignore their argument (frameSkip=3)', () => {
+    // Pin both aspects of the contract: a held-left cycle differs from an
+    // all-false cycle, while valid sentinel actions passed on intermediate
+    // ticks must leave the held-left physics unchanged.
+    const heldLeft = runBranch(false, 3, 0);
+    expect(JSON.stringify(heldLeft)).not.toEqual(JSON.stringify(runBranch(false, 3, 0, false)));
+    expect(JSON.stringify(runBranch(false, 3, 63))).toEqual(JSON.stringify(heldLeft));
     expect(
       JSON.stringify(
         runBranch(false, 3, {
@@ -79,6 +80,6 @@ describe('frameSkip hold must snapshot the action', () => {
           grapple: true,
         }),
       ),
-    ).toEqual(JSON.stringify(noopBaseline));
+    ).toEqual(JSON.stringify(heldLeft));
   });
 });
