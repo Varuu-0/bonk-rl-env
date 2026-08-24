@@ -554,10 +554,18 @@ describe('IpcBridge lifecycle', () => {
     it('isClosed returns false after start', async () => {
       const bridge = createBridge(portCounter++);
       const startPromise = bridge.start();
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
       expect(bridge.isClosed()).toBe(false);
       await bridge.close();
-      await startPromise;
+      // A cycle that already entered its serve loop exits normally on
+      // shutdown; under heavy parallel load the close can land inside
+      // startup's post-bind window instead, cancelling the cycle with the
+      // clear closed-during-start error (#402). Both outcomes settle here.
+      await startPromise.then(undefined, (err: unknown) => {
+        if (!(err instanceof Error) || !/closed during start/i.test(err.message)) {
+          throw err;
+        }
+      });
     });
   });
 
@@ -628,7 +636,7 @@ describe('IpcBridge lifecycle', () => {
       const { sentMessages } = captureSend(bridge);
       await callHandleRequest(bridge, JSON.stringify({ command: 'close', shutdown: true }));
       expect(JSON.parse(sentMessages[0]).status).toBe('ok');
-      await new Promise(r => setTimeout(r, 25));
+      await new Promise((r) => setTimeout(r, 25));
       expect(bridge.isClosed()).toBe(true);
     });
 

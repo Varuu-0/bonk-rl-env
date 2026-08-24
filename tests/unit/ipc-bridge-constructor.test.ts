@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => {
     unbind: () => Promise<void>;
     close: () => void;
     send: () => Promise<void>;
+    lastEndpoint?: string;
     [Symbol.asyncIterator]?: any;
   } = {
     closed: false,
@@ -31,6 +32,20 @@ const mocks = vi.hoisted(() => {
     },
     send: async () => {},
   };
+  // Model libzmq (issue #402): reading lastEndpoint on a destroyed socket
+  // throws "Socket operation on non-socket" (EBADF-equivalent), which is what
+  // makes a concurrent close() during start()'s post-bind window fatal. When
+  // the socket is still open the getter reports no resolved endpoint so the
+  // production `?? addr` fallback is exercised.
+  Object.defineProperty(sock, 'lastEndpoint', {
+    configurable: true,
+    get(): string | undefined {
+      if (sock.closed) {
+        throw new Error('Socket operation on non-socket');
+      }
+      return undefined;
+    },
+  });
   const controller = {
     tick: vi.fn(() => false),
     reportNow: vi.fn(() => true),
@@ -592,6 +607,106 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+});
+
+describe('IpcBridge start()/close() race (#402)', () => {
+  it('start() without awaiting then immediate close(): start and ready reject identically with BridgeClosedDuringStart', async () => {
+    const bridge = new IpcBridge({ server: { port: 12386 } });
+    // The exact race from issue #402: close() runs synchronously up to the
+    // socket destroy while start() is still suspended at the bind await.
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    // Exactly ONE deterministic outcome: a cancelled start rejects with the
+    // clear named error — never resolves silently and never surfaces the
+    // opaque libzmq error from reading a destroyed socket.
+    const startOutcome = await startPromise.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    // bridge.ready must settle within a short timeout, rejecting with the
+    // SAME error so awaiting callers observe one consistent contract.
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    await closePromise;
+  });
+
+  it('close() while bind is still pending converts an opaque bind rejection into BridgeClosedDuringStart', async () => {
+    // The second race window: close() destroys the ROUTER before the native
+    // bind settles, so the pending bind promise itself rejects with the
+    // opaque libzmq error. That rejection must be normalized into the same
+    // clear error on both start() and ready (#402).
+    let rejectBind!: (err: Error) => void;
+    bindSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectBind = reject;
+        }),
+    );
+
+    const bridge = new IpcBridge({ server: { port: 12387 } });
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    rejectBind(new Error('Socket operation on non-socket'));
+
+    const startOutcome = await startPromise.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    await closePromise;
+  });
+
+  it('a genuine bind failure on a restart after close() keeps its real error and cleans up the recreated socket', async () => {
+    const bridge = new IpcBridge({ server: { port: 12388 } });
+    // Complete one open->close cycle so _closed is stale-true for the
+    // restart, exactly like the #263/#316 restart flows.
+    await bridge.close();
+
+    const closeCallsBeforeRestart = closeSpy.mock.calls.length;
+    bindSpy.mockRejectedValueOnce(new Error('bind failed: address already in use'));
+
+    const startOutcome = await bridge.start().then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    // The stale _closed from the previous cycle must NOT misclassify this
+    // genuine failure as BridgeClosedDuringStart (#402 review).
+    expect(startOutcome).toBe('Error: bind failed: address already in use');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bind failed: address already in use');
+
+    // The #326 cleanup must still run on the recreated Router so the native
+    // handle cannot leak before the next start() recreates it again.
+    expect(closeSpy.mock.calls.length).toBe(closeCallsBeforeRestart + 1);
   });
 });
 
