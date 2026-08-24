@@ -11,7 +11,15 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => {
-  const sock: { closed: boolean; bind: () => Promise<void>; unbind: () => Promise<void>; close: () => void; send: () => Promise<void>; [Symbol.asyncIterator]?: any } = {
+  const sock: {
+    closed: boolean;
+    bind: () => Promise<void>;
+    unbind: () => Promise<void>;
+    close: () => void;
+    send: () => Promise<void>;
+    lastEndpoint?: string;
+    [Symbol.asyncIterator]?: any;
+  } = {
     closed: false,
     bind: async () => {},
     unbind: async () => {},
@@ -24,6 +32,20 @@ const mocks = vi.hoisted(() => {
     },
     send: async () => {},
   };
+  // Model libzmq (issue #402): reading lastEndpoint on a destroyed socket
+  // throws "Socket operation on non-socket" (EBADF-equivalent), which is what
+  // makes a concurrent close() during start()'s post-bind window fatal. When
+  // the socket is still open the getter reports no resolved endpoint so the
+  // production `?? addr` fallback is exercised.
+  Object.defineProperty(sock, 'lastEndpoint', {
+    configurable: true,
+    get(): string | undefined {
+      if (sock.closed) {
+        throw new Error('Socket operation on non-socket');
+      }
+      return undefined;
+    },
+  });
   const controller = {
     tick: vi.fn(() => false),
     reportNow: vi.fn(() => true),
@@ -199,32 +221,39 @@ describe('IpcBridge constructor', () => {
   });
 
   it('rejects a host:port-style bind address with a clear error (issue #235)', () => {
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '127.0.0.1:5555' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '127.0.0.1:5555' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
   });
 
   it('rejects a malformed bind address with a clear error (issue #235)', () => {
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: 'not a host' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: 'not a host' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
   });
 
   it('rejects a dotted-numeric bind address that is not a valid IPv4 (issue #235)', () => {
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999.999.999.999' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '1.2.3.4.5' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999.999.999.999' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '1.2.3.4.5' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
   });
 
   it('rejects a bare underscore bind address (issue #235)', () => {
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '_' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '_' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
   });
 
   it('rejects a purely numeric bind address that is not a valid IPv4 (issue #235)', () => {
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
-    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '12345' } }))
-      .toThrowError(/Invalid server\.bindAddress/);
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '999' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
+    expect(() => new IpcBridge({ server: { port: 12345, bindAddress: '12345' } })).toThrowError(
+      /Invalid server\.bindAddress/,
+    );
   });
 
   it('falls back to the loopback default for an empty bind address', () => {
@@ -270,7 +299,7 @@ describe('IpcBridge start()', () => {
   it('binds socket to configured address (lines 29-31)', async () => {
     const bridge = new IpcBridge({ server: { port: 12345 } });
     const startPromise = bridge.start();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://127.0.0.1:12345');
     await bridge.close();
     await startPromise;
@@ -279,7 +308,7 @@ describe('IpcBridge start()', () => {
   it('binds socket to the configured bind address when provided (issue #235)', async () => {
     const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '0.0.0.0' } });
     const startPromise = bridge.start();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://0.0.0.0:12348');
     await bridge.close();
     await startPromise;
@@ -288,7 +317,7 @@ describe('IpcBridge start()', () => {
   it('binds an IPv6 bind address with brackets in the endpoint (issue #235)', async () => {
     const bridge = new IpcBridge({ server: { port: 12348, bindAddress: '::1' } });
     const startPromise = bridge.start();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(bindSpy).toHaveBeenCalledWith('tcp://[::1]:12348');
     await bridge.close();
     await startPromise;
@@ -297,7 +326,7 @@ describe('IpcBridge start()', () => {
   it('sets _closed to false on start (line 32)', async () => {
     const bridge = new IpcBridge({ server: { port: 12346 } });
     const startPromise = bridge.start();
-    await new Promise(r => setTimeout(r, 10));
+    await new Promise((r) => setTimeout(r, 10));
     expect(bridge.isClosed()).toBe(false);
     await bridge.close();
     await startPromise;
@@ -308,15 +337,17 @@ describe('IpcBridge start() for-await loop (lines 36-47)', () => {
   it('catches and logs errors in server loop when not closed (lines 42-46)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    mockSock[Symbol.asyncIterator] = function() {
+    mockSock[Symbol.asyncIterator] = function () {
       return {
-        next: async () => { throw new Error('ZMQ connection lost'); },
+        next: async () => {
+          throw new Error('ZMQ connection lost');
+        },
       };
     };
 
     const bridge = new IpcBridge({ server: { port: 12349 } });
     const startPromise = bridge.start();
-    await new Promise(r => setTimeout(r, 20));
+    await new Promise((r) => setTimeout(r, 20));
     await bridge.close();
     await startPromise;
 
@@ -327,9 +358,11 @@ describe('IpcBridge start() for-await loop (lines 36-47)', () => {
   it('ignores errors during shutdown (line 44)', async () => {
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
 
-    mockSock[Symbol.asyncIterator] = function() {
+    mockSock[Symbol.asyncIterator] = function () {
       return {
-        next: async () => { throw new Error('Socket closed'); },
+        next: async () => {
+          throw new Error('Socket closed');
+        },
       };
     };
 
@@ -375,9 +408,12 @@ describe('IpcBridge close() (lines 159-173)', () => {
     (bridge as any).boundEndpoint = endpoint;
 
     let releaseUnbind!: () => void;
-    unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
-      releaseUnbind = resolve;
-    }));
+    unbindSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseUnbind = resolve;
+        }),
+    );
 
     const closePromise = bridge.close();
     expect(unbindSpy).toHaveBeenCalledWith(endpoint);
@@ -389,7 +425,9 @@ describe('IpcBridge close() (lines 159-173)', () => {
   });
 
   it('ignores socket close errors (lines 166-170)', async () => {
-    closeSpy.mockImplementation(() => { throw new Error('Socket already closed'); });
+    closeSpy.mockImplementation(() => {
+      throw new Error('Socket already closed');
+    });
     const bridge = new IpcBridge({ server: { port: 12354 } });
     await expect(bridge.close()).resolves.toBeUndefined();
   });
@@ -422,9 +460,12 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
     (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12380';
 
     let releaseUnbind!: () => void;
-    unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
-      releaseUnbind = resolve;
-    }));
+    unbindSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseUnbind = resolve;
+        }),
+    );
 
     const closeA = bridge.close();
     const closeB = bridge.close();
@@ -475,7 +516,7 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
 
       // A restart can still bind and settle ready.
       const startPromise = bridge.start();
-      await new Promise(r => setTimeout(r, 10));
+      await new Promise((r) => setTimeout(r, 10));
       expect(bindSpy).toHaveBeenCalled();
       // The destroyed socket forces the production transport-recreation path
       // (a fresh Router + re-wrapped send) instead of rebinding the dead one.
@@ -495,9 +536,12 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12384';
 
       let releaseUnbind!: () => void;
-      unbindSpy.mockImplementationOnce(() => new Promise<void>(resolve => {
-        releaseUnbind = resolve;
-      }));
+      unbindSpy.mockImplementationOnce(
+        () =>
+          new Promise<void>((resolve) => {
+            releaseUnbind = resolve;
+          }),
+      );
 
       const closePromise = bridge.close();
       const startPromise = bridge.start();
@@ -505,7 +549,7 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       // While the prior close is still unbinding, the restart must not bind:
       // the port has not been released yet, and the transport has not been
       // recreated yet either (start() is still awaiting the in-flight close).
-      await new Promise(r => setTimeout(r, 20));
+      await new Promise((r) => setTimeout(r, 20));
       expect(bindSpy).not.toHaveBeenCalled();
       expect(mocks.Router).toHaveBeenCalledTimes(1);
 
@@ -528,9 +572,12 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       (bridge as any).boundEndpoint = 'tcp://127.0.0.1:12385';
 
       let rejectUnbind!: (err: Error) => void;
-      unbindSpy.mockImplementationOnce(() => new Promise<void>((_, reject) => {
-        rejectUnbind = reject;
-      }));
+      unbindSpy.mockImplementationOnce(
+        () =>
+          new Promise<void>((_, reject) => {
+            rejectUnbind = reject;
+          }),
+      );
 
       const closePromise = bridge.close();
       const startPromise = bridge.start();
@@ -538,8 +585,11 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
       // The re-armed ready promise must settle (here via the restart's fresh
       // bind) instead of hanging forever after a rejected prior close.
       const readySettled = Promise.race([
-        (bridge as any).ready.then(() => 'resolved', () => 'rejected'),
-        new Promise<string>(resolve => setTimeout(() => resolve('hung'), 500)),
+        (bridge as any).ready.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise<string>((resolve) => setTimeout(() => resolve('hung'), 500)),
       ]);
 
       rejectUnbind(new Error('unbind failed'));
@@ -554,6 +604,106 @@ describe('IpcBridge close()/start() lifecycle (#316)', () => {
     } finally {
       consoleErrorSpy.mockRestore();
     }
+  });
+});
+
+describe('IpcBridge start()/close() race (#402)', () => {
+  it('start() without awaiting then immediate close(): start and ready reject identically with BridgeClosedDuringStart', async () => {
+    const bridge = new IpcBridge({ server: { port: 12386 } });
+    // The exact race from issue #402: close() runs synchronously up to the
+    // socket destroy while start() is still suspended at the bind await.
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    // Exactly ONE deterministic outcome: a cancelled start rejects with the
+    // clear named error — never resolves silently and never surfaces the
+    // opaque libzmq error from reading a destroyed socket.
+    const startOutcome = await startPromise.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    // bridge.ready must settle within a short timeout, rejecting with the
+    // SAME error so awaiting callers observe one consistent contract.
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    await closePromise;
+  });
+
+  it('close() while bind is still pending converts an opaque bind rejection into BridgeClosedDuringStart', async () => {
+    // The second race window: close() destroys the ROUTER before the native
+    // bind settles, so the pending bind promise itself rejects with the
+    // opaque libzmq error. That rejection must be normalized into the same
+    // clear error on both start() and ready (#402).
+    let rejectBind!: (err: Error) => void;
+    bindSpy.mockImplementationOnce(
+      () =>
+        new Promise<void>((_, reject) => {
+          rejectBind = reject;
+        }),
+    );
+
+    const bridge = new IpcBridge({ server: { port: 12387 } });
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    rejectBind(new Error('Socket operation on non-socket'));
+
+    const startOutcome = await startPromise.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    await closePromise;
+  });
+
+  it('a genuine bind failure on a restart after close() keeps its real error and cleans up the recreated socket', async () => {
+    const bridge = new IpcBridge({ server: { port: 12388 } });
+    // Complete one open->close cycle so _closed is stale-true for the
+    // restart, exactly like the #263/#316 restart flows.
+    await bridge.close();
+
+    const closeCallsBeforeRestart = closeSpy.mock.calls.length;
+    bindSpy.mockRejectedValueOnce(new Error('bind failed: address already in use'));
+
+    const startOutcome = await bridge.start().then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    // The stale _closed from the previous cycle must NOT misclassify this
+    // genuine failure as BridgeClosedDuringStart (#402 review).
+    expect(startOutcome).toBe('Error: bind failed: address already in use');
+
+    const readyOutcome = await Promise.race([
+      (bridge as any).ready.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bind failed: address already in use');
+
+    // The #326 cleanup must still run on the recreated Router so the native
+    // handle cannot leak before the next start() recreates it again.
+    expect(closeSpy.mock.calls.length).toBe(closeCallsBeforeRestart + 1);
   });
 });
 
@@ -884,10 +1034,18 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
   });
 
   it('floors a fractional session cap so it cannot silently relax the bound (issue #259)', () => {
-    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 1.5 } } as any) as any).maxClientSessions).toBe(1);
-    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 2.5 } } as any) as any).maxClientSessions).toBe(2);
-    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: '1.5' } } as any) as any).maxClientSessions).toBe(1);
-    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 0.5 } } as any) as any).maxClientSessions).toBe(1);
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 1.5 } } as any) as any).maxClientSessions).toBe(
+      1,
+    );
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 2.5 } } as any) as any).maxClientSessions).toBe(
+      2,
+    );
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: '1.5' } } as any) as any).maxClientSessions).toBe(
+      1,
+    );
+    expect((new IpcBridge({ server: { port: 12375, maxClientSessions: 0.5 } } as any) as any).maxClientSessions).toBe(
+      1,
+    );
   });
 
   it('falls back to the default cap for non-number cap values instead of coercing them (issue #259)', () => {
