@@ -89,6 +89,9 @@ export class IpcBridge {
   private _hostPool: boolean = false;
   private _hostConfig: any = null;
   private _hostUseSharedMemory: boolean | undefined = undefined;
+  // Owner callback invoked when an adopted pool fails and the bridge rebuilds
+  // a fresh pool for IPC clients (see adoptPool / recoverFailedHostPool).
+  private _onHostPoolFailed?: (pool: WorkerPool) => void;
   private _boundResolve: (() => void) | null = null;
   private _boundReject: ((reason?: any) => void) | null = null;
   private boundEndpoint: string | null = null;
@@ -359,9 +362,12 @@ export class IpcBridge {
     this.boundEndpoint = this.sock.lastEndpoint ?? addr;
     console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
     this._closed = false;
-    if (!this._hostPool) {
-      this.startSessionReaper();
-    }
+    // The reaper runs in every mode, including adopted-host mode. BonkEnv
+    // adopts its pool before calling start(), so gating the timer on
+    // !_hostPool would leave host-mode failure recovery unreachable and,
+    // after a recovery un-adopts the host pool, would leave future client
+    // sessions unreaped until process restart (#400 review).
+    this.startSessionReaper();
     this.markBound();
 
     // Wait for incoming requests from Python
@@ -553,9 +559,12 @@ export class IpcBridge {
    * unlike close(), which must never close a healthy adopted pool. After
    * closing the corpse, un-adopt so the next matching-count init builds a
    * fresh bridge-owned pool and shared clients recover with a plain re-init.
-   * The stale check keeps concurrent recovery passes idempotent: the reaper
-   * and a request's reactive cleanup can interleave at await points, and only
-   * a pass that still observes the original pool may flip the adoption state.
+   * The owner is notified through the onHostPoolFailed hook registered at
+   * adoption (plus a loud log), so its retained reference being orphaned is
+   * never silent. The stale check keeps concurrent recovery passes
+   * idempotent: the reaper and a request's reactive cleanup can interleave
+   * at await points, and only a pass that still observes the original pool
+   * may flip the adoption state.
    */
   private async recoverFailedHostPool(): Promise<void> {
     const session = this.localSession;
@@ -572,6 +581,19 @@ export class IpcBridge {
       // Another recovery pass (or a rebuild) got here first; do not clobber
       // whatever now occupies the host slot.
       return;
+    }
+    // Do not orphan the owner silently: BonkEnv keeps its own pool reference
+    // for direct step()/reset()/getPool() use, and that reference now points
+    // at a closed corpse while IPC clients get the rebuilt pool.
+    console.warn(
+      '[IPC] Adopted host pool failed; rebuilding a fresh bridge-owned pool for IPC clients. The owner retains the dead pool reference until it re-acquires or restarts.',
+    );
+    if (this._onHostPoolFailed) {
+      try {
+        this._onHostPoolFailed(pool);
+      } catch (hookError) {
+        console.error('[IPC] onHostPoolFailed handler threw:', hookError);
+      }
     }
     session.initialized = false;
     session.numEnvs = 0;
@@ -963,8 +985,20 @@ export class IpcBridge {
    * workers instead of spawning its own, so external clients share the
    * env's numEnvs/config/useSharedMemory rather than getting default
    * workers. The host keeps owning the pool's lifecycle.
+   *
+   * If the adopted pool later FAILS after init, the bridge closes the corpse
+   * and un-admits it: IPC clients recover by rebuilding a fresh
+   * bridge-owned pool via a plain re-init. The owner's own pool reference is
+   * then orphaned on the closed pool, so `onHostPoolFailed` (invoked with
+   * the dead pool, before the replacement) lets the owner react — log,
+   * invalidate its reference, or restart. An owner handler must not throw;
+   * throws are logged and swallowed so recovery always completes.
    */
-  adoptPool(pool: WorkerPool, numEnvs: number, options: { config?: any; useSharedMemory?: boolean } = {}): void {
+  adoptPool(
+    pool: WorkerPool,
+    numEnvs: number,
+    options: { config?: any; useSharedMemory?: boolean; onHostPoolFailed?: (pool: WorkerPool) => void } = {},
+  ): void {
     if (this._hostPool || this.localSession.initialized || this.sessions.size > 0) {
       throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
     }
@@ -973,6 +1007,7 @@ export class IpcBridge {
     this.localSession.numEnvs = numEnvs;
     this.localSession.lastActivityAt = Date.now();
     this._hostPool = true;
+    this._onHostPoolFailed = options.onHostPoolFailed;
     // Remember the host env's effective config and useSharedMemory so a
     // matching-count client init can be validated/echoed instead of
     // silently discarding the client's settings on an env-owned pool (#252).

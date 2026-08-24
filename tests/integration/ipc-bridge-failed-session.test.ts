@@ -19,7 +19,7 @@
  *   closed and un-adopted (reactively and from the reaper) so sharing IPC
  *   clients recover with a plain re-init instead of staying wedged forever.
  */
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { WorkerPool } from '../../src/core/worker-pool';
@@ -66,8 +66,13 @@ describe('IpcBridge drops sessions whose pool failed after init (issue #400)', (
     // A cap of 1 makes the freed-slot assertion exact: without the fix the
     // failed session keeps occupying the only slot and the fresh init fails.
     bridge = new IpcBridge({ server: { port, maxClientSessions: 1 } } as any);
-    // start() runs the serve loop until close(), so do not await it.
-    void bridge.start();
+    // start() runs the serve loop until close(), so do not await it. A
+    // rejection handler is still required: on a bind failure start() rejects
+    // and an unhandled rejection terminates the process on Node >=20 — the
+    // real failure surfaces through `await bridge.ready` below (#252).
+    void bridge.start().catch(() => {
+      /* bind failures surface via bridge.ready */
+    });
 
     client = new zmq.Dealer({ routingId: 'failclient' });
     await client.connect(`tcp://127.0.0.1:${port}`);
@@ -199,12 +204,17 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
   async function startHostBridge(
     routingId: string,
     port: number,
+    adoptOptions: { onHostPoolFailed?: (pool: WorkerPool) => void } = {},
   ): Promise<{ bridge: IpcBridge; client: zmq.Dealer; pool: WorkerPool }> {
     const pool = new WorkerPool();
     await pool.init(1, {}, false);
     const bridge = new IpcBridge({ server: { port } } as any);
-    bridge.adoptPool(pool, 1, { config: {}, useSharedMemory: false });
-    void bridge.start();
+    bridge.adoptPool(pool, 1, { config: {}, useSharedMemory: false, ...adoptOptions });
+    // Rejection handler required: a bind failure must surface via
+    // bridge.ready below, not as a process-killing unhandled rejection (#252).
+    void bridge.start().catch(() => {
+      /* bind failures surface via bridge.ready */
+    });
 
     const client = new zmq.Dealer({ routingId });
     await client.connect(`tcp://127.0.0.1:${port}`);
@@ -218,8 +228,14 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
     async () => {
       const portManager = new PortManager({ startPort: 16300, endPort: 16349 });
       const port = portManager.allocate();
-      const { bridge, client, pool } = await startHostBridge('hostclient', port);
+      const onHostPoolFailed = vi.fn();
+      const { bridge, client, pool } = await startHostBridge('hostclient', port, { onHostPoolFailed });
       try {
+        // The reaper must be armed in host mode too (BonkEnv adopts before
+        // start()): it drives proactive host-pool recovery and keeps reaping
+        // client sessions after a recovery un-adopts the host pool.
+        expect((bridge as any).sessionReapTimer).toBeDefined();
+
         // Shared client adopts the host session via a matching-count init.
         const initResponse = await sendCommand(client, { command: 'init', numEnvs: 1 });
         expect(initResponse.status).toBe('ok');
@@ -236,6 +252,11 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
         // future request wedged on the corpse.
         expect((bridge as any)._hostPool).toBe(false);
         expect((bridge as any).localSession.initialized).toBe(false);
+
+        // The owner is notified with the dead pool so its retained reference
+        // being orphaned is never silent.
+        expect(onHostPoolFailed).toHaveBeenCalledTimes(1);
+        expect(onHostPoolFailed).toHaveBeenCalledWith(pool);
 
         // A plain re-init rebuilds a fresh bridge-owned pool: no process
         // restart required, and the rebuilt pool actually serves steps.
@@ -264,6 +285,10 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
     const port = portManager.allocate();
     const { bridge, client, pool } = await startHostBridge('hostclient2', port);
     try {
+      // Reaper armed in host mode: no request arrives after the async failure
+      // below, so only the timer-driven reaper could notice and recover.
+      expect((bridge as any).sessionReapTimer).toBeDefined();
+
       const initResponse = await sendCommand(client, { command: 'init', numEnvs: 1 });
       expect(initResponse.status).toBe('ok');
 
