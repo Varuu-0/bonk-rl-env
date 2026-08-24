@@ -241,10 +241,22 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
         expect(initResponse.status).toBe('ok');
 
         // Kill the adopted pool asynchronously, exactly as a worker exit/error
-        // event would between requests.
-        await (pool as any).failPool(new Error('host worker exited between requests'));
-
-        const stepResponse = await sendCommand(client, { command: 'step', actions: [0] });
+        // event would between requests. Recovery must not be silent: the
+        // replacement is logged loudly and the owner hook fires with the
+        // dead pool.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let stepResponse: any;
+        let warnedAboutReplacement = false;
+        try {
+          await (pool as any).failPool(new Error('host worker exited between requests'));
+          stepResponse = await sendCommand(client, { command: 'step', actions: [0] });
+          // Read the recorded calls before mockRestore clears them.
+          warnedAboutReplacement = warnSpy.mock.calls.some((call) =>
+            String(call[0]).includes('Adopted host pool failed'),
+          );
+        } finally {
+          warnSpy.mockRestore();
+        }
         expect(stepResponse.status).toBe('error');
         expect(stepResponse.error).toContain('worker pool is in failed state');
 
@@ -253,10 +265,14 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
         expect((bridge as any)._hostPool).toBe(false);
         expect((bridge as any).localSession.initialized).toBe(false);
 
+        expect(warnedAboutReplacement).toBe(true);
+
         // The owner is notified with the dead pool so its retained reference
-        // being orphaned is never silent.
+        // being orphaned is never silent, and the bridge swapped in a rebuilt
+        // pool rather than leaving clients pinned to the corpse.
         expect(onHostPoolFailed).toHaveBeenCalledTimes(1);
         expect(onHostPoolFailed).toHaveBeenCalledWith(pool);
+        expect((bridge as any).localSession.pool).not.toBe(pool);
 
         // A plain re-init rebuilds a fresh bridge-owned pool: no process
         // restart required, and the rebuilt pool actually serves steps.
