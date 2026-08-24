@@ -89,6 +89,9 @@ export class IpcBridge {
   private _hostPool: boolean = false;
   private _hostConfig: any = null;
   private _hostUseSharedMemory: boolean | undefined = undefined;
+  // Owner callback invoked when an adopted pool fails and the bridge rebuilds
+  // a fresh pool for IPC clients (see adoptPool / recoverFailedHostPool).
+  private _onHostPoolFailed?: (pool: WorkerPool) => void;
   private _boundResolve: (() => void) | null = null;
   private _boundReject: ((reason?: any) => void) | null = null;
   private boundEndpoint: string | null = null;
@@ -350,7 +353,6 @@ export class IpcBridge {
       this.sock = this.createSocket();
       this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
-
     // Snapshot BEFORE awaiting bind: on a restart after close() (#263/#316)
     // _closed is still true from the previous cycle until the post-bind reset
     // below, so testing _closed alone would misclassify every genuine restart
@@ -436,9 +438,12 @@ export class IpcBridge {
     this.boundEndpoint = endpoint;
     console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
     this._closed = false;
-    if (!this._hostPool) {
-      this.startSessionReaper();
-    }
+    // The reaper runs in every mode, including adopted-host mode. BonkEnv
+    // adopts its pool before calling start(), so gating the timer on
+    // !_hostPool would leave host-mode failure recovery unreachable and,
+    // after a recovery un-adopts the host pool, would leave future client
+    // sessions unreaped until process restart (#400 review).
+    this.startSessionReaper();
     this.markBound();
 
     // Wait for incoming requests from Python
@@ -536,12 +541,27 @@ export class IpcBridge {
 
     const expiredSessions: PoolSession[] = [];
     for (const [sessionKey, session] of this.sessions) {
-      if (session.activeRequests === 0 && now - session.lastActivityAt >= CLIENT_SESSION_IDLE_TIMEOUT_MS) {
+      // A pool that failed asynchronously (worker crash/exit or a post-signal
+      // error between requests) can never serve again, so reap its session
+      // proactively instead of holding the maxClientSessions slot until the
+      // idle timeout or the next request's reactive drop. Healthy sessions
+      // keep the idle-timeout policy, and an in-flight request keeps its
+      // session alive until it settles (and runs its own reactive cleanup).
+      const failed = session.pool.isFailed();
+      if (session.activeRequests === 0 && (failed || now - session.lastActivityAt >= CLIENT_SESSION_IDLE_TIMEOUT_MS)) {
         // Remove before awaiting close so a returning client must
         // explicitly re-init rather than racing a closing pool.
         this.sessions.delete(sessionKey);
         expiredSessions.push(session);
       }
+    }
+
+    // The adopted HOST session is not in the sessions map, so the loop above
+    // can never see it. A dead host pool wedges every sharing IPC client
+    // forever ("worker pool is in failed state"), so the reaper performs the
+    // same proactive recovery here that map sessions got above.
+    if (this._hostPool && this.localSession.activeRequests === 0 && this.localSession.pool.isFailed()) {
+      await this.recoverFailedHostPool();
     }
 
     const reaping = Promise.all(
@@ -569,6 +589,103 @@ export class IpcBridge {
   private endSessionRequest(session: PoolSession): void {
     session.activeRequests--;
     session.lastActivityAt = Date.now();
+  }
+
+  /**
+   * Drop a client session whose WorkerPool was left in the failed state by a
+   * step/reset (shared-memory timeout, worker crash/exit, or a post-signal
+   * error). A pool that fails after init is as unusable as one that fails
+   * during initialization, so mirror the init-failure cleanup: evict the
+   * session and free its workers so a dead pool cannot hold a
+   * maxClientSessions slot or fail every retry until the idle reaper.
+   * Transient per-request errors (message-mode error replies, shared-mode
+   * ACTION_ENCODE) leave the pool ready and never reach here. Session mode
+   * stays engaged (the local/bypass fallback is not restored), matching the
+   * init-failure rationale: evicting a client must never re-admit it to the
+   * local/bypass pool.
+   */
+  private async dropFailedPoolSession(sessionKey: string, session: PoolSession): Promise<void> {
+    if (session === this.localSession) {
+      // An adopted host pool never enters the sessions map and the host owns
+      // its lifecycle, so the map-based eviction below cannot apply — but a
+      // failed host pool wedges every sharing IPC client forever. Recover
+      // the bridge instead of leaving it pinned to a corpse. A non-host
+      // local/bypass failure stays untouched: programmatic callers own that
+      // lifecycle and may be driving it directly.
+      if (this._hostPool) {
+        await this.recoverFailedHostPool();
+      }
+      return;
+    }
+    if (this.sessions.get(sessionKey) !== session) {
+      return;
+    }
+    if (!session.pool.isFailed()) {
+      return;
+    }
+    this.sessions.delete(sessionKey);
+    try {
+      await session.pool.close();
+    } catch (closeError) {
+      console.error('[IPC] Error closing failed client session:', closeError);
+    }
+  }
+
+  /**
+   * Recover the bridge from an adopted HOST pool that failed after init
+   * (worker timeout, crash/exit, or a post-signal error). The host session is
+   * not in the sessions map, so neither the reactive map eviction nor the
+   * idle reaper can free it: every sharing IPC client would fail forever with
+   * "worker pool is in failed state" until the process restarts. A failed
+   * pool's workers are already terminated by its own failure cleanup, so
+   * closing it here cannot steal a live lifecycle from the host BonkEnv —
+   * unlike close(), which must never close a healthy adopted pool. After
+   * closing the corpse, un-adopt so the next matching-count init builds a
+   * fresh bridge-owned pool and shared clients recover with a plain re-init.
+   * The owner is notified through the onHostPoolFailed hook registered at
+   * adoption (plus a loud log), so its retained reference being orphaned is
+   * never silent. The stale check keeps concurrent recovery passes
+   * idempotent: the reaper and a request's reactive cleanup can interleave
+   * at await points, and only a pass that still observes the original pool
+   * may flip the adoption state.
+   */
+  private async recoverFailedHostPool(): Promise<void> {
+    const session = this.localSession;
+    const pool = session.pool;
+    if (!pool.isFailed()) {
+      return;
+    }
+    try {
+      await pool.close();
+    } catch (closeError) {
+      console.error('[IPC] Error closing failed host pool:', closeError);
+    }
+    if (session.pool !== pool) {
+      // Another recovery pass (or a rebuild) got here first; do not clobber
+      // whatever now occupies the host slot.
+      return;
+    }
+    // Do not orphan the owner silently: BonkEnv keeps its own pool reference
+    // for direct step()/reset()/getPool() use, and that reference now points
+    // at a closed corpse while IPC clients get the rebuilt pool.
+    console.warn(
+      '[IPC] Adopted host pool failed; rebuilding a fresh bridge-owned pool for IPC clients. The owner retains the dead pool reference until it re-acquires or restarts.',
+    );
+    if (this._onHostPoolFailed) {
+      try {
+        this._onHostPoolFailed(pool);
+      } catch (hookError) {
+        console.error('[IPC] onHostPoolFailed handler threw:', hookError);
+      }
+    }
+    session.initialized = false;
+    session.numEnvs = 0;
+    session.lastActivityAt = Date.now();
+    this._hostPool = false;
+    this._hostConfig = null;
+    this._hostUseSharedMemory = undefined;
+    this.localSessionIdentity = undefined;
+    session.pool = new WorkerPool();
   }
 
   /**
@@ -870,6 +987,16 @@ export class IpcBridge {
       }
     } catch (e: any) {
       console.error('[IPC] Error handling request:', e);
+      // A step/reset failure that left the pool in the failed state
+      // (worker timeout, crash/exit, post-signal error) is fatal to that
+      // session, exactly like an init failure: drop the session and close
+      // its pool so a dead pool cannot hold a client-cap slot or fail
+      // every retry until the idle reaper. Transient per-request errors
+      // leave the pool ready, so this conservatively only ever removes
+      // sessions whose pool can no longer serve.
+      if (activeSession) {
+        await this.dropFailedPoolSession(sessionKey, activeSession);
+      }
       response = { status: 'error', error: e.message };
       serialized = null;
     }
@@ -953,8 +1080,20 @@ export class IpcBridge {
    * workers instead of spawning its own, so external clients share the
    * env's numEnvs/config/useSharedMemory rather than getting default
    * workers. The host keeps owning the pool's lifecycle.
+   *
+   * If the adopted pool later FAILS after init, the bridge closes the corpse
+   * and un-admits it: IPC clients recover by rebuilding a fresh
+   * bridge-owned pool via a plain re-init. The owner's own pool reference is
+   * then orphaned on the closed pool, so `onHostPoolFailed` (invoked with
+   * the dead pool, before the replacement) lets the owner react — log,
+   * invalidate its reference, or restart. An owner handler must not throw;
+   * throws are logged and swallowed so recovery always completes.
    */
-  adoptPool(pool: WorkerPool, numEnvs: number, options: { config?: any; useSharedMemory?: boolean } = {}): void {
+  adoptPool(
+    pool: WorkerPool,
+    numEnvs: number,
+    options: { config?: any; useSharedMemory?: boolean; onHostPoolFailed?: (pool: WorkerPool) => void } = {},
+  ): void {
     if (this._hostPool || this.localSession.initialized || this.sessions.size > 0) {
       throw new Error('Cannot adopt a pool after the bridge pool has been initialized');
     }
@@ -963,6 +1102,7 @@ export class IpcBridge {
     this.localSession.numEnvs = numEnvs;
     this.localSession.lastActivityAt = Date.now();
     this._hostPool = true;
+    this._onHostPoolFailed = options.onHostPoolFailed;
     // Remember the host env's effective config and useSharedMemory so a
     // matching-count client init can be validated/echoed instead of
     // silently discarding the client's settings on an env-owned pool (#252).

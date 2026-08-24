@@ -146,6 +146,9 @@ beforeEach(() => {
       close: vi.fn(),
       getTelemetrySnapshots: vi.fn().mockResolvedValue([]),
       isUsingSharedMemory: vi.fn(() => false),
+      // The idle reaper probes this to proactively evict failed pools; fake
+      // pools model healthy ones unless a test overrides the return value.
+      isFailed: vi.fn(() => false),
     };
   });
   mocks.gpTick.mockClear();
