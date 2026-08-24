@@ -28,7 +28,31 @@ interface SseFrame {
   svg: string;
 }
 
-const sseClients = new Set<http.ServerResponse>();
+/**
+ * Per-client SSE delivery state. When a client stops draining the socket
+ * (`res.write()` returns false / `writableNeedDrain`), subsequent frames are
+ * dropped for that client instead of buffered indefinitely, and a bounded
+ * eviction clock is armed so a persistently stalled client is severed rather
+ * than retained forever. The clock is monotonic against passive signals: a
+ * bare `drain` never re-arms it and never clears it. Recovery is state-based
+ * instead of instant-sampled — it takes sustained clean delivery (a run of
+ * consecutive accepted writes, or an observed full buffer flush) to clear the
+ * clock, while a fresh failed write re-arms it from that new observation.
+ */
+interface SseClientState {
+  backedUp: boolean;
+  backedUpSince: number | null;
+  /** Consecutive fully-accepted writes since the last backpressure signal. */
+  cleanWrites: number;
+}
+
+/** Max time a client may remain backed up before the server severs it. */
+const SSE_STALL_EVICT_MS = 5000;
+
+/** Consecutive accepted writes that confirm a backed-up client recovered. */
+const SSE_RECOVERY_WRITES = 3;
+
+const sseClients = new Map<http.ServerResponse, SseClientState>();
 let latestFrame: SseFrame | null = null;
 
 const HTML_PAGE = `<!doctype html>
@@ -91,17 +115,68 @@ const HTML_PAGE = `<!doctype html>
 </body>
 </html>`;
 
-function sseSend(res: http.ServerResponse, event: string, payload: unknown): void {
-  res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
+function sseSend(res: http.ServerResponse, event: string, payload: unknown): boolean {
+  return res.write(`event: ${event}\ndata: ${JSON.stringify(payload)}\n\n`);
 }
 
 function broadcast(event: string, payload: unknown): void {
-  for (const res of sseClients) sseSend(res, event, payload);
+  const now = Date.now();
+  for (const [res, state] of sseClients) {
+    if (!res.writable || res.writableEnded || res.destroyed) {
+      sseClients.delete(res);
+      continue;
+    }
+    if (state.backedUp) {
+      // Not draining: drop this frame rather than buffer it. The client
+      // reconnects to `latestFrame`, so skipping is safe; evict once the
+      // monotonic deadline elapses so a stalled client is never retained
+      // forever.
+      if (now - (state.backedUpSince ?? now) >= SSE_STALL_EVICT_MS) {
+        sseClients.delete(res);
+        res.destroy();
+      }
+      continue;
+    }
+    // Honor write() backpressure: when the socket high-water mark is hit,
+    // stop sending to this client (coalescing to the latest frame) instead
+    // of letting Node's write buffer grow without bound. A fresh failure is
+    // a new observation of backpressure, so it re-arms the eviction clock.
+    if (!sseSend(res, event, payload) || res.writableNeedDrain) {
+      state.backedUp = true;
+      state.cleanWrites = 0;
+      state.backedUpSince = now;
+    } else if (++state.cleanWrites >= SSE_RECOVERY_WRITES || res.writableLength === 0) {
+      // State-based recovery: sustained clean delivery — or an observed full
+      // flush — proves the client is draining again, so the eviction deadline
+      // clears. Sampling a single instant is not enough: a draining client
+      // whose buffer never happens to be empty at a broadcast tick must not
+      // be severed mid-recovery.
+      state.cleanWrites = SSE_RECOVERY_WRITES;
+      state.backedUpSince = null;
+    }
+  }
+}
+
+function registerSseClient(res: http.ServerResponse, req: http.IncomingMessage): void {
+  const state: SseClientState = { backedUp: false, backedUpSince: null, cleanWrites: 0 };
+  sseClients.set(res, state);
+  const onDrain = (): void => {
+    const current = sseClients.get(res);
+    // A drain only means the socket became writable again — the client may
+    // still be trailing, so it must NOT re-arm the eviction deadline.
+    // Recovery is confirmed in broadcast when a write fully flushes.
+    if (current) current.backedUp = false;
+  };
+  res.on('drain', onDrain);
+  req.on('close', () => {
+    res.removeListener('drain', onDrain);
+    sseClients.delete(res);
+  });
 }
 
 function shutdown(env: BonkEnvironment | null, server: http.Server, code = 0): void {
   if (env) env.close();
-  for (const res of sseClients) res.end();
+  for (const res of sseClients.keys()) res.end();
   sseClients.clear();
   server.close(() => process.exit(code));
   // Give the graceful SSE flush (final frame + 'done') a brief window, then
@@ -135,8 +210,7 @@ function handleRequest(
     });
     sseSend(res, 'meta', { map: deps.map, width: deps.width, height: deps.height });
     if (latestFrame) sseSend(res, 'frame', latestFrame);
-    sseClients.add(res);
-    req.on('close', () => sseClients.delete(res));
+    registerSseClient(res, req);
     return;
   }
   if (url === '/favicon.ico') {
@@ -161,11 +235,16 @@ async function main(): Promise<void> {
   const deps = { width, height, map };
 
   const server = http.createServer((req, res) => handleRequest(req, res, deps));
-  server.on('error', (e) => { console.error(e); shutdown(env, server, 1); });
+  server.on('error', (e) => {
+    console.error(e);
+    shutdown(env, server, 1);
+  });
   server.listen(port, () => {
     const bound = server.address();
     const boundPort = typeof bound === 'object' && bound ? bound.port : port;
-    console.log(`bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`);
+    console.log(
+      `bonk-rl-env live preview → http://localhost:${boundPort}  (map=${map}, fps=${fps}, tickCap=${tickCap || '∞'})`,
+    );
   });
 
   const intervalMs = Math.max(1, Math.round(1000 / fps));
@@ -195,4 +274,7 @@ async function main(): Promise<void> {
   process.on('SIGTERM', onSigint);
 }
 
-main().catch((e) => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});

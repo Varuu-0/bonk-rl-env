@@ -350,6 +350,7 @@ export class IpcBridge {
       this.sock = this.createSocket();
       this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
+
     // Snapshot BEFORE awaiting bind: on a restart after close() (#263/#316)
     // _closed is still true from the previous cycle until the post-bind reset
     // below, so testing _closed alone would misclassify every genuine restart
@@ -410,6 +411,7 @@ export class IpcBridge {
       this.markBindFailed(closedDuringStart);
       throw closedDuringStart;
     }
+
     let endpoint: string;
     try {
       endpoint = this.sock.lastEndpoint ?? addr;
@@ -426,6 +428,7 @@ export class IpcBridge {
       this.markBindFailed(err);
       throw err;
     }
+
     // From here to markBound() there is no await, so no close() can
     // interleave: once the fresh (or recreated) ROUTER read its endpoint,
     // resetting _closed is the legitimate restart-after-close handoff, not
@@ -444,7 +447,14 @@ export class IpcBridge {
         if (this._closed) break;
         const identity = frames[0];
         const msg = frames[frames.length - 1];
-        await this.handleRequest(identity, msg.toString());
+        // Exactly 3 frames with an empty middle frame is REQ's wire
+        // signature ([identity, "", payload]): libzmq's REQ state
+        // machine silently discards any reply that does not re-echo
+        // that empty delimiter, so mirror the request envelope on
+        // every reply (#410). Anything else — DEALER peers including
+        // multi-frame payloads — keeps the plain [identity, payload].
+        const reqEnvelope = frames.length === 3 && frames[1].length === 0;
+        await this.handleRequest(identity, msg.toString(), { reqEnvelope });
       }
     } catch (err: any) {
       // Ignore errors during shutdown
@@ -561,7 +571,19 @@ export class IpcBridge {
     session.lastActivityAt = Date.now();
   }
 
-  async handleRequest(identity: Buffer, rawMsg: string) {
+  /**
+   * Build the reply frames for a client. REQ peers require the empty
+   * delimiter frame they sent to be echoed ([identity, "", payload]) or
+   * their socket state machine silently drops the reply while the request
+   * has already executed; DEALER peers take the plain [identity, payload]
+   * pair (issue #410).
+   */
+  private replyFrames(identity: Buffer, payload: string, reqEnvelope: boolean): (Buffer | string)[] {
+    return reqEnvelope ? [identity, '', payload] : [identity, payload];
+  }
+
+  async handleRequest(identity: Buffer, rawMsg: string, options: { reqEnvelope?: boolean } = {}) {
+    const reqEnvelope = options.reqEnvelope ?? false;
     let response: any;
     // Step responses are serialized eagerly so the borrowed pool graph is
     // consumed before the telemetry branch awaits worker replies.
@@ -794,7 +816,7 @@ export class IpcBridge {
             // loop. The telemetry block runs detached below and
             // catches its own errors (see #185).
             try {
-              await this._wrappedSend([identity, serialized]);
+              await this._wrappedSend(this.replyFrames(identity, serialized, reqEnvelope));
             } catch (sendError) {
               // A send failure must not fabricate a step-error
               // reply for a step that already executed — the
@@ -855,7 +877,7 @@ export class IpcBridge {
     try {
       if (!replied) {
         try {
-          await this._wrappedSend([identity, serialized ?? JSON.stringify(response)]);
+          await this._wrappedSend(this.replyFrames(identity, serialized ?? JSON.stringify(response), reqEnvelope));
         } catch (sendError) {
           console.error('[IPC] Error sending response:', sendError);
         }
