@@ -34,12 +34,13 @@ export { MAX_OPPONENTS } from './opponent-capacity';
 const MAX_TICKS_DEFAULT = 30 * TPS;
 
 /**
- * Upper bound of the validated frame-skip window, mirroring the Python
- * client's MAX_FRAME_SKIP (python/envs/bonk_env.py) so the backend never
- * accepts a window that client would reject when coalescing terminal holds.
- * Exported as the single source of truth for the [1, MAX_FRAME_SKIP] contract
- * so tests (unit, IPC, and the Python parity test) reference the same value
- * instead of hardcoded literals (PR #396 follow-up).
+ * Upper bound of the validated frame-skip window and the single source of
+ * truth for the [1, MAX_FRAME_SKIP] contract shared with the Python client.
+ * Derivation flows one way only: this constant is exported here, copied into
+ * manifests/backend-constants.json by `npm run gen:constants`, and pinned by
+ * python/envs/bonk_env.py through its manifest parity test — so the backend
+ * never accepts a frame-skip window that client would reject when coalescing
+ * terminal holds (#393).
  */
 export const MAX_FRAME_SKIP = 100;
 

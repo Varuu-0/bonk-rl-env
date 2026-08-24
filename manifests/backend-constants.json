@@ -1,0 +1,5 @@
+{
+  "source": "src/core/environment.ts",
+  "generator": "npm run gen:constants",
+  "MAX_FRAME_SKIP": 100
+}

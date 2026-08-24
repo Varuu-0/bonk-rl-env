@@ -834,15 +834,34 @@ def test_num_opponents_non_finite_defaults_to_one_like_backend(
     env.close()
 
 
+def _find_repo_file(relative_path):
+    """Locate ``relative_path`` by walking up from this test file.
+
+    Layout-tolerant replacement for a hardcoded ``parents[N]`` depth: works no
+    matter how many directories separate this test module from the repo root,
+    and fails with an actionable message when the file is missing.
+    """
+    here = Path(__file__).resolve()
+    for parent in [here, *here.parents]:
+        candidate = parent / relative_path
+        if candidate.is_file():
+            return candidate
+    raise AssertionError(f"{relative_path} not found in any directory above {here}")
+
+
 def test_max_frame_skip_matches_backend_ts_constant():
     """#393 follow-up: the Python client's MAX_FRAME_SKIP must stay pinned to
     the backend's exported MAX_FRAME_SKIP (src/core/environment.ts), the single
-    source of truth for the validated [1, MAX_FRAME_SKIP] window, so the two
-    languages cannot drift (review suggestion on PR #396)."""
-    ts_source = Path(__file__).resolve().parents[2] / "src" / "core" / "environment.ts"
-    match = re.search(
-        r"export const MAX_FRAME_SKIP = (\d+);",
-        ts_source.read_text(encoding="utf-8"),
+    source of truth for the validated [1, MAX_FRAME_SKIP] window.
+
+    The pin is enforced against the committed JSON manifest
+    (manifests/backend-constants.json) generated from the TS constants by
+    ``npm run gen:constants`` and kept honest by the TS-side drift guard
+    (tests/unit/constants-manifest.test.ts). Reading the manifest value-only
+    via json.load couples this test to neither repo layout depth nor TS source
+    formatting."""
+    manifest = json.loads(
+        _find_repo_file("manifests/backend-constants.json").read_text(encoding="utf-8")
     )
-    assert match is not None, f"exported MAX_FRAME_SKIP not found in {ts_source}"
-    assert int(match.group(1)) == bonk_env.MAX_FRAME_SKIP
+    assert manifest.get("source") == "src/core/environment.ts"
+    assert manifest["MAX_FRAME_SKIP"] == bonk_env.MAX_FRAME_SKIP
