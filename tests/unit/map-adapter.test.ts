@@ -293,7 +293,7 @@ describe('normalizeMap', () => {
     it('folds rotated-rect world AABB extents into deathCenter (#420)', () => {
       // addBody() builds rects as ORIENTED boxes rotated by def.angle
       // (SetAsOrientedBox), so a 45° 600x40 ramp at y=400 spans
-      // [173.726..626.274] on both axes (half-extent (300+20)/√2 ≈
+      // [173.726..626.274] on the y axis (half-extent (300+20)/√2 ≈
       // 226.274), not [380..420]. Folding the unrotated extents
       // displaced the derived center to y=5 instead of y≈108.137 on
       // this asymmetric layout, dragging the whole 850-unit OOB circle
@@ -363,6 +363,83 @@ describe('normalizeMap', () => {
       // The oriented AABB of a rect stays symmetric about its center
       // for every angle, so shipped origin-symmetric maps keep {0,0}.
       expect(out.physics.deathCenter).toEqual({ x: 0, y: 0 });
+    });
+
+    it.each([Math.PI / 4, -Math.PI / 4, (5 * Math.PI) / 4, (9 * Math.PI) / 4])(
+      'treats equivalent ramp orientations (%p rad) identically in the rotated-rect bbox (#420 review)',
+      (angle) => {
+        // |cos|/|sin| make the oriented AABB invariant under ±θ and π-shifts,
+        // so negative and beyond-2π authored angles must land on the same
+        // death center as the canonical π/4 layout.
+        const out = normalizeMap({
+          bodies: [
+            { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: -400, width: 200, height: 20, static: true },
+            { bodyIndex: 1, name: 'ramp', type: 'rect', x: 0, y: 400, width: 600, height: 40, angle, static: true },
+          ],
+          spawns: [
+            { x: -100, y: -380, blue: true },
+            { x: 100, y: -380, red: true },
+          ],
+        } as any) as any;
+
+        expect(out.physics.deathCenter.x).toBe(0);
+        expect(out.physics.deathCenter.y).toBeCloseTo((-410 + 400 + 320 / Math.SQRT2) / 2, 3);
+      },
+    );
+
+    it('includes dynamic rotated rects in the death-center bbox (#420 review)', () => {
+      // The OOB circle bounds every fixture regardless of body type; a
+      // dynamic body must contribute its oriented extents like any static.
+      const out = normalizeMap({
+        bodies: [
+          { bodyIndex: 0, name: 'floor', type: 'rect', x: 0, y: 0, width: 100, height: 20, static: true },
+          {
+            bodyIndex: 1,
+            name: 'spinner',
+            type: 'rect',
+            x: 200,
+            y: 100,
+            width: 100,
+            height: 20,
+            angle: Math.PI / 2,
+            static: false,
+          },
+        ],
+        spawns: [{ x: 0, y: -50, blue: true, red: true }],
+      } as any) as any;
+
+      // spinner at 90°: half-extents (10, 50) → world AABB [190..210,
+      // 50..150] (up to float noise); floor is [-50..50, -10..10].
+      expect(out.physics.deathCenter.x).toBeCloseTo(80, 6);
+      expect(out.physics.deathCenter.y).toBeCloseTo(70, 6);
+    });
+
+    it('degrades a non-finite authored rect angle to 0 instead of voiding the bbox (#420 review)', () => {
+      const out = normalizeMap({
+        bodies: [
+          { bodyIndex: 0, name: 'anchor', type: 'rect', x: 0, y: -400, width: 200, height: 20, static: true },
+          {
+            bodyIndex: 1,
+            name: 'ramp',
+            type: 'rect',
+            x: 0,
+            y: 400,
+            width: 600,
+            height: 40,
+            angle: NaN,
+            static: true,
+          },
+        ],
+        spawns: [
+          { x: -100, y: -380, blue: true },
+          { x: 100, y: -380, red: true },
+        ],
+      } as any) as any;
+
+      // NaN cos/sin would poison every min/max fold and drop deathCenter
+      // entirely (silently disabling the OOB circle); the finite guard
+      // treats the rect as unrotated instead.
+      expect(out.physics.deathCenter).toEqual({ x: 0, y: 5 });
     });
 
     it('keeps the authored rotation on def.angle when converting absolute polygon vertices (#318, #344 review)', () => {
@@ -711,6 +788,66 @@ describe('normalizeMap', () => {
       expect(out.bodies).toHaveLength(2);
       expect(out.bodies[0].nativeBody?.index).toBe(0);
       expect(out.bodies[1].nativeBody?.index).toBe(0);
+    });
+
+    it('folds flattened native rotated rects (bodyAngle + shape angle) into deathCenter (#420 review)', () => {
+      // extractMap always emits the exporter's flat compatibility view and
+      // normalizeMap prefers it, so flat-view fixtures can never reach
+      // flattenNativeBodies. This drives the structured path directly: the
+      // facade combines bodyAngle + shape.angle into def.angle, and the
+      // death-center bbox must consume that combined rotation exactly as it
+      // does for an exporter-flat rect.
+      const out = normalizeMap({
+        physicsBodies: [
+          {
+            index: 0,
+            name: 'anchor',
+            type: 's',
+            typeName: 'static',
+            position: { x: 0, y: -400 },
+            fixtureIndices: [0],
+            fixtures: [
+              {
+                fixtureIndex: 0,
+                name: 'Unnamed Shape',
+                shape: { type: 'bx', typeName: 'rect', center: { x: 0, y: 0 }, angle: 0, width: 200, height: 20 },
+              },
+            ],
+          },
+          {
+            index: 1,
+            name: 'ramp',
+            type: 's',
+            typeName: 'static',
+            position: { x: 0, y: 400 },
+            // β = π/6 on the body plus α = π/12 on the shape compose to the
+            // same π/4 orientation the flat-view test asserts.
+            angle: Math.PI / 6,
+            fixtureIndices: [1],
+            fixtures: [
+              {
+                fixtureIndex: 1,
+                name: 'Unnamed Shape',
+                shape: {
+                  type: 'bx',
+                  typeName: 'rect',
+                  center: { x: 0, y: 0 },
+                  angle: Math.PI / 12,
+                  width: 600,
+                  height: 40,
+                },
+              },
+            ],
+          },
+        ],
+        spawns: [
+          { x: -100, y: -380, blue: true },
+          { x: 100, y: -380, red: true },
+        ],
+      } as any) as any;
+
+      expect(out.physics.deathCenter.x).toBe(0);
+      expect(out.physics.deathCenter.y).toBeCloseTo((-410 + 400 + 320 / Math.SQRT2) / 2, 3);
     });
 
     it('does not let an empty fixtureIndices list shadow populated fixtures', () => {

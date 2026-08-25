@@ -997,11 +997,12 @@ export function normalizeMap(raw: unknown): MapDef {
         // def.angle (SetAsOrientedBox), so the world AABB half-extents
         // of a rect at θ are (w/2)|cosθ| + (h/2)|sinθ| ×
         // (w/2)|sinθ| + (h/2)|cosθ|. Fold those rotated extents into
-        // the bbox: unrotated w/2, h/2 displaced deathCenter for any
+        // the bbox: the prior unrotated w/2, h/2 treatment displaced deathCenter for any
         // asymmetrically placed rotated rect (#420). θ = 0 degenerates
         // to the axis-aligned values, keeping unrotated maps
-        // bit-identical.
-        const angle = b.angle ?? 0;
+        // bit-identical. A non-finite authored angle degrades to 0 so a
+        // NaN can never void this body's bbox contribution.
+        const angle = Number.isFinite(b.angle) ? b.angle : 0;
         const cosA = Math.abs(Math.cos(angle));
         const sinA = Math.abs(Math.sin(angle));
         const hw = (b.width / 2) * cosA + (b.height / 2) * sinA;
