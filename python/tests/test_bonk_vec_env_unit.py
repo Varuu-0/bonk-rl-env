@@ -839,13 +839,17 @@ def _find_repo_file(relative_path):
 
     Layout-tolerant replacement for a hardcoded ``parents[N]`` depth: works no
     matter how many directories separate this test module from the repo root,
-    and fails with an actionable message when the file is missing.
+    and fails with an actionable message when the file is missing. The walk
+    stops at the first ancestor containing ``.git`` so a same-named file in an
+    enclosing checkout or monorepo parent can never satisfy the lookup.
     """
     here = Path(__file__).resolve()
     for parent in [here, *here.parents]:
         candidate = parent / relative_path
         if candidate.is_file():
             return candidate
+        if (parent / ".git").exists():
+            break
     raise AssertionError(f"{relative_path} not found in any directory above {here}")
 
 

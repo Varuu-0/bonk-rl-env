@@ -6,50 +6,42 @@ const frameSkipError = (value: unknown) =>
 
 describe('BonkEnvironment frameSkip validation (#393)', () => {
   it('rejects NaN frameSkip (would freeze action input)', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: NaN }))
-      .toThrow(frameSkipError(NaN));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: NaN })).toThrow(frameSkipError(NaN));
   });
 
   it('rejects frameSkip 0 (would disable the terminal hold)', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 0 }))
-      .toThrow(frameSkipError(0));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 0 })).toThrow(frameSkipError(0));
   });
 
   it('rejects negative frameSkip', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: -1 }))
-      .toThrow(frameSkipError(-1));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: -1 })).toThrow(frameSkipError(-1));
   });
 
   it('rejects fractional frameSkip (would widen the terminal-hold window)', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 2.5 }))
-      .toThrow(frameSkipError(2.5));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 2.5 })).toThrow(frameSkipError(2.5));
   });
 
   it('rejects non-finite frameSkip', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: Infinity }))
-      .toThrow(frameSkipError(Infinity));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: Infinity })).toThrow(frameSkipError(Infinity));
   });
 
   it('rejects absurdly large frameSkip past the MAX_FRAME_SKIP cap', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: MAX_FRAME_SKIP + 1 }))
-      .toThrow(frameSkipError(MAX_FRAME_SKIP + 1));
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 1e9 }))
-      .toThrow(frameSkipError(1e9));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: MAX_FRAME_SKIP + 1 })).toThrow(
+      frameSkipError(MAX_FRAME_SKIP + 1),
+    );
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 1e9 })).toThrow(frameSkipError(1e9));
   });
 
   it('rejects non-numeric frameSkip', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 'four' as any }))
-      .toThrow(frameSkipError('four'));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frameSkip: 'four' as any })).toThrow(frameSkipError('four'));
   });
 
   it('rejects snake_case frame_skip 0 through the alias', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frame_skip: 0 } as any))
-      .toThrow(frameSkipError(0));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frame_skip: 0 } as any)).toThrow(frameSkipError(0));
   });
 
   it('rejects fractional snake_case frame_skip through the alias', () => {
-    expect(() => new BonkEnvironment({ numOpponents: 1, frame_skip: 2.5 } as any))
-      .toThrow(frameSkipError(2.5));
+    expect(() => new BonkEnvironment({ numOpponents: 1, frame_skip: 2.5 } as any)).toThrow(frameSkipError(2.5));
   });
 
   it('accepts a positive integer frameSkip', () => {

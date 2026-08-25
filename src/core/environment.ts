@@ -39,7 +39,7 @@ const MAX_TICKS_DEFAULT = 30 * TPS;
  * Derivation flows one way only: this constant is exported here, copied into
  * manifests/backend-constants.json by `npm run gen:constants`, and pinned by
  * python/envs/bonk_env.py through its manifest parity test — so the backend
- * never accepts a frame-skip window that client would reject when coalescing
+ * never accepts a frame-skip window that the client would reject when coalescing
  * terminal holds (#393).
  */
 export const MAX_FRAME_SKIP = 100;
