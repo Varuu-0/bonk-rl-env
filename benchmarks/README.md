@@ -42,21 +42,25 @@ npm run bench:ipc-profile   # IPC latency decomposition
 ## Layers
 
 ### Layer 1 — Primitives (`layer1-primitives.ts`)
+
 Micro-benchmarks for the atomic operations that underpin shared memory IPC.
 Measures latency of `Atomics.wait`, `store`, `load`, `notify`, `TypedArray.set`,
 object allocation vs mutation, and the `sendCommand` cycle.
 
 ### Layer 2 — Raw Physics (`layer2-physics.ts`)
+
 Isolates the Box2D physics engine by calling `PhysicsEngine.tick()` in a tight
 loop. No environment wrapper, no observation extraction, no reward calculation.
 This is the theoretical maximum throughput of the simulation core.
 
 ### Layer 3 — Environment (`layer3-environment.ts`)
+
 Measures `BonkEnvironment.step()` which includes physics tick, observation
 extraction, reward calculation, and action decoding. No worker threads or IPC.
 Tests both default and frame-skip configurations.
 
 ### Layer 4 — Worker Pool (`layer4-worker-pool.ts`)
+
 Tests `WorkerPool.step()` with SharedArrayBuffer IPC across exactly 1, 2, 4, 8,
 and 16 workers, with one environment per worker. Each worker count runs in a
 single reused pool; ten balanced-order samples of 2,000 steps report per-step
@@ -66,16 +70,19 @@ startup and warmup are excluded from measurements. The N=16 aggregate is the
 SLA regression metric enforced by `npm run ci:bench`.
 
 ### Layer 5 — Memory (`layer5-memory.ts`)
+
 Runs 50K steps and monitors heap growth, peak RSS, and GC effectiveness.
 Also stress-tests 200 reset cycles to detect memory leaks from repeated
 environment creation/destruction.
 
 ### Layer 6 — Stability (`layer6-stability.ts`)
+
 Runs 100K steps with per-segment reporting to measure throughput variance.
 Reports coefficient of variation (CV) — a high CV indicates GC pauses or
 JIT deoptimization causing performance instability.
 
 ### Layer 7 — IPC (Python) (`python/benchmarks/layer7-*.py`)
+
 Full end-to-end benchmarks over ZMQ. Requires the TypeScript server running
 on port 5555. `layer7-ipc-throughput.py` measures SPS/SPM scaling.
 `layer7-ipc-latency.py` decomposes IPC into send/recv/parse/convert phases.
@@ -90,16 +97,25 @@ and key metrics per layer.
 
 ## Performance Targets
 
-| Layer | Metric | Target |
-|:------|:-------|:-------|
-| 1 | Atomics.wait non-blocking | < 10 us |
-| 1 | Object alloc (obs-like) | < 1 us |
-| 2 | PhysicsEngine TPS | > 15,000 |
-| 3 | BonkEnvironment SPS | > 30,000 |
-| 4 | WorkerPool SPS (N=1) | > 2,000 |
-| 4 | Aggregate Env-SPS (N>1) | >= 90% of N=1 |
-| 5 | Heap growth (50K steps) | < 5 MB |
-| 6 | Throughput CV (100K steps) | < 10% |
+All native loops measure sustained live physics: episodes are reset as they
+end (via `stepLive`), because a settled environment replays its terminal
+result with zero physics work (#421). SPS counts only live sim steps.
+
+| Layer | Metric                          | Target        |
+| :---- | :------------------------------ | :------------ |
+| 1     | Atomics.wait non-blocking       | < 10 us       |
+| 1     | Object alloc (obs-like)         | < 1 us        |
+| 2     | PhysicsEngine TPS               | > 15,000      |
+| 3     | BonkEnvironment SPS (live, 1v1) | > 2,800       |
+| 4     | WorkerPool SPS (N=1)            | > 2,000       |
+| 4     | Aggregate Env-SPS (N>1)         | >= 90% of N=1 |
+| 5     | Heap growth (50K live steps)    | < 5 MB        |
+| 6     | Throughput CV (stable)          | < 30%         |
+
+The Layer 3 target is the SLA regression boundary in
+`scripts/ci-bench-check.ts`; healthy reference hardware measures ~3,800-4,700
+SPS (~210-260 us/step). The Layer 6 CV target quantifies variance of real
+simulation work; healthy runs measure ~3-15%.
 
 ## Requirements
 

@@ -13,186 +13,215 @@
 import { BonkEnvironment } from '../src/core/environment';
 import { WorkerPool } from '../src/core/worker-pool';
 import {
-    BenchmarkResult,
-    BenchmarkSuite,
-    BenchmarkMetric,
-    createSuite,
-    recordResult,
-    finalizeSuite,
-    emitSuite,
-    formatSuiteSummary,
+  BenchmarkResult,
+  BenchmarkSuite,
+  BenchmarkMetric,
+  createSuite,
+  recordResult,
+  finalizeSuite,
+  emitSuite,
+  formatSuiteSummary,
+  stepLive,
 } from '../src/utils/bench-report';
 
 const STEPS = 100_000;
 const WARMUP = 2_000;
 const REPORT_INTERVAL = 10_000;
 
+/**
+ * Native stability is judged on run-to-run variance of real physics work,
+ * not absolute throughput (#421): healthy SPS spans an order of magnitude
+ * across machines and maps, so a fixed SPS floor either passes vacuously
+ * (the old >100k gate validated terminal-hold no-ops) or fails fast
+ * hardware. A variance ceiling catches GC/JIT instability instead. Healthy
+ * live-physics runs measure ~10-15% CV; this matches the ci-bench-check L6
+ * SLA fail limit so a standalone run and the SLA report agree.
+ */
+const NATIVE_CV_GATE = 30;
+
 interface SegmentResult {
-    steps: number;
-    elapsedMs: number;
-    sps: number;
+  steps: number;
+  elapsedMs: number;
+  sps: number;
 }
 
 function benchNativeStability(): BenchmarkResult {
-    // A horizon far beyond the measured window keeps every step on the
-    // physics path: the environment now settles into a terminal (no physics
-    // advance) state once maxTicks is reached (#197), so the default 900-tick
-    // horizon would turn ~99% of a 100K-step run into trivial steps.
-    const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1, maxTicks: 1_000_000 });
-    env.reset();
+  const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1 });
+  env.reset();
 
-    for (let i = 0; i < WARMUP; i++) env.step(0);
+  for (let i = 0; i < WARMUP; i++) stepLive(env, 0);
 
-    const segments: SegmentResult[] = [];
-    let totalStart = performance.now();
-    let segmentStart = totalStart;
+  const segments: SegmentResult[] = [];
+  let liveSteps = 0;
+  let resets = 0;
+  let totalStart = performance.now();
+  let segmentStart = totalStart;
+  let segmentLiveSteps = 0;
 
-    for (let i = 0; i < STEPS; i++) {
-        env.step(0);
-        if ((i + 1) % REPORT_INTERVAL === 0) {
-            const now = performance.now();
-            const segElapsed = now - segmentStart;
-            const segSps = REPORT_INTERVAL / (segElapsed / 1000);
-            segments.push({ steps: REPORT_INTERVAL, elapsedMs: segElapsed, sps: segSps });
-            segmentStart = now;
-        }
+  for (let i = 0; i < STEPS; i++) {
+    const outcome = stepLive(env, 0);
+    if (outcome.live) {
+      liveSteps++;
+      segmentLiveSteps++;
     }
+    if (outcome.reset) resets++;
+    if ((i + 1) % REPORT_INTERVAL === 0) {
+      const now = performance.now();
+      const segElapsed = now - segmentStart;
+      const segSps = segmentLiveSteps / (segElapsed / 1000);
+      segments.push({ steps: REPORT_INTERVAL, elapsedMs: segElapsed, sps: segSps });
+      segmentStart = now;
+      segmentLiveSteps = 0;
+    }
+  }
 
-    const totalElapsed = performance.now() - totalStart;
-    const overallSps = STEPS / (totalElapsed / 1000);
-    const segSpsValues = segments.map(s => s.sps);
-    const avgSegSps = segSpsValues.reduce((a, b) => a + b, 0) / segSpsValues.length;
-    const minSegSps = Math.min(...segSpsValues);
-    const maxSegSps = Math.max(...segSpsValues);
-    const stdDev = Math.sqrt(segSpsValues.reduce((sum, v) => sum + (v - avgSegSps) ** 2, 0) / segSpsValues.length);
-    const cv = (stdDev / avgSegSps) * 100;
+  const totalElapsed = performance.now() - totalStart;
+  // Only physics-executing steps count toward throughput (#421): with
+  // frameSkip=1 every measured step advances physics because episodes are
+  // reset the moment they end.
+  const overallSps = liveSteps / (totalElapsed / 1000);
+  const segSpsValues = segments.map((s) => s.sps);
+  const avgSegSps = segSpsValues.reduce((a, b) => a + b, 0) / segSpsValues.length;
+  const minSegSps = Math.min(...segSpsValues);
+  const maxSegSps = Math.max(...segSpsValues);
+  const stdDev = Math.sqrt(segSpsValues.reduce((sum, v) => sum + (v - avgSegSps) ** 2, 0) / segSpsValues.length);
+  const cv = (stdDev / avgSegSps) * 100;
 
-    // CV excluding first segment (JIT warmup dominates first 10K steps)
-    const stableSegments = segSpsValues.slice(1);
-    const avgStable = stableSegments.reduce((a, b) => a + b, 0) / stableSegments.length;
-    const stdDevStable = Math.sqrt(stableSegments.reduce((sum, v) => sum + (v - avgStable) ** 2, 0) / stableSegments.length);
-    const cvStable = (stdDevStable / avgStable) * 100;
+  // CV excluding first segment (JIT warmup dominates first 10K steps)
+  const stableSegments = segSpsValues.slice(1);
+  const avgStable = stableSegments.reduce((a, b) => a + b, 0) / stableSegments.length;
+  const stdDevStable = Math.sqrt(
+    stableSegments.reduce((sum, v) => sum + (v - avgStable) ** 2, 0) / stableSegments.length,
+  );
+  const cvStable = (stdDevStable / avgStable) * 100;
 
-    if (global.gc) global.gc();
+  if (global.gc) global.gc();
 
-    const metrics: BenchmarkMetric[] = [
-        { label: 'Overall SPS', value: Math.round(overallSps), unit: 'steps/sec' },
-        { label: 'Avg segment SPS', value: Math.round(avgSegSps), unit: 'steps/sec' },
-        { label: 'Min segment SPS', value: Math.round(minSegSps), unit: 'steps/sec' },
-        { label: 'Max segment SPS', value: Math.round(maxSegSps), unit: 'steps/sec' },
-        { label: 'Std deviation', value: Math.round(stdDev), unit: 'steps/sec' },
-        { label: 'CV (all)', value: +cv.toFixed(1), unit: '%' },
-        { label: 'CV (stable)', value: +cvStable.toFixed(1), unit: '%' },
-        { label: 'Avg step time', value: +((1 / overallSps) * 1_000_000).toFixed(1), unit: 'us' },
-        { label: 'Steps', value: STEPS, unit: '' },
-    ];
+  const metrics: BenchmarkMetric[] = [
+    { label: 'Overall SPS', value: Math.round(overallSps), unit: 'steps/sec' },
+    { label: 'Avg segment SPS', value: Math.round(avgSegSps), unit: 'steps/sec' },
+    { label: 'Min segment SPS', value: Math.round(minSegSps), unit: 'steps/sec' },
+    { label: 'Max segment SPS', value: Math.round(maxSegSps), unit: 'steps/sec' },
+    { label: 'Std deviation', value: Math.round(stdDev), unit: 'steps/sec' },
+    { label: 'CV (all)', value: +cv.toFixed(1), unit: '%' },
+    { label: 'CV (stable)', value: +cvStable.toFixed(1), unit: '%' },
+    { label: 'Avg step time', value: +((1 / overallSps) * 1_000_000).toFixed(1), unit: 'us' },
+    { label: 'Steps', value: STEPS, unit: '' },
+    { label: 'Live steps', value: liveSteps, unit: '' },
+    { label: 'Episodes completed', value: resets, unit: '' },
+  ];
 
-    return {
-        layer: 6,
-        name: `Native env stability (${(STEPS / 1000).toFixed(0)}K steps)`,
-        passed: overallSps > 100_000,
-        status: overallSps > 100_000 ? 'PASS' : 'FAIL',
-        durationMs: totalElapsed,
-        metrics,
-    };
+  return {
+    layer: 6,
+    name: `Native env stability (${(STEPS / 1000).toFixed(0)}K steps)`,
+    passed: cvStable < NATIVE_CV_GATE,
+    status: cvStable < NATIVE_CV_GATE ? 'PASS' : 'FAIL',
+    durationMs: totalElapsed,
+    metrics,
+  };
 }
 
 async function benchPoolStability(numEnvs: number): Promise<BenchmarkResult> {
-    const pool = new WorkerPool();
-    await pool.init(numEnvs, {}, true);
-    await pool.reset(undefined, { ownership: 'borrowed' });
+  const pool = new WorkerPool();
+  await pool.init(numEnvs, {}, true);
+  await pool.reset(undefined, { ownership: 'borrowed' });
 
-    const actions: any[] = [];
-    for (let i = 0; i < numEnvs; i++) {
-        actions.push({ left: false, right: true, up: false, down: false, heavy: false, grapple: false });
+  const actions: any[] = [];
+  for (let i = 0; i < numEnvs; i++) {
+    actions.push({ left: false, right: true, up: false, down: false, heavy: false, grapple: false });
+  }
+
+  for (let i = 0; i < Math.min(WARMUP, 500); i++) {
+    await pool.step(actions, { ownership: 'borrowed' });
+  }
+
+  const segments: SegmentResult[] = [];
+  let totalStart = performance.now();
+  let segmentStart = totalStart;
+
+  for (let i = 0; i < STEPS; i++) {
+    await pool.step(actions, { ownership: 'borrowed' });
+    if ((i + 1) % REPORT_INTERVAL === 0) {
+      const now = performance.now();
+      const segElapsed = now - segmentStart;
+      const segSps = REPORT_INTERVAL / (segElapsed / 1000);
+      segments.push({ steps: REPORT_INTERVAL, elapsedMs: segElapsed, sps: segSps });
+      segmentStart = now;
     }
+  }
 
-    for (let i = 0; i < Math.min(WARMUP, 500); i++) {
-        await pool.step(actions, { ownership: 'borrowed' });
-    }
+  const totalElapsed = performance.now() - totalStart;
+  const overallSps = STEPS / (totalElapsed / 1000);
+  const overallEnvSps = overallSps * numEnvs;
+  const segSpsValues = segments.map((s) => s.sps);
+  const avgSegSps = segSpsValues.reduce((a, b) => a + b, 0) / segSpsValues.length;
+  const stdDev = Math.sqrt(segSpsValues.reduce((sum, v) => sum + (v - avgSegSps) ** 2, 0) / segSpsValues.length);
+  const cv = (stdDev / avgSegSps) * 100;
 
-    const segments: SegmentResult[] = [];
-    let totalStart = performance.now();
-    let segmentStart = totalStart;
+  // CV excluding first segment (JIT warmup)
+  const stableSegments = segSpsValues.slice(1);
+  const avgStable = stableSegments.reduce((a, b) => a + b, 0) / stableSegments.length;
+  const stdDevStable = Math.sqrt(
+    stableSegments.reduce((sum, v) => sum + (v - avgStable) ** 2, 0) / stableSegments.length,
+  );
+  const cvStable = stableSegments.length > 1 ? (stdDevStable / avgStable) * 100 : cv;
 
-    for (let i = 0; i < STEPS; i++) {
-        await pool.step(actions, { ownership: 'borrowed' });
-        if ((i + 1) % REPORT_INTERVAL === 0) {
-            const now = performance.now();
-            const segElapsed = now - segmentStart;
-            const segSps = REPORT_INTERVAL / (segElapsed / 1000);
-            segments.push({ steps: REPORT_INTERVAL, elapsedMs: segElapsed, sps: segSps });
-            segmentStart = now;
-        }
-    }
+  pool.close();
+  if (global.gc) global.gc();
 
-    const totalElapsed = performance.now() - totalStart;
-    const overallSps = STEPS / (totalElapsed / 1000);
-    const overallEnvSps = overallSps * numEnvs;
-    const segSpsValues = segments.map(s => s.sps);
-    const avgSegSps = segSpsValues.reduce((a, b) => a + b, 0) / segSpsValues.length;
-    const stdDev = Math.sqrt(segSpsValues.reduce((sum, v) => sum + (v - avgSegSps) ** 2, 0) / segSpsValues.length);
-    const cv = (stdDev / avgSegSps) * 100;
+  // N=1 is effectively single-threaded (serial Atomics wait), so GC
+  // pauses are fully visible. Higher N values mask variance through
+  // serial synchronization. Use N-dependent thresholds.
+  const cvThreshold = numEnvs === 1 ? 40 : 20;
 
-    // CV excluding first segment (JIT warmup)
-    const stableSegments = segSpsValues.slice(1);
-    const avgStable = stableSegments.reduce((a, b) => a + b, 0) / stableSegments.length;
-    const stdDevStable = Math.sqrt(stableSegments.reduce((sum, v) => sum + (v - avgStable) ** 2, 0) / stableSegments.length);
-    const cvStable = stableSegments.length > 1 ? (stdDevStable / avgStable) * 100 : cv;
-
-    pool.close();
-    if (global.gc) global.gc();
-
-    // N=1 is effectively single-threaded (serial Atomics wait), so GC
-    // pauses are fully visible. Higher N values mask variance through
-    // serial synchronization. Use N-dependent thresholds.
-    const cvThreshold = numEnvs === 1 ? 40 : 20;
-
-    return {
-        layer: 6,
-        name: `WorkerPool stability N=${numEnvs} (${(STEPS / 1000).toFixed(0)}K steps)`,
-        passed: cvStable < cvThreshold,
-        status: cvStable < cvThreshold ? 'PASS' : 'FAIL',
-        durationMs: totalElapsed,
-        metrics: [
-            { label: 'SPS (per-env)', value: Math.round(overallSps), unit: 'steps/sec' },
-            { label: 'Env-SPS (aggregate)', value: Math.round(overallEnvSps), unit: 'env-steps/sec' },
-            { label: 'SPM (aggregate)', value: Math.round(overallEnvSps * 60), unit: 'env-steps/min' },
-            { label: 'CV (all)', value: +cv.toFixed(1), unit: '%' },
-            { label: 'CV (stable)', value: +cvStable.toFixed(1), unit: '%' },
-            { label: 'Total env-steps', value: STEPS * numEnvs, unit: '' },
-        ],
-    };
+  return {
+    layer: 6,
+    name: `WorkerPool stability N=${numEnvs} (${(STEPS / 1000).toFixed(0)}K steps)`,
+    passed: cvStable < cvThreshold,
+    status: cvStable < cvThreshold ? 'PASS' : 'FAIL',
+    durationMs: totalElapsed,
+    metrics: [
+      { label: 'SPS (per-env)', value: Math.round(overallSps), unit: 'steps/sec' },
+      { label: 'Env-SPS (aggregate)', value: Math.round(overallEnvSps), unit: 'env-steps/sec' },
+      { label: 'SPM (aggregate)', value: Math.round(overallEnvSps * 60), unit: 'env-steps/min' },
+      { label: 'CV (all)', value: +cv.toFixed(1), unit: '%' },
+      { label: 'CV (stable)', value: +cvStable.toFixed(1), unit: '%' },
+      { label: 'Total env-steps', value: STEPS * numEnvs, unit: '' },
+    ],
+  };
 }
 
 async function main(): Promise<void> {
-    const suiteStart = performance.now();
-    const suite = createSuite(6, 'Stability', 'Long-running throughput variance and GC pressure');
+  const suiteStart = performance.now();
+  const suite = createSuite(6, 'Stability', 'Long-running throughput variance and GC pressure');
 
-    recordResult(suite, benchNativeStability());
+  recordResult(suite, benchNativeStability());
 
-    for (const n of [1, 4, 8]) {
-        try {
-            const result = await benchPoolStability(n);
-            recordResult(suite, result);
-        } catch (e: any) {
-            recordResult(suite, {
-                layer: 6,
-                name: `WorkerPool stability N=${n}`,
-                passed: false,
-                status: 'ERROR',
-                durationMs: 0,
-                metrics: [],
-                error: e.message,
-            });
-        }
-        await new Promise(r => setTimeout(r, 500));
+  for (const n of [1, 4, 8]) {
+    try {
+      const result = await benchPoolStability(n);
+      recordResult(suite, result);
+    } catch (e: any) {
+      recordResult(suite, {
+        layer: 6,
+        name: `WorkerPool stability N=${n}`,
+        passed: false,
+        status: 'ERROR',
+        durationMs: 0,
+        metrics: [],
+        error: e.message,
+      });
     }
+    await new Promise((r) => setTimeout(r, 500));
+  }
 
-    finalizeSuite(suite, performance.now() - suiteStart);
-    console.log(formatSuiteSummary(suite));
-    emitSuite(suite, 'benchmarks/results/layer6.json');
-    process.exit(suite.failed > 0 || suite.errored > 0 ? 1 : 0);
+  finalizeSuite(suite, performance.now() - suiteStart);
+  console.log(formatSuiteSummary(suite));
+  emitSuite(suite, 'benchmarks/results/layer6.json');
+  process.exit(suite.failed > 0 || suite.errored > 0 ? 1 : 0);
 }
 
-main().catch(e => { console.error(e); process.exit(1); });
+main().catch((e) => {
+  console.error(e);
+  process.exit(1);
+});
