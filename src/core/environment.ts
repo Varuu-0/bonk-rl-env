@@ -20,6 +20,7 @@ import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { assertValidAction, decodeEncodedAction } from './action-validation';
+export { MAX_OPPONENTS } from './opponent-capacity';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -95,7 +96,13 @@ export interface StepResult {
 }
 
 export interface EnvironmentConfig {
-  /** Number of opponents (default 1) */
+  /**
+   * Number of opponents (default 1). Bounded by MAX_OPPONENTS (see
+   * src/core/opponent-capacity.ts): values above it are rejected at
+   * construction because the bundled Box2D broadphase pair table (4096
+   * slots) is exhausted by the quadratic pairs of co-located disc spawns
+   * (#392).
+   */
   numOpponents?: number;
   /** Maximum ticks per episode (default 900) */
   maxTicks?: number;
@@ -420,6 +427,11 @@ export class BonkEnvironment {
     const rawConfig = config as any;
     const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
 
+    // Validate before map loading or world construction (#392). This keeps an
+    // oversized opponent count from exhausting the fixed Box2D broadphase
+    // pair table and surfacing its opaque library-internal TypeError instead.
+    const numOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1);
+
     // Load map from file or use provided config. `mapData` (programmatic)
     // wins; otherwise the documented map-path surface is honored end to
     // end: the config-loader resolves `--map` / `DEFAULT_MAP_PATH` /
@@ -479,7 +491,7 @@ export class BonkEnvironment {
     };
 
     this.config = {
-      numOpponents: SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1),
+      numOpponents,
       maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
       randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
       mapData: mapDef,

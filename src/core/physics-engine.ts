@@ -21,6 +21,7 @@ const {
   b2World,
   b2AABB,
   b2Vec2,
+  b2Settings,
   b2BodyDef,
   b2CircleDef,
   b2PolygonDef,
@@ -34,6 +35,20 @@ const {
   b2XForm,
   b2Distance,
 } = box2d;
+
+import { MAX_OPPONENTS } from './opponent-capacity';
+
+/**
+ * Signature of the library-internal TypeError thrown when the bundled Box2D
+ * broadphase pair table is exhausted: b2PairManager.AddPair dereferences the
+ * drained free list (`pair = this.m_pairs[pIndex]` is undefined) with no
+ * bounds check (#392).
+ */
+const PAIR_TABLE_EXHAUSTION_TYPE_ERROR = "Cannot read properties of undefined (reading 'next')";
+
+function isPairTableExhaustionError(err: unknown): boolean {
+  return err instanceof TypeError && String((err as TypeError).message).includes(PAIR_TABLE_EXHAUSTION_TYPE_ERROR);
+}
 
 // ─── Constants ───────────────────────────────────────────────────────
 /** bonk.io runs at 30 ticks per second */
@@ -901,6 +916,10 @@ export class PhysicsEngine {
    * Add a static or dynamic body from a MapBodyDef to the world.
    */
   addBody(def: MapBodyDef): void {
+    // Fixture creation consumes broadphase capacity too, so a dense custom
+    // mapData must fail with the labeled capacity error instead of the
+    // library's opaque TypeError mid-build (#392).
+    this.assertBroadphaseCapacity(`cannot add map body${def.name ? ` '${def.name}'` : ''}`);
     const bodyDef = new b2BodyDef();
     const nativeBody = def.nativeBody;
     const nativeFixture = def.nativeFixture;
@@ -1148,7 +1167,11 @@ export class PhysicsEngine {
       shapeDef.filter = filter;
     }
 
-    const shape = body.CreateShape(shapeDef);
+    const shape = this.createShapeGuarded(
+      body,
+      shapeDef,
+      `adding the fixture for map body${def.name ? ` '${def.name}'` : ''}`,
+    );
     if (shape && typeof shape.SetUserData === 'function') shape.SetUserData(def);
     body.SetMassFromShapes();
     setBodyUserData();
@@ -1187,6 +1210,8 @@ export class PhysicsEngine {
     height: number,
     angle = 0,
   ): void {
+    // Sensor fixtures consume broadphase capacity like any other (#392).
+    this.assertBroadphaseCapacity(`cannot add cap-zone ${zone.index} sensor`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
     // Rotate the sensor body to match an angle-rotated fixture so the sensor
@@ -1200,7 +1225,7 @@ export class PhysicsEngine {
     shapeDef.density = 0;
     shapeDef.isSensor = true;
 
-    body.CreateShape(shapeDef);
+    this.createShapeGuarded(body, shapeDef, `adding the cap-zone ${zone.index} sensor`);
     body.SetUserData({ isCapZone: true, zoneType: zone.type, zoneIndex: zone.index, owner: zone.owner });
     this.capZoneSensors.push(body);
 
@@ -1695,10 +1720,94 @@ export class PhysicsEngine {
   private createdJoints: Map<string, any> = new Map();
 
   /**
+   * Single source of truth for the drained-sentinel contract (#392). The
+   * bundled Box2D port allocates fixed broadphase capacity at world creation
+   * (b2Settings.b2_maxProxies = 512 proxy slots, b2_maxPairs = 4096 pair
+   * slots) and drains both free lists with no bounds check: once exhausted,
+   * AddPair/CreateProxy dereference undefined and throw the opaque
+   * 'Cannot read properties of undefined (reading "next")' TypeError. The
+   * overloaded free-list heads (world.m_broadPhase.m_freeProxy,
+   * ...m_pairManager.m_freePair) are array indexes that read 0..capacity
+   * while slots remain and the USHRT_MAX sentinel (65535) once drained, so
+   * `>= capacity` detects both states. Returns each pool's drain state plus
+   * the capacities used for the checks so callers never rederive them.
+   */
+  private broadphaseDrain(): { pairsDrained: boolean; proxiesDrained: boolean; maxPairs: number; maxProxies: number } {
+    const world: any = this.world;
+    const broadPhase: any = world?.m_broadPhase;
+    const pairManager: any = broadPhase?.m_pairManager;
+    const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
+    const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
+    return {
+      pairsDrained: Boolean(pairManager && pairManager.m_freePair >= maxPairs),
+      proxiesDrained: Boolean(broadPhase && broadPhase.m_freeProxy >= maxProxies),
+      maxPairs,
+      maxProxies,
+    };
+  }
+
+  /**
+   * Convert any residual broadphase exhaustion (e.g. custom mapData dense
+   * enough to drain a pool despite the upstream MAX_OPPONENTS validation)
+   * into a descriptive error naming the capacity and the remedy.
+   */
+  private assertBroadphaseCapacity(context: string): void {
+    const { pairsDrained, proxiesDrained, maxPairs, maxProxies } = this.broadphaseDrain();
+    if (pairsDrained || proxiesDrained) {
+      throw new Error(
+        `PhysicsEngine broadphase capacity exhausted (b2_maxProxies = ${maxProxies}, ` +
+          `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
+          `(at most ${MAX_OPPONENTS}) or the number of collidable map fixtures.`,
+      );
+    }
+  }
+
+  /**
+   * Create a fixture shape on `body`, converting a broadphase exhaustion
+   * raised inside the library into the same descriptive capacity error as
+   * the pre-check above. CreateShape drains the fixed broadphase pools
+   * mid-add (CreateProxy buffers one pair per overlapping proxy), so the
+   * last free slot can be consumed inside the call itself after any
+   * pre-check passed. The library raises the same TypeError signature when
+   * EITHER fixed pool runs dry, so after the throw the heads are re-checked
+   * via broadphaseDrain() to attribute the failure: a drained m_freePair
+   * names the pair table, a drained m_freeProxy names the proxy pool, and
+   * when neither or both read drained the message stays non-committal.
+   * Every fixture-creation path (map bodies, cap-zone sensors, player
+   * discs) goes through this helper so dense custom mapData fails with the
+   * labeled validation error instead of the library's opaque TypeError
+   * (#392).
+   */
+  private createShapeGuarded(body: any, shapeDef: any, context: string): any {
+    try {
+      return body.CreateShape(shapeDef);
+    } catch (err) {
+      if (isPairTableExhaustionError(err)) {
+        const { pairsDrained, proxiesDrained, maxPairs, maxProxies } = this.broadphaseDrain();
+        let culprit: string;
+        if (pairsDrained && !proxiesDrained) {
+          culprit = `pair table exhausted (b2_maxPairs = ${maxPairs})`;
+        } else if (proxiesDrained && !pairsDrained) {
+          culprit = `proxy pool exhausted (b2_maxProxies = ${maxProxies})`;
+        } else {
+          culprit = `pair/proxy tables exhausted (b2_maxProxies = ${maxProxies}, b2_maxPairs = ${maxPairs})`;
+        }
+        throw new Error(
+          `PhysicsEngine broadphase ${culprit} while ${context}. Reduce ` +
+            `numOpponents (at most ${MAX_OPPONENTS}) or the number of collidable ` +
+            `map fixtures.`,
+        );
+      }
+      throw err;
+    }
+  }
+
+  /**
    * Add a dynamic circular player body.
    * Returns the player ID (0-indexed).
    */
   addPlayer(id: number, x: number, y: number): void {
+    this.assertBroadphaseCapacity(`cannot add player ${id}`);
     const bodyDef = new b2BodyDef();
     bodyDef.position.Set(x / this.scale, y / this.scale);
 
@@ -1722,7 +1831,7 @@ export class PhysicsEngine {
     filter.maskBits = 0xffff; // Collide with everything by default
     circleDef.filter = filter;
 
-    body.CreateShape(circleDef);
+    this.createShapeGuarded(body, circleDef, `adding the disc shape for player ${id}`);
     body.SetMassFromShapes();
 
     // Allow rotation (bonk players spin)

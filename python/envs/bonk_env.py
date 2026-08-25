@@ -26,6 +26,13 @@ MAX_FRAME_SKIP = 100
 # in tests/test_bonk_vec_env_unit.py reads the TS source and fails on drift,
 # so change both together.
 MAX_NUM_ENVS = 2048
+# Mirror of the backend's MAX_OPPONENTS (src/core/opponent-capacity.ts, #392).
+# The bundled Box2D broadphase pair table is fixed at 4096 slots and
+# co-located disc spawns consume pairs quadratically, so ~87 opponents on the
+# default map exhausts it and the backend crashes with an opaque TypeError.
+# The server rejects counts above 64; the client rejects them too so the
+# error names the parameter before any network round-trip.
+MAX_OPPONENTS = 64
 
 
 def _frame_skip_window(value):
@@ -67,7 +74,7 @@ class BonkVecEnv(VecEnv):
             port: ZMQ port for communication with Node.js backend
             config: Optional configuration dictionary, can include:
                 - frame_skip: Number of ticks to hold each action (default 1)
-                - num_opponents: Number of opponents (default 1)
+                - num_opponents: Number of opponents (default 1, max 64)
                 - max_ticks: Maximum ticks per episode (default 900)
                 - random_opponent: Use random opponent policy (default True)
                 - seed: Random seed
@@ -105,6 +112,36 @@ class BonkVecEnv(VecEnv):
                 f"num_envs must be an integer between 1 and {MAX_NUM_ENVS}, got {num_envs}"
             )
         num_envs = int(num_envs)
+
+        # During construction, validate num_opponents against the backend's
+        # MAX_OPPONENTS (#392): the server rejects counts above the bound, and
+        # rejecting them client-side makes the error name the parameter
+        # instead of surfacing a backend init failure. Acceptance semantics
+        # mirror the backend's normalization exactly: non-finite values
+        # (NaN/±inf) are not errors there — they fall back to the documented
+        # default of 1 — so the client coerces them to 1 as well, on a shallow
+        # copy so the caller's dict is untouched (and so the forwarded payload
+        # stays spec-valid JSON, since Infinity/NaN are not valid JSON);
+        # non-numeric values are left for the backend's normalization. Finite
+        # values are floored, and only a floored count above the bound is a
+        # misconfiguration.
+        num_opponents = (config or {}).get("num_opponents")
+        if isinstance(num_opponents, (Integral, float, np.floating)) and not isinstance(
+            num_opponents, (bool, np.bool_)
+        ):
+            try:
+                floored = int(num_opponents)
+            except (OverflowError, ValueError):
+                floored = None
+            if floored is None:
+                config = dict(config) if config else {}
+                config["num_opponents"] = 1
+            elif floored > MAX_OPPONENTS:
+                raise ValueError(
+                    f"Invalid num_opponents {floored}: expected at most "
+                    f"{MAX_OPPONENTS} opponents (the bundled Box2D broadphase "
+                    "pair table is limited to 4096 pairs)"
+                )
 
         self._timeout_ms = int(timeout_ms)
         self._close_timeout_ms = int(close_timeout_ms)
