@@ -47,6 +47,7 @@
     "ci:quick": "npx tsx scripts/local-ci.ts --quick",
     "ci:full": "npx tsx scripts/local-ci.ts --full",
     "ci:bench": "npx tsx scripts/ci-bench-check.ts",
+    "gen:constants": "tsx scripts/generate-constants-manifest.ts",
     "format:check": "npx tsx scripts/format.ts",
     "format:fix": "npx tsx scripts/format.ts --write"
   },
