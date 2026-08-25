@@ -90,6 +90,7 @@ const fakes = vi.hoisted(() => {
     private sync: Int32Array | null = null;
     private workerIndex = 0;
     private worker: FakeWorker | null = null;
+    private pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
     constructor(numEnvs: number) {
       this.index = FakeSharedMemoryManager.instances.length;
@@ -123,7 +124,10 @@ const fakes = vi.hoisted(() => {
     sendCommand(_command: number): void {
       if (!this.sync) throw new Error('fake manager was not connected');
       const delay = control.commandDelayMs[this.index] ?? 0;
-      setTimeout(() => {
+      // Track the handle so dispose() can cancel it: an armed timer (e.g. the
+      // 60s hung-worker delay) must never fire after the pool is torn down
+      // and signal a disposed pool's sync buffer.
+      this.pendingTimer = setTimeout(() => {
         if (!this.sync) return;
         // The forward wall-clock step lands exactly while the batch is in
         // flight: worker 0 completes first, stragglers are still pending.
@@ -162,6 +166,7 @@ const fakes = vi.hoisted(() => {
     }
 
     dispose(): void {
+      if (this.pendingTimer !== null) clearTimeout(this.pendingTimer);
       this.disposed = true;
     }
   }
