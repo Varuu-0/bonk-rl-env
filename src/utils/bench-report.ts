@@ -44,11 +44,13 @@ export interface LiveStepOutcome {
    * True unless this call replays the episode's terminal window: with
    * frameSkip > 1, done steps between the terminal tick and the cycle
    * boundary return the recorded terminal result with zero physics work
-   * (#197) and are excluded from throughput counts. Classification uses
-   * the same predicate the worker transport resets on (`done &&
-   * isTerminalHoldActive()`), so it cannot separate the window's final
-   * physics step from its no-physics restart step — each is miscounted
-   * once per episode and the residual error cancels to at most one step.
+   * (#197) and are excluded from throughput counts. Excluded steps are
+   * exactly the done steps on which the worker transport does not yet
+   * restart (`done && isTerminalHoldActive()`, the complement of
+   * applyStepAutoReset's reset condition), so the classifier cannot
+   * separate the window's final physics step from its no-physics restart
+   * step — each is miscounted once per episode and the residual error
+   * cancels to at most one step.
    */
   live: boolean;
   /** True when this call ended an episode and restarted the environment. */

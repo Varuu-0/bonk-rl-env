@@ -160,8 +160,9 @@ const SLA_CHECKS: SlaCheck[] = [
   },
   {
     // #421: CV now quantifies variance of real simulation work (episodes
-    // reset on end). Healthy runs measure ~10-15%; the old no-op segments
-    // were GC/JIT noise that spiked past 50% spuriously.
+    // reset on end). Healthy runs measure ~3-15% (forced-GC checker runs
+    // sit near the low end); the old no-op segments were GC/JIT noise
+    // that spiked past 50% spuriously.
     layer: 6,
     description: 'Long-run throughput variance (CV, stable)',
     benchMatch: /Native env stability/,

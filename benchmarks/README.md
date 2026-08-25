@@ -106,7 +106,7 @@ result with zero physics work (#421). SPS counts only live sim steps.
 | 1     | Atomics.wait non-blocking       | < 10 us       |
 | 1     | Object alloc (obs-like)         | < 1 us        |
 | 2     | PhysicsEngine TPS               | > 15,000      |
-| 3     | BonkEnvironment SPS (live, 1v1) | > 2,800       |
+| 3     | BonkEnvironment SPS (live, 1v1) | >= 2,800      |
 | 4     | WorkerPool SPS (N=1)            | > 2,000       |
 | 4     | Aggregate Env-SPS (N>1)         | >= 90% of N=1 |
 | 5     | Heap growth (50K live steps)    | < 5 MB        |
