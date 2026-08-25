@@ -42,6 +42,26 @@ function bodyWhoseCreateShapeThrows(err: unknown): any {
   };
 }
 
+/**
+ * Body stub whose CreateShape consumes the last slot of the given free list
+ * (pair or proxy) INSIDE the call before throwing, simulating a drain that
+ * happens mid-add so post-throw head inspection can attribute the failure.
+ */
+function bodyWhoseCreateShapeDrainsAndThrows(drain: () => void, err: unknown): any {
+  return {
+    CreateShape: () => {
+      drain();
+      throw err;
+    },
+  };
+}
+
+/** Stub world whose CreateBody returns `body` regardless of the def. */
+function stubWorldServing(world: any, body: any): any {
+  world.CreateBody = () => body;
+  return world;
+}
+
 function messageOf(fn: () => void): string {
   try {
     fn();
@@ -87,19 +107,64 @@ describe('PhysicsEngine broadphase capacity guard (#392)', () => {
     }
   });
 
-  it('addPlayer converts a pair-table drain raised mid-CreateShape into the descriptive error', () => {
+  it('addPlayer converts a mid-add drain into the non-committal wording when neither head reads drained', () => {
     const engine = new PhysicsEngine();
     const original = (engine as any).world;
     try {
       // Healthy free lists: the pre-check passes, then the shape add
-      // itself consumes the last slot inside the library.
+      // itself consumes the last slot inside the library. The heads read
+      // healthy again after the throw, so the message cannot tell which
+      // pool filled and names both.
       (engine as any).world = stubWorld(0, 0, () =>
         bodyWhoseCreateShapeThrows(new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
       );
       const message = messageOf(() => engine.addPlayer(7, 0, 0));
-      expect(message).toMatch(/PhysicsEngine broadphase pair table exhausted/);
+      expect(message).toMatch(/PhysicsEngine broadphase pair\/proxy tables exhausted/);
       expect(message).toMatch(/for player 7/);
       expect(message).toMatch(/Reduce numOpponents \(at most 64\)/);
+      expect(message).not.toContain("reading 'next'");
+    } finally {
+      (engine as any).world = original;
+    }
+  });
+
+  it('addPlayer attributes a mid-add drain to the pair table when m_freePair reads drained after the throw', () => {
+    const engine = new PhysicsEngine();
+    const original = (engine as any).world;
+    try {
+      const world: any = stubWorld(0, 0);
+      stubWorldServing(
+        world,
+        bodyWhoseCreateShapeDrainsAndThrows(() => {
+          world.m_broadPhase.m_pairManager.m_freePair = DRAINED;
+        }, new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
+      );
+      (engine as any).world = world;
+      const message = messageOf(() => engine.addPlayer(7, 0, 0));
+      expect(message).toMatch(/PhysicsEngine broadphase pair table exhausted \(b2_maxPairs/);
+      expect(message).not.toMatch(/proxy pool exhausted/);
+      expect(message).toMatch(/while adding the disc shape for player 7/);
+      expect(message).not.toContain("reading 'next'");
+    } finally {
+      (engine as any).world = original;
+    }
+  });
+
+  it('addPlayer attributes a mid-add drain to the proxy pool when m_freeProxy reads drained after the throw', () => {
+    const engine = new PhysicsEngine();
+    const original = (engine as any).world;
+    try {
+      const world: any = stubWorld(0, 0);
+      stubWorldServing(
+        world,
+        bodyWhoseCreateShapeDrainsAndThrows(() => {
+          world.m_broadPhase.m_freeProxy = DRAINED;
+        }, new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
+      );
+      (engine as any).world = world;
+      const message = messageOf(() => engine.addPlayer(1, 0, 0));
+      expect(message).toMatch(/PhysicsEngine broadphase proxy pool exhausted \(b2_maxProxies/);
+      expect(message).not.toMatch(/pair table exhausted/);
       expect(message).not.toContain("reading 'next'");
     } finally {
       (engine as any).world = original;
@@ -137,9 +202,14 @@ describe('PhysicsEngine broadphase capacity guard (#392)', () => {
     const engine = new PhysicsEngine();
     const original = (engine as any).world;
     try {
-      (engine as any).world = stubWorld(0, 0, () =>
-        bodyWhoseCreateShapeThrows(new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
+      const world: any = stubWorld(0, 0);
+      stubWorldServing(
+        world,
+        bodyWhoseCreateShapeDrainsAndThrows(() => {
+          world.m_broadPhase.m_pairManager.m_freePair = DRAINED;
+        }, new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
       );
+      (engine as any).world = world;
       const message = messageOf(() => engine.addBody(WALL));
       expect(message).toMatch(/PhysicsEngine broadphase pair table exhausted/);
       expect(message).toContain("fixture for map body 'dense-wall'");
@@ -159,6 +229,32 @@ describe('PhysicsEngine broadphase capacity guard (#392)', () => {
       );
       expect(message).toMatch(/PhysicsEngine broadphase capacity exhausted/);
       expect(message).toContain('cannot add cap-zone 3 sensor');
+    } finally {
+      (engine as any).world = original;
+    }
+  });
+
+  it('addCapZone converts a mid-add drain into the descriptive error naming the sensor', () => {
+    const engine = new PhysicsEngine();
+    const original = (engine as any).world;
+    try {
+      // Proxy-attributed variant: the sensor's CreateProxy consumes the last
+      // proxy slot inside the call, mirroring addBody/addPlayer coverage.
+      const world: any = stubWorld(0, 0);
+      stubWorldServing(
+        world,
+        bodyWhoseCreateShapeDrainsAndThrows(() => {
+          world.m_broadPhase.m_freeProxy = DRAINED;
+        }, new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
+      );
+      (engine as any).world = world;
+      const message = messageOf(() =>
+        engine.addCapZone({ index: 3, owner: 'blue', type: 1, fixture: '', shapeType: 'r' }, 0, 0, 10, 10),
+      );
+      expect(message).toMatch(/PhysicsEngine broadphase proxy pool exhausted/);
+      expect(message).toContain('while adding the cap-zone 3 sensor');
+      expect(message).toMatch(/Reduce numOpponents \(at most 64\)/);
+      expect(message).not.toContain("reading 'next'");
     } finally {
       (engine as any).world = original;
     }

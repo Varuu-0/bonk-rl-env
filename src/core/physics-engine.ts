@@ -1749,23 +1749,43 @@ export class PhysicsEngine {
   }
 
   /**
-   * Create a fixture shape on `body`, converting a broadphase pair-table
-   * exhaustion raised inside the library into the same descriptive capacity
-   * error as the pre-check above. CreateShape drains pair-table slots mid-add
-   * (CreateProxy buffers one pair per overlapping proxy), so the last free
-   * slot can be consumed inside the call itself after any pre-check passed.
-   * Every fixture-creation path (map bodies, cap-zone sensors, player discs)
-   * goes through this helper so dense custom mapData fails with the labeled
-   * validation error instead of the library's opaque TypeError (#392).
+   * Create a fixture shape on `body`, converting a broadphase exhaustion
+   * raised inside the library into the same descriptive capacity error as
+   * the pre-check above. CreateShape drains the fixed broadphase pools
+   * mid-add (CreateProxy buffers one pair per overlapping proxy), so the
+   * last free slot can be consumed inside the call itself after any
+   * pre-check passed. The library raises the same TypeError signature when
+   * EITHER fixed pool runs dry, so after the throw each free-list head is
+   * re-checked against its capacity to attribute the failure: a drained
+   * m_freePair names the pair table, a drained m_freeProxy names the proxy
+   * pool, and when neither head reads drained (the last slot was consumed
+   * and released within the failing call) the message stays non-committal.
+   * Every fixture-creation path (map bodies, cap-zone sensors, player
+   * discs) goes through this helper so dense custom mapData fails with the
+   * labeled validation error instead of the library's opaque TypeError
+   * (#392).
    */
   private createShapeGuarded(body: any, shapeDef: any, context: string): any {
     try {
       return body.CreateShape(shapeDef);
     } catch (err) {
       if (isPairTableExhaustionError(err)) {
+        const broadPhase: any = this.world?.m_broadPhase;
+        const pairManager: any = broadPhase?.m_pairManager;
+        const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
+        const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
+        const pairsDrained = Boolean(pairManager && pairManager.m_freePair >= maxPairs);
+        const proxiesDrained = Boolean(broadPhase && broadPhase.m_freeProxy >= maxProxies);
+        let culprit: string;
+        if (pairsDrained && !proxiesDrained) {
+          culprit = `pair table exhausted (b2_maxPairs = ${maxPairs})`;
+        } else if (proxiesDrained && !pairsDrained) {
+          culprit = `proxy pool exhausted (b2_maxProxies = ${maxProxies})`;
+        } else {
+          culprit = `pair/proxy tables exhausted (b2_maxProxies = ${maxProxies}, b2_maxPairs = ${maxPairs})`;
+        }
         throw new Error(
-          `PhysicsEngine broadphase pair table exhausted (b2_maxPairs = ` +
-            `${b2Settings?.b2_maxPairs ?? 4096}) while ${context}. Reduce ` +
+          `PhysicsEngine broadphase ${culprit} while ${context}. Reduce ` +
             `numOpponents (at most ${MAX_OPPONENTS}) or the number of collidable ` +
             `map fixtures.`,
         );

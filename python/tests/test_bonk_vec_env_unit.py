@@ -1,6 +1,7 @@
 from collections import UserDict
 from collections.abc import Mapping
 from unittest.mock import MagicMock
+import json
 import os
 import re
 import warnings
@@ -819,6 +820,12 @@ def test_num_opponents_non_finite_defaults_to_one_like_backend(
 
     payload = socket.send_json.call_args.args[0]
     assert payload["config"]["num_opponents"] == 1
+
+    # Pin the docstring's spec-valid-JSON claim through real serialization:
+    # send_json is mocked, so these assertions alone would pass even if the
+    # raw inf/NaN leaked into the payload. allow_nan=False makes dumps raise
+    # instead of emitting the non-standard Infinity/NaN literals.
+    json.loads(json.dumps(payload, allow_nan=False))
 
     # The caller's dict is untouched: the coercion happens on a shallow copy.
     assert original["num_opponents"] is non_finite

@@ -98,7 +98,7 @@ class BonkVecEnv(VecEnv):
             if isinstance(value, bool) or not isinstance(value, Integral) or value < minimum:
                 raise ValueError(f"{name} must be an integer greater than or equal to {minimum}")
 
-# Fail before the socket is created (and thus before any init request
+        # Fail before the socket is created (and thus before any init request
         # is sent): the Node side enforces the same [1, MAX_NUM_ENVS] range,
         # but validating here surfaces the error without a server round trip.
         # `or` short-circuits left-to-right, so non-Integral types never reach
