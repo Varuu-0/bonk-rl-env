@@ -171,6 +171,32 @@ describe('PhysicsEngine broadphase capacity guard (#392)', () => {
     }
   });
 
+  it('addPlayer stays non-committal when BOTH heads read drained after the throw', () => {
+    const engine = new PhysicsEngine();
+    const original = (engine as any).world;
+    try {
+      // Both pools drained inside the failing call: neither single-pool
+      // attribution is sound, so the message must name both capacities.
+      const world: any = stubWorld(0, 0);
+      stubWorldServing(
+        world,
+        bodyWhoseCreateShapeDrainsAndThrows(() => {
+          world.m_broadPhase.m_pairManager.m_freePair = DRAINED;
+          world.m_broadPhase.m_freeProxy = DRAINED;
+        }, new TypeError(PAIR_EXHAUSTION_TYPE_ERROR)),
+      );
+      (engine as any).world = world;
+      const message = messageOf(() => engine.addPlayer(2, 0, 0));
+      expect(message).toMatch(/PhysicsEngine broadphase pair\/proxy tables exhausted/);
+      expect(message).toMatch(/for player 2/);
+      expect(message).not.toMatch(/pair table exhausted \(/);
+      expect(message).not.toMatch(/proxy pool exhausted \(/);
+      expect(message).not.toContain("reading 'next'");
+    } finally {
+      (engine as any).world = original;
+    }
+  });
+
   it('passes unrelated CreateShape failures through untouched', () => {
     const engine = new PhysicsEngine();
     const original = (engine as any).world;

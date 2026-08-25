@@ -1720,26 +1720,40 @@ export class PhysicsEngine {
   private createdJoints: Map<string, any> = new Map();
 
   /**
-   * The bundled Box2D port allocates fixed broadphase capacity at world
-   * creation (b2Settings.b2_maxProxies = 512 proxy slots, b2_maxPairs = 4096
-   * pair slots) and drains both free lists with no bounds check: once
-   * exhausted, AddPair/CreateProxy dereference undefined and throw the
-   * opaque 'Cannot read properties of undefined (reading "next")' TypeError
-   * (#392). The upstream MAX_OPPONENTS validation keeps bundled-map configs
-   * clear of the limit; this guard converts any residual exhaustion (e.g.
-   * custom mapData dense enough to drain the table) into a descriptive error
-   * that names the capacity and the remedy. The overloaded free-list heads
-   * (world.m_broadPhase.m_freeProxy, ...m_pairManager.m_freePair) are array
-   * indexes that read 0..capacity while slots remain and the USHRT_MAX
-   * sentinel (65535) once drained, so `>= capacity` detects both states.
+   * Single source of truth for the drained-sentinel contract (#392). The
+   * bundled Box2D port allocates fixed broadphase capacity at world creation
+   * (b2Settings.b2_maxProxies = 512 proxy slots, b2_maxPairs = 4096 pair
+   * slots) and drains both free lists with no bounds check: once exhausted,
+   * AddPair/CreateProxy dereference undefined and throw the opaque
+   * 'Cannot read properties of undefined (reading "next")' TypeError. The
+   * overloaded free-list heads (world.m_broadPhase.m_freeProxy,
+   * ...m_pairManager.m_freePair) are array indexes that read 0..capacity
+   * while slots remain and the USHRT_MAX sentinel (65535) once drained, so
+   * `>= capacity` detects both states. Returns each pool's drain state plus
+   * the capacities used for the checks so callers never rederive them.
    */
-  private assertBroadphaseCapacity(context: string): void {
+  private broadphaseDrain(): { pairsDrained: boolean; proxiesDrained: boolean; maxPairs: number; maxProxies: number } {
     const world: any = this.world;
     const broadPhase: any = world?.m_broadPhase;
     const pairManager: any = broadPhase?.m_pairManager;
     const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
     const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
-    if ((pairManager && pairManager.m_freePair >= maxPairs) || (broadPhase && broadPhase.m_freeProxy >= maxProxies)) {
+    return {
+      pairsDrained: Boolean(pairManager && pairManager.m_freePair >= maxPairs),
+      proxiesDrained: Boolean(broadPhase && broadPhase.m_freeProxy >= maxProxies),
+      maxPairs,
+      maxProxies,
+    };
+  }
+
+  /**
+   * Convert any residual broadphase exhaustion (e.g. custom mapData dense
+   * enough to drain a pool despite the upstream MAX_OPPONENTS validation)
+   * into a descriptive error naming the capacity and the remedy.
+   */
+  private assertBroadphaseCapacity(context: string): void {
+    const { pairsDrained, proxiesDrained, maxPairs, maxProxies } = this.broadphaseDrain();
+    if (pairsDrained || proxiesDrained) {
       throw new Error(
         `PhysicsEngine broadphase capacity exhausted (b2_maxProxies = ${maxProxies}, ` +
           `b2_maxPairs = ${maxPairs}): ${context}. Reduce numOpponents ` +
@@ -1755,11 +1769,10 @@ export class PhysicsEngine {
    * mid-add (CreateProxy buffers one pair per overlapping proxy), so the
    * last free slot can be consumed inside the call itself after any
    * pre-check passed. The library raises the same TypeError signature when
-   * EITHER fixed pool runs dry, so after the throw each free-list head is
-   * re-checked against its capacity to attribute the failure: a drained
-   * m_freePair names the pair table, a drained m_freeProxy names the proxy
-   * pool, and when neither head reads drained (the last slot was consumed
-   * and released within the failing call) the message stays non-committal.
+   * EITHER fixed pool runs dry, so after the throw the heads are re-checked
+   * via broadphaseDrain() to attribute the failure: a drained m_freePair
+   * names the pair table, a drained m_freeProxy names the proxy pool, and
+   * when neither or both read drained the message stays non-committal.
    * Every fixture-creation path (map bodies, cap-zone sensors, player
    * discs) goes through this helper so dense custom mapData fails with the
    * labeled validation error instead of the library's opaque TypeError
@@ -1770,12 +1783,7 @@ export class PhysicsEngine {
       return body.CreateShape(shapeDef);
     } catch (err) {
       if (isPairTableExhaustionError(err)) {
-        const broadPhase: any = this.world?.m_broadPhase;
-        const pairManager: any = broadPhase?.m_pairManager;
-        const maxPairs: number = b2Settings?.b2_maxPairs ?? 4096;
-        const maxProxies: number = b2Settings?.b2_maxProxies ?? 512;
-        const pairsDrained = Boolean(pairManager && pairManager.m_freePair >= maxPairs);
-        const proxiesDrained = Boolean(broadPhase && broadPhase.m_freeProxy >= maxProxies);
+        const { pairsDrained, proxiesDrained, maxPairs, maxProxies } = this.broadphaseDrain();
         let culprit: string;
         if (pairsDrained && !proxiesDrained) {
           culprit = `pair table exhausted (b2_maxPairs = ${maxPairs})`;
