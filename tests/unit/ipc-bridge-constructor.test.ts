@@ -710,6 +710,167 @@ describe('IpcBridge start()/close() race (#402)', () => {
   });
 });
 
+describe('IpcBridge ready capture order (#435)', () => {
+  /**
+   * Settle-or-hang probe: reports how `promise` settled within `ms`, or
+   * 'hung' if it is still pending. The hang verdict is exactly the #435
+   * deadlock this suite guards against, so every assertion below compares
+   * against an explicit outcome instead of awaiting bare (which would time
+   * out with no diagnosis).
+   */
+  async function settleOutcome(promise: Promise<void>, ms = 1500): Promise<string> {
+    return Promise.race([
+      promise.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.message ?? e})`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), ms)),
+    ]);
+  }
+
+  it('settles a ready promise captured BEFORE start() when the bind succeeds', async () => {
+    const bridge = new IpcBridge({ server: { port: 12389 } });
+    // The race-free embedder pattern from issue #435: grab the readiness
+    // signal first, then start the serve loop without awaiting start().
+    const earlyReady = bridge.ready;
+    const startPromise = bridge.start();
+    try {
+      expect(await settleOutcome(earlyReady)).toBe('resolved');
+      expect(bridge.isClosed()).toBe(false);
+    } finally {
+      await bridge.close();
+      await startPromise;
+    }
+  });
+
+  it('rejects a ready promise captured BEFORE start() with the same bind failure start() reports', async () => {
+    bindSpy.mockRejectedValueOnce(new Error('bind failed: address already in use'));
+    const bridge = new IpcBridge({ server: { port: 12390 } });
+    const earlyReady = bridge.ready;
+    await expect(bridge.start()).rejects.toThrow('bind failed: address already in use');
+    // The captured promise must reject too — never hang (EADDRINUSE class).
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bind failed: address already in use)');
+    // The failed-bind cleanup (#326) still ran on the mock socket.
+    expect(closeSpy).toHaveBeenCalled();
+  });
+
+  it('still settles a ready promise read AFTER start() on success (order pin)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12391 } });
+    const startPromise = bridge.start();
+    const lateReady = bridge.ready;
+    try {
+      expect(await settleOutcome(lateReady)).toBe('resolved');
+    } finally {
+      await bridge.close();
+      await startPromise;
+    }
+  });
+
+  it('still rejects a ready promise read AFTER start() on bind failure (order pin)', async () => {
+    bindSpy.mockRejectedValueOnce(new Error('bind failed: EADDRINUSE'));
+    const bridge = new IpcBridge({ server: { port: 12392 } });
+    const startPromise = bridge.start();
+    const lateReady = bridge.ready;
+    await expect(startPromise).rejects.toThrow('bind failed: EADDRINUSE');
+    expect(await settleOutcome(lateReady)).toBe('rejected(bind failed: EADDRINUSE)');
+  });
+
+  it('settles capturers on BOTH sides of the re-arm from one bind outcome', async () => {
+    const bridge = new IpcBridge({ server: { port: 12393 } });
+    const beforeStart = bridge.ready;
+    const startPromise = bridge.start();
+    const afterStart = bridge.ready;
+    // start() re-armed a fresh promise for the new cycle (#263), but the
+    // pre-start capture must settle alongside it, not be orphaned.
+    expect(afterStart).not.toBe(beforeStart);
+    try {
+      expect(await settleOutcome(beforeStart)).toBe('resolved');
+      expect(await settleOutcome(afterStart)).toBe('resolved');
+    } finally {
+      await bridge.close();
+      await startPromise;
+    }
+  });
+
+  it('rejects capturers on BOTH sides of the re-arm from one bind failure', async () => {
+    bindSpy.mockRejectedValueOnce(new Error('EADDRINUSE'));
+    const bridge = new IpcBridge({ server: { port: 12394 } });
+    const beforeStart = bridge.ready;
+    const startPromise = bridge.start();
+    const afterStart = bridge.ready;
+    expect(afterStart).not.toBe(beforeStart);
+    await expect(startPromise).rejects.toThrow('EADDRINUSE');
+    expect(await settleOutcome(beforeStart)).toBe('rejected(EADDRINUSE)');
+    expect(await settleOutcome(afterStart)).toBe('rejected(EADDRINUSE)');
+  });
+
+  it('keeps settling pre-start captures across a close()+start() restart cycle', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12395 } });
+      // Cycle 1: pre-start capture settles with the first bind.
+      const firstCycle = bridge.ready;
+      const serve1 = bridge.start();
+      expect(await settleOutcome(firstCycle)).toBe('resolved');
+      await roundTripClose(bridge, serve1);
+
+      // Restart: a capture taken before the restart's start() (here the
+      // already-settled cycle-1 promise handed out between cycles) stays
+      // settled, and the restart's fresh signal resolves with the new bind.
+      const staleBetweenCycles = bridge.ready;
+      await expect(staleBetweenCycles).resolves.toBeUndefined();
+      const serve2 = bridge.start();
+      const restartedSignal = bridge.ready;
+      expect(restartedSignal).not.toBe(firstCycle);
+      expect(await settleOutcome(restartedSignal)).toBe('resolved');
+      await roundTripClose(bridge, serve2);
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
+  it('delivers a restart bind failure to a capture taken before the retry start()', async () => {
+    const bridge = new IpcBridge({ server: { port: 12396 } });
+    // First cycle fails while a pre-start capture is outstanding.
+    bindSpy.mockRejectedValueOnce(new Error('address already in use'));
+    const earlyCapture = bridge.ready;
+    await expect(bridge.start()).rejects.toThrow('address already in use');
+    expect(await settleOutcome(earlyCapture)).toBe('rejected(address already in use)');
+
+    // Retry binds clean; the NEW current signal resolves, and the rejected
+    // early capture can never flip back.
+    const retryServe = bridge.start();
+    const retrySignal = bridge.ready;
+    expect(retrySignal).not.toBe(earlyCapture);
+    try {
+      expect(await settleOutcome(retrySignal)).toBe('resolved');
+    } finally {
+      await bridge.close();
+      await retryServe;
+    }
+  });
+
+  it('propagates BridgeClosedDuringStart to a pre-start capture identically (#402 interplay)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12397 } });
+    const earlyReady = bridge.ready;
+    const startPromise = bridge.start();
+    const closePromise = bridge.close();
+
+    await expect(startPromise).rejects.toThrow('bridge was closed during start');
+    // The cancellation path also reaches the early capture: one consistent
+    // outcome on both sides of the re-arm boundary.
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bridge was closed during start)');
+    await closePromise;
+  });
+
+  /** Close the bridge and wait for its serve loop to exit cleanly. */
+  async function roundTripClose(bridge: IpcBridge, serve: Promise<void>): Promise<void> {
+    await bridge.close();
+    expect(bridge.isClosed()).toBe(true);
+    await serve;
+  }
+});
+
 describe('IpcBridge telemetry at 5000 steps (lines 90-98)', () => {
   async function simulateSteps(bridge: IpcBridge, count: number): Promise<any> {
     currentBridge = bridge;

@@ -29,7 +29,11 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
   }, 30000);
 
   afterAll(async () => {
-    try { await bridge.close(); } catch { /* ignore */ }
+    try {
+      await bridge.close();
+    } catch {
+      /* ignore */
+    }
     portManager.release(port);
   }, 10000);
 
@@ -43,7 +47,7 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
     const client = new zmq.Dealer();
     try {
       await client.connect(`tcp://127.0.0.1:${port}`);
-      await new Promise(r => setTimeout(r, 100));
+      await new Promise((r) => setTimeout(r, 100));
 
       const sendCommand = async (cmd: object): Promise<any> => {
         await client.send(JSON.stringify(cmd));
@@ -90,11 +94,15 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
         }
       } finally {
         if (bound && !unbound) {
-          try { await probe.unbind(endpoint); } catch { /* close below */ }
+          try {
+            await probe.unbind(endpoint);
+          } catch {
+            /* close below */
+          }
         }
         probe.close();
       }
-      await new Promise(r => setTimeout(r, 50));
+      await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error(`port ${port} did not become free`);
   }
@@ -194,7 +202,7 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
       expect(bridge.isClosed()).toBe(true);
 
       // Release the port; the retry must re-arm ready and bind fresh.
-      await new Promise<void>(resolve => blocker.close(() => resolve()));
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
       await waitForPortFree();
 
       const serve3 = bridge.start();
@@ -209,7 +217,104 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
       // The success path already closed the listener above; only close here
       // if an assertion failed while it was still listening, so a redundant
       // close (which rejects with ERR_SERVER_NOT_RUNNING) is a true no-op.
-      if (blocker.listening) await new Promise<void>(resolve => blocker.close(() => resolve()));
+      if (blocker.listening) await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  }, 60000);
+});
+
+describe('IpcBridge ready capture order with real sockets (issue #435)', () => {
+  let portManager: PortManager;
+  let port: number;
+
+  beforeAll(() => {
+    portManager = new PortManager({ startPort: 15900, endPort: 15999 });
+    port = portManager.allocate();
+  });
+
+  afterAll(() => {
+    portManager.release(port);
+  }, 10000);
+
+  /**
+   * Bounded settle probe: resolves with how `promise` settled, or 'hung'
+   * if it is still pending after `ms`. A 'hung' verdict is exactly the
+   * silent #435 deadlock (an early-captured ready promise that never
+   * settles), so tests assert an explicit outcome rather than awaiting bare.
+   */
+  async function settleOutcome(promise: Promise<void>, ms = 10000): Promise<string> {
+    return Promise.race([
+      promise.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.code ?? e?.message ?? e})`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), ms)),
+    ]);
+  }
+
+  it('a ready promise captured BEFORE start() resolves on a successful bind', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    // Capture the readiness signal before starting the serve loop — the
+    // natural race-free embedder pattern that deadlocked before the fix.
+    const earlyReady = bridge.ready;
+    const serve = bridge.start();
+    serve.catch(() => {});
+    try {
+      expect(await settleOutcome(earlyReady)).toBe('resolved');
+      expect(bridge.isClosed()).toBe(false);
+
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await serve;
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a ready promise captured BEFORE start() rejects on a genuine EADDRINUSE bind failure', async () => {
+    // Occupy the port so the bridge's bind deterministically fails with
+    // libzmq's EADDRINUSE — the exact outcome class from issue #435.
+    const blocker = net.createServer();
+    try {
+      await new Promise<void>((resolve, reject) => {
+        blocker.once('error', reject);
+        blocker.listen(port, '127.0.0.1', resolve);
+      });
+
+      const bridge = new IpcBridge({ server: { port } } as any);
+      const earlyReady = bridge.ready; // captured BEFORE start()
+      await expect(bridge.start()).rejects.toThrow();
+      // The early capture must reject with the SAME bind failure start()
+      // surfaced — previously it stayed pending forever.
+      expect(await settleOutcome(earlyReady)).toBe('rejected(EADDRINUSE)');
+      expect(bridge.isClosed()).toBe(false);
+      await bridge.close();
+    } finally {
+      if (blocker.listening) await new Promise<void>((resolve) => blocker.close(() => resolve()));
+    }
+  }, 60000);
+
+  it('a ready promise captured AFTER start() settles with the same cycle outcome (order pin)', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const serve = bridge.start();
+    serve.catch(() => {});
+    try {
+      const lateReady = bridge.ready;
+      expect(await settleOutcome(lateReady)).toBe('resolved');
+
+      // And on this same live socket, restart semantics stay pinned (#263):
+      // close + start re-arms a fresh signal that also resolves.
+      await bridge.close();
+      await serve;
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      const restartedReady = bridge.ready;
+      expect(restartedReady).not.toBe(lateReady);
+      expect(await settleOutcome(restartedReady)).toBe('resolved');
+
+      await bridge.close();
+      await serve2;
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
     }
   }, 60000);
 });
