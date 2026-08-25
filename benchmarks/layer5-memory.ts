@@ -5,8 +5,13 @@
  * memory leaks and GC pressure. Runs BonkEnvironment for 50K
  * steps and reports heap growth, peak RSS, and GC effectiveness.
  *
+ * The heap-growth gates assume forced collection: run with
+ * `--expose-gc` (as `scripts/ci-bench-check.ts` does) for meaningful,
+ * low-variance numbers — a plain `tsx` run leaves collection to timing
+ * luck, so growth figures swing widely.
+ *
  * Layer: 5 — Memory
- * Run:   npx tsx benchmarks/layer5-memory.ts
+ * Run:   npx tsx --expose-gc benchmarks/layer5-memory.ts
  */
 
 import { BonkEnvironment } from '../src/core/environment';
@@ -53,10 +58,13 @@ function benchMemoryStability(): BenchmarkResult {
   const heapSnapshots: number[] = [baselineHeap];
   const rssSnapshots: number[] = [baselineRSS];
 
+  let liveSteps = 0;
   let resets = 0;
   const start = performance.now();
   for (let i = 0; i < STEPS; i++) {
-    if (stepLive(env, 0).reset) resets++;
+    const outcome = stepLive(env, 0);
+    if (outcome.live) liveSteps++;
+    if (outcome.reset) resets++;
     if ((i + 1) % REPORT_INTERVAL === 0) {
       heapSnapshots.push(getHeapMB());
       rssSnapshots.push(getRSSMB());
@@ -71,7 +79,10 @@ function benchMemoryStability(): BenchmarkResult {
   const heapGrowth = finalHeap - baselineHeap;
   const peakHeap = Math.max(...heapSnapshots);
   const peakRSS = Math.max(...rssSnapshots);
-  const sps = STEPS / (elapsed / 1000);
+  // Live-step SPS, matching layers 3/6: with frameSkip=1 every step is
+  // live today, but dividing by the tracked count keeps this honest if
+  // the loop config ever changes.
+  const sps = liveSteps / (elapsed / 1000);
 
   const heapStable = heapGrowth < 5; // less than 5MB growth
 
@@ -89,6 +100,7 @@ function benchMemoryStability(): BenchmarkResult {
       { label: 'Peak RSS', value: +peakRSS.toFixed(1), unit: 'MB' },
       { label: 'SPS', value: Math.round(sps), unit: 'steps/sec' },
       { label: 'Steps', value: STEPS, unit: '' },
+      { label: 'Live steps', value: liveSteps, unit: '' },
       { label: 'Episodes completed', value: resets, unit: '' },
     ],
   };

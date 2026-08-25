@@ -115,9 +115,10 @@ const SLA_CHECKS: SlaCheck[] = [
   {
     // #421: measures sustained live-physics stepping on the default map
     // (episodes reset as they end), so the honest healthy value is the
-    // engine's real Box2D-backed step cost (~230-250 us/step on reference
-    // hardware) plus observation/reward overhead — not the ~200k+ no-op
-    // terminal-hold numbers the loop reported before reset-on-done.
+    // engine's real Box2D-backed step cost plus observation/reward
+    // overhead (~3,800-4,700 SPS on reference hardware, see
+    // benchmarks/README.md) — not the ~200k+ no-op terminal-hold numbers
+    // the loop reported before reset-on-done.
     layer: 3,
     description: 'BonkEnvironment 1v1 step() throughput',
     benchMatch: /BonkEnvironment\.step\(\) \(1 AI \+ 1 opponent\)/,

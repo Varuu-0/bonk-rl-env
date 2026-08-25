@@ -34,8 +34,9 @@ const REPORT_INTERVAL = 10_000;
  * across machines and maps, so a fixed SPS floor either passes vacuously
  * (the old >100k gate validated terminal-hold no-ops) or fails fast
  * hardware. A variance ceiling catches GC/JIT instability instead. Healthy
- * live-physics runs measure ~10-15% CV; this matches the ci-bench-check L6
- * SLA fail limit so a standalone run and the SLA report agree.
+ * live-physics runs measure ~3-15% CV (forced-GC runs sit at the low end);
+ * this matches the ci-bench-check L6 SLA fail limit so a standalone run
+ * and the SLA report agree.
  */
 const NATIVE_CV_GATE = 30;
 

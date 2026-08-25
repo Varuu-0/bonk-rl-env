@@ -164,8 +164,10 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
         expect(records[i].tick).toBe(records[i - 1].tick + 1);
       }
     }
-    // Every restart lands immediately after a handled termination.
-    expect(restarts).toBe(resets);
+    // Every reset except possibly a trailing one (which has no follower in
+    // the measured window) is followed by a fresh episode at tick 1.
+    const trailingResets = records[records.length - 1].reset ? 1 : 0;
+    expect(restarts).toBe(resets - trailingResets);
   });
 
   it('excludes frame-skip terminal-hold replay steps from the live count', () => {
@@ -212,6 +214,9 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
         expect(record.tick).toBe(records[i - 1].tick + 1);
       }
     }
-    expect(restarts).toBe(resets);
+    // Every reset except possibly a trailing one (which has no follower in
+    // the measured window) is followed by a fresh episode at tick 1.
+    const trailingResets = records[records.length - 1].reset ? 1 : 0;
+    expect(restarts).toBe(resets - trailingResets);
   });
 });

@@ -33,9 +33,13 @@ const WARMUP = 50;
  * Live-physics pass gates (#421). The measured quantity is sustained
  * Box2D-backed stepping on the default map — same order as the
  * PhysicsEngine.tick() SLA baseline (~22,600 TPS) plus observation/reward
- * overhead. These match the ci-bench-check L3 SLA fail limit so a
- * standalone run and the SLA report agree on where regression starts; the
- * old no-op-inflated gates (>15k/20k SPS) validated terminal-hold fiction.
+ * overhead. LIVE_SPS_GATE equals the ci-bench-check L3 SLA fail limit, so
+ * a standalone run and the SLA report agree on where regression starts
+ * (a value exactly at the gate WARNs in the SLA report rather than
+ * failing); FRAME_SKIP_SPS_GATE has no SLA row and is a standalone-only
+ * floor kept at the same value for consistency. Both replace the old
+ * no-op-inflated gates (>15k/20k SPS) that validated terminal-hold
+ * fiction.
  */
 const LIVE_SPS_GATE = 2_800;
 const FRAME_SKIP_SPS_GATE = 2_800;
@@ -44,9 +48,8 @@ function benchEnvironmentStep(): BenchmarkResult {
   const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1 });
   env.reset();
 
-  let warmupResets = 0;
   for (let i = 0; i < WARMUP; i++) {
-    if (stepLive(env, Math.floor(Math.random() * 64)).reset) warmupResets++;
+    stepLive(env, Math.floor(Math.random() * 64));
   }
 
   let liveSteps = 0;
@@ -67,8 +70,8 @@ function benchEnvironmentStep(): BenchmarkResult {
   return {
     layer: 3,
     name: 'BonkEnvironment.step() (1 AI + 1 opponent)',
-    passed: sps > LIVE_SPS_GATE,
-    status: sps > LIVE_SPS_GATE ? 'PASS' : 'FAIL',
+    passed: sps >= LIVE_SPS_GATE,
+    status: sps >= LIVE_SPS_GATE ? 'PASS' : 'FAIL',
     durationMs: elapsed,
     metrics: [
       { label: 'SPS', value: Math.round(sps), unit: 'steps/sec' },
@@ -106,8 +109,8 @@ function benchEnvironmentWithFrameSkip(): BenchmarkResult {
   return {
     layer: 3,
     name: 'BonkEnvironment.step() (frameSkip=3)',
-    passed: sps > FRAME_SKIP_SPS_GATE,
-    status: sps > FRAME_SKIP_SPS_GATE ? 'PASS' : 'FAIL',
+    passed: sps >= FRAME_SKIP_SPS_GATE,
+    status: sps >= FRAME_SKIP_SPS_GATE ? 'PASS' : 'FAIL',
     durationMs: elapsed,
     metrics: [
       { label: 'SPS', value: Math.round(sps), unit: 'steps/sec' },

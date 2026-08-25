@@ -114,8 +114,10 @@ result with zero physics work (#421). SPS counts only live sim steps.
 
 The Layer 3 target is the SLA regression boundary in
 `scripts/ci-bench-check.ts`; healthy reference hardware measures ~3,800-4,700
-SPS (~210-260 us/step). The Layer 6 CV target quantifies variance of real
-simulation work; healthy runs measure ~3-15%.
+SPS (~210-265 us/step — Box2D tick cost plus observation/reward overhead).
+The Layer 6 CV target quantifies variance of real simulation work; healthy
+runs measure ~3-15% (`--expose-gc` checker runs sit near the low end, plain
+standalone runs around 10-13%).
 
 ## Requirements
 

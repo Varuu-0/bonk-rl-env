@@ -41,9 +41,14 @@ export interface LiveStepOutcome {
   /** The environment's step result, unchanged. */
   result: StepResult;
   /**
-   * True when this step executed a physics tick. False only for
-   * terminal-hold replay steps (frameSkip > 1), which return the recorded
-   * terminal result without advancing physics (#197).
+   * True unless this call replays the episode's terminal window: with
+   * frameSkip > 1, done steps between the terminal tick and the cycle
+   * boundary return the recorded terminal result with zero physics work
+   * (#197) and are excluded from throughput counts. Classification uses
+   * the same predicate the worker transport resets on (`done &&
+   * isTerminalHoldActive()`), so it cannot separate the window's final
+   * physics step from its no-physics restart step — each is miscounted
+   * once per episode and the residual error cancels to at most one step.
    */
   live: boolean;
   /** True when this call ended an episode and restarted the environment. */
@@ -67,13 +72,12 @@ export interface LiveStepOutcome {
  * been served (`!env.isTerminalHoldActive()`, i.e. frameSkip = 1 or the hold
  * window elapsed), it resets so the next step starts a fresh episode on the
  * physics path. On that reset step the result keeps the ended episode's
- * observation so callers see worker-parity terminal results (#222). Callers
- * should count only `live` steps toward SPS — with frameSkip = 1 every
- * measured step is live up to the reset bookkeeping, and with frameSkip > 1
- * the per-episode terminal window (terminal step plus hold replays) is
- * excluded instead of diluting the measurement with no-op steps. The
- * classification trades the episode's final physics step against its
- * restart step, so the residual error is at most one step per episode.
+ * observation so callers see worker-parity terminal results (#222).
+ * Callers should count only `live` steps toward SPS: with frameSkip = 1
+ * every measured step is live, while with frameSkip > 1 each episode's
+ * terminal window (terminal step plus hold replays) is excluded instead of
+ * diluting the measurement with no-op steps. See `LiveStepOutcome.live`
+ * for the bounded classification error this rule carries.
  */
 export function stepLive(env: BonkEnvironment, action: Action): LiveStepOutcome {
   const result = env.step(action);
@@ -85,10 +89,11 @@ export function stepLive(env: BonkEnvironment, action: Action): LiveStepOutcome 
     // and the worker transport would not reset here either (#228).
     return { result, live: false, reset: false };
   }
-  // Final report of the ended episode: this step itself advanced physics
-  // to the terminal state. Preserve the terminal observation across the
-  // reset (the shared-memory transport's observations alias buffers that
-  // reset overwrites, so applyStepAutoReset keeps the same guarantee).
+  // Final report of the ended episode. Capture and re-assign the terminal
+  // observation purely for parity with applyStepAutoReset: in-process
+  // step() results own freshly built observation objects, so the restore
+  // is a no-op today, but a shared-memory-backed caller would need the
+  // pre-reset observation preserved exactly as the worker does (#222).
   const terminalObservation = result.observation;
   env.reset();
   result.observation = terminalObservation;
