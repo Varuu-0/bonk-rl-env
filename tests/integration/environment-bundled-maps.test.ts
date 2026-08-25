@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest';
 import * as path from 'path';
 import { PhysicsEngine, MapBodyDef } from '../../src/core/physics-engine';
 import { BonkEnvironment } from '../../src/core/environment';
+import { loadMap } from '../utils/map-loader';
 import { safeDestroy } from '../utils/test-helpers';
 
 // Regression suite for #271: the bundled maps bonk_WeiRd_DeAth_BalL__80622.json
@@ -14,147 +15,186 @@ import { safeDestroy } from '../utils/test-helpers';
 //   3. a disc whose position goes NaN dies via the OOB check instead of
 //      persisting forever with alive=true (NaN > radius is false).
 const NAN_MAPS = {
-    weird: 'bonk_WeiRd_DeAth_BalL__80622.json',
-    wdb: 'bonk_WDB__no_nothing__1232248.json',
+  weird: 'bonk_WeiRd_DeAth_BalL__80622.json',
+  wdb: 'bonk_WDB__no_nothing__1232248.json',
 };
 
 const STEP_TICKS = 30;
 
 describe('bundled maps never corrupt episodes with NaN physics (#271)', () => {
-    it.each(Object.entries(NAN_MAPS))('%s: every observation stays finite and the AI disc stays alive', (_label, file) => {
-        const env = new BonkEnvironment({
-            mapPath: path.join(process.cwd(), 'maps', file),
-            seed: 12345,
-            numOpponents: 1,
-            maxTicks: 1000,
-            randomOpponent: false,
-        });
-        try {
-            env.reset(12345);
-            let firstObs: { playerX: number; playerY: number } | null = null;
-            let lastObs: { playerX: number; playerY: number } | null = null;
-            for (let t = 1; t <= STEP_TICKS; t++) {
-                const r = env.step(0);
-                const o = r.observation;
-                expect(Number.isFinite(o.playerX)).toBe(true);
-                expect(Number.isFinite(o.playerY)).toBe(true);
-                expect(Number.isFinite(o.playerVelX)).toBe(true);
-                expect(Number.isFinite(o.playerVelY)).toBe(true);
-                expect(Number.isFinite(o.playerAngle)).toBe(true);
-                for (const opp of o.opponents) {
-                    expect(Number.isFinite(opp.x)).toBe(true);
-                    expect(Number.isFinite(opp.y)).toBe(true);
-                    expect(Number.isFinite(opp.velX)).toBe(true);
-                    expect(Number.isFinite(opp.velY)).toBe(true);
-                }
-                // A corrupted (NaN) disc must not become immortal: the episode
-                // must still be able to end by death, and the disc is expected
-                // to remain alive through the pin window.
-                expect(r.info.aiAlive).toBe(true);
-                if (firstObs === null) firstObs = { playerX: o.playerX, playerY: o.playerY };
-                lastObs = { playerX: o.playerX, playerY: o.playerY };
-            }
-            // The disc must be *moving* (gravity applies), not frozen at spawn.
-            // Compound platforms and their corrected joints may hold the disc
-            // close to its spawn point, so use its finite velocity as the
-            // movement signal instead of relying on a one-pixel displacement.
-            const finalState = (env as any).physics.getPlayerState(0);
-            const moved =
-                Math.abs(lastObs!.playerX - firstObs!.playerX) > 0.1 ||
-                Math.abs(lastObs!.playerY - firstObs!.playerY) > 0.1 ||
-                Math.abs(finalState.velX) > 0.1 ||
-                Math.abs(finalState.velY) > 0.1;
-            expect(moved).toBe(true);
-        } finally {
-            env.close();
+  it.each(Object.entries(NAN_MAPS))(
+    '%s: every observation stays finite and the AI disc stays alive',
+    (_label, file) => {
+      const env = new BonkEnvironment({
+        mapPath: path.join(process.cwd(), 'maps', file),
+        seed: 12345,
+        numOpponents: 1,
+        maxTicks: 1000,
+        randomOpponent: false,
+      });
+      try {
+        env.reset(12345);
+        let firstObs: { playerX: number; playerY: number } | null = null;
+        let lastObs: { playerX: number; playerY: number } | null = null;
+        for (let t = 1; t <= STEP_TICKS; t++) {
+          const r = env.step(0);
+          const o = r.observation;
+          expect(Number.isFinite(o.playerX)).toBe(true);
+          expect(Number.isFinite(o.playerY)).toBe(true);
+          expect(Number.isFinite(o.playerVelX)).toBe(true);
+          expect(Number.isFinite(o.playerVelY)).toBe(true);
+          expect(Number.isFinite(o.playerAngle)).toBe(true);
+          for (const opp of o.opponents) {
+            expect(Number.isFinite(opp.x)).toBe(true);
+            expect(Number.isFinite(opp.y)).toBe(true);
+            expect(Number.isFinite(opp.velX)).toBe(true);
+            expect(Number.isFinite(opp.velY)).toBe(true);
+          }
+          // A corrupted (NaN) disc must not become immortal: the episode
+          // must still be able to end by death, and the disc is expected
+          // to remain alive through the pin window.
+          expect(r.info.aiAlive).toBe(true);
+          if (firstObs === null) firstObs = { playerX: o.playerX, playerY: o.playerY };
+          lastObs = { playerX: o.playerX, playerY: o.playerY };
         }
-    });
+        // The disc must be *moving* (gravity applies), not frozen at spawn.
+        // Compound platforms and their corrected joints may hold the disc
+        // close to its spawn point, so use its finite velocity as the
+        // movement signal instead of relying on a one-pixel displacement.
+        const finalState = (env as any).physics.getPlayerState(0);
+        const moved =
+          Math.abs(lastObs!.playerX - firstObs!.playerX) > 0.1 ||
+          Math.abs(lastObs!.playerY - firstObs!.playerY) > 0.1 ||
+          Math.abs(finalState.velX) > 0.1 ||
+          Math.abs(finalState.velY) > 0.1;
+        expect(moved).toBe(true);
+      } finally {
+        env.close();
+      }
+    },
+  );
+});
+
+describe('bundled map corpus keeps its rotation-aware death centers (#420)', () => {
+  // normalizeMap derives physics.deathCenter from the geometry bbox with
+  // rotation-aware rect extents (#420). Pin the per-map values: maps
+  // without rotated rects (or with origin-symmetric rotated layouts) stay
+  // {0,0}, while no_nothing's asymmetric rotated-rect layout lands on its
+  // true oriented-bbox center instead of the unrotated estimate.
+  const EXPECTED_DEATH_CENTERS: Record<string, { x: number; y: number }> = {
+    'bonk_Gang_Grounds_2_0_37368.json': { x: 0, y: 0 },
+    'bonk_Simple_1v1_123.json': { x: 0, y: 0 },
+    'bonk_WDB__No_Mapshake__716916.json': { x: 0, y: 0 },
+    'bonk_WDB__no_nothing__1232248.json': { x: 0, y: 113.93291742977516 },
+    'bonk_WeiRd_DeAth_BalL__80622.json': { x: 0, y: 0 },
+  };
+
+  it.each(Object.entries(EXPECTED_DEATH_CENTERS))(
+    '%s derives the expected OOB death-circle center',
+    (file, expected) => {
+      const map = loadMap(file);
+      expect(map.physics?.deathCenter?.x).toBeCloseTo(expected.x, 6);
+      expect(map.physics?.deathCenter?.y).toBeCloseTo(expected.y, 6);
+    },
+  );
 });
 
 describe('PhysicsEngine spawn-overlap regression (#271)', () => {
-    it('a disc spawned over two overlapping static platforms stays finite for 60 ticks', () => {
-        const engine = new PhysicsEngine();
-        try {
-            // Minimal trigger from the issue: the two overlapping static rects
-            // under the WeiRd spawn point (-350,225,50,20) + (0,237.5,750,25)
-            // used to explode the port's solver to NaN at tick ~4.
-            const all = { g1: true, g2: true, g3: true, g4: true };
-            const p1: MapBodyDef = {
-                name: 'p1', type: 'rect', x: -350, y: 225,
-                width: 50, height: 20, static: true, collides: all,
-            };
-            const p2: MapBodyDef = {
-                name: 'p2', type: 'rect', x: 0, y: 237.5,
-                width: 750, height: 25, static: true, collides: all,
-            };
-            engine.addBody(p1);
-            engine.addBody(p2);
-            engine.addPlayer(0, -315, 212.5); // spawn as authored by the WeiRd map
+  it('a disc spawned over two overlapping static platforms stays finite for 60 ticks', () => {
+    const engine = new PhysicsEngine();
+    try {
+      // Minimal trigger from the issue: the two overlapping static rects
+      // under the WeiRd spawn point (-350,225,50,20) + (0,237.5,750,25)
+      // used to explode the port's solver to NaN at tick ~4.
+      const all = { g1: true, g2: true, g3: true, g4: true };
+      const p1: MapBodyDef = {
+        name: 'p1',
+        type: 'rect',
+        x: -350,
+        y: 225,
+        width: 50,
+        height: 20,
+        static: true,
+        collides: all,
+      };
+      const p2: MapBodyDef = {
+        name: 'p2',
+        type: 'rect',
+        x: 0,
+        y: 237.5,
+        width: 750,
+        height: 25,
+        static: true,
+        collides: all,
+      };
+      engine.addBody(p1);
+      engine.addBody(p2);
+      engine.addPlayer(0, -315, 212.5); // spawn as authored by the WeiRd map
 
-            for (let t = 1; t <= 60; t++) {
-                engine.tick();
-                const s = engine.getPlayerState(0);
-                expect(Number.isFinite(s.x)).toBe(true);
-                expect(Number.isFinite(s.y)).toBe(true);
-                expect(Number.isFinite(s.velX)).toBe(true);
-                expect(Number.isFinite(s.velY)).toBe(true);
-            }
-        } finally {
-            safeDestroy(engine);
-        }
-    });
+      for (let t = 1; t <= 60; t++) {
+        engine.tick();
+        const s = engine.getPlayerState(0);
+        expect(Number.isFinite(s.x)).toBe(true);
+        expect(Number.isFinite(s.y)).toBe(true);
+        expect(Number.isFinite(s.velX)).toBe(true);
+        expect(Number.isFinite(s.velY)).toBe(true);
+      }
+    } finally {
+      safeDestroy(engine);
+    }
+  });
 });
 
 describe('NaN disc dies via the fail-safe OOB check (#271)', () => {
-    it('a disc forced to a NaN position is eliminated with deathType 4, not immortal', () => {
-        const engine = new PhysicsEngine();
-        try {
-            engine.addPlayer(0, 0, 0);
-            // Corrupt the disc's transform to NaN, simulating a solver that
-            // produced an invalid position (the issue's tick-4 explosion).
-            // The bundled box2d port exposes b2Body.SetXForm(position, angle)
-            // with a vector position; b2Vec2.SetV(v) copies v.x/v.y, so the
-            // plain object below genuinely lands in m_xf.position/m_sweep.c.
-            const body = (engine as any).playerBodies.get(0);
-            body.SetXForm({ x: NaN, y: NaN }, 0);
+  it('a disc forced to a NaN position is eliminated with deathType 4, not immortal', () => {
+    const engine = new PhysicsEngine();
+    try {
+      engine.addPlayer(0, 0, 0);
+      // Corrupt the disc's transform to NaN, simulating a solver that
+      // produced an invalid position (the issue's tick-4 explosion).
+      // The bundled box2d port exposes b2Body.SetXForm(position, angle)
+      // with a vector position; b2Vec2.SetV(v) copies v.x/v.y, so the
+      // plain object below genuinely lands in m_xf.position/m_sweep.c.
+      const body = (engine as any).playerBodies.get(0);
+      body.SetXForm({ x: NaN, y: NaN }, 0);
 
-            // Self-verify the corruption actually took effect so this test
-            // genuinely exercises the non-finite OOB branch and cannot silently
-            // degrade into a NaN-coercion no-op if the port's API ever changes.
-            const corrupted = body.GetPosition();
-            expect(Number.isNaN(corrupted.x)).toBe(true);
-            expect(Number.isNaN(corrupted.y)).toBe(true);
+      // Self-verify the corruption actually took effect so this test
+      // genuinely exercises the non-finite OOB branch and cannot silently
+      // degrade into a NaN-coercion no-op if the port's API ever changes.
+      const corrupted = body.GetPosition();
+      expect(Number.isNaN(corrupted.x)).toBe(true);
+      expect(Number.isNaN(corrupted.y)).toBe(true);
 
-            engine.tick();
+      engine.tick();
 
-            const s = engine.getPlayerState(0);
-            expect(s.alive).toBe(false);
-            expect(s.deathType).toBe(4);
-        } finally {
-            safeDestroy(engine);
-        }
-    });
+      const s = engine.getPlayerState(0);
+      expect(s.alive).toBe(false);
+      expect(s.deathType).toBe(4);
+    } finally {
+      safeDestroy(engine);
+    }
+  });
 
-    it('a disc forced to an infinite position is eliminated with deathType 4', () => {
-        const engine = new PhysicsEngine();
-        try {
-            engine.addPlayer(0, 0, 0);
-            const body = (engine as any).playerBodies.get(0);
-            body.SetXForm({ x: Infinity, y: Infinity }, 0);
+  it('a disc forced to an infinite position is eliminated with deathType 4', () => {
+    const engine = new PhysicsEngine();
+    try {
+      engine.addPlayer(0, 0, 0);
+      const body = (engine as any).playerBodies.get(0);
+      body.SetXForm({ x: Infinity, y: Infinity }, 0);
 
-            // Same self-verification as the NaN variant: the Infinity branch
-            // must be genuinely exercised, not coerced to NaN by the API.
-            const corrupted = body.GetPosition();
-            expect(corrupted.x).toBe(Infinity);
-            expect(corrupted.y).toBe(Infinity);
+      // Same self-verification as the NaN variant: the Infinity branch
+      // must be genuinely exercised, not coerced to NaN by the API.
+      const corrupted = body.GetPosition();
+      expect(corrupted.x).toBe(Infinity);
+      expect(corrupted.y).toBe(Infinity);
 
-            engine.tick();
+      engine.tick();
 
-            const s = engine.getPlayerState(0);
-            expect(s.alive).toBe(false);
-            expect(s.deathType).toBe(4);
-        } finally {
-            safeDestroy(engine);
-        }
-    });
+      const s = engine.getPlayerState(0);
+      expect(s.alive).toBe(false);
+      expect(s.deathType).toBe(4);
+    } finally {
+      safeDestroy(engine);
+    }
+  });
 });
