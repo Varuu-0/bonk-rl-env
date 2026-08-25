@@ -173,7 +173,11 @@ def test_max_num_envs_matches_typescript_source_of_truth():
     )
     worker_pool_ts = os.path.join(project_root, "src", "core", "worker-pool.ts")
     if not os.path.isfile(worker_pool_ts):
-        pytest.skip("src/core/worker-pool.ts not found next to the python package")
+        pytest.fail(
+            "src/core/worker-pool.ts not found next to the python package "
+            "(renamed or moved?); the MAX_NUM_ENVS parity guard must never "
+            "silently disable itself"
+        )
     with open(worker_pool_ts, encoding="utf-8") as ts_file:
         source = ts_file.read()
     match = re.search(r"export const MAX_NUM_ENVS = (\d+)", source)

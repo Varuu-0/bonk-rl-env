@@ -22,9 +22,9 @@ MAX_FRAME_SKIP = 100
 # cost and shared-memory sizing (see the constant rationale there, issue
 # #390), and lets the client reject a misconfigured count before any request
 # is sent instead of waiting out the 30 s timeout. This value MUST stay equal
-# to the TS export — test_max_num_envs_parity_with_typescript in
-# tests/test_bonk_vec_env_unit.py reads the TS source and fails on drift, so
-# change both together.
+# to the TS export — test_max_num_envs_matches_typescript_source_of_truth
+# in tests/test_bonk_vec_env_unit.py reads the TS source and fails on drift,
+# so change both together.
 MAX_NUM_ENVS = 2048
 
 
