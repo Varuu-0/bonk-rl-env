@@ -126,8 +126,10 @@ const fakes = vi.hoisted(() => {
       const delay = control.commandDelayMs[this.index] ?? 0;
       // Track the handle so dispose() can cancel it: an armed timer (e.g. the
       // 60s hung-worker delay) must never fire after the pool is torn down
-      // and signal a disposed pool's sync buffer.
+      // and signal a disposed pool's sync buffer. The disposed guard also
+      // covers any handle orphaned by a sendCommand re-entry.
       this.pendingTimer = setTimeout(() => {
+        if (this.disposed) return;
         if (!this.sync) return;
         // The forward wall-clock step lands exactly while the batch is in
         // flight: worker 0 completes first, stragglers are still pending.
