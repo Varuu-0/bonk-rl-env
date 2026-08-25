@@ -1274,7 +1274,11 @@ export class WorkerPool {
   }
 
   private async waitForSharedCompletion(sync: Int32Array, operation: string, timeoutMs: number): Promise<void> {
-    const startedAt = Date.now();
+    // Monotonic clock: wall-clock Date.now() can jump forward (NTP step,
+    // VM pause/resume) mid-batch and would spuriously exhaust the budget,
+    // escalating healthy batches into failPool(). Matches the hrtime-based
+    // latency metrics below; Atomics.waitAsync's own timeout is monotonic.
+    const startedAt = process.hrtime.bigint();
     const numWorkers = this.workers.length;
 
     while (true) {
@@ -1295,7 +1299,8 @@ export class WorkerPool {
         break;
       }
 
-      const remaining = timeoutMs - (Date.now() - startedAt);
+      const elapsedMs = Number(process.hrtime.bigint() - startedAt) / 1e6;
+      const remaining = timeoutMs - elapsedMs;
       if (remaining <= 0) {
         throw this.createSharedTimeout(operation, sync, timeoutMs);
       }
