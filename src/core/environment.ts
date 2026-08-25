@@ -20,6 +20,7 @@ import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { assertValidAction, decodeEncodedAction } from './action-validation';
+export { MAX_OPPONENTS } from './opponent-capacity';
 
 // ─── Constants ───────────────────────────────────────────────────────
 
@@ -429,9 +430,7 @@ export class BonkEnvironment {
     // Validate before map loading or world construction (#392). This keeps an
     // oversized opponent count from exhausting the fixed Box2D broadphase
     // pair table and surfacing its opaque library-internal TypeError instead.
-    const numOpponents = SharedMemoryManager.normalizeNumOpponents(
-      config.numOpponents ?? rawConfig.num_opponents ?? 1,
-    );
+    const numOpponents = SharedMemoryManager.normalizeNumOpponents(config.numOpponents ?? rawConfig.num_opponents ?? 1);
 
     // Load map from file or use provided config. `mapData` (programmatic)
     // wins; otherwise the documented map-path surface is honored end to
