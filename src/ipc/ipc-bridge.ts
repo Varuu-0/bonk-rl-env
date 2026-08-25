@@ -92,17 +92,24 @@ export class IpcBridge {
   // Owner callback invoked when an adopted pool fails and the bridge rebuilds
   // a fresh pool for IPC clients (see adoptPool / recoverFailedHostPool).
   private _onHostPoolFailed?: (pool: WorkerPool) => void;
-  private _boundResolve: (() => void) | null = null;
-  private _boundReject: ((reason?: any) => void) | null = null;
+  // Resolvers of every outstanding ready promise. rearmReady() APPENDS
+  // instead of replacing, so the list spans capture generations — promises
+  // handed out before start() ran, plus each cycle's fresh signal — until
+  // the next bind outcome drains it via markBound()/markBindFailed(). That
+  // fan-out is what settles every capture exactly once (#435); never swap
+  // this for a single per-cycle pair or pre-start captures hang again.
+  private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
   // promise instead of the stale, already-resolved first-bind one (#263).
+  // The previous cycle's promise stays reachable through _readyResolvers
+  // until the bind outcome settles it, so capture order relative to
+  // start() cannot strand an awaiter (#435).
   private _ready: Promise<void> = new Promise<void>((resolve, reject) => {
-    this._boundResolve = resolve;
-    this._boundReject = reject;
+    this._readyResolvers.push({ resolve, reject });
   });
 
   /**
@@ -111,24 +118,29 @@ export class IpcBridge {
    * drive the serve loop without awaiting start() (which only exits on
    * close()) can await this to know when the advertised port is actually
    * reachable. Re-armed per start(), so awaiting it after a close() +
-   * start() restart reflects the new bind (issue #263).
+   * start() restart reflects the new bind (issue #263). A promise captured
+   * BEFORE start() settles with the same outcome: re-arm appends resolvers
+   * instead of replacing them, so the cycle's bind result reaches every
+   * outstanding ready promise regardless of capture order (issue #435).
    */
   get ready(): Promise<void> {
     return this._ready;
   }
 
   /**
-   * Replace the one-shot `ready` signal with a fresh promise for the next
-   * serve cycle. A ZMQ bind can only settle a promise once, so a restart
-   * after close() must observe a new promise (issue #263). The rejection is
-   * swallowed for the same reason as in the constructor: consumers such as
-   * src/server.ts never await ready, so a bind failure must not surface as
-   * an unhandled rejection.
+   * Arm a fresh promise for the next serve cycle. A ZMQ bind can only
+   * settle a promise once, so a restart after close() must observe a new
+   * promise (issue #263). The new resolvers are appended to the pending
+   * list rather than swapped in, so promises handed out earlier — captured
+   * before start() ran, or during an in-flight cycle — are settled by this
+   * cycle's bind outcome too instead of hanging forever (#435). The
+   * rejection is swallowed for the same reason as in the constructor:
+   * consumers such as src/server.ts never await ready, so a bind failure
+   * must not surface as an unhandled rejection.
    */
   private rearmReady(): void {
     this._ready = new Promise<void>((resolve, reject) => {
-      this._boundResolve = resolve;
-      this._boundReject = reject;
+      this._readyResolvers.push({ resolve, reject });
     });
     this._ready.catch(() => {});
   }
@@ -231,18 +243,22 @@ export class IpcBridge {
   }
 
   private markBound(): void {
-    if (this._boundResolve) {
-      this._boundResolve();
-      this._boundResolve = null;
-      this._boundReject = null;
+    const pending = this._readyResolvers;
+    this._readyResolvers = [];
+    // Settle EVERY outstanding ready promise — not just the newest — so an
+    // early capture never hangs once the bind it describes succeeds (#435).
+    for (const { resolve } of pending) {
+      resolve();
     }
   }
 
   private markBindFailed(err: unknown): void {
-    if (this._boundReject) {
-      this._boundReject(err);
-      this._boundResolve = null;
-      this._boundReject = null;
+    const pending = this._readyResolvers;
+    this._readyResolvers = [];
+    // Mirror markBound(): every outstanding ready promise rejects with the
+    // same bind failure start() surfaces, including EADDRINUSE (#435).
+    for (const { reject } of pending) {
+      reject(err);
     }
   }
 
