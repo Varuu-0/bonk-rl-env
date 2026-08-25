@@ -227,7 +227,10 @@ describe('IpcBridge ready capture order with real sockets (issue #435)', () => {
   let port: number;
 
   beforeAll(() => {
-    portManager = new PortManager({ startPort: 15900, endPort: 15999 });
+    // 16100-16199 is reserved for this suite: 15900-15999 belongs to
+    // ipc-bridge-options.test.ts and vitest forks run in parallel, so an
+    // overlap would make both suites race to bind the same port (#435 review).
+    portManager = new PortManager({ startPort: 16100, endPort: 16199 });
     port = portManager.allocate();
   });
 

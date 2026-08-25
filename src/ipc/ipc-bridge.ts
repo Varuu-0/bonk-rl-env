@@ -92,11 +92,12 @@ export class IpcBridge {
   // Owner callback invoked when an adopted pool fails and the bridge rebuilds
   // a fresh pool for IPC clients (see adoptPool / recoverFailedHostPool).
   private _onHostPoolFailed?: (pool: WorkerPool) => void;
-  // Resolvers of every outstanding ready promise for this serve cycle.
-  // rearmReady() APPENDS instead of replacing, so markBound()/markBindFailed()
-  // settle every promise a caller captured — including one read before
-  // start() ran (#435) — and no outstanding ready promise is ever stranded
-  // unsettled by a re-arm.
+  // Resolvers of every outstanding ready promise. rearmReady() APPENDS
+  // instead of replacing, so the list spans capture generations — promises
+  // handed out before start() ran, plus each cycle's fresh signal — until
+  // the next bind outcome drains it via markBound()/markBindFailed(). That
+  // fan-out is what settles every capture exactly once (#435); never swap
+  // this for a single per-cycle pair or pre-start captures hang again.
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
