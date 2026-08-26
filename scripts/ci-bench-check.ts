@@ -386,7 +386,9 @@ export function runLayer(
     // --expose-gc makes global.gc available so the Layer 5 heap-growth
     // measurements are deterministic instead of GC-timing noise (see
     // issue #196: the global.gc guard is a no-op without the flag).
-    const child = spawn('npx', ['tsx', '--expose-gc', layer.file], {
+    // The resolved benchPath is quoted because `shell: true` joins args
+    // without escaping (paths with spaces would otherwise split).
+    const child = spawn('npx', ['tsx', '--expose-gc', `"${benchPath}"`], {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
       cwd: ROOT,

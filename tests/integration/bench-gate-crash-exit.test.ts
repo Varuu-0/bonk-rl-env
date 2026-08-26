@@ -35,18 +35,20 @@ const CLEAN_SUITE: BenchmarkSuite = {
 
 const CRASH_AFTER_REPORT = `
 const suite = ${JSON.stringify(CLEAN_SUITE)};
-console.log('__BENCH_JSON_START__' + JSON.stringify(suite) + '__BENCH_JSON_END__');
+// Synchronous write: console.log to a pipe can be lost when process.exit
+// fires immediately after (async pipe flush on some platforms).
+require('node:fs').writeSync(1, '__BENCH_JSON_START__' + JSON.stringify(suite) + '__BENCH_JSON_END__\\n');
 process.exit(3);
 `;
 
 const CRASH_BEFORE_REPORT = `
-console.error('boom during warmup');
+require('node:fs').writeSync(2, 'boom during warmup\\n');
 process.exit(1);
 `;
 
 const HEALTHY = `
 const suite = ${JSON.stringify(CLEAN_SUITE)};
-console.log('__BENCH_JSON_START__' + JSON.stringify(suite) + '__BENCH_JSON_END__');
+require('node:fs').writeSync(1, '__BENCH_JSON_START__' + JSON.stringify(suite) + '__BENCH_JSON_END__\\n');
 `;
 
 describe('ci-bench-check gate: non-zero layer exit fails the SLA gate (#429)', () => {
@@ -68,7 +70,7 @@ describe('ci-bench-check gate: non-zero layer exit fails the SLA gate (#429)', (
   }, 30_000);
 
   afterAll(() => {
-    fs.rmSync(dir, { recursive: true, force: true });
+    if (dir) fs.rmSync(dir, { recursive: true, force: true });
   });
 
   it('resolves ERROR when a layer prints a clean suite block and then crashes (exit 3)', async () => {
