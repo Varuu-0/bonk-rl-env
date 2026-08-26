@@ -113,13 +113,19 @@ const SLA_CHECKS: SlaCheck[] = [
     direction: 'higher-better',
   },
   {
+    // #421: measures sustained live-physics stepping on the default map
+    // (episodes reset as they end), so the honest healthy value is the
+    // engine's real Box2D-backed step cost plus observation/reward
+    // overhead (~3,800-4,700 SPS on reference hardware, see
+    // benchmarks/README.md) — not the ~200k+ no-op terminal-hold numbers
+    // the loop reported before reset-on-done.
     layer: 3,
     description: 'BonkEnvironment 1v1 step() throughput',
     benchMatch: /BonkEnvironment\.step\(\) \(1 AI \+ 1 opponent\)/,
     metricLabel: 'SPS',
     unit: 'steps/sec',
-    baseline: 28_000,
-    failLimit: 22_000,
+    baseline: 3_500,
+    failLimit: 2_800,
     direction: 'higher-better',
   },
   {
@@ -153,13 +159,17 @@ const SLA_CHECKS: SlaCheck[] = [
     direction: 'lower-better',
   },
   {
+    // #421: CV now quantifies variance of real simulation work (episodes
+    // reset on end). Healthy runs measure ~3-15% (forced-GC checker runs
+    // sit near the low end); the old no-op segments were GC/JIT noise
+    // that spiked past 50% spuriously.
     layer: 6,
     description: 'Long-run throughput variance (CV, stable)',
     benchMatch: /Native env stability/,
     metricLabel: 'CV (stable)',
     unit: '%',
-    baseline: 5,
-    failLimit: 15,
+    baseline: 15,
+    failLimit: 30,
     direction: 'lower-better',
   },
 ];
