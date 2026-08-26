@@ -321,3 +321,143 @@ describe('IpcBridge ready capture order with real sockets (issue #435)', () => {
     }
   }, 60000);
 });
+
+describe('IpcBridge close() during an in-flight restart bind (issue #431)', () => {
+  let portManager: PortManager;
+  let port: number;
+
+  beforeAll(() => {
+    // 16400-16499 is reserved for this suite: vitest forks run in parallel,
+    // so an overlap with another ipc suite's range would race the same port.
+    portManager = new PortManager({ startPort: 16400, endPort: 16499 });
+    port = portManager.allocate();
+  });
+
+  afterAll(() => {
+    portManager.release(port);
+  }, 10000);
+
+  /**
+   * Bounded settle probe (mirrors the #435 helper): resolves with how
+   * `promise` settled so assertions observe an explicit outcome instead of
+   * hanging on a wedged lifecycle.
+   */
+  async function settleOutcome(promise: Promise<unknown>, ms = 10000): Promise<string> {
+    return Promise.race([
+      promise.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.name ?? e?.message ?? e})`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('hung'), ms)),
+    ]);
+  }
+
+  /**
+   * Poll until a throwaway TCP listener can bind the bridge's port, proving
+   * nothing is serving on it. A resurrected bridge would hold the port and
+   * every attempt would fail with EADDRINUSE until the deadline expires.
+   */
+  async function waitForPortFree(deadline = Date.now() + 5000): Promise<void> {
+    while (Date.now() < deadline) {
+      const freed = await new Promise<boolean>((resolve) => {
+        const probe = net.createServer();
+        probe.once('error', () => resolve(false));
+        probe.listen(port, '127.0.0.1', () => {
+          probe.close(() => resolve(true));
+        });
+      });
+      if (freed) return;
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`port ${port} is still held by the bridge`);
+  }
+
+  /**
+   * Run one healthy serve cycle (start → ready → full shutdown) so each
+   * test begins from the closed state whose restart exposes the #431 race.
+   */
+  async function startAndShutdown(bridge: IpcBridge): Promise<void> {
+    const serve = bridge.start();
+    serve.catch(() => {});
+    await bridge.ready;
+    await bridge.close();
+    await serve;
+    expect(bridge.isClosed()).toBe(true);
+  }
+
+  it('an awaited close() racing a restart bind leaves the bridge permanently closed', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    try {
+      await startAndShutdown(bridge);
+
+      // Invoke the documented restart flow WITHOUT awaiting it, then race a
+      // shutdown against its in-flight bind. start() reaches its bind await
+      // synchronously, so this close() deterministically lands inside the
+      // pre-bind window where _closed is still stale-true from cycle 1 —
+      // exactly where close() used to resolve as a silent no-op (#431).
+      const restart = bridge.start();
+      const restartOutcome = restart.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.name ?? e?.message ?? e})`,
+      );
+      await bridge.close();
+
+      // The awaited shutdown must have performed the FULL teardown, not a
+      // no-op: the bridge reports closed the moment close() resolves...
+      expect(bridge.isClosed()).toBe(true);
+
+      // ...and the pending restart must never resurrect serving: ready
+      // settles without a bound server and start() settles with the same
+      // cancelled-cycle outcome, mirroring #402's first-start close.
+      expect(await settleOutcome(bridge.ready)).toBe('rejected(BridgeClosedDuringStart)');
+      expect(await restartOutcome).toBe('rejected(BridgeClosedDuringStart)');
+
+      // isClosed() STAYS true after the would-be bind window has long
+      // passed, and nothing serves afterwards: an independent binder can
+      // take the port.
+      await waitForPortFree();
+      expect(bridge.isClosed()).toBe(true);
+
+      // The shutdown state is terminal until a NEW start() call; an
+      // idempotent close() still resolves cleanly.
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a fresh start() after the cancelled restart binds and serves again', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const client = new zmq.Dealer();
+    try {
+      // Cancel a restart mid-bind exactly like the core regression above.
+      await startAndShutdown(bridge);
+      const cancelled = bridge.start();
+      void cancelled.catch(() => {});
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await expect(cancelled).rejects.toThrow('bridge was closed during start');
+
+      // The documented restart flow still works once the dust settles:
+      // a NEW start() call must bind and serve round-trips again.
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+
+      await client.connect(`tcp://127.0.0.1:${port}`);
+      await new Promise((r) => setTimeout(r, 100));
+      await client.send(JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false }));
+      const [reply] = await client.receive();
+      expect(JSON.parse(reply.toString()).status).toBe('ok');
+
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await serve2;
+    } finally {
+      client.close();
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+});

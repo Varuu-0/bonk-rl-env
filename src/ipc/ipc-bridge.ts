@@ -101,6 +101,13 @@ export class IpcBridge {
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
+  // True while a start() cycle's native bind() is still pending. During a
+  // restart's pre-bind window _closed is still stale-true from the PREVIOUS
+  // cycle (it only resets after the next bind commits), so close() cannot
+  // treat _closed alone as "fully shut down": doing so made an awaited
+  // shutdown resolve as a silent no-op while the restart finished binding
+  // and resurrected serving afterwards (#431).
+  private bindInFlight: boolean = false;
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -374,11 +381,18 @@ export class IpcBridge {
     // below, so testing _closed alone would misclassify every genuine restart
     // bind failure (e.g. EADDRINUSE) as a cancelled start AND skip the #326
     // cleanup, leaking the freshly recreated Router. During a restart's
-    // in-flight bind a concurrent close() is itself a no-op (the teardown
-    // early-returns while _closed is set), so only a close that FLIPS _closed
-    // during THIS cycle (first starts) or an externally destroyed socket
-    // (sock.closed) is a cancellation; every other rejection here is genuine.
+    // in-flight bind a concurrent close() now runs its real teardown and
+    // destroys the fresh socket (bindInFlight keeps close() from treating
+    // the stale _closed as "already shut down", #431), which surfaces here
+    // as sock.closed. Only that cancellation — or a close that FLIPS _closed
+    // during THIS cycle (first starts, #402) — classifies as a
+    // BridgeClosedDuringStart; every other rejection here is genuine.
     const closedBeforeBind = this._closed;
+    // Flag the pending native bind so close() can tell this pre-bind window
+    // apart from a genuinely shut-down bridge (#431). Cleared as soon as the
+    // bind settles; from there to markBound() no await runs, so a close()
+    // either cancelled this cycle or observes the fully committed state.
+    this.bindInFlight = true;
     try {
       await this.sock.bind(addr);
     } catch (err) {
@@ -407,6 +421,8 @@ export class IpcBridge {
         // Preserve the original bind error if socket cleanup fails.
       }
       throw err;
+    } finally {
+      this.bindInFlight = false;
     }
     // libzmq resolves wildcard binds to a concrete endpoint (for example,
     // tcp://0.0.0.0:<port>). Keep that resolved value because unbind()
@@ -1171,12 +1187,25 @@ export class IpcBridge {
    * promise, and the retained reference is dropped the moment the teardown
    * settles so a rejected close can never wedge later close()/start()
    * attempts on a stale rejection (#316).
+   *
+   * A close() issued while a start() cycle's bind is still in flight —
+   * including a restart's pre-bind window where _closed is still stale-true
+   * from the previous cycle — runs the real teardown instead of no-oping,
+   * cancelling that cycle into BridgeClosedDuringStart. Once an awaited
+   * close() resolves, nothing can re-bind or resurrect serving without a
+   * new start() call (#431).
    */
   close(): Promise<void> {
     if (this.closePromise) {
       return this.closePromise;
     }
-    if (this._closed) {
+    // _closed alone cannot mean "already shut down": during a restart's
+    // pre-bind window it is still stale-true from the previous cycle while a
+    // fresh bind is pending. While bindInFlight, fall through to the real
+    // teardown — destroying the fresh socket rejects the pending start()
+    // with BridgeClosedDuringStart and guarantees the port stays free after
+    // this shutdown resolves (#431).
+    if (this._closed && !this.bindInFlight) {
       return Promise.resolve();
     }
     this._closed = true;
