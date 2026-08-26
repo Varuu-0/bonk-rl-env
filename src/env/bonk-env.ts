@@ -140,15 +140,43 @@ export class BonkEnv {
   }
 
   /**
+   * Verifies that this env's port is actually free on the OS before
+   * anything binds or advertises it, relocating via a probed allocation
+   * when another process already holds it (issue #432). The replacement
+   * port is claimed before the old one is released so the swap is atomic
+   * from every allocator's point of view; this.portReserved continues to
+   * cover the new port. Explicitly configured ports are respected as-is:
+   * a caller who names a port gets that port's fate, including a loud
+   * EADDRINUSE on bind (#223).
+   */
+  private async ensureUsablePort(): Promise<void> {
+    if (this.config.port !== undefined) {
+      return;
+    }
+    if (await PortManager.isPortAvailable(this.port)) {
+      return;
+    }
+    console.warn(`[BonkEnv:${this.id}] Port ${this.port} is held by another process; reallocating`);
+    const replacement = await this.portManager.allocateAvailable();
+    this.portManager.release(this.port);
+    this.port = replacement;
+  }
+
+  /**
    * Body of a start() attempt. Runs with this.startPromise already set, so
    * the failure path must NOT call the public stop() — stop() awaits the
    * in-flight start() and would deadlock. Teardown goes through
    * teardownFailedStart() instead.
    */
   private async performStart(): Promise<void> {
-    console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
-
     try {
+      // Verify/relocate the advertised port against the OS before spawning
+      // workers or binding (issue #432): a port held by an unrelated
+      // process must be skipped here rather than discovered as an opaque
+      // ZMQ bind failure after pool.init() has already spawned workers.
+      await this.ensureUsablePort();
+
+      console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
       // Create worker pool
       const pool = new WorkerPool();
       this.pool = pool;
