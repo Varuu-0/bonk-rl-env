@@ -1,11 +1,15 @@
 /**
- * server-lifecycle.test.ts — regression coverage for issue #326
+ * server-lifecycle.test.ts — regression coverage for issues #326 and #424
  *
  * A failed standalone server bind must release its bridge, ROUTER socket, and
  * telemetry dashboard so the caller can retry after the port becomes free.
+ * A client-initiated remote shutdown (`close` with shutdown:true) must clear
+ * the module singleton the same way: isServerRunning() must report false for
+ * the dead listener and a subsequent startServer() must succeed.
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as net from 'net';
+import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { startServer, stopServer, isServerRunning } from '../../src/server';
 import { deepMerge, loadConfig, resetConfig, type AppConfig } from '../../src/config/config-loader';
@@ -83,6 +87,23 @@ function makeConfig(port: number, telemetryEnabled = false, dashboardPort?: numb
       ...(dashboardPort === undefined ? {} : { dashboardPort }),
     },
   } as Partial<AppConfig>);
+}
+
+/**
+ * Sends the documented remote-shutdown command (`close` with shutdown:true)
+ * from a DEALER client and awaits the `{status:'ok'}` reply, mirroring what
+ * an external supervisor does to stop the server (issue #424).
+ */
+async function remoteShutdown(port: number): Promise<void> {
+  const dealer = new zmq.Dealer();
+  try {
+    dealer.connect(`tcp://127.0.0.1:${port}`);
+    await dealer.send(JSON.stringify({ command: 'close', shutdown: true }));
+    const reply = JSON.parse((await dealer.receive())[0].toString());
+    expect(reply.status).toBe('ok');
+  } finally {
+    dealer.close();
+  }
 }
 
 describe('standalone server bind-failure lifecycle (issue #326)', () => {
@@ -198,5 +219,122 @@ describe('standalone server bind-failure lifecycle (issue #326)', () => {
       await bridge.close();
       await closeServer(blocker.server);
     }
+  });
+});
+
+describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
+  beforeEach(() => {
+    resetConfig();
+    getTelemetryController().shutdown();
+  });
+
+  afterEach(async () => {
+    await stopServer();
+    getTelemetryController().shutdown();
+  });
+
+  it('clears the singleton after a client-initiated remote shutdown and allows restart', async () => {
+    const reserved = await listenOnEphemeralPort();
+    await closeServer(reserved.server);
+
+    const serving = startServer(makeConfig(reserved.port));
+    try {
+      await waitForServerPort(reserved.port);
+      expect(isServerRunning()).toBe(true);
+      await remoteShutdown(reserved.port);
+      // startServer() resolves once the serve loop exits, and its #424
+      // cleanup runs before that resolution: no polling needed here.
+      await serving;
+    } catch (error) {
+      await serving.catch(() => {});
+      throw error;
+    }
+
+    expect(isServerRunning()).toBe(false);
+
+    // A subsequent startServer() on a fresh port must succeed without an
+    // intervening stopServer() — the wedge this regression pins.
+    const restartReserved = await listenOnEphemeralPort();
+    await closeServer(restartReserved.server);
+    const restart = startServer(makeConfig(restartReserved.port));
+    try {
+      await waitForServerPort(restartReserved.port);
+      expect(isServerRunning()).toBe(true);
+    } catch (error) {
+      await restart.catch(() => {});
+      throw error;
+    } finally {
+      await stopServer();
+      // stopServer() lands after the port is reachable, so the restarted
+      // cycle either exits normally on shutdown or rejects with the
+      // deterministic closed-during-start error if it was still inside
+      // start()'s post-bind window (#402). Both leave a truthful flag.
+      await restart.then(undefined, (err: unknown) => {
+        if (!(err instanceof Error) || !/closed during start/i.test(err.message)) {
+          throw err;
+        }
+      });
+    }
+    expect(isServerRunning()).toBe(false);
+  });
+
+  it('releases the telemetry dashboard after a remote shutdown', async () => {
+    const reserved = await listenOnEphemeralPort();
+    await closeServer(reserved.server);
+    const dashboard = await listenOnEphemeralPort();
+    await closeServer(dashboard.server);
+
+    const serving = startServer(makeConfig(reserved.port, true, dashboard.port));
+    try {
+      await waitForServerPort(reserved.port);
+      await remoteShutdown(reserved.port);
+      await serving;
+    } catch (error) {
+      await serving.catch(() => {});
+      throw error;
+    }
+
+    expect(isServerRunning()).toBe(false);
+    await waitForPortAvailable(dashboard.port);
+  });
+
+  it('does not force-emit a zero-tick telemetry report for a remotely-shutdown server that never served', async () => {
+    const reserved = await listenOnEphemeralPort();
+    await closeServer(reserved.server);
+    const dashboard = await listenOnEphemeralPort();
+    await closeServer(dashboard.server);
+
+    const controller = getTelemetryController();
+    // Keep reportNow real so a forced shutdown report would flow into
+    // emitReport, and stub writeToFile so the file/both JSONL branch is
+    // observed without touching disk. outputFormat 'both' keeps that branch
+    // live, so both assertions below genuinely fail if the remote-shutdown
+    // rollback ever force-emits a report for a server that never served
+    // (the #324 hazard applied to the #424 path).
+    const reportSpy = vi.spyOn(controller, 'reportNow');
+    const writeSpy = vi.spyOn(controller as any, 'writeToFile').mockImplementation(() => {});
+    const base = loadConfig();
+    const config = deepMerge(base, {
+      server: { port: reserved.port, bindAddress: '127.0.0.1' },
+      workerPool: { numWorkers: 1, useSharedMemory: false },
+      telemetry: { enabled: true, outputFormat: 'both', dashboardPort: dashboard.port },
+    } as Partial<AppConfig>);
+
+    const serving = startServer(config);
+    try {
+      await waitForServerPort(reserved.port);
+      await remoteShutdown(reserved.port);
+      await serving;
+    } catch (error) {
+      await serving.catch(() => {});
+      throw error;
+    } finally {
+      reportSpy.mockRestore();
+      writeSpy.mockRestore();
+    }
+
+    expect(isServerRunning()).toBe(false);
+    expect(reportSpy).not.toHaveBeenCalled();
+    expect(writeSpy).not.toHaveBeenCalled();
   });
 });
