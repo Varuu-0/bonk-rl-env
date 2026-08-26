@@ -973,9 +973,12 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
 
   it('releases a newly-created session when its init fails so another client can use the cap slot', async () => {
     const initError = new Error('worker startup failed');
+    // A genuine post-teardown init failure leaves state 'failed' (failPool
+    // ran in initInternal's own catch); only such dead pools are evicted.
     const failedSessionPool = {
       init: vi.fn().mockRejectedValue(initError),
       close: vi.fn().mockResolvedValue(undefined),
+      isFailed: vi.fn(() => true),
     };
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const bridge = new IpcBridge({ server: { port: 12376, maxClientSessions: 1 } } as any);
@@ -1000,7 +1003,7 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     }
   });
 
-  it('drops an existing session whose re-init fails so it never holds a cap slot', async () => {
+  it('drops an existing session whose re-init fails the pool so it never holds a cap slot', async () => {
     const initError = new Error('worker startup failed');
     const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 1 } } as any);
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
@@ -1011,6 +1014,11 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
 
     const session = (bridge as any).sessions.get(client.toString('hex'));
     session.pool.init.mockRejectedValueOnce(initError);
+    // Model a genuine post-teardown failure: failPool ran inside
+    // initInternal's own catch, so the pool reports failed and eviction is
+    // correct. A rejection that leaves the pool ready keeps its session
+    // (issue #440) — see the validation-only test below.
+    (session.pool as any).isFailed.mockReturnValue(true);
     const closeSpy = vi.spyOn(session.pool, 'close');
 
     await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
@@ -1023,6 +1031,35 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     expect(lastResponse().status).toBe('ok');
     expect((bridge as any).sessions.size).toBe(1);
+  });
+
+  it('keeps an existing session whose re-init was rejected while the pool stayed ready (#440)', async () => {
+    const initError = new Error('Invalid numOpponents 65: expected at most 64 opponents');
+    const bridge = new IpcBridge({ server: { port: 12379, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const client = Buffer.from('reinit-client-440');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    const session = (bridge as any).sessions.get(client.toString('hex'));
+    // Pre-teardown validation rejects BEFORE closeInternal(): the pool stays
+    // 'ready' (not failed), so the bridge must not evict or close anything.
+    session.pool.init.mockRejectedValueOnce(initError);
+    const closeSpy = vi.spyOn(session.pool, 'close');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+    expect(lastResponse()).toMatchObject({
+      status: 'error',
+      error: 'Invalid numOpponents 65: expected at most 64 opponents',
+    });
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect((bridge as any).sessions.size).toBe(1);
+
+    // The surviving session still serves its original pool.
+    await handleRequest(client, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
   });
 
   it('keeps the local pool pinned to a programmatic caller across a failed init (no silent re-admission)', async () => {
@@ -1040,6 +1077,7 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     const failedPool = {
       init: vi.fn().mockRejectedValue(initError),
       close: vi.fn().mockResolvedValue(undefined),
+      isFailed: vi.fn(() => true),
     };
     mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
       return failedPool;
