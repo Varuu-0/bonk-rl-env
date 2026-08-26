@@ -779,13 +779,15 @@ export class IpcBridge {
           if (this.localSession.pool.isFailed()) {
             activeSession = this.localSession;
             this.beginSessionRequest(this.localSession);
-            // Capture the cause before recovering: close() clears the
-            // pool's recorded failure.
-            const failureMessage = this.localSession.pool.getFailure()?.message ?? 'unknown failure';
+            // Compose the reply before recovering: close() clears the
+            // pool's recorded failure, and the pool's shared formatter
+            // keeps this proactive rejection word-identical to the
+            // reactive step/reset failed-state errors.
+            const failedInitError = this.localSession.pool.failedStateError('init');
             await this.recoverFailedHostPool();
             response = {
               status: 'error',
-              error: `Cannot init: worker pool is in failed state (${failureMessage})`,
+              error: failedInitError,
             };
           } else if (numEnvs === this.localSession.numEnvs) {
             activeSession = this.localSession;
