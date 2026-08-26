@@ -20,26 +20,37 @@ let bridge: IpcBridge | null = null;
  * Guarded on instance identity: a stale settle must never tear down a newer
  * server instance that replaced it. Idempotent with a concurrent explicit
  * stopServer(): whichever observer clears the singleton first wins and the
- * other becomes a no-op.
+ * other becomes a no-op. Mirrors stopServer()'s ordering — the bridge is
+ * fully closed BEFORE the module reference is dropped — so isServerRunning()
+ * never turns false while a listener teardown is still in flight.
+ *
+ * @returns true if this call performed the release; false when the guard
+ * found the singleton already moved on (stale settle / concurrent stop).
  */
 async function releaseServerInstance(
   serverBridge: IpcBridge,
   telemetryOptions: { emitFinalReport?: boolean },
-): Promise<void> {
+): Promise<boolean> {
   if (bridge !== serverBridge) {
-    return;
+    return false;
   }
-  bridge = null;
   try {
     await serverBridge.close();
   } catch (cleanupError) {
     console.error('Error during server cleanup:', cleanupError);
   }
+  // Re-check after the close await: a concurrent stopServer() may have
+  // cleared the singleton while this release was closing the bridge.
+  if (bridge !== serverBridge) {
+    return false;
+  }
+  bridge = null;
   try {
     getTelemetryController().shutdown(telemetryOptions);
   } catch (cleanupError) {
     console.error('Error during telemetry cleanup:', cleanupError);
   }
+  return true;
 }
 
 /**
@@ -100,8 +111,12 @@ export async function startServer(config?: AppConfig): Promise<void> {
   // a remote shutdown that arrives before any tick was served must not
   // force-emit a zero-tick report (or JSONL entry in file/both modes).
   const controller = getTelemetryController();
-  await releaseServerInstance(serverBridge, { emitFinalReport: controller.getTickCount() > 0 });
-  console.log('Server stopped.');
+  const released = await releaseServerInstance(serverBridge, { emitFinalReport: controller.getTickCount() > 0 });
+  // Only claim the shutdown when this call actually performed the release;
+  // a concurrent stopServer() logs its own shutdown record.
+  if (released) {
+    console.log('Server stopped.');
+  }
 }
 
 /**

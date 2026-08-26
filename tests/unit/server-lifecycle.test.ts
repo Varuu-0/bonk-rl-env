@@ -89,20 +89,70 @@ function makeConfig(port: number, telemetryEnabled = false, dashboardPort?: numb
   } as Partial<AppConfig>);
 }
 
+/** Deadline for a single IPC round trip so a lost reply fails at the right assertion instead of hanging to the suite timeout. */
+const REPLY_TIMEOUT_MS = 5000;
+
+interface IpcTestClient {
+  request(payload: Record<string, unknown>): Promise<Record<string, any>>;
+  close(): void;
+}
+
+/**
+ * Opens a DEALER client against the server. The ZMQ ROUTER/DEALER exchange
+ * needs a handshake before messages flow, so callers must not send before the
+ * settle delay (same discipline as tests/unit/telemetry-pipeline.test.ts).
+ */
+async function connectClient(port: number): Promise<IpcTestClient> {
+  const dealer = new zmq.Dealer();
+  dealer.connect(`tcp://127.0.0.1:${port}`);
+  await new Promise((resolve) => setTimeout(resolve, 500));
+  return {
+    async request(payload) {
+      let timer: NodeJS.Timeout | undefined;
+      try {
+        await dealer.send(JSON.stringify(payload));
+        const frames = await Promise.race([
+          dealer.receive(),
+          new Promise<never>((_, reject) => {
+            timer = setTimeout(
+              () =>
+                reject(
+                  new Error(
+                    `timed out after ${REPLY_TIMEOUT_MS}ms waiting for a reply to ${JSON.stringify(payload)} on port ${port}`,
+                  ),
+                ),
+              REPLY_TIMEOUT_MS,
+            );
+          }),
+        ]);
+        return JSON.parse(frames[0].toString());
+      } finally {
+        if (timer) clearTimeout(timer);
+      }
+    },
+    close() {
+      try {
+        dealer.close();
+      } catch {
+        // Ignore double-close.
+      }
+    },
+  };
+}
+
 /**
  * Sends the documented remote-shutdown command (`close` with shutdown:true)
- * from a DEALER client and awaits the `{status:'ok'}` reply, mirroring what
- * an external supervisor does to stop the server (issue #424).
+ * and awaits the `{status:'ok'}` reply, mirroring what an external supervisor
+ * does to stop the server (issue #424). Bounded by REPLY_TIMEOUT_MS so a lost
+ * reply fails with a diagnostic instead of hanging to the suite timeout.
  */
 async function remoteShutdown(port: number): Promise<void> {
-  const dealer = new zmq.Dealer();
+  const client = await connectClient(port);
   try {
-    dealer.connect(`tcp://127.0.0.1:${port}`);
-    await dealer.send(JSON.stringify({ command: 'close', shutdown: true }));
-    const reply = JSON.parse((await dealer.receive())[0].toString());
+    const reply = await client.request({ command: 'close', shutdown: true });
     expect(reply.status).toBe('ok');
   } finally {
-    dealer.close();
+    client.close();
   }
 }
 
@@ -246,7 +296,9 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
       // cleanup runs before that resolution: no polling needed here.
       await serving;
     } catch (error) {
-      await serving.catch(() => {});
+      // Detach (never await): the server may still be running when an
+      // assertion fails, and it only settles at afterEach's stopServer().
+      serving.catch(() => {});
       throw error;
     }
 
@@ -261,7 +313,7 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
       await waitForServerPort(restartReserved.port);
       expect(isServerRunning()).toBe(true);
     } catch (error) {
-      await restart.catch(() => {});
+      restart.catch(() => {});
       throw error;
     } finally {
       await stopServer();
@@ -290,7 +342,7 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
       await remoteShutdown(reserved.port);
       await serving;
     } catch (error) {
-      await serving.catch(() => {});
+      serving.catch(() => {});
       throw error;
     }
 
@@ -326,7 +378,7 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
       await remoteShutdown(reserved.port);
       await serving;
     } catch (error) {
-      await serving.catch(() => {});
+      serving.catch(() => {});
       throw error;
     } finally {
       reportSpy.mockRestore();
@@ -337,4 +389,59 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
     expect(reportSpy).not.toHaveBeenCalled();
     expect(writeSpy).not.toHaveBeenCalled();
   });
+
+  it(
+    'force-emits exactly one final report when a remote shutdown follows served ticks',
+    { timeout: 60000 },
+    async () => {
+      const reserved = await listenOnEphemeralPort();
+      await closeServer(reserved.server);
+      const dashboard = await listenOnEphemeralPort();
+      await closeServer(dashboard.server);
+
+      const controller = getTelemetryController();
+      // Keep reportNow real so the forced shutdown final report flows into
+      // emitReport, and stub writeToFile so the file/both JSONL branch is
+      // observed without touching disk. A huge reportIntervalMs keeps interval
+      // reports out of the picture: after a single step, the only possible
+      // reportNow call is the forced shutdown final report, so both assertions
+      // below genuinely fail if the #424 path ever drops the served-session
+      // final report (the #237 contract) or emits more than one (#324 noise).
+      const reportSpy = vi.spyOn(controller, 'reportNow');
+      const writeSpy = vi.spyOn(controller as any, 'writeToFile').mockImplementation(() => {});
+      const base = loadConfig();
+      const config = deepMerge(base, {
+        server: { port: reserved.port, bindAddress: '127.0.0.1' },
+        workerPool: { numWorkers: 1, useSharedMemory: false },
+        telemetry: { enabled: true, outputFormat: 'both', dashboardPort: dashboard.port, reportIntervalMs: 600000 },
+      } as Partial<AppConfig>);
+
+      const serving = startServer(config);
+      const client = await connectClient(reserved.port);
+      try {
+        await waitForServerPort(reserved.port);
+        expect((await client.request({ command: 'init', numEnvs: 1, useSharedMemory: false })).status).toBe('ok');
+        expect((await client.request({ command: 'step', actions: [0] })).status).toBe('ok');
+        expect(controller.getTickCount()).toBeGreaterThan(0);
+
+        await remoteShutdown(reserved.port);
+        await serving;
+      } catch (error) {
+        serving.catch(() => {});
+        throw error;
+      }
+      client.close();
+
+      expect(isServerRunning()).toBe(false);
+      // Exactly one report: the forced shutdown final report preserved on the
+      // remote-shutdown path for a server that actually served (#237), with
+      // its JSONL entry written under outputFormat 'both'. Positive-count
+      // assertions must run BEFORE mockRestore: restoring clears recorded
+      // calls, so restoring in a finally would silently zero them.
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      expect(writeSpy).toHaveBeenCalled();
+      reportSpy.mockRestore();
+      writeSpy.mockRestore();
+    },
+  );
 });
