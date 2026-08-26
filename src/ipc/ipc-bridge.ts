@@ -101,6 +101,13 @@ export class IpcBridge {
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
+  // True from a start() invocation until its serve cycle settles (start()
+  // only exits on close()/failure). Armed synchronously before the first
+  // await so an overlapping second start() fails fast WITHOUT re-arming
+  // ready or touching the shared ROUTER — whose EADDRINUSE cleanup would
+  // otherwise destroy the live socket of the healthy first cycle (issue
+  // #418). Mirrors BonkEnv's startPromise guard (#267).
+  private _serveCycleInFlight: boolean = false;
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -337,7 +344,34 @@ export class IpcBridge {
   // Wrapped send function for telemetry
   private _wrappedSend: Function;
 
-  async start() {
+  async start(): Promise<void> {
+    // Overlapping-call guard (#418): reject a second concurrent start()
+    // BEFORE any state mutation — in particular before rearmReady(), which
+    // would swap the live cycle's readiness signal, and long before the
+    // bind whose EADDRINUSE cleanup would close the shared, currently
+    // serving ROUTER and silently kill the healthy first cycle. The flag is
+    // armed synchronously here and cleared only when THIS cycle settles,
+    // mirroring BonkEnv's startPromise guard (#267); a failed or closed-out
+    // start clears it in the finally below so genuine retries/restarts work.
+    if (this._serveCycleInFlight) {
+      throw new Error(
+        'IpcBridge.start() called while already running: a serve cycle is still active on this bridge; await that cycle or close() it before starting again',
+      );
+    }
+    this._serveCycleInFlight = true;
+    try {
+      await this.runStartCycle();
+    } finally {
+      this._serveCycleInFlight = false;
+    }
+  }
+
+  /**
+   * Body of one start() invocation. Runs with _serveCycleInFlight already
+   * set, so an overlapping start() can never reach the shared transport
+   * state mutated here (issue #418).
+   */
+  private async runStartCycle(): Promise<void> {
     // Re-arm `ready` before waiting for a prior close to finish. Callers
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
