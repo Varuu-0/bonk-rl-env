@@ -1195,6 +1195,17 @@ export class WorkerPool {
     return this.state === 'failed';
   }
 
+  /**
+   * The error that put the pool into the failed state, or null while the
+   * pool has never failed. Callers that reject an operation on a failed
+   * pool use this to report the underlying cause instead of a bare
+   * failed-state notice (issue #436). Must be read BEFORE closing the
+   * pool: close() clears the recorded failure.
+   */
+  getFailure(): Error | null {
+    return this.failure;
+  }
+
   private assertReady(operation: string): void {
     if (this.state === 'failed') {
       throw new Error(
