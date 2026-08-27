@@ -1,6 +1,11 @@
 import * as zmq from 'zeromq';
 import * as net from 'net';
-import { WorkerPool, MAX_NUM_ENVS } from '../core/worker-pool';
+import {
+  WorkerPool,
+  MAX_NUM_ENVS,
+  describeInvalidUseSharedMemory,
+  normalizeUseSharedMemory,
+} from '../core/worker-pool';
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from '../telemetry/profiler';
 import {
   isTelemetryEnabled as isTelemetryControllerEnabled,
@@ -776,6 +781,21 @@ export class IpcBridge {
             status: 'error',
             error: `Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got ${numEnvs}`,
           };
+        } else if (payload.useSharedMemory !== undefined && typeof payload.useSharedMemory !== 'boolean') {
+          // Reject a malformed transport request up front (#433), mirroring
+          // the numEnvs guards above: a truthy non-boolean (the JSON string
+          // "false" being the canonical mistake for non-Python clients)
+          // previously flowed into WorkerPool.init verbatim and silently
+          // served the SharedArrayBuffer transport the caller asked to
+          // disable. Failing here is a per-request error that never touches
+          // worker state or a client-cap slot, and the message is
+          // word-identical to the pool-level rejection.
+          response = {
+            status: 'error',
+            error: `Invalid useSharedMemory: expected a boolean (true or false), got ${describeInvalidUseSharedMemory(
+              payload.useSharedMemory,
+            )}`,
+          };
         } else if (this._hostPool) {
           // The pool was adopted from an enclosing BonkEnv and is
           // already initialized with that env's numEnvs and config.
@@ -1179,8 +1199,13 @@ export class IpcBridge {
     // Remember the host env's effective config and useSharedMemory so a
     // matching-count client init can be validated/echoed instead of
     // silently discarding the client's settings on an env-owned pool (#252).
+    // The echo is the documented effective-settings surface, so store the
+    // strictly-normalized value: a matching-count init reply must never
+    // echo a non-boolean transport flag back to clients (#433). The host
+    // pool itself rejects malformed values at init time, so this only
+    // guards direct adoptPool callers.
     this._hostConfig = options.config ?? null;
-    this._hostUseSharedMemory = options.useSharedMemory;
+    this._hostUseSharedMemory = normalizeUseSharedMemory(options.useSharedMemory);
   }
 
   /**
