@@ -218,6 +218,11 @@ describe('config-loader env vars and CLI', () => {
       expect(loadConfig(testDir).environment.maxTicks).toBe(900);
     });
 
+    it('MAX_TICKS rejects extra-zero typo values beyond the loader sanity cap', () => {
+      process.env.MAX_TICKS = '90000000000';
+      expect(loadConfig(testDir).environment.maxTicks).toBe(900);
+    });
+
     it('NUM_OPPONENTS overrides the default opponent count (#413)', () => {
       process.env.NUM_OPPONENTS = '3';
       const cfg = loadConfig(testDir);
@@ -269,6 +274,15 @@ describe('config-loader env vars and CLI', () => {
       process.env.RANDOM_OPPONENT = 'maybe';
       const cfg = loadConfig(testDir);
       expect(cfg.environment.randomOpponent).toBe(true);
+    });
+
+    it('RANDOM_OPPONENT trims surrounding whitespace and CRLF (dotenv values)', () => {
+      process.env.RANDOM_OPPONENT = 'false\r';
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(false);
+
+      resetConfig();
+      process.env.RANDOM_OPPONENT = ' true ';
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(true);
     });
 
     it('RANDOM_OPP_MOVE_PROB overrides the opponent move probability', () => {
@@ -1017,6 +1031,10 @@ describe('config-loader env vars and CLI', () => {
       resetConfig();
       process.argv = ['node', 'script.js', '--max-ticks', '900.25'];
       expect(loadConfig(testDir).environment.maxTicks).toBe(900);
+
+      resetConfig();
+      process.argv = ['node', 'script.js', '--max-ticks', '90000000000'];
+      expect(loadConfig(testDir).environment.maxTicks).toBe(900);
     });
 
     it('--num-opponents sets the opponent count (#413)', () => {
@@ -1047,6 +1065,21 @@ describe('config-loader env vars and CLI', () => {
       resetConfig();
       process.argv = ['node', 'script.js', '--random-opponent', 'true'];
       expect(loadConfig(testDir).environment.randomOpponent).toBe(true);
+    });
+
+    it('--random-opponent treats common negative spellings as false', () => {
+      for (const negative of ['off', 'disable']) {
+        resetConfig();
+        process.argv = ['node', 'script.js', '--random-opponent', negative];
+        expect(loadConfig(testDir).environment.randomOpponent).toBe(false);
+      }
+    });
+
+    it('a bare --random-opponent flips an env-disabled policy back on (CLI > env)', () => {
+      process.env.RANDOM_OPPONENT = 'false';
+      process.argv = ['node', 'script.js', '--random-opponent'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.randomOpponent).toBe(true);
     });
 
     it('a bare --random-opponent does not swallow a following flag or value', () => {
@@ -1716,6 +1749,95 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.environment.numOpponents).toBe(3);
       expect(cfg.environment.randomOpponent).toBe(true);
       expect(cfg.environment.defaultMapPath).toBe('maps/cli.json');
+    });
+
+    it('CLI overrides only the knobs present on argv, leaving env values intact (#413)', () => {
+      process.env.MAX_TICKS = '1500';
+      process.env.NUM_OPPONENTS = '3';
+      process.env.RANDOM_OPPONENT = 'false';
+      process.argv = ['node', 'script.js', '--frame-skip', '4'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.frameSkip).toBe(4);
+      expect(cfg.environment.maxTicks).toBe(1500);
+      expect(cfg.environment.numOpponents).toBe(3);
+      expect(cfg.environment.randomOpponent).toBe(false);
+    });
+  });
+
+  // ─── config.json environment gating ───────────────────────────────────
+
+  describe('config.json environment gating (#413 review)', () => {
+    it('out-of-range config.json values fall back to the documented defaults', () => {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          environment: { frameSkip: 500, maxTicks: 0, numOpponents: 99 },
+        }),
+      );
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.frameSkip).toBe(1);
+      expect(cfg.environment.maxTicks).toBe(900);
+      expect(cfg.environment.numOpponents).toBe(1);
+    });
+
+    it('snake_case config.json aliases share the same gating', () => {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          environment: { frame_skip: 'abc', num_opponents: -1, max_ticks: 90000000000 },
+        }),
+      );
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.frameSkip).toBe(1);
+      expect(cfg.environment.numOpponents).toBe(1);
+      expect(cfg.environment.maxTicks).toBe(900);
+    });
+
+    it('string randomOpponent spellings in config.json normalize to booleans', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { randomOpponent: 'false' } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(false);
+
+      resetConfig();
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { random_opponent: 'no' } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(false);
+
+      resetConfig();
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { randomOpponent: 'garbage' } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(true);
+
+      resetConfig();
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { randomOpponent: 0 } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(false);
+
+      resetConfig();
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { randomOpponent: 1 } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(true);
+
+      resetConfig();
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { randomOpponent: 2 } }));
+      expect(loadConfig(testDir).environment.randomOpponent).toBe(true);
+    });
+
+    it('valid config.json environment values still pass through untouched', () => {
+      fs.writeFileSync(
+        configPath,
+        JSON.stringify({
+          environment: { frameSkip: 4, maxTicks: 1800, numOpponents: 3, randomOpponent: false },
+        }),
+      );
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.frameSkip).toBe(4);
+      expect(cfg.environment.maxTicks).toBe(1800);
+      expect(cfg.environment.numOpponents).toBe(3);
+      expect(cfg.environment.randomOpponent).toBe(false);
+    });
+
+    it('env vars still win over config.json after gating', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ environment: { maxTicks: 0, frameSkip: 500 } }));
+      process.env.MAX_TICKS = '1500';
+      const cfg = loadConfig(testDir);
+      expect(cfg.environment.maxTicks).toBe(1500);
+      expect(cfg.environment.frameSkip).toBe(1);
     });
   });
 

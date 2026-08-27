@@ -632,6 +632,52 @@ function normalizeResolvedConfig(config: AppConfig): AppConfig {
   if (!['json', 'msgpack'].includes(config.ipc.serialization)) {
     config.ipc.serialization = DEFAULTS.ipc.serialization;
   }
+
+  // Environment-section gating (#413): the same bounds the env-var/CLI
+  // layers enforce, applied to every authoring surface (config.json,
+  // including snake_case aliases resolved by mergeEnvironmentConfig) so an
+  // invalid value cannot fail differently per surface. Invalid values keep
+  // the documented default here; per-spawn overrides that bypass the loader
+  // remain validated at the BonkEnvironment boundary (#393/#266/#392).
+  if (!isPlainObject(config.environment)) config.environment = { ...DEFAULTS.environment };
+  config.environment.frameSkip = normalizeIntegerConfigValue(
+    config.environment.frameSkip,
+    DEFAULTS.environment.frameSkip,
+    1,
+    MAX_FRAME_SKIP,
+  );
+  config.environment.maxTicks = normalizeIntegerConfigValue(
+    config.environment.maxTicks,
+    DEFAULTS.environment.maxTicks,
+    1,
+    MAX_ZMQ_OPTION,
+  );
+  config.environment.numOpponents = normalizeIntegerConfigValue(
+    config.environment.numOpponents,
+    DEFAULTS.environment.numOpponents,
+    0,
+    MAX_NUM_OPPONENTS,
+  );
+  const randomOpponent: unknown = config.environment.randomOpponent;
+  if (typeof randomOpponent === 'number') {
+    // 0/1 are the numeric spellings of the env-var booleans; anything else
+    // is unrecognized and keeps the documented default.
+    config.environment.randomOpponent =
+      randomOpponent === 0 ? false : randomOpponent === 1 ? true : DEFAULTS.environment.randomOpponent;
+  } else if (typeof randomOpponent === 'string') {
+    // A string like "false" is truthy in JS and would keep the policy
+    // enabled downstream (#413 review); normalize the documented spellings
+    // and fall back to the default for anything unrecognized.
+    const t = randomOpponent.trim().toLowerCase();
+    config.environment.randomOpponent =
+      t === 'false' || t === '0' || t === 'no'
+        ? false
+        : t === 'true' || t === '1' || t === 'yes'
+          ? true
+          : DEFAULTS.environment.randomOpponent;
+  } else if (typeof randomOpponent !== 'boolean') {
+    config.environment.randomOpponent = DEFAULTS.environment.randomOpponent;
+  }
   return config;
 }
 
@@ -775,14 +821,20 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
   }
   if (env.MAX_TICKS !== undefined) {
     const v = parseInteger(env.MAX_TICKS);
-    if (v !== null && v >= 1) config.environment.maxTicks = v;
+    // MAX_ZMQ_OPTION is the repo's loose loader-side sanity cap: an
+    // extra-zero typo (90000000000) must not create effectively
+    // never-truncating episodes with no wall-clock backstop (#413 review).
+    if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) config.environment.maxTicks = v;
   }
   if (env.NUM_OPPONENTS !== undefined) {
     const v = parseInteger(env.NUM_OPPONENTS);
     if (v !== null && v >= 0 && v <= MAX_NUM_OPPONENTS) config.environment.numOpponents = v;
   }
   if (env.RANDOM_OPPONENT !== undefined) {
-    const v = env.RANDOM_OPPONENT.toLowerCase();
+    // Trim like parseInteger: dotenv/--env-file values on Windows can carry
+    // a trailing CRLF, which would otherwise match neither branch and
+    // silently leave the policy enabled (#413 review).
+    const v = env.RANDOM_OPPONENT.trim().toLowerCase();
     if (v === 'true' || v === '1' || v === 'yes') {
       config.environment.randomOpponent = true;
     } else if (v === 'false' || v === '0' || v === 'no') {
@@ -1155,7 +1207,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
       case '--max-ticks':
         if (next) {
           const v = parseInteger(next);
-          if (v !== null && v >= 1) {
+          if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) {
             config.environment.maxTicks = v;
             i++;
           }
@@ -1181,12 +1233,14 @@ function parseCliFlags(config: AppConfig): AppConfig {
         // explicit boolean token is consumed so `--random-opponent
         // false` disables it instead of enabling the policy and
         // silently dropping "false" as an unknown argument (#413).
+        // Common negative spellings are part of the false-set so a token
+        // like "off" cannot invert the user's intent (#413 review).
         if (next) {
           const t = next.toLowerCase();
           if (t === 'true' || t === '1' || t === 'yes') {
             config.environment.randomOpponent = true;
             i++;
-          } else if (t === 'false' || t === '0' || t === 'no') {
+          } else if (t === 'false' || t === '0' || t === 'no' || t === 'off' || t === 'disable') {
             config.environment.randomOpponent = false;
             i++;
           } else {
