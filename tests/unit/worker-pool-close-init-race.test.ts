@@ -8,7 +8,8 @@
  * init resumed, resurrected the pool to 'ready' with live workers — or, when
  * the close landed during the worker-reply wait, flipped the already-closed
  * pool to 'failed'. These tests pin the contract: once close() settles, the
- * pool stays terminally closed, the pending init rejects, and no spawned
+ * pool stays terminally closed, every init that was pending when close() ran
+ * rejects (running, queued behind the lock, or mid resume), and no spawned
  * worker survives.
  *
  * Deterministic fake workers hold their init replies so both interleavings
@@ -141,5 +142,45 @@ describe('WorkerPool close() during pending init() (#427)', () => {
     await pool.init(1, {}, false);
     const observations = await pool.reset();
     expect(observations).toHaveLength(1);
+  });
+
+  it('aborts init when close() runs between the last reply resolving and init resuming', async () => {
+    pool = new WorkerPool(1);
+    const initPromise = pool.init(1, {}, false);
+    await tick(); // init is now pinned at its worker-reply wait
+
+    // Resolve the init reply and close() in the SAME synchronous block: the
+    // reply resolves Promise.all, but init's continuation only drains after
+    // close()'s synchronous section has already bumped the epoch and closed
+    // the pool — exercising the post-await abort checkpoint.
+    const worker = fakes.CloseRaceWorker.instances[0];
+    const initMsg = worker.sent.find((msg) => msg.type === 'init');
+    worker.emit('message', { id: initMsg.id, status: 'ok', data: {} });
+    const closePromise = pool.close();
+
+    await closePromise;
+    await expect(initPromise).rejects.toThrow(/initialization aborted/i);
+    expect(pool.isFailed()).toBe(false);
+    await expect(pool.reset()).rejects.toThrow(/worker pool is closed/);
+    expect((pool as any).workers).toHaveLength(0);
+  });
+
+  it('cancels an init that was queued behind the lock when close() ran, instead of starting it after the close settles', async () => {
+    pool = new WorkerPool(1);
+    // Pin a first init at its reply wait so the second init queues behind
+    // it on the operation lock while still only being *called*, not started.
+    const firstInit = pool.init(1, {}, false);
+    await tick();
+    const queuedInit = pool.init(1, {}, false);
+    await tick();
+
+    await pool.close(); // must win over BOTH pending inits
+
+    await expect(firstInit).rejects.toThrow(/closed/i);
+    await expect(queuedInit).rejects.toThrow(/initialization aborted/i);
+    expect(fakes.CloseRaceWorker.instances).toHaveLength(1); // queued init never spawned
+    expect((pool as any).workers).toHaveLength(0);
+    expect(pool.isFailed()).toBe(false);
+    await expect(pool.reset()).rejects.toThrow(/worker pool is closed/);
   });
 });

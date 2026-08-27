@@ -144,10 +144,14 @@ export class WorkerPool {
   private failure: Error | null = null;
   private cleanupPromise: Promise<void> | null = null;
 
-  // Bumped synchronously by every external close() (#427). Long-running
-  // operations capture the value at their start and compare after each
-  // await, distinguishing an external shutdown from init's own internal
-  // pre-clean (which also runs closeInternal and must not cancel itself).
+  // Bumped synchronously by every external close() (#427). initInternal
+  // captures the value when init() is called — before it may queue behind
+  // the operation lock — and re-checks it after each await, so a close()
+  // that lands while an init is pending (running or merely queued) aborts
+  // it instead of letting it resume into 'ready'. init's own internal
+  // pre-clean also runs closeInternal without bumping the epoch, so it
+  // never cancels itself. reset/step need no epoch: assertReady and their
+  // post-await 'closed' guards already honor an interrupting close.
   private closeEpoch: number = 0;
 
   // Serializes the buffer-mutating operations (init/reset/step) so callers
@@ -248,10 +252,20 @@ export class WorkerPool {
   }
 
   async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
-    return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory));
+    // Capture at CALL time, before queueing (#427 review): an init that is
+    // still pending when close() runs must reject rather than begin
+    // initializing after the close has settled. Queued reset/step calls get
+    // the same treatment from assertReady's closed-state rejection.
+    const startCloseEpoch = this.closeEpoch;
+    return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory, startCloseEpoch));
   }
 
-  private async initInternal(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
+  private async initInternal(
+    totalEnvs: number,
+    config: any = {},
+    useSharedMemory?: boolean,
+    startCloseEpoch: number = this.closeEpoch,
+  ) {
     if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
       throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
     }
@@ -274,12 +288,10 @@ export class WorkerPool {
     const numOpponents = SharedMemoryManager.normalizeNumOpponents(
       config?.numOpponents ?? (config as any)?.num_opponents,
     );
-    // Capture before init's own pre-clean so the internal teardown below is
-    // distinguishable from an external close() landing during it (#427).
-    const startCloseEpoch = this.closeEpoch;
     await this.closeInternal(); // Clean up existing if re-initialized
     if (this.closeEpoch !== startCloseEpoch) {
-      // An external close() resolved while this init was suspended: the
+      // An external close() resolved while this init was pending (suspended
+      // here, waiting on the operation lock, or past its reply wait): the
       // caller already observed a completed shutdown, so abort before
       // touching pool state. No worker exists yet (the spawn loop is below),
       // leaving the pool terminally closed (#427).
