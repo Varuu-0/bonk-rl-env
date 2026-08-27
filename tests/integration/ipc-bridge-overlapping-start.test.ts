@@ -265,6 +265,21 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       await bridge.ready;
       expect(await roundTripInitStatus()).toBe('ok');
 
+      // The winner re-registers itself as the retained serve-cycle slot when
+      // it claims admission; the loser (last _serveCycle writer) must never
+      // leave the slot naming its own settled promise. Probe the slot with a
+      // macrotask gap (unambiguous vs two pre-settled race arms): the
+      // winner's live cycle is still PENDING (timer wins), a superseded
+      // loser's dead cycle would reject before the timer fires.
+      const slotState = await Promise.race([
+        (bridge as any)._serveCycle.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise<string>((r) => setTimeout(() => r('still-pending'), 250)),
+      ]);
+      expect(slotState).toBe('still-pending');
+
       // A further start() while the winner serves must be rejected at the
       // ENTRY guard (slot still truthy), not after re-arming ready, and the
       // winner's readiness signal must be untouched and promptly settled.

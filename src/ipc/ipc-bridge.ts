@@ -407,7 +407,13 @@ export class IpcBridge {
       throw err;
     }
     const admission = Symbol('start-cycle');
-    const cycle = this.runStartCycle(admission);
+    // The body re-registers the admission WINNER into _serveCycle after the
+    // post-drain claim (it runs after the wrapper's initial assignment in
+    // the close-drain path, see runStartCycle); publish its identity here so
+    // that re-register is possible.
+    const holder: { cycle?: Promise<void> } = {};
+    const cycle = this.runStartCycle(admission, holder);
+    holder.cycle = cycle;
     this._serveCycle = cycle;
     try {
       await cycle;
@@ -434,7 +440,7 @@ export class IpcBridge {
    * an overlapping start() can never reach the shared transport state
    * mutated here (issue #418).
    */
-  private async runStartCycle(admission: symbol): Promise<void> {
+  private async runStartCycle(admission: symbol, holder: { cycle?: Promise<void> }): Promise<void> {
     // From here on every armed resolver is settled by THIS cycle's bind
     // outcome (markBound/markBindFailed), so close() must not pre-drain
     // with the pre-bind error (#458); the #402 close-during-start
@@ -483,6 +489,19 @@ export class IpcBridge {
       throw err;
     }
     this._drainAdmission = admission;
+    // Re-register the admission winner as the retained serve-cycle slot. In
+    // the close-drain path this runs after the wrapper's initial assignment,
+    // and a superseded caller may have overwritten the slot since — leaving
+    // it naming its own dead promise while the winner still serves would let
+    // the entry guard read a settled loser instead of the live cycle (issue
+    // #418 review). The winner (the only caller that holds _drainAdmission)
+    // re-publishes its own cycle here, synchronously with the claim. In the
+    // no-close path the claim already ran synchronously during the wrapper's
+    // assignment, so holder.cycle is still unwritten and the slot is already
+    // correct.
+    if (holder.cycle !== undefined) {
+      this._serveCycle = holder.cycle;
+    }
 
     const addr = `tcp://${this.bindAddress}:${this.port}`;
     // A closed ZMQ socket is permanently destroyed and can never be
