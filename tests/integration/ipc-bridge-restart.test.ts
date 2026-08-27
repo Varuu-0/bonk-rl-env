@@ -17,6 +17,56 @@ import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { PortManager } from '../../src/utils/port-manager';
 
+/**
+ * Shared by every describe in this file: wait until `port` is bindable
+ * again. The closed listener releases it asynchronously, so probe with a
+ * throwaway ROUTER and await that probe's explicit unbind before allowing
+ * the follow-up bind. Only port contention (EADDRINUSE) is transient — any
+ * other bind/unbind failure is a real error and propagates immediately
+ * instead of burning the deadline in a misleading retry storm. `deadline` is
+ * an absolute timestamp so a caller can share one bounded budget across a
+ * loop of probes rather than multiplying a per-probe timeout.
+ */
+async function waitForPortFree(port: number, deadline = Date.now() + 5000): Promise<void> {
+  const endpoint = `tcp://127.0.0.1:${port}`;
+  while (Date.now() < deadline) {
+    const probe = new zmq.Router();
+    let bound = false;
+    let unbound = false;
+    try {
+      await probe.bind(endpoint);
+      bound = true;
+      await probe.unbind(endpoint);
+      unbound = true;
+      return;
+    } catch (err) {
+      if (!isEaddrInUse(err)) {
+        throw err;
+      }
+    } finally {
+      if (bound && !unbound) {
+        try {
+          await probe.unbind(endpoint);
+        } catch {
+          /* close below */
+        }
+      }
+      probe.close();
+    }
+    await new Promise((r) => setTimeout(r, 50));
+  }
+  throw new Error(`port ${port} did not become free`);
+}
+
+/**
+ * A bind on a held port rejects with EADDRINUSE (errno 98); anything else
+ * (e.g. a broken ZMQ context or an invalid endpoint) is not contention and
+ * must not be treated as retryable.
+ */
+function isEaddrInUse(err: unknown): boolean {
+  return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EADDRINUSE';
+}
+
 describe('IpcBridge can be restarted after close() (issue #263)', () => {
   let bridge: IpcBridge;
   let portManager: PortManager;
@@ -66,56 +116,6 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
     }
   }
 
-  /**
-   * Wait until the bridge's port is bindable again. The closed listener
-   * releases it asynchronously, so poll with a throwaway ROUTER and await
-   * that probe's explicit unbind before allowing the follow-up bind.
-   * Only port contention (EADDRINUSE) is transient — any other bind/unbind
-   * failure is a real error and propagates immediately instead of burning
-   * the deadline in a misleading retry storm. `deadline` is an absolute
-   * timestamp so a caller can share one bounded budget across a loop of
-   * probes rather than multiplying a per-probe timeout.
-   */
-  async function waitForPortFree(deadline = Date.now() + 5000): Promise<void> {
-    const endpoint = `tcp://127.0.0.1:${port}`;
-    while (Date.now() < deadline) {
-      const probe = new zmq.Router();
-      let bound = false;
-      let unbound = false;
-      try {
-        await probe.bind(endpoint);
-        bound = true;
-        await probe.unbind(endpoint);
-        unbound = true;
-        return;
-      } catch (err) {
-        if (!isEaddrInUse(err)) {
-          throw err;
-        }
-      } finally {
-        if (bound && !unbound) {
-          try {
-            await probe.unbind(endpoint);
-          } catch {
-            /* close below */
-          }
-        }
-        probe.close();
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    throw new Error(`port ${port} did not become free`);
-  }
-
-  /**
-   * A bind on a held port rejects with EADDRINUSE (errno 98); anything else
-   * (e.g. a broken ZMQ context or an invalid endpoint) is not contention and
-   * must not be treated as retryable.
-   */
-  function isEaddrInUse(err: unknown): boolean {
-    return typeof err === 'object' && err !== null && (err as { code?: string }).code === 'EADDRINUSE';
-  }
-
   it('leaves the probe endpoint immediately rebindable (#327)', async () => {
     const endpoint = `tcp://127.0.0.1:${port}`;
 
@@ -128,7 +128,7 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
     const deadline = Date.now() + 15000;
 
     for (let attempt = 0; attempt < 50; attempt++) {
-      await waitForPortFree(deadline);
+      await waitForPortFree(port, deadline);
 
       const retry = new zmq.Router();
       let bound = false;
@@ -203,7 +203,7 @@ describe('IpcBridge can be restarted after close() (issue #263)', () => {
 
       // Release the port; the retry must re-arm ready and bind fresh.
       await new Promise<void>((resolve) => blocker.close(() => resolve()));
-      await waitForPortFree();
+      await waitForPortFree(port);
 
       const serve3 = bridge.start();
       serve3.catch(() => {});
@@ -327,28 +327,36 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
   let port: number;
 
   beforeAll(() => {
-    // Disjoint port bands across the ipc test suites (vitest forks run in
-    // parallel, so two suites allocating the same port would race to bind
-    // it). Every band below is exclusive to ONE concurrently-running suite;
-    // the e2e suite bound at 15700-15799 only when the separate Tier-3
-    // drive runs (never concurrent with Tier 2).
-    //   6000-6600    env-manager (single-file, sequential describes)
-    //   7000-7475    env-lifecycle (single-file, sequential describes)
-    //   7500-7600    env-manager-worker-pool-coverage
-    //   7700-7799    env-manager-worker-pool-coverage (endPoint exclusive of 7800)
-    //   7800-8000    env-config-forwarding
-    //   8100-8500    env-manager-batch-shape (single-file, sequential describes)
-    //   15600-15699  ipc-bridge-dealer-socket
-    //   15700-15799  ipc-bridge-bind-address (+ ipc-bridge-e2e, Tier-3 only)
-    //   15800-15899  ipc-bridge-restart (ready-capture describe)
-    //   15900-15999  ipc-bridge-options
-    //   16000-16099  ipc-bridge-req-socket
-    //   16100-16199  ipc-bridge-restart (restart-lifecycle describe)
-    //   16200-16399  ipc-bridge-failed-session
-    //   16400-17010  bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
-    //   17100-17199  this #431 describe
-    //   17200-17299  ipc-bridge-multiclient
-    //   17400-17449  ipc-bridge-failed-session (host-failure init tests)
+    // Disjoint port bands across every tests/integration/*.test.ts suite that
+    // binds a socket (vitest forks run in parallel, so two suites allocating
+    // the same port would race to bind it). Every band below is exclusive to
+    // ONE concurrently-running suite; describes within a single file run
+    // sequentially and reuse their own bands. ipc-bridge-e2e (15700-15799)
+    // only binds under the separate Tier-3 drive, never concurrently with
+    // Tier 2. preview-server.test.ts derives its port from the spawned server
+    // (no fixed band).
+    //   6000-6005, 6000-6002   env-manager (sequential describes in one file)
+    //   6100-6600              env-manager (sequential describes in one file)
+    //   7000-7100, 7200-7300   env-lifecycle (sequential describes in one file)
+    //   7400-7475              env-lifecycle (sequential describes in one file)
+    //   7500-7600              env-manager-worker-pool-coverage
+    //   7700-7799              env-manager-worker-pool-coverage (exclusive of 7800 below)
+    //   7800-7900, 7900-8000   env-config-forwarding
+    //   8100-8500              env-manager-batch-shape (sequential describes in one file)
+    //   15560-15561            ipc-bridge-bypass (hardcoded, one file)
+    //   15600-15699            ipc-bridge-dealer-socket
+    //   15700-15799            ipc-bridge-bind-address (+ ipc-bridge-e2e, Tier-3 only)
+    //   15800-15899            ipc-bridge-restart (#263 restart describe)
+    //   15900-15999            ipc-bridge-options
+    //   16000-16099            ipc-bridge-req-socket
+    //   16100-16199            ipc-bridge-restart (#435 ready-capture describe)
+    //   16200-16299            ipc-bridge-failed-session
+    //   16300-16399            ipc-bridge-failed-session (sequential describes in one file)
+    //   16400-17010            bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
+    //   17100-17199            this #431 describe
+    //   17200-17299            ipc-bridge-multiclient
+    //   17400-17449            ipc-bridge-failed-session (host-failure init tests)
+    //   19992-19999            ipc-shared-memory (hardcoded, one file)
     portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
@@ -370,33 +378,6 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       ),
       new Promise<string>((resolve) => setTimeout(() => resolve('hung'), ms)),
     ]);
-  }
-
-  /**
-   * Poll until a throwaway TCP listener can bind the bridge's port, proving
-   * nothing is serving on it. A resurrected bridge would hold the port and
-   * every attempt would fail with EADDRINUSE until the deadline expires.
-   * Mirrors the sibling #435 helper's discipline: only port contention
-   * (EADDRINUSE) is transient — any other failure is a real error and
-   * propagates immediately instead of burning the deadline in a misleading
-   * retry storm.
-   */
-  async function waitForPortFree(deadline = Date.now() + 5000): Promise<void> {
-    while (Date.now() < deadline) {
-      const outcome = await new Promise<string>((resolve) => {
-        const probe = net.createServer();
-        probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code ?? 'UNKNOWN'));
-        probe.listen(port, '127.0.0.1', () => {
-          probe.close(() => resolve('free'));
-        });
-      });
-      if (outcome === 'free') return;
-      if (outcome !== 'EADDRINUSE') {
-        throw new Error(`port ${port} probe failed unexpectedly: ${outcome}`);
-      }
-      await new Promise((r) => setTimeout(r, 50));
-    }
-    throw new Error(`port ${port} is still held by the bridge`);
   }
 
   /**
@@ -442,7 +423,7 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       // isClosed() STAYS true after the would-be bind window has long
       // passed, and nothing serves afterwards: an independent binder can
       // take the port.
-      await waitForPortFree();
+      await waitForPortFree(port);
       expect(bridge.isClosed()).toBe(true);
 
       // The shutdown state is terminal until a NEW start() call; an
@@ -488,7 +469,7 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       expect(await parkedOutcome).toBe('rejected(BridgeClosedDuringStart)');
 
       // Nothing serves afterwards and the closed state is terminal.
-      await waitForPortFree();
+      await waitForPortFree(port);
       expect(bridge.isClosed()).toBe(true);
       await bridge.close();
       expect(bridge.isClosed()).toBe(true);
@@ -516,7 +497,7 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       await priorClose;
       await expect(parkedRestart).rejects.toThrow('bridge was closed during start');
       expect(bridge.isClosed()).toBe(true);
-      await waitForPortFree();
+      await waitForPortFree(port);
 
       // The cancellation must not leave stuck internal state (a leftover
       // parkedStart marker, a retained closePromise, or a stale _closed):
