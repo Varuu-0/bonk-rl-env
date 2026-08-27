@@ -257,14 +257,18 @@ export class WorkerPool {
     // initializing after the close has settled. Queued reset/step calls get
     // the same treatment from assertReady's closed-state rejection.
     const startCloseEpoch = this.closeEpoch;
-    return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory, startCloseEpoch));
+    return this.withOperationLock(() => this.initInternal(totalEnvs, config, startCloseEpoch, useSharedMemory));
   }
 
   private async initInternal(
     totalEnvs: number,
     config: any = {},
+    // Required (no default): the epoch must be captured at init() CALL time
+    // to cancel inits that were queued when close() ran (#427 review). A
+    // default re-capturing here would silently reopen that race for any
+    // direct caller.
+    startCloseEpoch: number,
     useSharedMemory?: boolean,
-    startCloseEpoch: number = this.closeEpoch,
   ) {
     if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
       throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
