@@ -355,7 +355,10 @@ describe('IpcBridge keeps a healthy session on a validation-only re-init rejecti
   const sessionKey = Buffer.from('reinit440', 'utf8').toString('hex');
 
   beforeAll(async () => {
-    portManager = new PortManager({ startPort: 16400, endPort: 16499 });
+    // 16400-17000 belongs to bonk-env-ipc-server.test.ts and vitest runs
+    // suites concurrently (pool: 'forks'), so pick a band no other suite
+    // reserves to avoid intermittent EADDRINUSE in beforeAll.
+    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
     bridge = new IpcBridge({ server: { port } } as any);
     // Rejection handler required: a bind failure must surface via
