@@ -863,6 +863,79 @@ describe('IpcBridge ready capture order (#435)', () => {
     await closePromise;
   });
 
+  // Pre-bind shutdown (#458): close() before the first start() is the one
+  // lifecycle transition with NO bind-outcome drain inside start(), so the
+  // constructor-armed signal would strand pending forever. Vitest fails the
+  // run on unhandled rejections, so every assertion below additionally pins
+  // that the drained promises stay handled (constructor/rearm swallow-catch).
+
+  it('rejects a ready promise captured BEFORE a close() that precedes any start() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12398 } });
+    // The exact embedder pattern the getter's JSDoc advertises: capture the
+    // readiness signal, then abort startup without ever serving.
+    const earlyReady = bridge.ready;
+    await bridge.close();
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('rejects a ready promise read AFTER a close() that precedes any start() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12399 } });
+    await bridge.close();
+    // Post-close readers get the same drained (now rejected) generation, so
+    // a shared readiness helper cannot wedge on a fresh read either.
+    expect(await settleOutcome(bridge.ready)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('settles a ready promise captured concurrently with a pre-start close (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12400 } });
+    // Race capture and shutdown from independent async contexts: whichever
+    // order the two interleave in, the outstanding generation must settle —
+    // never hang.
+    const readyOutcome = settleOutcome(bridge.ready, 1000);
+    const closeOutcome = bridge.close().then(
+      () => 'closed',
+      () => 'closed-rejected',
+    );
+    expect(await closeOutcome).toBe('closed');
+    expect(await readyOutcome).toBe('rejected(bridge was closed before start)');
+    // A read taken after the same close settles identically.
+    expect(await settleOutcome(bridge.ready)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('keeps a drained pre-start close idempotent on repeated close() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12401 } });
+    const earlyReady = bridge.ready;
+    await bridge.close();
+    await expect(bridge.close()).resolves.toBeUndefined();
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('still restarts after a pre-start close: the fresh signal resolves on the new bind (#458)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12402 } });
+      const stranded = bridge.ready;
+      await bridge.close();
+      expect(await settleOutcome(stranded)).toBe('rejected(bridge was closed before start)');
+
+      // The restart contract (#263) is unchanged: a later start() arms a
+      // fresh signal that resolves with the new bind, and the drained
+      // rejection never leaks into the new cycle.
+      const serve = bridge.start();
+      const restartedSignal = bridge.ready;
+      expect(restartedSignal).not.toBe(stranded);
+      try {
+        expect(await settleOutcome(restartedSignal)).toBe('resolved');
+        expect(bridge.isClosed()).toBe(false);
+      } finally {
+        await bridge.close();
+        await serve;
+      }
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   /** Close the bridge and wait for its serve loop to exit cleanly. */
   async function roundTripClose(bridge: IpcBridge, serve: Promise<void>): Promise<void> {
     await bridge.close();

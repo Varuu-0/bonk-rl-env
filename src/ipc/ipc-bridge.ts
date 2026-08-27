@@ -99,6 +99,13 @@ export class IpcBridge {
   // fan-out is what settles every capture exactly once (#435); never swap
   // this for a single per-cycle pair or pre-start captures hang again.
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
+  // Whether any start() bind cycle has ever armed a signal. Once true, every
+  // armed resolver is settled by that cycle's own bind outcome (markBound/
+  // markBindFailed, including the #402 cancellation classification), so
+  // close() must stay out of the way. While still false, NO bind-outcome
+  // path can ever run: close() is the only remaining settler, and without a
+  // pre-drain there the constructor-armed signal strands forever (#458).
+  private _startedOnce: boolean = false;
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
 
@@ -275,6 +282,20 @@ export class IpcBridge {
   }
 
   /**
+   * The canonical error for a close() that runs before any start() bind
+   * cycle: rejected on every outstanding ready promise — the constructor-armed
+   * signal and any read taken after the close — so pre-bind shutdown settles
+   * readiness awaiters with one consistent, distinguishable terminal outcome
+   * instead of hanging them forever (#458). Sibling of closedDuringStartError
+   * (#402), which covers the close-during-an-armed-bind-cycle transition.
+   */
+  private closedBeforeStartError(): Error {
+    const err = new Error('bridge was closed before start');
+    err.name = 'BridgeClosedBeforeStart';
+    return err;
+  }
+
+  /**
    * Normalize a configured bind address into a ZMQ endpoint-ready host.
    * Empty/whitespace values fall back to the loopback default; `*` (the
    * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
@@ -338,6 +359,11 @@ export class IpcBridge {
   private _wrappedSend: Function;
 
   async start() {
+    // From here on every armed resolver is settled by THIS cycle's bind
+    // outcome (markBound/markBindFailed), so close() must not pre-drain
+    // with the pre-bind error (#458); the #402 close-during-start
+    // cancellation identity also depends on that gate.
+    this._startedOnce = true;
     // Re-arm `ready` before waiting for a prior close to finish. Callers
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
@@ -1204,6 +1230,19 @@ export class IpcBridge {
       return Promise.resolve();
     }
     this._closed = true;
+    // A shutdown before any start() bind cycle can never reach the
+    // markBound()/markBindFailed() drains inside start(), so the
+    // constructor-armed readiness signal would stay pending forever and
+    // every `await bridge.ready` awaiter — captures taken before this
+    // close and reads taken after it — would hang silently (#458, the one
+    // lifecycle transition the #435 fan-out did not cover). Drain every
+    // outstanding signal here with the distinguishable sibling of the #402
+    // cancellation error. Once a bind cycle HAS been armed, its own outcome
+    // settles every signal (including close-during-start, #402), so leave
+    // the list alone: pre-draining there would mislabel the cancellation.
+    if (!this._startedOnce) {
+      this.markBindFailed(this.closedBeforeStartError());
+    }
     if (this.sessionReapTimer) {
       clearInterval(this.sessionReapTimer);
       this.sessionReapTimer = undefined;
