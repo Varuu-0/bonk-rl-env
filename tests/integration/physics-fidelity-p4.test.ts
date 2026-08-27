@@ -947,7 +947,7 @@ describe('P4: differential validation — replay comparator', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     for (const tick of bad.ticks) tick.discs[1] = null; // opponent never exists natively
     const verdict = compareTrace(bad, { seed: 0 });
-    expect(verdict.perTick.some((t) => t.mismatches.length > 0)).toBe(true);
+    expect(verdict.perTick.some((t) => t.playerErrors.length > 0)).toBe(true);
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
     expect(verdict.pass).toBe(false);
@@ -962,7 +962,7 @@ describe('P4: differential validation — replay comparator', () => {
     const verdict = compareTrace(bad, { seed: 0 });
     expect(verdict.pass).toBe(false);
     expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed disc entry' });
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 0, reason: 'malformed disc entry' });
     for (const value of Object.values(verdict.worst)) expect(Number.isFinite(value)).toBe(true);
   });
 
@@ -1016,7 +1016,7 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.pass).toBe(false);
     expect(applied).not.toContain(1);
     expect(applied.filter((id) => id === 0).length).toBeGreaterThan(0);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 1, reason: 'malformed disc entry' });
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 1, reason: 'malformed disc entry' });
   });
 
   it('does not replay a corrupt input byte and fails the tick loudly (issue #450)', () => {
@@ -1041,7 +1041,7 @@ describe('P4: differential validation — replay comparator', () => {
       },
     });
     expect(verdict.pass).toBe(false);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed input byte' });
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 0, reason: 'malformed input byte' });
     // Slot 0's replayed action is the neutral fallback (every button
     // released), never the fabricated decode of the corrupt byte.
     const slot0 = applied.filter((a) => a.id === 0)[0];
@@ -1082,7 +1082,11 @@ describe('P4: differential validation — replay comparator', () => {
     // collateral kinematic drift.
     expect(verdict.ticksOutsideTolerance).toBe(1);
     expect(verdict.perTick[0].withinTolerance).toBe(false);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: -1, reason: 'malformed input set' });
+    // The corruption is tick-level: it is reported in `tickErrors` (the
+    // container belongs to no player slot). The null disc entries flag their
+    // own per-slot 'native absent' errors — that collateral is expected and
+    // is not what this test pins.
+    expect(verdict.perTick[0].tickErrors).toEqual(['malformed input set']);
   });
 
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {

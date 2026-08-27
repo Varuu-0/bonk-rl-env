@@ -57,7 +57,14 @@ export interface DiscAxesDiff {
 export interface TickComparison {
   tick: number;
   compared: DiscAxesDiff[];
-  mismatches: Array<{ id: number; reason: string }>;
+  /** Per-slot corruptions (e.g. a corrupt input byte) that fail the tick. */
+  playerErrors: Array<{ id: number; reason: string }>;
+  /**
+   * Whole-tick corruptions that fail the tick but belong to no player slot
+   * (e.g. a present-but-non-array `inputs` container). Kept separate from
+   * `playerErrors` so the player-id space stays un-overloaded.
+   */
+  tickErrors: string[];
   /** True when every compared disc was within tolerance. */
   withinTolerance: boolean;
 }
@@ -231,7 +238,7 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       physics.tick();
 
       const compared: DiscAxesDiff[] = [];
-      const mismatches: TickComparison['mismatches'] = [];
+      const mismatches: TickComparison['playerErrors'] = [];
       let withinTolerance = true;
       let deathAgreements = 0;
 
@@ -244,13 +251,13 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         mismatches.push({ id, reason: 'malformed input byte' });
         withinTolerance = false;
       }
-      // Malformed input-set container (#450): a whole-tick corruption flagged
-      // once, outside the aligned-disc loop — a tick with zero aligned discs
-      // would otherwise swallow it entirely, letting an error-ignoring caller
-      // vouch for a trace parseNativeTrace rejects. id -1 marks the tick-level
-      // (not per-slot) corruption.
+      // Malformed input-set container (#450): a whole-tick corruption kept out
+      // of the per-player list and carried as a tick-level error instead — it
+      // belongs to no player slot, so the sentinel id would overload the
+      // contract. Flagged once, outside the aligned-disc loop, so a tick with
+      // zero aligned discs still fails instead of silently passing on a trace
+      // parseNativeTrace rejects.
       if (inputsMalformed) {
-        mismatches.push({ id: -1, reason: 'malformed input set' });
         withinTolerance = false;
       }
 
@@ -329,7 +336,13 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       const hadData = compared.length > 0 || mismatches.length > 0 || deathAgreements > 0;
       if (!hadData) skippedNoData++;
       if (!withinTolerance) ticksOutsideTolerance++;
-      perTick.push({ tick: recorded.t, compared, mismatches, withinTolerance });
+      perTick.push({
+        tick: recorded.t,
+        compared,
+        playerErrors: mismatches,
+        tickErrors: inputsMalformed ? ['malformed input set'] : [],
+        withinTolerance,
+      });
     }
 
     const comparedTicks = perTick.length - skippedNoData;
