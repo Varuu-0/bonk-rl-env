@@ -7,7 +7,10 @@
  * cycle — every later client request hung forever, isClosed() kept reporting
  * false, and even close() wedged (unbind on the destroyed socket). The guard
  * added with this suite rejects an overlapping start() fast, before any
- * state mutation, so the running bridge keeps serving untouched.
+ * state mutation, so the running bridge keeps serving untouched. Cycles
+ * whose shutdown is already owned by close() (in-flight closePromise) or
+ * whose transport is already destroyed keep using the #316/#263
+ * serialization paths instead of being rejected.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as net from 'net';
@@ -15,20 +18,33 @@ import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { PortManager } from '../../src/utils/port-manager';
 
-// 16400-16499 is reserved for this suite; every other ipc-bridge suite owns
-// a disjoint range and vitest forks run in parallel.
+// 17100-17199 is reserved for this suite; every other ipc-bridge suite owns
+// a disjoint range (bonk-env-ipc-server.test.ts spreads 16400-17010 via
+// offsets from IPC_SERVER_TEST_START) and vitest forks run in parallel.
 describe('IpcBridge overlapping start() calls (issue #418)', () => {
   let portManager: PortManager;
   let port: number;
 
   beforeAll(() => {
-    portManager = new PortManager({ startPort: 16400, endPort: 16499 });
+    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
 
   afterAll(() => {
     portManager.release(port);
   }, 10000);
+
+  /**
+   * Return the rejection reason of `promise`, or fail if it resolves.
+   */
+  async function rejectOf(promise: Promise<unknown>): Promise<any> {
+    try {
+      await promise;
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected promise to reject');
+  }
 
   /**
    * Fresh DEALER client round-trip (as the Python client does): connect,
@@ -98,8 +114,11 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       // overlap: the guard must reject without re-arming/swapping it.
       const liveReady = bridge.ready;
 
-      // Overlapping call: fails fast with a clear error...
-      await expect(bridge.start()).rejects.toThrow(/already running/);
+      // Overlapping call: fails fast with a clear, programmatically
+      // distinguishable error...
+      const overlapErr = await rejectOf(bridge.start());
+      expect(overlapErr.name).toBe('BridgeAlreadyRunning');
+      expect(overlapErr.message).toMatch(/already running/);
 
       // ...WITHOUT touching the running instance's transport or state:
       // same, still-open ROUTER handle; readiness signal not swapped;
@@ -124,7 +143,73 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
     }
   }, 60000);
 
-  it('the in-flight flag clears when a cycle settles, so restart-after-overlap still works', async () => {
+  it('close() and start() issued back-to-back still serialize a live cycle into a clean restart (#316 pattern)', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const sockFirst = (bridge as any).sock;
+    try {
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      await bridge.ready;
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      // Racy-but-supported pattern: close() and the restart's start() are
+      // issued back-to-back WITHOUT awaiting the old serve promise. The
+      // shutdown owns the old cycle's cancellation, so the restart must
+      // serialize behind the in-flight closePromise (previousClose await +
+      // transport recreation) instead of being rejected as an overlap.
+      const closePromise = bridge.close();
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      await closePromise;
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+
+      // The restart recreated the transport and the new cycle answers.
+      expect((bridge as any).sock).not.toBe(sockFirst);
+      expect((bridge as any).sock.closed).toBe(false);
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      // The old loop drained once its socket was destroyed.
+      await serve1;
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await serve2;
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a restart issued before the drained cycle settles is not rejected as an overlap (#263 pattern)', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    try {
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      await bridge.ready;
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      // serve1 may still be unwinding here, but its transport is already
+      // destroyed, so the restart must proceed via transport recreation
+      // instead of being rejected as an overlapping start.
+      const sockDrained = (bridge as any).sock;
+      expect(sockDrained.closed).toBe(true);
+
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+      expect((bridge as any).sock).not.toBe(sockDrained);
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      await serve1;
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await serve2;
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('the guard clears when a cycle settles, so restart-after-overlap still works', async () => {
     const bridge = new IpcBridge({ server: { port } } as any);
     try {
       const serve1 = bridge.start();
@@ -132,7 +217,8 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       await bridge.ready;
 
       // Overlap rejected while cycle 1 is live...
-      await expect(bridge.start()).rejects.toThrow(/already running/);
+      const overlapErr = await rejectOf(bridge.start());
+      expect(overlapErr.name).toBe('BridgeAlreadyRunning');
       await bridge.close();
       await serve1;
 

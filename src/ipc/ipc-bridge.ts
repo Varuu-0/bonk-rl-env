@@ -101,13 +101,15 @@ export class IpcBridge {
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
-  // True from a start() invocation until its serve cycle settles (start()
-  // only exits on close()/failure). Armed synchronously before the first
-  // await so an overlapping second start() fails fast WITHOUT re-arming
+  // Retained promise of the in-flight serve cycle (start() only exits on
+  // close()/failure). The start() guard reads it synchronously before any
+  // state mutation: an overlapping start() must fail fast WITHOUT re-arming
   // ready or touching the shared ROUTER — whose EADDRINUSE cleanup would
   // otherwise destroy the live socket of the healthy first cycle (issue
-  // #418). Mirrors BonkEnv's startPromise guard (#267).
-  private _serveCycleInFlight: boolean = false;
+  // #418). A promise (not a boolean) so an older draining cycle can never
+  // clear the guard for a newer overlapping one. Mirrors BonkEnv's
+  // startPromise guard (#267).
+  private _serveCycle: Promise<void> | null = null;
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -345,24 +347,40 @@ export class IpcBridge {
   private _wrappedSend: Function;
 
   async start(): Promise<void> {
-    // Overlapping-call guard (#418): reject a second concurrent start()
-    // BEFORE any state mutation — in particular before rearmReady(), which
-    // would swap the live cycle's readiness signal, and long before the
-    // bind whose EADDRINUSE cleanup would close the shared, currently
-    // serving ROUTER and silently kill the healthy first cycle. The flag is
-    // armed synchronously here and cleared only when THIS cycle settles,
-    // mirroring BonkEnv's startPromise guard (#267); a failed or closed-out
-    // start clears it in the finally below so genuine retries/restarts work.
-    if (this._serveCycleInFlight) {
-      throw new Error(
+    // Overlapping-call guard (#418): fail fast when another start() is
+    // actively holding the transport — proceeding would swap the live
+    // cycle's readiness signal via rearmReady(), and a duplicate bind's
+    // EADDRINUSE cleanup would close the shared, currently serving ROUTER,
+    // silently killing the healthy first cycle. A cycle that is no longer
+    // live is NOT an overlap: an in-flight closePromise owns the old
+    // cycle's cancellation (the previousClose await in runStartCycle
+    // serializes the restart behind it, #316), and a destroyed transport
+    // (sock.closed after a settled teardown) can no longer serve — the
+    // recreation path in runStartCycle then serves the restart (#263).
+    // Those two exemptions keep the previously supported racy
+    // close()/start() and drain-window restart patterns working; a live
+    // cycle (serving or mid-bind) always rejects. The check runs before
+    // the first await, so no shared state is mutated on rejection.
+    const activeCycle = this._serveCycle;
+    if (activeCycle && this.closePromise === null && !this.sock.closed) {
+      const err = new Error(
         'IpcBridge.start() called while already running: a serve cycle is still active on this bridge; await that cycle or close() it before starting again',
       );
+      err.name = 'BridgeAlreadyRunning';
+      throw err;
     }
-    this._serveCycleInFlight = true;
+    const cycle = this.runStartCycle();
+    this._serveCycle = cycle;
     try {
-      await this.runStartCycle();
+      await cycle;
     } finally {
-      this._serveCycleInFlight = false;
+      // Only the owner clears the guard: with the racy patterns above two
+      // start() invocations can briefly overlap (old cycle draining while
+      // the new one serves), and the older settlement must not unlock the
+      // transport for a third call while the newer cycle still holds it.
+      if (this._serveCycle === cycle) {
+        this._serveCycle = null;
+      }
     }
   }
 
