@@ -44,6 +44,8 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
   // Master switch
   '--telemetry': 'enableTelemetry',
   '--enable-telemetry': 'enableTelemetry',
+  // Documented long form (config.example.json, issue #459)
+  '--telemetry-enabled': 'enableTelemetry',
   '-t': 'enableTelemetry',
 
   // Profiling level
@@ -56,10 +58,14 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
 
   // Debug level
   '--debug': 'debugLevel',
+  // Documented long form (config.example.json, issue #459)
+  '--debug-level': 'debugLevel',
   '-d': 'debugLevel',
 
   // Output format
   '--output': 'outputFormat',
+  // Documented long form (config.example.json, issue #459)
+  '--output-format': 'outputFormat',
   '-o': 'outputFormat',
 
   // Dashboard port
@@ -70,6 +76,8 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
 
   // Retention days
   '--retention': 'retentionDays',
+  // Documented long form (config.example.json, issue #459)
+  '--retention-days': 'retentionDays',
 };
 
 /**
@@ -88,6 +96,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'profileLevel', valid: false, value: 'standard' };
 
     case '--debug':
+    case '--debug-level':
     case '-d':
       if (value === 'none' || value === 'error' || value === 'verbose') {
         return { key: 'debugLevel', valid: true, value };
@@ -96,6 +105,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'debugLevel', valid: false, value: 'none' };
 
     case '--output':
+    case '--output-format':
     case '-o':
       if (value === 'console' || value === 'file' || value === 'both') {
         return { key: 'outputFormat', valid: true, value };
@@ -120,6 +130,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'reportInterval', valid: false, value: 5000 };
 
     case '--retention':
+    case '--retention-days':
       const days = parseInt(value, 10);
       if (!isNaN(days) && days > 0) {
         return { key: 'retentionDays', valid: true, value: days };
@@ -240,7 +251,9 @@ export function parseFlags(): TelemetryFlags {
  * Mirrors the CLI + env activation surface that parseFlags() +
  * applyEnvOverrides() resolve inside initialize(), so workers and embedded
  * consumers — which never call initialize() and never load config.json —
- * honor MANIFOLD_PROFILE / MANIFOLD_DEBUG / MANIFOLD_TELEMETRY the same way
+ * honor MANIFOLD_PROFILE / MANIFOLD_DEBUG / MANIFOLD_TELEMETRY (and their
+ * documented config.example.json spellings TELEMETRY_ENABLED / PROFILE_LEVEL /
+ * DEBUG_LEVEL, issue #459) the same way
  * the standalone server does on its CLI/env path (issue #389):
  * - The explicit MANIFOLD_TELEMETRY master switch wins over everything,
  *   including argv flags, exactly like applyEnvOverrides().
@@ -268,10 +281,30 @@ export function isAnyTelemetryEnabled(): boolean {
     }
   }
 
+  // Documented master switch (config.example.json, issue #459), evaluated
+  // after MANIFOLD_TELEMETRY so the established name wins when both are set.
+  const envTelemetryEnabled = process.env.TELEMETRY_ENABLED;
+  if (envTelemetryEnabled !== undefined) {
+    const telemetryValue = envTelemetryEnabled.toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
+      return true;
+    }
+    if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
+      return false;
+    }
+  }
+
   // Selecting a profile level implies telemetry, exactly like the CLI
   // --profile/-l flags in parseFlags() (issue #385).
   const envProfile = process.env.MANIFOLD_PROFILE;
   if (envProfile === 'minimal' || envProfile === 'standard' || envProfile === 'detailed') {
+    return true;
+  }
+
+  // Documented spelling (config.example.json, issue #459), evaluated after
+  // MANIFOLD_PROFILE so the established name wins when both are set.
+  const envProfileLevel = process.env.PROFILE_LEVEL;
+  if (envProfileLevel === 'minimal' || envProfileLevel === 'standard' || envProfileLevel === 'detailed') {
     return true;
   }
 
@@ -282,13 +315,20 @@ export function isAnyTelemetryEnabled(): boolean {
     return true;
   }
 
+  // Documented spelling (config.example.json, issue #459), evaluated after
+  // MANIFOLD_DEBUG so the established name wins when both are set.
+  const envDebugLevel = process.env.DEBUG_LEVEL;
+  if (envDebugLevel === 'none' || envDebugLevel === 'error' || envDebugLevel === 'verbose') {
+    return true;
+  }
+
   const argv = process.argv;
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
 
     // Check for master switch
-    if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '-t') {
+    if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '--telemetry-enabled' || arg === '-t') {
       // Check if it's followed by '=true' or '=1'
       const value = arg.split('=')[1];
       if (value === undefined) {
@@ -307,7 +347,7 @@ export function isAnyTelemetryEnabled(): boolean {
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
       return true;
     }
-    if ((arg === '--debug' || arg === '-d') &&
+    if ((arg === '--debug' || arg === '--debug-level' || arg === '-d') &&
         (nextArg === 'none' || nextArg === 'error' || nextArg === 'verbose')) {
       return true;
     }
@@ -324,6 +364,52 @@ export function isAnyTelemetryEnabled(): boolean {
  * @returns Merged flags with environment overrides
  */
 export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
+  // Documented env names (config.example.json, issue #459). The level/format
+  // selectors are applied BEFORE their MANIFOLD_* counterparts so the
+  // established MANIFOLD_* names keep winning when both spellings are set.
+  // The TELEMETRY_ENABLED master switch is applied after the level selectors
+  // (an explicit switch beats an implied activation) but before
+  // MANIFOLD_TELEMETRY (the established master switch still wins).
+  const envOutputFormat = process.env.OUTPUT_FORMAT;
+  if (envOutputFormat !== undefined) {
+    if (envOutputFormat === 'console' || envOutputFormat === 'file' || envOutputFormat === 'both') {
+      flags.outputFormat = envOutputFormat;
+      _explicitFlagKeys.add('outputFormat');
+    }
+  }
+
+  const envProfileLevel = process.env.PROFILE_LEVEL;
+  if (envProfileLevel !== undefined) {
+    if (envProfileLevel === 'minimal' || envProfileLevel === 'standard' || envProfileLevel === 'detailed') {
+      flags.profileLevel = envProfileLevel;
+      // Selecting a profile level implies telemetry, exactly like the CLI
+      // --profile-level flag and the MANIFOLD_PROFILE override below.
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  const envDebugLevel = process.env.DEBUG_LEVEL;
+  if (envDebugLevel !== undefined) {
+    if (envDebugLevel === 'none' || envDebugLevel === 'error' || envDebugLevel === 'verbose') {
+      flags.debugLevel = envDebugLevel;
+      // Selecting a debug level implies telemetry, exactly like the CLI
+      // --debug-level flag and the MANIFOLD_DEBUG override below.
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  // Documented retention window (config.example.json, issue #459).
+  const envRetentionDays = process.env.RETENTION_DAYS;
+  if (envRetentionDays !== undefined) {
+    const days = parseInt(envRetentionDays, 10);
+    if (!isNaN(days) && days > 0) {
+      flags.retentionDays = days;
+      _explicitFlagKeys.add('retentionDays');
+    }
+  }
+
   // Check for environment variable: MANIFOLD_TELEMETRY_OUTPUT
   const envOutput = process.env.MANIFOLD_TELEMETRY_OUTPUT;
   if (envOutput !== undefined) {
@@ -353,6 +439,23 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
       // Selecting a debug level implies telemetry, exactly like the CLI
       // --debug/-d flags in parseFlags() (issue #385).
       flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  // Check for environment variable: TELEMETRY_ENABLED — the documented
+  // spelling of the MANIFOLD_TELEMETRY master switch (config.example.json,
+  // issue #459). Applied after the level selectors (an explicit switch beats
+  // an implied activation) but before MANIFOLD_TELEMETRY so the established
+  // master switch still wins when both spellings are set.
+  const envTelemetryEnabled = process.env.TELEMETRY_ENABLED;
+  if (envTelemetryEnabled !== undefined) {
+    const telemetryValue = envTelemetryEnabled.toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    } else if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
+      flags.enableTelemetry = false;
       _explicitFlagKeys.add('enableTelemetry');
     }
   }

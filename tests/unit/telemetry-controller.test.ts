@@ -10,7 +10,16 @@ import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnab
 
 describe('TelemetryController', () => {
   const originalArgv = process.argv;
-  const envKeys = ['MANIFOLD_TELEMETRY', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG', 'MANIFOLD_TELEMETRY_OUTPUT'];
+  const envKeys = [
+    'MANIFOLD_TELEMETRY',
+    'MANIFOLD_PROFILE',
+    'MANIFOLD_DEBUG',
+    'MANIFOLD_TELEMETRY_OUTPUT',
+    'TELEMETRY_ENABLED',
+    'PROFILE_LEVEL',
+    'DEBUG_LEVEL',
+    'OUTPUT_FORMAT',
+  ];
 
   beforeEach(() => {
     // Reset singleton state
@@ -72,6 +81,13 @@ describe('TelemetryController', () => {
       const controller = TelemetryController.getInstance();
       expect(controller.getFlags().enableTelemetry).toBe(true);
     });
+
+    it('isTelemetryEnabled returns true with --telemetry-enabled (documented long form, issue #459)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(isTelemetryEnabled()).toBe(true);
+    });
   });
 
   describe('enabled via environment', () => {
@@ -91,6 +107,20 @@ describe('TelemetryController', () => {
       process.env.MANIFOLD_TELEMETRY = 'yes';
       const controller = TelemetryController.getInstance();
       expect(controller.getFlags().enableTelemetry).toBe(true);
+    });
+
+    it('isTelemetryEnabled returns true with TELEMETRY_ENABLED=true (documented name, issue #459)', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('isTelemetryEnabled returns false with TELEMETRY_ENABLED=false', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(false);
+      expect(isTelemetryEnabled()).toBe(false);
     });
   });
 
@@ -124,6 +154,47 @@ describe('TelemetryController', () => {
       expect(flags.enableTelemetry).toBe(false);
       expect(flags.profileLevel).toBe('detailed');
       expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    // Documented env names (config.example.json, issue #459) through the
+    // initialize() pipeline.
+    it('PROFILE_LEVEL alone enables telemetry at the requested level through initialize()', () => {
+      process.env.PROFILE_LEVEL = 'detailed';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.profileLevel).toBe('detailed');
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('DEBUG_LEVEL alone enables telemetry through initialize()', () => {
+      process.env.DEBUG_LEVEL = 'verbose';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('explicit TELEMETRY_ENABLED=false disables telemetry even when PROFILE_LEVEL is set', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.PROFILE_LEVEL = 'detailed';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      const flags = controller.getFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.profileLevel).toBe('detailed');
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY wins over TELEMETRY_ENABLED when both are set', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: false });
+      expect(controller.getFlags().enableTelemetry).toBe(false);
     });
 
     it('config telemetry.enabled=false cannot downgrade a MANIFOLD_PROFILE activation', () => {
@@ -443,12 +514,13 @@ describe('TelemetryController', () => {
       process.argv = ['node', 'script.js', '--telemetry'];
       const controller = TelemetryController.getInstance();
       const server = http.createServer(() => {});
-      const closeSpy = vi
-        .spyOn(server, 'close')
-        .mockImplementation((function (this: http.Server, callback?: (err?: Error) => void) {
-          if (typeof callback === 'function') callback();
-          return this as unknown as http.Server;
-        }) as unknown as typeof server.close);
+      const closeSpy = vi.spyOn(server, 'close').mockImplementation(function (
+        this: http.Server,
+        callback?: (err?: Error) => void,
+      ) {
+        if (typeof callback === 'function') callback();
+        return this as unknown as http.Server;
+      } as unknown as typeof server.close);
 
       // Simulate a shutdown that fires before the async 'listening' event:
       // dashboardListened is still false, yet the server must be closed so
@@ -467,7 +539,9 @@ describe('TelemetryController', () => {
   describe('worker telemetry in file reports', () => {
     const workerBuf = (vals: bigint[]): BigUint64Array => {
       const buf = new BigUint64Array(5);
-      vals.forEach((v, i) => { buf[i] = v; });
+      vals.forEach((v, i) => {
+        buf[i] = v;
+      });
       return buf;
     };
 
@@ -599,7 +673,9 @@ describe('TelemetryController', () => {
       process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
-      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => { throw new Error('report failed'); });
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {
+        throw new Error('report failed');
+      });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       expect(controller.reportNow()).toBe(false);

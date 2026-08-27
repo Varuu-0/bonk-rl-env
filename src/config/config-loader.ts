@@ -134,8 +134,6 @@ export interface TelemetryConfig {
   dashboardPort: number;
   reportIntervalMs: number;
   retentionDays: number;
-  hookPhysicsMethods: boolean;
-  memoryRecordInterval: number;
   workerSnapshotInterval: number;
 }
 
@@ -284,8 +282,11 @@ const DEFAULTS: AppConfig = {
     dashboardPort: 3001,
     reportIntervalMs: 5000,
     retentionDays: 7,
-    hookPhysicsMethods: true,
-    memoryRecordInterval: 1000,
+    // hookPhysicsMethods / memoryRecordInterval were removed in #459: no
+    // runtime consumer exists (physics-call instrumentation is wired at
+    // fixed profiler call sites; memory snapshots run on the workers'
+    // hardcoded cadence), so the documented knobs could only ever be a
+    // silent no-op.
     workerSnapshotInterval: 5000,
   },
   logging: {
@@ -703,7 +704,36 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     if (v !== null && v >= 1 && v <= MAX_ZMQ_OPTION) config.server.zmqBacklog = v;
   }
 
-  // Telemetry
+  // Telemetry — documented env names (config.example.json, issue #459).
+  // TELEMETRY_ENABLED / PROFILE_LEVEL / DEBUG_LEVEL / OUTPUT_FORMAT /
+  // RETENTION_DAYS are the documented spellings of the fields the MANIFOLD_*
+  // namespace already served. They are applied BEFORE the MANIFOLD_* block
+  // so the established MANIFOLD_* names keep winning when both spellings
+  // are set, mirroring the precedence in telemetry/flags.ts.
+  if (env.TELEMETRY_ENABLED !== undefined) {
+    const v = env.TELEMETRY_ENABLED.toLowerCase();
+    if (v === 'true' || v === '1' || v === 'yes') {
+      config.telemetry.enabled = true;
+    } else if (v === 'false' || v === '0' || v === 'no') {
+      config.telemetry.enabled = false;
+    }
+  }
+  if (env.PROFILE_LEVEL !== undefined) {
+    const v = env.PROFILE_LEVEL;
+    if (v === 'minimal' || v === 'standard' || v === 'detailed') config.telemetry.profileLevel = v;
+  }
+  if (env.DEBUG_LEVEL !== undefined) {
+    const v = env.DEBUG_LEVEL;
+    if (v === 'none' || v === 'error' || v === 'verbose') config.telemetry.debugLevel = v;
+  }
+  if (env.OUTPUT_FORMAT !== undefined) {
+    const v = env.OUTPUT_FORMAT;
+    if (v === 'console' || v === 'file' || v === 'both') config.telemetry.outputFormat = v;
+  }
+  if (env.RETENTION_DAYS !== undefined) {
+    const v = parseInteger(env.RETENTION_DAYS);
+    if (v !== null && v >= 1) config.telemetry.retentionDays = v;
+  }
   if (env.MANIFOLD_TELEMETRY !== undefined) {
     const v = env.MANIFOLD_TELEMETRY.toLowerCase();
     if (v === 'true' || v === '1' || v === 'yes') {
@@ -989,6 +1019,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
         break;
 
       case '--telemetry':
+      case '--telemetry-enabled':
       case '-t':
         config.telemetry.enabled = true;
         break;
@@ -1006,6 +1037,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
         break;
 
       case '--debug':
+      case '--debug-level':
       case '-d':
         if (next) {
           if (next === 'none' || next === 'error' || next === 'verbose') {
@@ -1016,10 +1048,21 @@ function parseCliFlags(config: AppConfig): AppConfig {
         break;
 
       case '--output':
+      case '--output-format':
       case '-o':
         if (next) {
           if (next === 'console' || next === 'file' || next === 'both') {
             config.telemetry.outputFormat = next;
+            i++;
+          }
+        }
+        break;
+
+      case '--retention-days':
+        if (next) {
+          const v = parseInteger(next);
+          if (v !== null && v >= 1) {
+            config.telemetry.retentionDays = v;
             i++;
           }
         }
