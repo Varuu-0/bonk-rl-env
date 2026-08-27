@@ -549,13 +549,8 @@ function parseFiniteFloat(rawValue: string): number | null {
  * Strictly parse an integer from a CLI/env string. Newly wired numeric
  * surfaces use this helper so values such as "32abc" cannot silently change
  * runtime configuration.
- *
- * Exported so telemetry/flags.ts parses the documented RETENTION_DAYS knob
- * with the identical strict contract on both resolution paths — server
- * (config-loader) and worker/embedded fallback (flags.ts) — instead of
- * "30abc" becoming 30 on one path and 7 on the other (#459 review).
  */
-export function parseInteger(rawValue: string): number | null {
+function parseInteger(rawValue: string): number | null {
   const trimmed = rawValue.trim();
   if (!INTEGER_NUMERIC_RE.test(trimmed)) return null;
   const value = Number(trimmed);
@@ -984,14 +979,18 @@ function parseCliFlags(config: AppConfig): AppConfig {
   const argv = process.argv;
   const argc = argv.length;
 
+  // Master-switch tokens are last-wins across the full argv list (#459
+  // review), exactly like telemetry/flags.ts's parseFlags(): a bare master
+  // switch enables, an inline --telemetry-enabled= sets the value, and a
+  // later token overrides an earlier one.
   for (let i = 2; i < argc; i++) {
     const arg = argv[i];
     const next = i + 1 < argc ? argv[i + 1] : undefined;
 
-    // Documented master switch with an inline value (#459 review): honor
-    // --telemetry-enabled=true/false the same way the telemetry fallback
-    // (isAnyTelemetryEnabled) and telemetry/flags.ts do, instead of
-    // silently skipping the '='-joined token.
+    // Documented master switch with an inline value (#459 review): honored
+    // the same way the telemetry fallback (isAnyTelemetryEnabled) and
+    // telemetry/flags.ts do, instead of silently skipping the
+    // '='-joined token.
     if (arg.startsWith('--telemetry-enabled=')) {
       const inline = arg.slice('--telemetry-enabled='.length).toLowerCase();
       if (inline === 'true' || inline === '1' || inline === 'yes') {

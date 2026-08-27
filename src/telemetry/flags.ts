@@ -9,7 +9,6 @@
  */
 
 import { TelemetryFlags } from '../types/index.d';
-import { parseInteger } from '../config/config-loader';
 
 /**
  * Default telemetry flags - all disabled for maximum performance.
@@ -29,6 +28,21 @@ const DEFAULT_FLAGS: TelemetryFlags = {
  * Populated by parseFlags() and applyEnvOverrides(); consumed by mergeConfigWithFlags().
  */
 let _explicitFlagKeys: Set<string> = new Set();
+
+/**
+ * Strictly parse a whole-string integer from an env/CLI value — the local
+ * mirror of config-loader.ts's parseInteger() (INTEGER_NUMERIC_RE +
+ * Number.isSafeInteger). Used for the documented RETENTION_DAYS knob so
+ * "30abc" is rejected on the controller path exactly like the server path,
+ * without importing the whole config-loader into worker bundles (#459
+ * review).
+ */
+function parseStrictInteger(rawValue: string): number | null {
+  const trimmed = rawValue.trim();
+  if (!/^[+-]?\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) ? value : null;
+}
 
 /**
  * Returns the set of explicitly-provided flag keys from the last parseFlags()/applyEnvOverrides() run.
@@ -135,7 +149,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       // Same strict integer contract as config-loader's RETENTION_DAYS knob,
       // so '30abc' can never become 30 on one layer and 7 on the other
       // (#459 review).
-      const days = parseInteger(value);
+      const days = parseStrictInteger(value);
       if (days !== null && days > 0) {
         return { key: 'retentionDays', valid: true, value: days };
       }
@@ -349,31 +363,33 @@ export function isAnyTelemetryEnabled(): boolean {
 
   const argv = process.argv;
 
+  // Master-switch tokens resolve last-wins across the full argv list,
+  // exactly like parseFlags()/parseCliFlags() apply them in token order
+  // (#459 review): a bare master switch enables, an inline
+  // --telemetry-enabled=<value> sets the value, and a later token overrides
+  // an earlier one, so the fast path can never disagree with the
+  // initialize() resolution on the same argv.
+  let masterSwitchEnabled = false;
+
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
 
     // Check for master switch
-    if (
-      arg === '--telemetry' ||
-      arg === '--enable-telemetry' ||
-      arg === '--telemetry-enabled' ||
-      arg.startsWith('--telemetry-enabled=') ||
-      arg === '-t'
-    ) {
-      // Check if it's followed by '=true' or '=1'
-      const value = arg.startsWith('--telemetry-enabled=')
-        ? arg.slice('--telemetry-enabled='.length).toLowerCase()
-        : arg.split('=')[1];
-      if (value === undefined) {
-        // Flag present without value = enabled
-        return true;
-      }
+    if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '--telemetry-enabled' || arg === '-t') {
+      // Flag present without value = enabled
+      masterSwitchEnabled = true;
+      continue;
+    }
+    if (arg.startsWith('--telemetry-enabled=')) {
+      const value = arg.slice('--telemetry-enabled='.length).toLowerCase();
       if (value === 'true' || value === '1' || value === 'yes') {
-        return true;
+        masterSwitchEnabled = true;
+      } else if (value === 'false' || value === '0' || value === 'no') {
+        masterSwitchEnabled = false;
       }
-      // An explicit inline false (or garbage) does not imply telemetry on
-      // this fast path — fall through and keep scanning, exactly like
-      // parseFlags() leaves the default in place for those tokens.
+      // A garbage inline value does not touch the switch, exactly like
+      // parseFlags() leaves the default in place for that token.
+      continue;
     }
 
     // Keep the fast path exactly aligned with parseFlags(): only the
@@ -389,7 +405,7 @@ export function isAnyTelemetryEnabled(): boolean {
     }
   }
 
-  return false;
+  return masterSwitchEnabled;
 }
 
 /**
@@ -447,7 +463,7 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
   // here and 7 there (#459 review).
   const envRetentionDays = process.env.RETENTION_DAYS;
   if (envRetentionDays !== undefined) {
-    const days = parseInteger(envRetentionDays);
+    const days = parseStrictInteger(envRetentionDays);
     if (days !== null && days >= 1) {
       flags.retentionDays = days;
       _explicitFlagKeys.add('retentionDays');
