@@ -385,9 +385,9 @@ export class IpcBridge {
   }
 
   /**
-   * Body of one start() invocation. Runs with _serveCycleInFlight already
-   * set, so an overlapping start() can never reach the shared transport
-   * state mutated here (issue #418).
+   * Body of one start() invocation. Runs with _serveCycle already set, so
+   * an overlapping start() can never reach the shared transport state
+   * mutated here (issue #418).
    */
   private async runStartCycle(): Promise<void> {
     // Re-arm `ready` before waiting for a prior close to finish. Callers
