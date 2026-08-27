@@ -12,9 +12,10 @@
  *
  * Run: npx tsx scripts/ci-bench-check.ts [--layer7] [--verbose]
  *
- * The pure evaluation helpers are exported for unit testing
- * (tests/unit/ci-bench-check.test.ts); main() only runs when this file is
- * executed directly.
+ * The pure evaluation helpers (and runLayer, with an injectable layer table)
+ * are exported for unit/integration testing (tests/unit/ci-bench-check.test.ts,
+ * tests/integration/bench-gate-crash-exit.test.ts); main() only runs when this
+ * file is executed directly.
  */
 
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
@@ -50,7 +51,7 @@ interface BenchmarkResult {
   error?: string;
 }
 
-interface BenchmarkSuite {
+export interface BenchmarkSuite {
   layer: number;
   name: string;
   description: string;
@@ -187,7 +188,13 @@ interface Layer7Verdict {
   detail: string;
 }
 
-const LAYERS: Record<string, { file: string; name: string; timeoutMs: number }> = {
+interface LayerSpec {
+  file: string;
+  name: string;
+  timeoutMs: number;
+}
+
+const LAYERS: Record<string, LayerSpec> = {
   '1': { file: 'benchmarks/layer1-primitives.ts', name: 'Primitives', timeoutMs: 180_000 },
   '2': { file: 'benchmarks/layer2-physics.ts', name: 'Raw Physics', timeoutMs: 180_000 },
   '3': { file: 'benchmarks/layer3-environment.ts', name: 'Environment', timeoutMs: 180_000 },
@@ -331,12 +338,35 @@ export function applyEnvOverrides(checks: SlaCheck[]): SlaCheck[] {
   return checks;
 }
 
-function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
+/**
+ * Close-handler classification for a spawned benchmark layer (issue #429).
+ * A non-zero child exit code must never upgrade a run to PASS — even when
+ * the captured output already carries a clean suite block (crash-after-report:
+ * unhandled rejection or OOM during teardown after emitSuite). This mirrors
+ * the runLayer7 contract, which rejects on `code !== 0` before parsing.
+ * `code === null` (signal death) counts as non-zero.
+ */
+export function resolveCloseStatus(
+  timedOut: boolean,
+  code: number | null,
+  suite: BenchmarkSuite | null,
+): LayerRun['status'] {
+  if (timedOut) return 'TIMEOUT';
+  if (code !== 0) return 'ERROR';
+  if (suite && (suite.failed > 0 || suite.errored > 0)) return 'FAIL';
+  return suite ? 'PASS' : 'ERROR';
+}
+
+export function runLayer(
+  layerKey: string,
+  verbose: boolean,
+  layers: Record<string, LayerSpec> = LAYERS,
+): Promise<LayerRun> {
   return new Promise((resolve) => {
     if (shutdownRequested) {
       resolve({
         layer: +layerKey,
-        name: LAYERS[layerKey].name,
+        name: layers[layerKey].name,
         suite: null,
         durationMs: 0,
         status: 'ERROR',
@@ -345,8 +375,8 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
       });
       return;
     }
-    const layer = LAYERS[layerKey];
-    const benchPath = path.join(ROOT, layer.file);
+    const layer = layers[layerKey];
+    const benchPath = path.isAbsolute(layer.file) ? layer.file : path.join(ROOT, layer.file);
     const startHr = process.hrtime.bigint();
     let rawOutput = '';
     let timedOut = false;
@@ -356,7 +386,9 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
     // --expose-gc makes global.gc available so the Layer 5 heap-growth
     // measurements are deterministic instead of GC-timing noise (see
     // issue #196: the global.gc guard is a no-op without the flag).
-    const child = spawn('npx', ['tsx', '--expose-gc', layer.file], {
+    // The resolved benchPath is quoted because `shell: true` joins args
+    // without escaping (paths with spaces would otherwise split).
+    const child = spawn('npx', ['tsx', '--expose-gc', `"${benchPath}"`], {
       stdio: ['ignore', 'pipe', 'pipe'],
       shell: true,
       cwd: ROOT,
@@ -399,22 +431,23 @@ function runLayer(layerKey: string, verbose: boolean): Promise<LayerRun> {
       clearTimeout(timeout);
       const durationMs = Number(process.hrtime.bigint() - startHr) / 1e6;
       const suite = parseSuiteFromOutput(rawOutput);
-      const status: LayerRun['status'] = timedOut
-        ? 'TIMEOUT'
-        : code !== 0 && !suite
-          ? 'ERROR'
-          : suite && (suite.failed > 0 || suite.errored > 0)
-            ? 'FAIL'
-            : suite
-              ? 'PASS'
-              : 'ERROR';
+      const status = resolveCloseStatus(timedOut, code, suite);
+      let error: string | undefined;
+      if (timedOut) {
+        error = `Timed out after ${layer.timeoutMs}ms`;
+      } else if (code !== 0) {
+        // #429: surface the crash even when a suite block was printed
+        // before the process died (same detail style as runLayer7).
+        const lastLine = rawOutput.trimEnd().split(/\r?\n/).pop()?.slice(0, 500) || 'unknown error';
+        error = `layer exited with code ${code}: ${lastLine}`;
+      }
       resolve({
         layer: +layerKey,
         name: layer.name,
         suite,
         durationMs,
         status,
-        error: timedOut ? `Timed out after ${layer.timeoutMs}ms` : undefined,
+        error,
         rawOutput,
       });
     });
