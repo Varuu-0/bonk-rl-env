@@ -84,19 +84,19 @@ function makeLsjTrace(anchorA: { x: number; y: number }): NativeTrace {
 }
 
 /** Per-tick input program for recordSimTrace: `applied[i]` is the PlayerInput
- *  applied pre-step for player i (missing entries fall back to neutral), and
- *  `bytes` is the Discrete(64) byte map recorded on the tick — build it with
- *  encodePlayerInput so the ACTION_FIELDS bit layout stays single-sourced. */
+ *  applied pre-step for player i (missing entries fall back to neutral). The
+ *  tick's recorded Discrete(64) byte map is derived from `applied` with
+ *  encodePlayerInput — the same object feeds both the engine and the trace —
+ *  so the recorded bytes can never contradict the applied inputs. */
 interface SimTraceTickInputs {
   applied: PlayerInput[];
-  bytes: Record<number, number>;
 }
 
 /** Deterministic sim recording: step an engine N ticks and capture recorder
  *  ticks, yielding a trace the comparator replays. Player 0 is the AI slot;
  *  extra players are the opponent slots. With no inputsForTick provider the
  *  run is neutral-input (every player gets the zero byte applied, nothing
- *  recorded); a provider supplies the per-tick applied inputs and bytes. */
+ *  recorded); a provider supplies the per-tick applied inputs. */
 function recordSimTrace(
   mapRaw: unknown,
   ticks: number,
@@ -157,7 +157,17 @@ function recordSimTrace(
         av: body.GetAngularVelocity(),
       };
     }
-    rec.push({ t, discs: states, ...(tickInputs ? { inputs: tickInputs.bytes } : {}) });
+    if (tickInputs) {
+      // Derive the recorded byte map from the same resolved inputs the engine
+      // applies, so trace bytes and dynamics are consistent by construction.
+      const inputs: Record<number, number> = {};
+      for (let i = 0; i <= numOpponents; i++) {
+        inputs[i] = encodePlayerInput(tickInputs.applied[i] ?? NEUTRAL);
+      }
+      rec.push({ t, discs: states, inputs });
+    } else {
+      rec.push({ t, discs: states });
+    }
   }
 
   return { trace: rec.toTrace(), env };
@@ -903,7 +913,6 @@ describe('P4: differential validation — replay comparator', () => {
     const HELD_RIGHT_BYTE = encodePlayerInput(HELD_RIGHT);
     const { trace: traceWithInputs, env } = recordSimTrace(loadMap(WDB_GROUND_JOINTS), 60, 1, 7, () => ({
       applied: [HELD_RIGHT, NEUTRAL],
-      bytes: { 0: HELD_RIGHT_BYTE, 1: encodePlayerInput(NEUTRAL) },
     }));
 
     try {
