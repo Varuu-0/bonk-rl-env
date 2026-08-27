@@ -1067,6 +1067,24 @@ describe('P4: differential validation — replay comparator', () => {
     });
   });
 
+  it('flags a malformed input-set container even with zero aligned discs (issue #450)', () => {
+    // parseNativeTrace rejects a present-but-non-array `inputs` outright; the
+    // comparator must fail the tick too — even when every disc entry is null,
+    // so the aligned-disc loop never runs. The flag is tick-level (id -1),
+    // outside the disc loop, so an error-ignoring caller cannot vouch for a
+    // trace the parser rejected by rolling a tick with no comparable discs.
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    bad.ticks[0].inputs = 21 as any;
+    bad.ticks[0].discs = [null, null];
+    const verdict = compareTrace(bad, { seed: 0 });
+    expect(verdict.pass).toBe(false);
+    // Only the corrupted tick fails — the flag is the sole cause, not
+    // collateral kinematic drift.
+    expect(verdict.ticksOutsideTolerance).toBe(1);
+    expect(verdict.perTick[0].withinTolerance).toBe(false);
+    expect(verdict.perTick[0].mismatches).toContainEqual({ id: -1, reason: 'malformed input set' });
+  });
+
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
     const noData: NativeTrace = {
       schema: 'bonk.rl.env.native-trace',

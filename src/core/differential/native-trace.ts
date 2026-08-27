@@ -337,7 +337,7 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
             // silently diverge. It scans by index, not every(): a sparse
             // array's holes are skipped by every() entirely, so a hole must
             // read as undefined and be rejected like any other malformed
-            // byte; this also keeps parseâserializeâparse stable (a hole
+            // byte; this also keeps parse→serialize→parse stable (a hole
             // serializes as null and would flip the set from silently
             // trusted to rejected).
             const inputs = Array.isArray(tk.inputs) && inputsAllValid(tk.inputs) ? tk.inputs : undefined;
