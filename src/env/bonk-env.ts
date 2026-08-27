@@ -145,12 +145,24 @@ export class BonkEnv {
    * when another process already holds it (issue #432). The replacement
    * port is claimed before the old one is released so the swap is atomic
    * from every allocator's point of view; this.portReserved continues to
-   * cover the new port. Explicitly configured ports are respected as-is:
-   * a caller who names a port gets that port's fate, including a loud
-   * EADDRINUSE on bind (#223).
+   * cover the new port.
+   *
+   * The guard deliberately mirrors the constructor's truthiness check so
+   * an explicitly configured port and a falsy `port: 0` (which the
+   * constructor treats as "allocate") are classified identically.
+   * Explicitly configured truthy ports are respected as-is: a caller who
+   * names a port gets that port's fate, including a loud EADDRINUSE on
+   * bind (#223).
+   *
+   * The probe is a point-in-time check on loopback (the bridge's default
+   * bind address). The gap between probe and actual ZMQ bind spans the
+   * multi-second worker spawn, and a bridge configured to bind a
+   * non-default address is not covered — a genuine late EADDRINUSE still
+   * surfaces through the #223 start() rejection/teardown path instead of
+   * being masked.
    */
   private async ensureUsablePort(): Promise<void> {
-    if (this.config.port !== undefined) {
+    if (this.config.port) {
       return;
     }
     if (await PortManager.isPortAvailable(this.port)) {

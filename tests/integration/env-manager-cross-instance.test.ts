@@ -6,14 +6,23 @@
  * guarantee distinct, bindable ports, and a second IPC-enabled environment
  * must start cleanly alongside the first instead of dying with
  * EADDRINUSE.
+ *
+ * The first two tests intentionally use the real default 6000-7000 range —
+ * that is the headline #432 scenario. Other suites running in parallel
+ * forks have their own module registries, and any cross-process collision
+ * is defused by the OS probe (assertions are relative: distinctness and
+ * active state, never absolute port numbers). The custom-allocator test
+ * below pins a reserved high range instead.
  */
 
 import { describe, it, expect } from 'vitest';
+import * as net from 'net';
 import { PortManager } from '../../src/utils/port-manager';
+import { BonkEnv } from '../../src/env/bonk-env';
 import { EnvManager } from '../../src/env/env-manager';
 
-// Above every range used by other suites so parallel fork workers never
-// contend for the same ports.
+// Above every fixed range used by other suites (the highest is 16400+
+// in the IPC server tests).
 const CUSTOM_BASE = 17200;
 
 async function shutdownQuietly(managers: EnvManager[]): Promise<void> {
@@ -71,6 +80,28 @@ describe('EnvManager cross-instance port coordination (#432)', () => {
     } finally {
       await shutdownQuietly([manager]);
       custom.releaseAll();
+    }
+  });
+
+  it('probes and relocates a falsy port:0 env like any auto-allocated env', { timeout: 60000 }, async () => {
+    // port: 0 is falsy, so the constructor treats it as "allocate" —
+    // the start()-time OS probe must apply to it exactly as it does for
+    // a port the allocator picked on its own (#432 review).
+    const env = new BonkEnv({ numEnvs: 1, useSharedMemory: false, port: 0 });
+    const blockedPort = env.port;
+    const blocker = await new Promise<net.Server>((resolve, reject) => {
+      const server = net.createServer();
+      server.once('error', reject);
+      server.listen(blockedPort, '127.0.0.1', () => resolve(server));
+    });
+
+    try {
+      await env.start();
+      expect(env.isActive()).toBe(true);
+      expect(env.port).not.toBe(blockedPort);
+    } finally {
+      await new Promise<void>((resolve) => blocker.close(() => resolve()));
+      await env.stop();
     }
   });
 });

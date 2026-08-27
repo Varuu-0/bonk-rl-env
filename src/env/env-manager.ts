@@ -10,7 +10,13 @@ import { PortManager } from '../utils/port-manager';
 import type { ResultOwnershipOptions } from '../core/worker-pool';
 
 export interface EnvManagerOptions {
-  /** Port manager range options, or an existing PortManager instance to share */
+  /**
+   * Port manager range options, or an existing PortManager instance to
+   * share across managers and standalone envs. A supplied instance is
+   * used as-is and is NOT owned by this manager: shutdownAll() stops
+   * this manager's environments but never releases the shared
+   * allocator's other claims — the owner must releaseAll() itself.
+   */
   portManager?:
     | PortManager
     | {

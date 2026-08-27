@@ -4,15 +4,24 @@
  * Independently constructed allocators share the process-wide registry, so
  * two default managers can never hand out the same port, and the probed
  * allocation path skips ports held by unrelated processes.
+ *
+ * Port scoping: the default-range tests deliberately exercise the real
+ * default 6000-7000 range — that is the headline #432 scenario. Cross-FILE
+ * contention with other suites is impossible (each vitest fork gets its
+ * own module registry) and cross-PROCESS contention is made harmless by
+ * the OS probe, since assertions are relative (distinctness, not absolute
+ * port numbers). The explicit sub-ranges below sit between other suites'
+ * fixed ranges to keep even deliberate blocker listeners collision-free.
  */
 
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import * as net from 'net';
 import { PortManager } from '../../src/utils/port-manager';
 import { EnvManager } from '../../src/env/env-manager';
 
-// Ranges below avoid every range used by other suites so parallel fork
-// workers never contend for the same ports.
+// Explicit sub-ranges sit between other suites' fixed ranges (6600 end of
+// env-manager.test.ts, 7000 start of the next suite) to keep even the
+// deliberate blocker listeners here collision-free.
 const BASE = 6650;
 
 const createdManagers: PortManager[] = [];
@@ -153,6 +162,55 @@ describe('PortManager.allocateAvailable OS probe (#432)', () => {
         const idx = openServers.indexOf(blocker);
         if (idx !== -1) openServers.splice(idx, 1);
       }
+    }
+  });
+  it("release by a foreign manager leaves the owner's claim intact", () => {
+    const first = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
+    const second = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
+
+    const p1 = first.allocate();
+    expect(() => second.release(p1)).not.toThrow();
+
+    expect(first.isAllocated(p1)).toBe(true);
+    // The registry claim survived, so the second manager must not be
+    // handed the port either.
+    expect(second.allocate()).not.toBe(p1);
+  });
+});
+
+describe('PortManager.allocateAvailable concurrency (#432 review)', () => {
+  it('overlapping probed allocations return distinct ports', async () => {
+    const first = makeManager({ startPort: BASE + 220, endPort: BASE + 230 });
+    const second = makeManager({ startPort: BASE + 220, endPort: BASE + 230 });
+
+    // Resolve every probe as free, but keep both allocators suspended on
+    // their first batch so they scan the same candidates before either
+    // commits: without the no-await re-check both would claim the first
+    // candidate.
+    const spy = vi.spyOn(PortManager, 'isPortAvailable').mockResolvedValue(true);
+
+    try {
+      const [p1, p2] = await Promise.all([first.allocateAvailable(), second.allocateAvailable()]);
+      expect(p1).not.toBe(p2);
+      expect(first.isAllocated(p1)).toBe(true);
+      expect(second.isAllocated(p2)).toBe(true);
+      expect(second.isAllocated(p1)).toBe(false);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('overlapping probed allocations on one manager return distinct ports', async () => {
+    const manager = makeManager({ startPort: BASE + 240, endPort: BASE + 250 });
+
+    const spy = vi.spyOn(PortManager, 'isPortAvailable').mockResolvedValue(true);
+
+    try {
+      const [p1, p2] = await Promise.all([manager.allocateAvailable(), manager.allocateAvailable()]);
+      expect(p1).not.toBe(p2);
+      expect(manager.getAllocatedCount()).toBe(2);
+    } finally {
+      spy.mockRestore();
     }
   });
 });
