@@ -11,7 +11,9 @@
  *    or an EnvManager alongside standalone BonkEnvs on the global
  *    singleton) can never hand out the same port within one process, and
  *    managers discarded without releaseAll() stop poisoning their ports
- *    once garbage-collected.
+ *    once garbage-collected. The static findAvailablePort() helper obeys
+ *    the same discipline: it skips claimed ports and commits its choice
+ *    on behalf of the process through a hidden claimant (issue #468).
  *  - OS probing: allocateAvailable() binds candidate ports on 127.0.0.1
  *    with throwaway net.Servers (in parallel batches) before committing,
  *    so ports already held by unrelated processes are skipped instead of
@@ -55,6 +57,14 @@ function claimOwner(port: number): PortManager | undefined {
   }
   return owner;
 }
+
+// Hidden claimant for choices committed by the static findAvailablePort()
+// helper (issue #468): the helper is a class-level operation with no
+// instance of its own, so its commit needs an owner that lives for the
+// process lifetime. Kept separate from globalPortManager so the exported
+// singleton's options stay caller-controlled; a reserving manager adopts
+// these claims, and they otherwise stay occupied for the process lifetime.
+let foundPortOwner: PortManager | null = null;
 
 export interface PortManagerOptions {
   /** Starting port number (default: 6000) */
@@ -184,7 +194,11 @@ export class PortManager {
   }
 
   /**
-   * Reserve a specific port without allocating from the pool.
+   * Reserve a specific port without allocating from the pool. A choice
+   * handed out by the static findAvailablePort() helper is an advisory
+   * process-owned claim (issue #468): a reserving manager adopts it, so
+   * a found port can be claimed — and released — through the caller's
+   * own instance.
    * @param port The port to reserve
    * @throws Error if port is already allocated by this instance or by
    *   another PortManager in this process (issue #432)
@@ -194,7 +208,7 @@ export class PortManager {
       throw new Error(`Port ${port} is already allocated`);
     }
     const owner = claimOwner(port);
-    if (owner !== undefined && owner !== this) {
+    if (owner !== undefined && owner !== this && owner !== foundPortOwner) {
       throw new Error(`Port ${port} is already allocated by another PortManager`);
     }
     this.claim(port);
@@ -260,17 +274,61 @@ export class PortManager {
   }
 
   /**
-   * Find an available port in the system (any port).
+   * Find an available port in the system (any port). A port is only
+   * returned when no PortManager in this process has claimed it and the
+   * system itself holds no listener on it (issue #468). The choice is
+   * committed to the process-wide registry before returning — on behalf
+   * of the process through a hidden claimant — so the next allocator,
+   * instance or helper, never hands the same port out twice. The commit
+   * is ownership on behalf of the process: reserve() on a caller-owned
+   * manager adopts it so a found port can be claimed — and released —
+   * through the caller's own instance, and released ports return to the
+   * pool for every allocator. Callers that skip reserve() should bind
+   * the port immediately; a committed claim that is never bound nor
+   * adopted stays occupied for the process lifetime.
    * @param preferredStart Preferred starting port
    * @returns An available port number
+   * @throws Error if no available port exists
    */
   static async findAvailablePort(preferredStart: number = 6000): Promise<number> {
-    for (let port = preferredStart; port <= 65535; port++) {
-      if (await PortManager.isPortAvailable(port)) {
-        return port;
+    // Port 0 would make the OS assign an ephemeral port, so the returned
+    // number would not be the bound one; candidates start at 1.
+    for (let port = Math.max(1, preferredStart); port <= 65535; port++) {
+      // Honour process-wide claims before probing (issue #468): a port
+      // owned by any live PortManager in this process is skipped even
+      // though no socket is bound there yet.
+      if (claimOwner(port)) {
+        continue;
       }
+      if (!(await PortManager.isPortAvailable(port))) {
+        continue;
+      }
+      // Re-check with no intervening await: JS runs this block
+      // atomically, so a sync allocator that raced the probe either
+      // already claimed the port (visible here) or cannot interleave
+      // with the commit below (mirrors allocateAvailable, issue #468).
+      if (claimOwner(port)) {
+        continue;
+      }
+      PortManager.commitFoundPort(port);
+      return port;
     }
     throw new Error('No available ports found');
+  }
+
+  /**
+   * Commit a static-helper choice to the process-wide registry on
+   * behalf of the process (issue #468). The helper is a class-level
+   * operation with no instance of its own, so its claims live on a
+   * hidden claimant kept separate from getGlobalPortManager() so the
+   * exported singleton's options stay caller-controlled; reserving
+   * managers adopt the claim via {@link reserve}.
+   */
+  private static commitFoundPort(port: number): void {
+    if (!foundPortOwner) {
+      foundPortOwner = new PortManager({ startPort: 1, endPort: 65535 });
+    }
+    foundPortOwner.claim(port);
   }
 
   /**

@@ -26,6 +26,8 @@ PortManager.isPortAvailable(port: number): Promise<boolean>   // Check system av
 PortManager.findAvailablePort(preferredStart: number): Promise<number>  // Find free port
 ```
 
+`allocate`, `reserve`, and `findAvailablePort` all cooperate through a process-wide registry (#432, #468): two allocators in one process never receive the same port, `findAvailablePort` skips claimed ports and commits its choice (a reserving manager adopts it), and released ports return to the pool for every allocator.
+
 ## Usage
 
 Each `BonkEnv` instance gets a unique port from the `PortManager` to avoid collisions when running multiple IPC servers simultaneously. The default range (6000-7000) supports up to 1000 concurrent environments.
