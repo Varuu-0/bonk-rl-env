@@ -111,6 +111,19 @@ describe('PortManager cross-instance coordination (#432)', () => {
     first.allocate();
     expect(() => second.allocate()).toThrow(`No available ports in range ${BASE + 80}-${BASE + 82}`);
   });
+
+  it("release by a foreign manager leaves the owner's claim intact", () => {
+    const first = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
+    const second = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
+
+    const p1 = first.allocate();
+    expect(() => second.release(p1)).not.toThrow();
+
+    expect(first.isAllocated(p1)).toBe(true);
+    // The registry claim survived, so the second manager must not be
+    // handed the port either.
+    expect(second.allocate()).not.toBe(p1);
+  });
 });
 
 describe('PortManager.allocateAvailable OS probe (#432)', () => {
@@ -163,18 +176,6 @@ describe('PortManager.allocateAvailable OS probe (#432)', () => {
         if (idx !== -1) openServers.splice(idx, 1);
       }
     }
-  });
-  it("release by a foreign manager leaves the owner's claim intact", () => {
-    const first = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
-    const second = makeManager({ startPort: BASE + 70, endPort: BASE + 80 });
-
-    const p1 = first.allocate();
-    expect(() => second.release(p1)).not.toThrow();
-
-    expect(first.isAllocated(p1)).toBe(true);
-    // The registry claim survived, so the second manager must not be
-    // handed the port either.
-    expect(second.allocate()).not.toBe(p1);
   });
 });
 
