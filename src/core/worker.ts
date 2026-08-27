@@ -1,6 +1,6 @@
 import { parentPort } from 'worker_threads';
 import { BonkEnvironment, Action, Observation, StepResult } from './environment';
-import { deriveConstructionSeed } from './seed-range';
+import { assertSupportedSeed, deriveConstructionSeed } from './seed-range';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 
 // Type for SharedArrayBuffer (available in Node.js >= 9.1.0)
@@ -169,6 +169,14 @@ parentPort.on('message', (msg) => {
       _obsNumOpponents = SharedMemoryManager.normalizeNumOpponents(
         config.numOpponents ?? (config as any)?.num_opponents,
       );
+      // The configured BASE seed must itself be inside the supported domain
+      // (#460 review): only the derived per-env offset wraps. A driver that
+      // posts an init directly to the worker (bypassing WorkerPool's init
+      // validation) must get the same labeled rejection instead of the
+      // out-of-domain value silently wrapping onto a different stream.
+      if (config.seed !== undefined && config.seed !== null) {
+        assertSupportedSeed(config.seed, 'constructor');
+      }
       _obsBuffer = new Float32Array(16 + 6 * Math.max(0, _obsNumOpponents - 1));
       envs = [];
       for (let i = 0; i < numEnvsParam; i++) {

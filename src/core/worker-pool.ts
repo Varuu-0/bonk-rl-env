@@ -293,6 +293,19 @@ export class WorkerPool {
     const numOpponents = SharedMemoryManager.normalizeNumOpponents(
       config?.numOpponents ?? (config as any)?.num_opponents,
     );
+    // The configured seed seeds every pooled environment's construction
+    // stream (worker.ts derives seed + global env index, with only the
+    // derived offset wrapped into the supported domain). Validate it with
+    // the same shared validator the direct BonkEnvironment boundary and
+    // reset() use (#460 review): an out-of-domain config.seed previously
+    // reached the PRNG's `>>> 0` and silently ran the pool on a different
+    // stream than the caller requested. Absent (undefined/null) keeps the
+    // worker's documented `?? 0` default. Throws before closeInternal(),
+    // so a validation-only re-init rejection cannot tear down an existing
+    // healthy pool (#440 doctrine, same as the numOpponents guard above).
+    if (config?.seed !== undefined && config?.seed !== null) {
+      assertSupportedSeed(config.seed, 'constructor');
+    }
     await this.closeInternal(); // Clean up existing if re-initialized
     if (this.closeEpoch !== startCloseEpoch) {
       // An external close() resolved while this init was pending (suspended
