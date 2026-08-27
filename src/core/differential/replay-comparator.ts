@@ -153,21 +153,6 @@ function decodeInput(bits: number | undefined): PlayerInput {
 }
 
 /**
- * Comparator-side input gate (issue #450): a recorded Discrete(64) byte only
- * drives replay when it is a finite integer inside the shared encoded range
- * — the same invariant `parseNativeTrace` enforces at parse time, re-checked
- * here because a caller can compare an unparsed (or error-ignoring) trace.
- * A corrupt byte must not drive replayed input: the slot falls back to the
- * neutral action and is flagged, so the tick fails loudly instead of silently
- * executing a fabricated button press (e.g. -1 would set every bit). A slot
- * beyond the recorded array carries no byte at all and keeps the documented
- * neutral fallback without being flagged.
- */
-function isReplayableTraceInput(value: unknown): value is number {
-  return isReplayableInputByte(value);
-}
-
-/**
  * Comparator-side disc gate: a disc only counts as replayable/comparable when
  * it is a fully-valid native disc AND its `id` matches the array slot it sits
  * in (the slot-alignment invariant `parseNativeTrace` enforces at parse time).
@@ -212,19 +197,38 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // must not drive replay (#450): the slot falls back to the neutral
       // action — the same fallback a missing byte takes — and is flagged
       // below, failing the tick loudly instead of silently executing a
-      // fabricated button press.
-      const inputs = recorded.inputs ?? [];
+      // fabricated button press. The input set container is gated explicitly:
+      // a present-but-non-array value (which parseNativeTrace rejects) is
+      // routed to the flagged corrupt path on every aligned slot, never to
+      // the silent neutral fallback, so an error-ignoring caller cannot get
+      // a pass on a trace the parser rejected.
+      const inputs = Array.isArray(recorded.inputs) ? recorded.inputs : [];
+      const inputsMalformed = recorded.inputs !== undefined && !Array.isArray(recorded.inputs);
       const corruptInputSlots: number[] = [];
       for (let id = 0; id < recorded.discs.length; id++) {
         if (!isAlignedTraceDisc(recorded.discs[id], id)) continue;
-        if (id >= inputs.length) {
+        if (inputsMalformed) {
+          // Present-but-non-array input set: flagged like a corrupt byte on
+          // every aligned slot.
+          corruptInputSlots.push(id);
+          physics.applyInput(id, decodeInput(0));
+        } else if (id >= inputs.length) {
           // No recorded byte for this slot: the documented neutral fallback.
           physics.applyInput(id, decodeInput(undefined));
-        } else if (isReplayableTraceInput(inputs[id])) {
+        } else if (isReplayableInputByte(inputs[id])) {
           physics.applyInput(id, decodeInput(inputs[id]));
         } else {
           corruptInputSlots.push(id);
           physics.applyInput(id, decodeInput(0));
+        }
+      }
+      // The corrupt-byte scan is independent of disc alignment (#450): every
+      // malformed byte in the recorded set is flagged, even when its slot's
+      // disc is null or misaligned — matching parseNativeTrace, which rejects
+      // the whole set regardless of disc state.
+      for (let id = 0; id < inputs.length; id++) {
+        if (!isReplayableInputByte(inputs[id]) && !corruptInputSlots.includes(id)) {
+          corruptInputSlots.push(id);
         }
       }
       // Neutral input for any traced player without a record so the world still

@@ -222,6 +222,11 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       },
       { name: 'fractional', inputs: [1.5], error: 'tick 0 input 0 is malformed: expected an integer, got 1.5' },
       { name: 'non-finite', inputs: [NaN], error: 'tick 0 input 0 is malformed: expected a finite number, got NaN' },
+      {
+        name: 'infinite byte',
+        inputs: [Infinity],
+        error: 'tick 0 input 0 is malformed: expected a finite number, got Infinity',
+      },
       { name: 'string byte', inputs: ['2'], error: 'tick 0 input 0 is malformed: expected a finite number, got 2' },
       {
         name: 'null byte',

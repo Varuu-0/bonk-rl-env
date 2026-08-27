@@ -159,6 +159,23 @@ export function isReplayableInputByte(value: unknown): value is number {
 }
 
 /**
+ * Index-based validity scan for a whole `inputs` set (issue #450). Not
+ * `Array.prototype.every`: `every` skips a sparse array's holes entirely, so
+ * `[0, <hole>, 2]` would pass while the hole leaks into the typed output and
+ * parse→serialize→parse goes unstable (the hole serializes as `null` and the
+ * re-parse then rejects the whole set). Indexing makes a hole read as
+ * `undefined`, which inputByteError rejects like any other malformed byte —
+ * the same predicate the parse error loop used, so errors and the typed
+ * output cannot silently diverge.
+ */
+function inputsAllValid(arr: unknown[]): boolean {
+  for (let id = 0; id < arr.length; id++) {
+    if (inputByteError(arr[id]) !== null) return false;
+  }
+  return true;
+}
+
+/**
  * The single disc acceptance predicate for the parsed output: a disc is
  * comparable only when it is a fully-valid native disc AND its `id` matches
  * its array slot (the index-alignment invariant). Returns the message suffix
@@ -255,12 +272,17 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
         if (!Array.isArray(tick.inputs)) {
           errors.push(`tick ${tick.t} inputs must be an array when present`);
         } else {
-          tick.inputs.forEach((byte, id) => {
-            const err = inputByteError(byte);
+          // Index-based loop, not forEach: a sparse array's holes are skipped
+          // by forEach entirely, so `[0, <hole>, 2]` would parse with zero
+          // errors and the hole would leak into the typed output. A hole
+          // reads as undefined here and is rejected like any other
+          // malformed byte.
+          for (let id = 0; id < tick.inputs.length; id++) {
+            const err = inputByteError(tick.inputs[id]);
             if (err !== null) {
               errors.push(`tick ${tick.t} input ${id} is malformed: ${err}`);
             }
-          });
+          }
         }
       }
     }
@@ -310,13 +332,15 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
             // button press (e.g. -1 sets every bit). A violating set is
             // dropped entirely — the comparator falls back to a neutral
             // input for a missing byte — mirroring how malformed discs are
-            // nulled. inputByteError is the same predicate the error loop
+            // nulled. inputsAllValid is the same predicate the error loop
             // above used, so reported errors and the typed output cannot
-            // silently diverge.
-            const inputs =
-              Array.isArray(tk.inputs) && tk.inputs.every((byte) => inputByteError(byte) === null)
-                ? tk.inputs
-                : undefined;
+            // silently diverge. It scans by index, not every(): a sparse
+            // array's holes are skipped by every() entirely, so a hole must
+            // read as undefined and be rejected like any other malformed
+            // byte; this also keeps parseâserializeâparse stable (a hole
+            // serializes as null and would flip the set from silently
+            // trusted to rejected).
+            const inputs = Array.isArray(tk.inputs) && inputsAllValid(tk.inputs) ? tk.inputs : undefined;
             return {
               ...tk,
               inputs,
