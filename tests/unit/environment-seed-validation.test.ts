@@ -138,23 +138,29 @@ describe('BonkEnvironment seed validation (#460)', () => {
     for (const [seedStr, expectedState] of Object.entries(goldenRngState)) {
       const seed = Number(seedStr);
       const env = new BonkEnvironment({ numOpponents: 1, seed });
-      env.reset(seed);
-      for (let i = 0; i < 40; i++) {
-        env.step(0);
+      try {
+        env.reset(seed);
+        for (let i = 0; i < 40; i++) {
+          env.step(0);
+        }
+        expect((env as any).rng.getState()).toBe(expectedState);
+      } finally {
+        env.close();
       }
-      expect((env as any).rng.getState()).toBe(expectedState);
-      env.close();
 
       // The constructor seed slot seeds the identical stream without an
       // explicit reset(seed): the same 40-step pattern must produce the
       // same fingerprint.
       const envCtor = new BonkEnvironment({ numOpponents: 1, seed });
-      envCtor.reset();
-      for (let i = 0; i < 40; i++) {
-        envCtor.step(0);
+      try {
+        envCtor.reset();
+        for (let i = 0; i < 40; i++) {
+          envCtor.step(0);
+        }
+        expect((envCtor as any).rng.getState()).toBe(expectedState);
+      } finally {
+        envCtor.close();
       }
-      expect((envCtor as any).rng.getState()).toBe(expectedState);
-      envCtor.close();
     }
   });
 

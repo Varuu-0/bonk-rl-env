@@ -87,9 +87,11 @@ describe('Worker-pool per-env construction seeds (review of #200)', () => {
     // Before the #460 wrap, init(4, { seed: MAX_SUPPORTED_RESET_SEED })
     // derived MAX+1.. for the trailing envs and the constructor guard
     // aborted the whole init; the derived per-env seeds now wrap into the
-    // supported domain so the pool still comes up usable. The derivation
-    // itself is pinned by the unit tests; here the observable is that the
-    // pooled environments construct, stay distinct, and serve resets.
+    // supported domain (MAX, 0, 1, 2 — pinned by the unit tests) so the
+    // pool still comes up usable. Here the observable is that the pooled
+    // environments construct, serve resets, AND stay distinct: a future
+    // regression to clamping would hand the trailing envs duplicate
+    // streams, the exact hazard the seed-range docstring calls out.
     const pool = new WorkerPool(1);
     try {
       await pool.init(4, { seed: MAX_SUPPORTED_RESET_SEED }, false);
@@ -97,6 +99,23 @@ describe('Worker-pool per-env construction seeds (review of #200)', () => {
       expect(obs).toHaveLength(4);
       for (const o of obs) {
         expect(o).toHaveProperty('playerX');
+      }
+
+      // Stepped without reset seeds, each wrapped construction stream must
+      // produce its own trajectory (same signature check as the tests
+      // above, so a clamp regression fails here too).
+      const signatures: number[][] = [[], [], [], []];
+      for (let step = 0; step < 30; step++) {
+        const results = await pool.step([0, 0, 0, 0]);
+        for (let envIdx = 0; envIdx < 4; envIdx++) {
+          const o = results[envIdx].observation;
+          signatures[envIdx].push(o.playerX, o.playerY, o.opponents[0].x, o.opponents[0].y);
+        }
+      }
+      for (let a = 0; a < 4; a++) {
+        for (let b = a + 1; b < 4; b++) {
+          expect(signatures[a]).not.toEqual(signatures[b]);
+        }
       }
     } finally {
       await pool.close();
