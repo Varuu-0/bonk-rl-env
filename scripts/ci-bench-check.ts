@@ -438,7 +438,7 @@ export function runLayer(
       } else if (code !== 0) {
         // #429: surface the crash even when a suite block was printed
         // before the process died (same detail style as runLayer7).
-        const lastLine = rawOutput.trim().split(/\r?\n/).pop() ?? 'unknown error';
+        const lastLine = rawOutput.trimEnd().split(/\r?\n/).pop()?.slice(0, 500) || 'unknown error';
         error = `layer exited with code ${code}: ${lastLine}`;
       }
       resolve({
