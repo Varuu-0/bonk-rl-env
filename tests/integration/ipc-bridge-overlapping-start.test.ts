@@ -18,15 +18,17 @@ import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { PortManager } from '../../src/utils/port-manager';
 
-// 17100-17199 is reserved for this suite; every other ipc-bridge suite owns
-// a disjoint range (bonk-env-ipc-server.test.ts spreads 16400-17010 via
-// offsets from IPC_SERVER_TEST_START) and vitest forks run in parallel.
+// 17211-17310 is reserved for this suite. Every other ipc-bridge suite owns
+// a disjoint band: bonk-env-ipc-server.test.ts spreads 16400-17010 via
+// offsets from IPC_SERVER_TEST_START, ipc-bridge-failed-session.test.ts
+// reserves 17100-17199, and earlier bands are claimed by older suites —
+// vitest forks run in parallel, so ranges must not overlap.
 describe('IpcBridge overlapping start() calls (issue #418)', () => {
   let portManager: PortManager;
   let port: number;
 
   beforeAll(() => {
-    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
+    portManager = new PortManager({ startPort: 17211, endPort: 17310 });
     port = portManager.allocate();
   });
 
@@ -231,6 +233,57 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       await expect(bridge.close()).resolves.toBeUndefined();
       await serve2;
       await serve1; // the old draining cycle also settles
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a start() after a superseded loser rejects at entry and never strands bridge.ready (slot-clear ownership)', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    try {
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      await bridge.ready;
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      // Drain race with a superseded loser: serve2 wins admission, serve3 is
+      // the last _serveCycle writer and rejects. Regression: the loser's
+      // finally used to clear _serveCycle purely because it matched ITS OWN
+      // (last-written) promise — clearing it out from under the serving
+      // winner. A later start() then bypassed the entry guard, re-armed
+      // bridge.ready to a promise nothing settles, and failed at the
+      // admission claim — stranding standalone `await bridge.ready` callers.
+      const closePromise = bridge.close();
+      const serve2 = bridge.start();
+      const serve3 = bridge.start();
+      serve2.catch(() => {});
+      serve3.catch(() => {});
+      await closePromise;
+
+      const loserErr = await rejectOf(serve3);
+      expect(loserErr.name).toBe('BridgeOverlappingStart');
+      await bridge.ready;
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      // A further start() while the winner serves must be rejected at the
+      // ENTRY guard (slot still truthy), not after re-arming ready, and the
+      // winner's readiness signal must be untouched and promptly settled.
+      const winnerReady = bridge.ready;
+      const lateErr = await rejectOf(bridge.start());
+      expect(lateErr.name).toBe('BridgeOverlappingStart');
+      expect(bridge.ready).toBe(winnerReady);
+      const readyOutcome = await Promise.race([
+        bridge.ready.then(
+          () => 'resolved',
+          () => 'rejected',
+        ),
+        new Promise<string>((r) => setTimeout(() => r('STILL PENDING'), 1500)),
+      ]);
+      expect(readyOutcome).toBe('resolved');
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await serve2;
+      await serve1;
     } finally {
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
     }
