@@ -17,7 +17,10 @@
  *   idle timeout or a retry to trigger the reactive drop;
  * - the adopted HOST session gets the same treatment: a dead host pool is
  *   closed and un-adopted (reactively and from the reaper) so sharing IPC
- *   clients recover with a plain re-init instead of staying wedged forever.
+ *   clients recover with a plain re-init instead of staying wedged forever;
+ * - a matching-count init that arrives AFTER an async host-pool failure
+ *   reports the real failed-state error at ACK time instead of acking ok on
+ *   the corpse (issue #436), so the client recovers with its immediate retry.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as zmq from 'zeromq';
@@ -335,4 +338,70 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
       portManager.release(port);
     }
   });
+
+  it(
+    'an init arriving after an async host-pool failure reports the real error instead of ok on a corpse (#436)',
+    { timeout: 60000 },
+    async () => {
+      const portManager = new PortManager({ startPort: 16400, endPort: 16449 });
+      const port = portManager.allocate();
+      const onHostPoolFailed = vi.fn();
+      const { bridge, client, pool } = await startHostBridge('hostclient3', port, { onHostPoolFailed });
+      try {
+        const initResponse = await sendCommand(client, { command: 'init', numEnvs: 1 });
+        expect(initResponse.status).toBe('ok');
+
+        // Async failure exactly like a worker exit/error event between
+        // requests. The NEXT request is the matching-count init itself —
+        // no step/reset ever fails first to trigger the reactive path.
+        const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+        let failedInitResponse: any;
+        let warnedAboutReplacement = false;
+        try {
+          await (pool as any).failPool(new Error('host worker exited before re-init'));
+          failedInitResponse = await sendCommand(client, { command: 'init', numEnvs: 1 });
+          warnedAboutReplacement = warnSpy.mock.calls.some((call) =>
+            String(call[0]).includes('Adopted host pool failed'),
+          );
+        } finally {
+          warnSpy.mockRestore();
+        }
+
+        // Before the fix this replied status:'ok' for a dead pool and the
+        // client only learned the truth by crashing on its first step. The
+        // ACK-time health check now reports the real failure immediately,
+        // including the underlying cause.
+        expect(failedInitResponse.status).toBe('error');
+        expect(failedInitResponse.error).toContain('worker pool is in failed state');
+        expect(failedInitResponse.error).toContain('host worker exited before re-init');
+
+        // The same request recovered the bridge instead of leaving the
+        // client pinned to the corpse for its retry.
+        expect((bridge as any)._hostPool).toBe(false);
+        expect((bridge as any).localSession.initialized).toBe(false);
+        expect(warnedAboutReplacement).toBe(true);
+        expect(onHostPoolFailed).toHaveBeenCalledTimes(1);
+        expect(onHostPoolFailed).toHaveBeenCalledWith(pool);
+        expect((bridge as any).localSession.pool).not.toBe(pool);
+
+        // The immediate retry lands on the rebuilt pool and serves steps.
+        const reinitResponse = await sendCommand(client, { command: 'init', numEnvs: 1 });
+        expect(reinitResponse.status).toBe('ok');
+        const stepOk = await sendCommand(client, { command: 'step', actions: [0] });
+        expect(stepOk.status).toBe('ok');
+      } finally {
+        try {
+          client.close();
+        } catch {
+          /* ignore */
+        }
+        try {
+          await bridge.close();
+        } catch {
+          /* ignore */
+        }
+        portManager.release(port);
+      }
+    },
+  );
 });
