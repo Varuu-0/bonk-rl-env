@@ -327,9 +327,10 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
   let port: number;
 
   beforeAll(() => {
-    // 16400-16499 is reserved for this suite: vitest forks run in parallel,
+    // 17100-17199 is reserved for this suite: vitest forks run in parallel,
     // so an overlap with another ipc suite's range would race the same port.
-    portManager = new PortManager({ startPort: 16400, endPort: 16499 });
+    // (bonk-env-ipc-server.test.ts owns 16400-17010, so stay above it.)
+    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
 
@@ -356,17 +357,24 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
    * Poll until a throwaway TCP listener can bind the bridge's port, proving
    * nothing is serving on it. A resurrected bridge would hold the port and
    * every attempt would fail with EADDRINUSE until the deadline expires.
+   * Mirrors the sibling #435 helper's discipline: only port contention
+   * (EADDRINUSE) is transient — any other failure is a real error and
+   * propagates immediately instead of burning the deadline in a misleading
+   * retry storm.
    */
   async function waitForPortFree(deadline = Date.now() + 5000): Promise<void> {
     while (Date.now() < deadline) {
-      const freed = await new Promise<boolean>((resolve) => {
+      const outcome = await new Promise<string>((resolve) => {
         const probe = net.createServer();
-        probe.once('error', () => resolve(false));
+        probe.once('error', (err: NodeJS.ErrnoException) => resolve(err.code ?? 'UNKNOWN'));
         probe.listen(port, '127.0.0.1', () => {
-          probe.close(() => resolve(true));
+          probe.close(() => resolve('free'));
         });
       });
-      if (freed) return;
+      if (outcome === 'free') return;
+      if (outcome !== 'EADDRINUSE') {
+        throw new Error(`port ${port} probe failed unexpectedly: ${outcome}`);
+      }
       await new Promise((r) => setTimeout(r, 50));
     }
     throw new Error(`port ${port} is still held by the bridge`);
@@ -424,6 +432,50 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       expect(bridge.isClosed()).toBe(true);
     } finally {
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a close() landing on a restart parked on an in-flight close cancels the parked cycle', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const serve = bridge.start();
+    serve.catch(() => {});
+    try {
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+
+      // Fire a close() while the bridge is SERVING so its teardown is
+      // genuinely in flight, then immediately initiate the restart, which
+      // parks on that teardown — the documented #316 restart-during-close
+      // window. start() reaches its previousClose await synchronously, so
+      // the park is guaranteed before the next statement runs.
+      const priorClose = bridge.close();
+      const parkedRestart = bridge.start();
+      const parkedOutcome = parkedRestart.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.name ?? e?.message ?? e})`,
+      );
+
+      // ...then race a shutdown in while the restart is still parked. This
+      // close must own the lifecycle: once it resolves, the parked cycle
+      // must abort instead of re-binding behind the completed teardown.
+      await bridge.close();
+      await priorClose;
+
+      // The awaited shutdown left the bridge fully closed, the parked
+      // restart settled as a cancelled cycle (never a silent bind), and
+      // ready settled with it.
+      expect(bridge.isClosed()).toBe(true);
+      expect(await settleOutcome(bridge.ready)).toBe('rejected(BridgeClosedDuringStart)');
+      expect(await parkedOutcome).toBe('rejected(BridgeClosedDuringStart)');
+
+      // Nothing serves afterwards and the closed state is terminal.
+      await waitForPortFree();
+      expect(bridge.isClosed()).toBe(true);
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+      await serve.catch(() => {});
     }
   }, 60000);
 

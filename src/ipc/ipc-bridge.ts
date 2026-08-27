@@ -108,6 +108,11 @@ export class IpcBridge {
   // shutdown resolve as a silent no-op while the restart finished binding
   // and resurrected serving afterwards (#431).
   private bindInFlight: boolean = false;
+  // The start() cycle currently parked on an in-flight close() (the #316
+  // restart-during-close window). A close() arriving while it waits marks it
+  // cancelled so the parked cycle aborts with BridgeClosedDuringStart
+  // instead of re-binding right after that shutdown resolves (#431).
+  private parkedStart: { cancelled: boolean } | null = null;
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -351,6 +356,11 @@ export class IpcBridge {
     this.rearmReady();
     if (this.closePromise) {
       const previousClose = this.closePromise;
+      // Register this parked cycle so a close() arriving while it waits can
+      // cancel it (#431): without the marker, a shutdown landing during the
+      // park would resolve while this restart still re-binds afterwards.
+      const parked = { cancelled: false };
+      this.parkedStart = parked;
       try {
         await previousClose;
       } catch (error) {
@@ -364,6 +374,20 @@ export class IpcBridge {
         if (this.closePromise === previousClose) {
           this.closePromise = null;
         }
+        if (this.parkedStart === parked) {
+          this.parkedStart = null;
+        }
+      }
+      // A close() that arrived while this cycle was parked owns the
+      // lifecycle: the prior close's teardown has already completed, so
+      // letting this restart bind would resurrect serving right after an
+      // awaited shutdown resolved (#431). Settle ready with the same
+      // distinguishable error the #402 cancellation path uses — ready
+      // still settles (rejected), honoring #316's no-hang guarantee.
+      if (parked.cancelled) {
+        const closedDuringStart = this.closedDuringStartError();
+        this.markBindFailed(closedDuringStart);
+        throw closedDuringStart;
       }
     }
 
@@ -1188,14 +1212,25 @@ export class IpcBridge {
    * settles so a rejected close can never wedge later close()/start()
    * attempts on a stale rejection (#316).
    *
-   * A close() issued while a start() cycle's bind is still in flight —
-   * including a restart's pre-bind window where _closed is still stale-true
-   * from the previous cycle — runs the real teardown instead of no-oping,
-   * cancelling that cycle into BridgeClosedDuringStart. Once an awaited
-   * close() resolves, nothing can re-bind or resurrect serving without a
-   * new start() call (#431).
+   * A close() issued while a start() cycle is pending cancels that cycle
+   * into BridgeClosedDuringStart instead of letting it bind afterwards
+   * (#431): a cycle whose bind is in flight is cancelled by the teardown
+   * destroying the socket, and a restart parked on an in-flight close is
+   * cancelled by the parkedStart marker. (A start() initiated while a close
+   * is already in flight parks and proceeds once that close settles — the
+   * documented restart-during-close flow (#316) — unless a further close()
+   * arrives while it waits.) Once an awaited close() resolves, nothing can
+   * re-bind or resurrect serving without a start() cycle initiated after
+   * this close began.
    */
   close(): Promise<void> {
+    // Runs BEFORE the join/no-op guards: even a close() that merely joins
+    // the in-flight teardown (or no-ops on a settled bridge) must still
+    // invalidate a restart parked on it, or the awaited shutdown would
+    // resolve while a re-bind is queued behind it (#431).
+    if (this.parkedStart) {
+      this.parkedStart.cancelled = true;
+    }
     if (this.closePromise) {
       return this.closePromise;
     }
