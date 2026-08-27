@@ -57,6 +57,9 @@ const lethalMap: MapDef = {
   bodies: [{ name: 'lethal', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true, isLethal: true }],
 };
 
+/** One measured step of a replica bench loop: stepLive classification plus the step's tick. */
+type StepRecord = { live: boolean; reset: boolean; done: boolean; tick: number };
+
 describe('issue #421: sustained benchmark measurement keeps episodes live', () => {
   it('a loop that ignores done never advances past the terminal tick (defect pin)', () => {
     const env = new BonkEnvironment({
@@ -97,7 +100,7 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
     mapData: MapDef,
     config: { maxTicks: number; frameSkip: number },
     measuredSteps: number,
-  ): Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> => {
+  ): StepRecord[] => {
     const env = new BonkEnvironment({
       mapData,
       ...config,
@@ -110,7 +113,7 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
       // Warmup like the benches, resetting through any early end.
       for (let i = 0; i < 50; i++) stepLive(env, Math.floor((i * 13) % 64));
 
-      const records: Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> = [];
+      const records: StepRecord[] = [];
       for (let i = 0; i < measuredSteps; i++) {
         const outcome = stepLive(env, Math.floor((i * 29) % 64));
         records.push({
@@ -238,9 +241,7 @@ describe('issue #461: reset-cycles loop keeps episodes live across reset windows
   const WINDOWS = 4;
   const STEPS_PER_WINDOW = 150;
 
-  const runResetCyclesLoop = (
-    mode: 'stepLive' | 'raw',
-  ): Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> => {
+  const runResetCyclesLoop = (mode: 'stepLive' | 'raw'): StepRecord[] => {
     const env = new BonkEnvironment({
       mapData: lethalMap,
       maxTicks: 10_000,
@@ -250,7 +251,7 @@ describe('issue #461: reset-cycles loop keeps episodes live across reset windows
       seed: 42,
     });
     try {
-      const records: Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> = [];
+      const records: StepRecord[] = [];
       for (let w = 0; w < WINDOWS; w++) {
         env.reset();
         for (let i = 0; i < STEPS_PER_WINDOW; i++) {

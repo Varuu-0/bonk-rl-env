@@ -159,7 +159,7 @@ function benchResetCycles(): BenchmarkResult {
       { label: 'SPS', value: Math.round(sps), unit: 'steps/sec' },
       { label: 'Total steps', value: totalSteps, unit: '' },
       { label: 'Live steps', value: liveSteps, unit: '' },
-      { label: 'Episodes completed', value: resets, unit: '' },
+      { label: 'Episode restarts (mid-window)', value: resets, unit: '' },
       { label: 'Resets', value: RESETS, unit: '' },
     ],
   };
