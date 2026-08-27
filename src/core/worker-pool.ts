@@ -1195,11 +1195,28 @@ export class WorkerPool {
     return this.state === 'failed';
   }
 
+  /**
+   * Compose the exact error `assertReady` throws for a failed pool, for
+   * callers that must reject an operation on an already-failed pool without
+   * first attempting it (issue #436). One shared formatter keeps the
+   * bridge's proactive init rejection word-identical to the reactive
+   * step/reset failures so clients can match either. A non-failed pool is
+   * a call-site bug, not a client-facing outcome: it throws instead of
+   * silently fabricating a plausible "...(unknown failure)" notice. Must
+   * be called BEFORE closing the pool: close() clears the recorded failure.
+   */
+  failedStateError(operation: string): string {
+    if (this.state !== 'failed') {
+      throw new Error(
+        `Internal error: failedStateError('${operation}') requires a failed pool, got state '${this.state}'`,
+      );
+    }
+    return `Cannot ${operation}: worker pool is in failed state (${this.failure?.message ?? 'unknown failure'})`;
+  }
+
   private assertReady(operation: string): void {
     if (this.state === 'failed') {
-      throw new Error(
-        `Cannot ${operation}: worker pool is in failed state (${this.failure?.message ?? 'unknown failure'})`,
-      );
+      throw new Error(this.failedStateError(operation));
     }
     if (this.state !== 'ready') {
       throw new Error(`Cannot ${operation}: worker pool is ${this.state}`);
