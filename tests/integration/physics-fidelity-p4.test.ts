@@ -289,7 +289,10 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     // ever yields a trusted input set containing one.
     const sparse: unknown[] = [0];
     sparse[2] = 2; // index 1 is a hole
-    const first = parseNativeTrace({
+    // Shared trace fixture: parseNativeTrace is non-mutating, so the same
+    // literal feeds both gates below — the raw (sparse) object for the first
+    // gate, its JSON round-trip (hole densified to null) for the second.
+    const rawTrace = {
       schema: 'bonk.rl.env.native-trace',
       version: TRACE_SCHEMA_VERSION,
       tps: 30,
@@ -297,7 +300,8 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       players: [{ id: 0 }, { id: 1 }],
       spawns: [],
       ticks: [{ t: 0, inputs: sparse as any, discs: [null, null] }],
-    });
+    };
+    const first = parseNativeTrace(rawTrace);
     expect(first.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got undefined']);
     expect(first.trace.ticks[0].inputs).toBeUndefined();
 
@@ -306,19 +310,7 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     // same (corrupt-in is rejected-out consistently, never silently trusted)
     // — and the typed output, with the corrupt set dropped, re-parses with
     // zero errors (the parser never emits a trace that fails its own gates).
-    const densified = parseNativeTrace(
-      JSON.parse(
-        JSON.stringify({
-          schema: 'bonk.rl.env.native-trace',
-          version: TRACE_SCHEMA_VERSION,
-          tps: 30,
-          map: {},
-          players: [{ id: 0 }, { id: 1 }],
-          spawns: [],
-          ticks: [{ t: 0, inputs: sparse as any, discs: [null, null] }],
-        }),
-      ),
-    );
+    const densified = parseNativeTrace(JSON.parse(JSON.stringify(rawTrace)));
     expect(densified.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got null']);
     expect(densified.trace.ticks[0].inputs).toBeUndefined();
     const clean = parseNativeTrace(JSON.parse(JSON.stringify(first.trace)));
