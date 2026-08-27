@@ -111,8 +111,13 @@ async function connectClient(port: number): Promise<IpcTestClient> {
       let timer: NodeJS.Timeout | undefined;
       try {
         await dealer.send(JSON.stringify(payload));
+        const reply = dealer.receive();
+        // When the timeout below wins the race, this receive stays
+        // registered on the socket and rejects when the dealer is closed
+        // afterwards. Mark it handled so only the race outcome propagates.
+        void reply.catch(() => {});
         const frames = await Promise.race([
-          dealer.receive(),
+          reply,
           new Promise<never>((_, reject) => {
             timer = setTimeout(
               () =>
@@ -373,21 +378,30 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
     } as Partial<AppConfig>);
 
     const serving = startServer(config);
+    let zeroTickReports = 0;
+    let reportWrites = 0;
     try {
       await waitForServerPort(reserved.port);
       await remoteShutdown(reserved.port);
       await serving;
     } catch (error) {
+      // Detach (never await): the server may still be running when an
+      // assertion fails, and it only settles at afterEach's stopServer().
       serving.catch(() => {});
       throw error;
     } finally {
+      // Snapshot BEFORE restoring: mockRestore clears recorded calls, so
+      // asserting against a restored spy would be vacuously true. Snapshot
+      // and restore here so both happen even when an assertion fails.
+      zeroTickReports = reportSpy.mock.calls.length;
+      reportWrites = writeSpy.mock.calls.length;
       reportSpy.mockRestore();
       writeSpy.mockRestore();
     }
 
     expect(isServerRunning()).toBe(false);
-    expect(reportSpy).not.toHaveBeenCalled();
-    expect(writeSpy).not.toHaveBeenCalled();
+    expect(zeroTickReports).toBe(0);
+    expect(reportWrites).toBe(0);
   });
 
   it(
@@ -418,6 +432,8 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
 
       const serving = startServer(config);
       const client = await connectClient(reserved.port);
+      let forcedReports = 0;
+      let reportWrites = 0;
       try {
         await waitForServerPort(reserved.port);
         expect((await client.request({ command: 'init', numEnvs: 1, useSharedMemory: false })).status).toBe('ok');
@@ -427,21 +443,28 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
         await remoteShutdown(reserved.port);
         await serving;
       } catch (error) {
+        // Detach (never await): the server may still be running when an
+        // assertion fails, and it only settles at afterEach's stopServer().
         serving.catch(() => {});
         throw error;
+      } finally {
+        // Always release the DEALER socket and the spies, even on a failed
+        // assertion: an open ZMQ handle keeps the event loop alive and a
+        // leaked spy would cascade into the zero-tick assertions below.
+        // Snapshot BEFORE restoring — mockRestore clears recorded calls.
+        client.close();
+        forcedReports = reportSpy.mock.calls.filter((args) => args[0] === true).length;
+        reportWrites = writeSpy.mock.calls.length;
+        reportSpy.mockRestore();
+        writeSpy.mockRestore();
       }
-      client.close();
 
       expect(isServerRunning()).toBe(false);
       // Exactly one report: the forced shutdown final report preserved on the
       // remote-shutdown path for a server that actually served (#237), with
-      // its JSONL entry written under outputFormat 'both'. Positive-count
-      // assertions must run BEFORE mockRestore: restoring clears recorded
-      // calls, so restoring in a finally would silently zero them.
-      expect(reportSpy).toHaveBeenCalledTimes(1);
-      expect(writeSpy).toHaveBeenCalled();
-      reportSpy.mockRestore();
-      writeSpy.mockRestore();
+      // its JSONL entry written under outputFormat 'both'.
+      expect(forcedReports).toBe(1);
+      expect(reportWrites).toBeGreaterThan(0);
     },
   );
 });

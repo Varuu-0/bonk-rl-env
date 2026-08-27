@@ -122,27 +122,26 @@ export async function startServer(config?: AppConfig): Promise<void> {
 /**
  * Gracefully stops the IPC bridge server.
  *
+ * Routes through the guarded release helper so an explicit stop, a
+ * remote-shutdown settle, and a failed-bind rollback share exactly-once
+ * singleton and telemetry teardown: the losing observer of a concurrent
+ * release must be a no-op, not a second telemetry shutdown on a freshly
+ * recreated controller (whose forced report could emit a zero-tick entry,
+ * the #324 hazard this module guards against) (#424).
+ *
  * @returns Promise that resolves when the server is stopped
  */
 export async function stopServer(): Promise<void> {
-  if (bridge === null) {
+  const current = bridge;
+  if (current === null) {
     return;
   }
 
   console.log('Shutting down IPC bridge...');
-
-  try {
-    await bridge.close();
-  } catch (error) {
-    console.error('Error during server shutdown:', error);
-  } finally {
-    bridge = null;
-    // Emit the shutdown final report and release telemetry resources.
-    try {
-      getTelemetryController().shutdown();
-    } catch (error) {
-      console.error('Error during telemetry shutdown:', error);
-    }
+  const released = await releaseServerInstance(current, {});
+  // Only claim the shutdown when this call performed the release; a losing
+  // racer already logged its own shutdown record.
+  if (released) {
     console.log('Server stopped.');
   }
 }
