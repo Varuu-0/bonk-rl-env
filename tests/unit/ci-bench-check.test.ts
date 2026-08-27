@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { evaluate, parseSuiteFromOutput, parseLayer7, toMillis, applyEnvOverrides } from '../../scripts/ci-bench-check';
+import {
+  evaluate,
+  parseSuiteFromOutput,
+  parseLayer7,
+  toMillis,
+  applyEnvOverrides,
+  resolveCloseStatus,
+} from '../../scripts/ci-bench-check';
+import type { BenchmarkSuite } from '../../scripts/ci-bench-check';
 
 describe('ci-bench-check: applyEnvOverrides', () => {
   const checks = [
@@ -175,5 +183,50 @@ describe('ci-bench-check: parseLayer7', () => {
 
   it('errors when no median line exists', () => {
     expect(parseLayer7('no timing output').status).toBe('ERROR');
+  });
+});
+
+describe('ci-bench-check: resolveCloseStatus (issue #429)', () => {
+  const cleanSuite: BenchmarkSuite = {
+    layer: 2,
+    name: 'Raw Physics',
+    description: 'desc',
+    results: [{ layer: 2, name: 'bench', passed: true, status: 'PASS', durationMs: 1, metrics: [] }],
+    durationMs: 1,
+    passed: 1,
+    failed: 0,
+    skipped: 0,
+    errored: 0,
+  };
+  const failedSuite: BenchmarkSuite = { ...cleanSuite, failed: 1, passed: 0, results: [] };
+  const erroredSuite: BenchmarkSuite = { ...cleanSuite, errored: 1, results: [] };
+
+  it('never upgrades a non-zero exit to PASS when a clean suite was printed (crash-after-report)', () => {
+    expect(resolveCloseStatus(false, 3, cleanSuite)).toBe('ERROR');
+  });
+
+  it('treats signal death (null code) as a crash even with a clean suite', () => {
+    expect(resolveCloseStatus(false, null, cleanSuite)).toBe('ERROR');
+  });
+
+  it('still errors on a non-zero exit without any suite block', () => {
+    expect(resolveCloseStatus(false, 1, null)).toBe('ERROR');
+  });
+
+  it('keeps timeout precedence over the close code', () => {
+    expect(resolveCloseStatus(true, 1, cleanSuite)).toBe('TIMEOUT');
+  });
+
+  it('passes on a zero exit with a clean suite', () => {
+    expect(resolveCloseStatus(false, 0, cleanSuite)).toBe('PASS');
+  });
+
+  it('fails on a zero exit whose suite reports internal failures or errors', () => {
+    expect(resolveCloseStatus(false, 0, failedSuite)).toBe('FAIL');
+    expect(resolveCloseStatus(false, 0, erroredSuite)).toBe('FAIL');
+  });
+
+  it('errors on a zero exit without markers', () => {
+    expect(resolveCloseStatus(false, 0, null)).toBe('ERROR');
   });
 });
