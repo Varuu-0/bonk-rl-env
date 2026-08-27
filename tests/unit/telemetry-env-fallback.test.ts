@@ -116,6 +116,24 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       expect(isTelemetryEnabled()).toBe(false);
     });
 
+    // CRLF-carrying env-file values must resolve identically on both
+    // resolution paths (#459 review): the fallback trims the documented
+    // spellings exactly like config-loader.ts.
+    it('a CRLF-carrying TELEMETRY_ENABLED value enables telemetry on the fallback path', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('a CRLF-carrying PROFILE_LEVEL value enables telemetry on the fallback path', () => {
+      process.env.PROFILE_LEVEL = 'standard\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('a CRLF-carrying DEBUG_LEVEL value enables telemetry on the fallback path', () => {
+      process.env.DEBUG_LEVEL = 'error\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
     it('OUTPUT_FORMAT alone does not enable telemetry', () => {
       process.env.OUTPUT_FORMAT = 'file';
       expect(isTelemetryEnabled()).toBe(false);
@@ -194,6 +212,23 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
     it('--telemetry-enabled enables telemetry without env vars', () => {
       process.argv = ['node', 'worker.js', '--telemetry-enabled'];
       expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    // Inline value form of the documented master switch (#459 review): the
+    // fallback honors it exactly like parseFlags()/parseCliFlags() do.
+    it('--telemetry-enabled=true enables telemetry without env vars', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=true'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--telemetry-enabled=false leaves telemetry disabled', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=garbage leaves telemetry disabled', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=maybe'];
+      expect(isTelemetryEnabled()).toBe(false);
     });
 
     it('--debug-level verbose enables telemetry without env vars', () => {

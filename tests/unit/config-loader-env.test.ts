@@ -555,6 +555,12 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.profileLevel).toBe('detailed');
     });
 
+    it('PROFILE_LEVEL trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.PROFILE_LEVEL = 'detailed\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.profileLevel).toBe('detailed');
+    });
+
     it('PROFILE_LEVEL rejects invalid value', () => {
       process.env.PROFILE_LEVEL = 'basic';
       const cfg = loadConfig(testDir);
@@ -570,6 +576,12 @@ describe('config-loader env vars and CLI', () => {
 
     it('DEBUG_LEVEL sets debug level', () => {
       process.env.DEBUG_LEVEL = 'verbose';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('DEBUG_LEVEL trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.DEBUG_LEVEL = 'verbose\r';
       const cfg = loadConfig(testDir);
       expect(cfg.telemetry.debugLevel).toBe('verbose');
     });
@@ -591,6 +603,12 @@ describe('config-loader env vars and CLI', () => {
       process.env.OUTPUT_FORMAT = 'both';
       const cfg = loadConfig(testDir);
       expect(cfg.telemetry.outputFormat).toBe('both');
+    });
+
+    it('OUTPUT_FORMAT trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.OUTPUT_FORMAT = 'file\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('file');
     });
 
     it('OUTPUT_FORMAT rejects invalid value', () => {
@@ -618,6 +636,17 @@ describe('config-loader env vars and CLI', () => {
       resetConfig();
       process.env.RETENTION_DAYS = 'abc';
       expect(loadConfig(testDir).telemetry.retentionDays).toBe(7);
+    });
+
+    it('RETENTION_DAYS rejects partial-numeric values like 30abc (#459 review)', () => {
+      process.env.RETENTION_DAYS = '30abc';
+      expect(loadConfig(testDir).telemetry.retentionDays).toBe(7);
+    });
+
+    it('TELEMETRY_ENABLED trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
     });
 
     it('DASHBOARD_PORT overrides the dashboard port', () => {
@@ -854,6 +883,36 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.enabled).toBe(true);
     });
 
+    // Inline value form of the documented master switch (#459 review):
+    // honored by parseCliFlags() the same way the telemetry fallback and
+    // telemetry/flags.ts honor it, instead of silently skipping the token.
+    it('--telemetry-enabled=true enables telemetry', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('--telemetry-enabled=false disables telemetry', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('CLI --telemetry-enabled=false overrides env TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('--telemetry-enabled=garbage leaves the config.json value in place', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+      process.argv = ['node', 'script.js', '--telemetry-enabled=maybe'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
     it('--debug-level sets debug level', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const cfg = loadConfig(testDir);
@@ -886,6 +945,12 @@ describe('config-loader env vars and CLI', () => {
 
     it('--retention-days rejects invalid value', () => {
       process.argv = ['node', 'script.js', '--retention-days', '0'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.retentionDays).toBe(7);
+    });
+
+    it('--retention-days rejects partial-numeric values like 30abc (#459 review)', () => {
+      process.argv = ['node', 'script.js', '--retention-days', '30abc'];
       const cfg = loadConfig(testDir);
       expect(cfg.telemetry.retentionDays).toBe(7);
     });

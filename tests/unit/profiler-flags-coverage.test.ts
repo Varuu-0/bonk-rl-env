@@ -386,6 +386,44 @@ describe('Flags uncovered paths', () => {
       expect(flags.retentionDays).toBe(14);
     });
 
+    // Inline value form of the documented master switch (#459 review): the
+    // fallback (isAnyTelemetryEnabled) detects this token, so parseFlags()
+    // must honor it too instead of silently skipping it.
+    it('parses --telemetry-enabled=true inline form and marks it explicit', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=1 inline form', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=1'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=false inline form and marks it explicit', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('silently leaves the default for a garbage --telemetry-enabled value', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=maybe'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('rejects partial-numeric --retention-days values like 30abc (#459 review)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.argv = ['node', 'script.js', '--retention-days', '30abc'];
+      const flags = parseFlags();
+      expect(flags.retentionDays).toBe(7);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid retention days'));
+      warnSpy.mockRestore();
+    });
+
     it('warns on invalid debug level and uses default', () => {
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
       process.argv = ['node', 'script.js', '--debug', 'trace'];
@@ -1073,6 +1111,96 @@ describe('Flags uncovered paths', () => {
       });
       expect(flags.retentionDays).toBe(7);
     });
+
+    // Strict whole-string integer contract, aligned with config-loader's
+    // RETENTION_DAYS handling (#459 review).
+    it('rejects partial-numeric RETENTION_DAYS values like 30abc', () => {
+      process.env.RETENTION_DAYS = '30abc';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(7);
+    });
+
+    it('still accepts whitespace-padded RETENTION_DAYS values', () => {
+      process.env.RETENTION_DAYS = ' 30 ';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(30);
+    });
+
+    // CRLF-carrying env-file values must resolve identically on both
+    // resolution paths (#459 review).
+    it('trims a CRLF-carrying PROFILE_LEVEL value', () => {
+      process.env.PROFILE_LEVEL = 'detailed\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('detailed');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('trims a CRLF-carrying DEBUG_LEVEL value', () => {
+      process.env.DEBUG_LEVEL = 'verbose\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.debugLevel).toBe('verbose');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('trims a CRLF-carrying OUTPUT_FORMAT value', () => {
+      process.env.OUTPUT_FORMAT = 'file\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.outputFormat).toBe('file');
+    });
+
+    it('trims a CRLF-carrying TELEMETRY_ENABLED value', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(true);
+    });
   });
 
   describe('mergeConfigWithFlags', () => {
@@ -1327,6 +1455,31 @@ describe('Flags uncovered paths', () => {
 
     it('returns false for --telemetry-enabled=false (matches the --telemetry= form handling)', () => {
       process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=true inline form (aligned with parseFlags, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --telemetry-enabled=garbage inline form', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=garbage'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true when PROFILE_LEVEL carries a trailing CR (CRLF env-file value, #459 review)', () => {
+      process.env.PROFILE_LEVEL = 'standard\r';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true when TELEMETRY_ENABLED carries a trailing CR (CRLF env-file value, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false when TELEMETRY_ENABLED=false carries a trailing CR', () => {
+      process.env.TELEMETRY_ENABLED = 'false\r';
       expect(isAnyTelemetryEnabled()).toBe(false);
     });
 

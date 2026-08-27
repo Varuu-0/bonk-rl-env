@@ -549,8 +549,13 @@ function parseFiniteFloat(rawValue: string): number | null {
  * Strictly parse an integer from a CLI/env string. Newly wired numeric
  * surfaces use this helper so values such as "32abc" cannot silently change
  * runtime configuration.
+ *
+ * Exported so telemetry/flags.ts parses the documented RETENTION_DAYS knob
+ * with the identical strict contract on both resolution paths — server
+ * (config-loader) and worker/embedded fallback (flags.ts) — instead of
+ * "30abc" becoming 30 on one path and 7 on the other (#459 review).
  */
-function parseInteger(rawValue: string): number | null {
+export function parseInteger(rawValue: string): number | null {
   const trimmed = rawValue.trim();
   if (!INTEGER_NUMERIC_RE.test(trimmed)) return null;
   const value = Number(trimmed);
@@ -709,9 +714,13 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
   // RETENTION_DAYS are the documented spellings of the fields the MANIFOLD_*
   // namespace already served. They are applied BEFORE the MANIFOLD_* block
   // so the established MANIFOLD_* names keep winning when both spellings
-  // are set, mirroring the precedence in telemetry/flags.ts.
+  // are set, mirroring the precedence in telemetry/flags.ts. Values are
+  // trimmed so a CRLF-carrying value from an env file (e.g. PROFILE_LEVEL
+  // with a trailing "\r" from Windows line endings) is not silently ignored,
+  // matching the RANDOM_OPPONENT handler (#413) and telemetry/flags.ts
+  // (#459 review).
   if (env.TELEMETRY_ENABLED !== undefined) {
-    const v = env.TELEMETRY_ENABLED.toLowerCase();
+    const v = env.TELEMETRY_ENABLED.trim().toLowerCase();
     if (v === 'true' || v === '1' || v === 'yes') {
       config.telemetry.enabled = true;
     } else if (v === 'false' || v === '0' || v === 'no') {
@@ -719,15 +728,15 @@ function applyEnvOverrides(config: AppConfig): AppConfig {
     }
   }
   if (env.PROFILE_LEVEL !== undefined) {
-    const v = env.PROFILE_LEVEL;
+    const v = env.PROFILE_LEVEL.trim();
     if (v === 'minimal' || v === 'standard' || v === 'detailed') config.telemetry.profileLevel = v;
   }
   if (env.DEBUG_LEVEL !== undefined) {
-    const v = env.DEBUG_LEVEL;
+    const v = env.DEBUG_LEVEL.trim();
     if (v === 'none' || v === 'error' || v === 'verbose') config.telemetry.debugLevel = v;
   }
   if (env.OUTPUT_FORMAT !== undefined) {
-    const v = env.OUTPUT_FORMAT;
+    const v = env.OUTPUT_FORMAT.trim();
     if (v === 'console' || v === 'file' || v === 'both') config.telemetry.outputFormat = v;
   }
   if (env.RETENTION_DAYS !== undefined) {
@@ -978,6 +987,20 @@ function parseCliFlags(config: AppConfig): AppConfig {
   for (let i = 2; i < argc; i++) {
     const arg = argv[i];
     const next = i + 1 < argc ? argv[i + 1] : undefined;
+
+    // Documented master switch with an inline value (#459 review): honor
+    // --telemetry-enabled=true/false the same way the telemetry fallback
+    // (isAnyTelemetryEnabled) and telemetry/flags.ts do, instead of
+    // silently skipping the '='-joined token.
+    if (arg.startsWith('--telemetry-enabled=')) {
+      const inline = arg.slice('--telemetry-enabled='.length).toLowerCase();
+      if (inline === 'true' || inline === '1' || inline === 'yes') {
+        config.telemetry.enabled = true;
+      } else if (inline === 'false' || inline === '0' || inline === 'no') {
+        config.telemetry.enabled = false;
+      }
+      continue;
+    }
 
     switch (arg) {
       case '--port':
