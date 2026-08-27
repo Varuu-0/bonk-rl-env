@@ -222,9 +222,10 @@ describe('PortManager.allocateAvailable concurrency (#432 review)', () => {
 describe('PortManager.findAvailablePort registry discipline (#468)', () => {
   // Committed helper choices linger for this file's process lifetime (the
   // helper's hidden claimant is never released), so every test below gets
-  // its own slice of 6950-6999 — above the cross-instance bands above and
-  // below the next suite's fixed 7000 range.
-  const HELPER_BASE = 6950;
+  // its own slice of 6930-6999 — above the cross-instance bands above and
+  // below the next suite's fixed 7000 range, so even the deliberate
+  // blocker listener here stays off every other suite's ports.
+  const HELPER_BASE = 6930;
 
   it('never returns a port claimed by another manager even when OS-free', async () => {
     const first = makeManager({ startPort: HELPER_BASE, endPort: HELPER_BASE + 9 });
@@ -274,6 +275,10 @@ describe('PortManager.findAvailablePort registry discipline (#468)', () => {
   });
 
   it('still skips a port occupied by an unrelated process', async () => {
+    // 7000 is the next suites' first registered port, and a real listener
+    // there can collide with a parallel fork that binds it for real
+    // (EADDRINUSE in whichever file loses the race); the lowered
+    // HELPER_BASE keeps this blocker inside 6930-6999 instead.
     const blocker = await occupy(HELPER_BASE + 50);
 
     try {
@@ -288,7 +293,9 @@ describe('PortManager.findAvailablePort registry discipline (#468)', () => {
   it('overlapping helper calls return distinct ports', async () => {
     // Keep both calls suspended on the first candidate so they scan the
     // same candidates before either commits: without the no-await
-    // re-check both would hand out the first candidate.
+    // re-check both would hand out the first candidate. The mocked scan
+    // must stay below 7000 too: its committed choices linger for this
+    // file's process lifetime.
     const spy = vi.spyOn(PortManager, 'isPortAvailable').mockResolvedValue(true);
 
     try {

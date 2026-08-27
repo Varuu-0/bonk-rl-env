@@ -293,25 +293,35 @@ export class PortManager {
   static async findAvailablePort(preferredStart: number = 6000): Promise<number> {
     // Port 0 would make the OS assign an ephemeral port, so the returned
     // number would not be the bound one; candidates start at 1.
+    const candidates: number[] = [];
     for (let port = Math.max(1, preferredStart); port <= 65535; port++) {
-      // Honour process-wide claims before probing (issue #468): a port
-      // owned by any live PortManager in this process is skipped even
-      // though no socket is bound there yet.
-      if (claimOwner(port)) {
-        continue;
+      candidates.push(port);
+    }
+
+    // Probes run in parallel batches (mirroring allocateAvailable): the
+    // worst case stays bounded instead of O(range x probe latency), and a
+    // batch slice is re-checked atomically before its commit.
+    for (let offset = 0; offset < candidates.length; offset += ALLOCATION_PROBE_BATCH) {
+      const slice = candidates.slice(offset, offset + ALLOCATION_PROBE_BATCH).filter((port) => !claimOwner(port));
+
+      const probed = await Promise.all(
+        slice.map(async (port) => ((await PortManager.isPortAvailable(port)) ? port : -1)),
+      );
+
+      for (const port of probed) {
+        if (port === -1) {
+          continue;
+        }
+        // Re-check with no intervening await: JS runs this block
+        // atomically, so a sync allocator that raced the probe either
+        // already claimed the port (visible here) or cannot interleave
+        // with the commit below (mirrors allocateAvailable, issue #468).
+        if (claimOwner(port)) {
+          continue;
+        }
+        PortManager.commitFoundPort(port);
+        return port;
       }
-      if (!(await PortManager.isPortAvailable(port))) {
-        continue;
-      }
-      // Re-check with no intervening await: JS runs this block
-      // atomically, so a sync allocator that raced the probe either
-      // already claimed the port (visible here) or cannot interleave
-      // with the commit below (mirrors allocateAvailable, issue #468).
-      if (claimOwner(port)) {
-        continue;
-      }
-      PortManager.commitFoundPort(port);
-      return port;
     }
     throw new Error('No available ports found');
   }
