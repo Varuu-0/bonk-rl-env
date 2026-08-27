@@ -327,9 +327,11 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
   let port: number;
 
   beforeAll(() => {
-    // 17100-17199 is reserved for this suite: vitest forks run in parallel,
-    // so an overlap with another ipc suite's range would race the same port.
-    // (bonk-env-ipc-server.test.ts owns 16400-17010, so stay above it.)
+    // Per-suite dedicated port bands (vitest forks run in parallel, so an
+    // overlap would make two suites race to bind the same port):
+    //   15600-16399 — ipc-bridge suites (dealer/req/options/restart/multiclient/failed-session)
+    //   16400-17010 — bonk-env-ipc-server.test.ts (IPC_SERVER_TEST_START = 16400, sparse bands)
+    //   17100-17199 — this #431 suite (chosen above 16400-17010)
     portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
@@ -474,6 +476,51 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       await bridge.close();
       expect(bridge.isClosed()).toBe(true);
     } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+      await serve.catch(() => {});
+    }
+  }, 60000);
+
+  it('a fresh start() succeeds after a close cancels a parked restart (no stuck state)', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const client = new zmq.Dealer();
+    const serve = bridge.start();
+    serve.catch(() => {});
+    try {
+      await bridge.ready;
+
+      // Reproduce the park-window cancellation: close() while serving, park
+      // a restart on the in-flight teardown, then a second close() cancels
+      // the parked cycle.
+      const priorClose = bridge.close();
+      const parkedRestart = bridge.start();
+      void parkedRestart.catch(() => {});
+      await bridge.close();
+      await priorClose;
+      await expect(parkedRestart).rejects.toThrow('bridge was closed during start');
+      expect(bridge.isClosed()).toBe(true);
+      await waitForPortFree();
+
+      // The cancellation must not leave stuck internal state (a leftover
+      // parkedStart marker, a retained closePromise, or a stale _closed):
+      // the documented restart flow works again, binding and serving a
+      // DEALER round-trip on this same instance.
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+
+      await client.connect(`tcp://127.0.0.1:${port}`);
+      await new Promise((r) => setTimeout(r, 100));
+      await client.send(JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false }));
+      const [reply] = await client.receive();
+      expect(JSON.parse(reply.toString()).status).toBe('ok');
+
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await serve2;
+    } finally {
+      client.close();
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
       await serve.catch(() => {});
     }
