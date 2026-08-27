@@ -197,38 +197,33 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // must not drive replay (#450): the slot falls back to the neutral
       // action — the same fallback a missing byte takes — and is flagged
       // below, failing the tick loudly instead of silently executing a
-      // fabricated button press. The input set container is gated explicitly:
-      // a present-but-non-array value (which parseNativeTrace rejects) is
-      // routed to the flagged corrupt path on every aligned slot, never to
-      // the silent neutral fallback, so an error-ignoring caller cannot get
-      // a pass on a trace the parser rejected.
+      // fabricated button press. The bytes are vetted in one O(n) pass up
+      // front (inputs.length is caller-controlled, so no includes() rescan
+      // per slot), and the vetting is independent of disc state: a corrupt
+      // byte on a null or misaligned slot is corruption all the same.
+      // A present-but-non-array container (which parseNativeTrace rejects
+      // outright) is a tick-level corruption, flagged once below — outside
+      // the aligned-disc loop, so a tick with zero aligned discs still fails
+      // instead of silently passing on a trace the parser rejected.
       const inputs = Array.isArray(recorded.inputs) ? recorded.inputs : [];
       const inputsMalformed = recorded.inputs !== undefined && !Array.isArray(recorded.inputs);
-      const corruptInputSlots: number[] = [];
+      const corruptBytes = new Set<number>();
+      for (let id = 0; id < inputs.length; id++) {
+        if (!isReplayableInputByte(inputs[id])) corruptBytes.add(id);
+      }
       for (let id = 0; id < recorded.discs.length; id++) {
         if (!isAlignedTraceDisc(recorded.discs[id], id)) continue;
         if (inputsMalformed) {
-          // Present-but-non-array input set: flagged like a corrupt byte on
-          // every aligned slot.
-          corruptInputSlots.push(id);
+          // Present-but-non-array input set: neutral fallback per aligned
+          // slot; the tick-level flag below carries the failure.
           physics.applyInput(id, decodeInput(0));
         } else if (id >= inputs.length) {
           // No recorded byte for this slot: the documented neutral fallback.
           physics.applyInput(id, decodeInput(undefined));
-        } else if (isReplayableInputByte(inputs[id])) {
-          physics.applyInput(id, decodeInput(inputs[id]));
-        } else {
-          corruptInputSlots.push(id);
+        } else if (corruptBytes.has(id)) {
           physics.applyInput(id, decodeInput(0));
-        }
-      }
-      // The corrupt-byte scan is independent of disc alignment (#450): every
-      // malformed byte in the recorded set is flagged, even when its slot's
-      // disc is null or misaligned — matching parseNativeTrace, which rejects
-      // the whole set regardless of disc state.
-      for (let id = 0; id < inputs.length; id++) {
-        if (!isReplayableInputByte(inputs[id]) && !corruptInputSlots.includes(id)) {
-          corruptInputSlots.push(id);
+        } else {
+          physics.applyInput(id, decodeInput(inputs[id]));
         }
       }
       // Neutral input for any traced player without a record so the world still
@@ -243,8 +238,19 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // Corrupt input bytes (#450) fail the tick: the replayed slot was
       // downgraded to the neutral fallback, so the tick cannot be vouched
       // for even when the kinematic diff happens to stay within tolerance.
-      for (const id of corruptInputSlots) {
+      // The vetting pass is disc-independent, so bytes on null or misaligned
+      // slots are flagged too — they are unplayable by definition.
+      for (const id of corruptBytes) {
         mismatches.push({ id, reason: 'malformed input byte' });
+        withinTolerance = false;
+      }
+      // Malformed input-set container (#450): a whole-tick corruption flagged
+      // once, outside the aligned-disc loop — a tick with zero aligned discs
+      // would otherwise swallow it entirely, letting an error-ignoring caller
+      // vouch for a trace parseNativeTrace rejects. id -1 marks the tick-level
+      // (not per-slot) corruption.
+      if (inputsMalformed) {
+        mismatches.push({ id: -1, reason: 'malformed input set' });
         withinTolerance = false;
       }
 

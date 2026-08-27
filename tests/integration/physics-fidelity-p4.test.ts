@@ -280,6 +280,52 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(mixed.trace.ticks[0].inputs).toBeUndefined();
   });
 
+  it('rejects sparse inputs arrays: a hole is named like any other malformed byte (issue #450)', () => {
+    // A sparse array's holes are invisible to forEach/every — they would slip
+    // past both validation passes and leak into the typed output, making
+    // parse→serialize→parse unstable (a hole serializes as null, and the
+    // re-parse then rejects the whole set). Indexing reads a hole as
+    // undefined and rejects it like any other malformed byte, so no parse
+    // ever yields a trusted input set containing one.
+    const sparse: unknown[] = [0];
+    sparse[2] = 2; // index 1 is a hole
+    const first = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }, { id: 1 }],
+      spawns: [],
+      ticks: [{ t: 0, inputs: sparse as any, discs: [null, null] }],
+    });
+    expect(first.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got undefined']);
+    expect(first.trace.ticks[0].inputs).toBeUndefined();
+
+    // Round-trip stability, both directions: the raw sparse array serializes
+    // with the hole densified to null and the re-parse rejects it just the
+    // same (corrupt-in is rejected-out consistently, never silently trusted)
+    // — and the typed output, with the corrupt set dropped, re-parses with
+    // zero errors (the parser never emits a trace that fails its own gates).
+    const densified = parseNativeTrace(
+      JSON.parse(
+        JSON.stringify({
+          schema: 'bonk.rl.env.native-trace',
+          version: TRACE_SCHEMA_VERSION,
+          tps: 30,
+          map: {},
+          players: [{ id: 0 }, { id: 1 }],
+          spawns: [],
+          ticks: [{ t: 0, inputs: sparse as any, discs: [null, null] }],
+        }),
+      ),
+    );
+    expect(densified.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got null']);
+    expect(densified.trace.ticks[0].inputs).toBeUndefined();
+    const clean = parseNativeTrace(JSON.parse(JSON.stringify(first.trace)));
+    expect(clean.errors).toEqual([]);
+    expect(clean.trace.ticks[0].inputs).toBeUndefined();
+  });
+
   it('rejects wrong schema/version as errors', () => {
     const parsed = parseNativeTrace({ schema: 'nope', version: 1, tps: 30, players: [], spawns: [], ticks: [] });
     expect(parsed.errors.length).toBeGreaterThan(0);
