@@ -87,6 +87,61 @@ const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
 
+/**
+ * Describe an invalid `useSharedMemory` value for the labeled validation
+ * error shared by the pool and the IPC bridge (#433). Strings quote their
+ * exact contents (truncated) because the JSON string `"false"` is the
+ * canonical repro; other non-serializable types only name their JS type so
+ * an error message can never embed an arbitrary payload structure.
+ */
+export function describeInvalidUseSharedMemory(value: unknown): string {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'string': {
+      const quoted = value.length > 64 ? `${value.slice(0, 64)}…` : value;
+      return `string "${quoted}"`;
+    }
+    case 'number':
+      return `number (${value})`;
+    case 'bigint':
+      return `bigint (${value})`;
+    case 'object':
+      return Array.isArray(value) ? 'array' : 'object';
+    default:
+      return typeof value;
+  }
+}
+
+/**
+ * Strict normalization of the `useSharedMemory` init option, the choke
+ * point every init surface converges on (#433).
+ *
+ * The value used to be consumed verbatim: any truthy non-boolean — including
+ * the JSON string `"false"` a non-Python IPC client might send — silently
+ * enabled the SharedArrayBuffer transport the caller asked to disable, while
+ * falsy non-boolean values (`null`, `0`) silently forced message mode. Both
+ * bypassed the SharedArrayBuffer capability check that guards the
+ * config-default path.
+ *
+ * Repo doctrine for boolean options is strict (action fields, physics
+ * sleeping flags, and map settings all accept only real booleans), and no
+ * string alias for this field is documented anywhere (README, docs/, and the
+ * bundled Python client all send real booleans; the lenient `false`/`0`/`no`
+ * coercion lives only on the USE_SHARED_MEMORY environment-variable surface
+ * in config-loader). So only `true`/`false` are accepted, `undefined` keeps
+ * the "no preference" config-default semantics, and every other type is
+ * rejected with a labeled error naming the offending type/value.
+ */
+export function normalizeUseSharedMemory(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new Error(
+      `Invalid useSharedMemory: expected a boolean (true or false), got ${describeInvalidUseSharedMemory(value)}`,
+    );
+  }
+  return value;
+}
+
 export class WorkerPool {
   private workers: Worker[] = [];
   private workerEnvs: number[] = [];
@@ -287,6 +342,10 @@ export class WorkerPool {
     if (!Number.isInteger(this.numWorkers) || this.numWorkers < 1) {
       throw new Error(`Invalid worker count: expected a positive integer, got ${this.numWorkers}`);
     }
+    // Strictly validate the transport request BEFORE teardown (#392/#440
+    // doctrine): a malformed useSharedMemory must reject without closing an
+    // existing healthy pool (#433).
+    const requestedSharedMemory = normalizeUseSharedMemory(useSharedMemory);
     // Validate before teardown or worker spawning (#392), keeping an
     // oversized count from reaching Box2D world construction.
     const numOpponents = SharedMemoryManager.normalizeNumOpponents(
@@ -304,10 +363,23 @@ export class WorkerPool {
     this.state = 'initializing';
     this.failure = null;
 
-    // Determine if we should use shared memory
+    // Determine if we should use shared memory. The capability check that
+    // guards the config default also governs an explicit request (#433):
+    // an explicit `true` degrades to message-passing (loudly) on a runtime
+    // without SharedArrayBuffer instead of crashing inside the constructor,
+    // an explicit `false` always selects message-passing, and the config
+    // default is coerced to a real boolean so a hand-edited config file can
+    // never leak a truthy non-boolean into the transport decision.
     const sharedMemorySupported = SharedMemoryManager.isSupported();
+    if (requestedSharedMemory === true && !sharedMemorySupported) {
+      console.warn(
+        '[WorkerPool] useSharedMemory=true requested, but SharedArrayBuffer is not available in this runtime; falling back to message-passing mode',
+      );
+    }
     this.useSharedMemory =
-      useSharedMemory !== undefined ? useSharedMemory : getConfig().workerPool.useSharedMemory && sharedMemorySupported;
+      requestedSharedMemory === undefined
+        ? getConfig().workerPool.useSharedMemory === true && sharedMemorySupported
+        : requestedSharedMemory && sharedMemorySupported;
 
     // Set default ring size
     this.ringSize = getConfig().workerPool.ringBufferSize;
