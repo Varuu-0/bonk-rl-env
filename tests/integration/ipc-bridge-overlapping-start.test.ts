@@ -179,6 +179,63 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
     }
   }, 60000);
 
+  it('two start() calls during an unsettled close(): exactly one wins and serves; the loser rejects with a typed error', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    try {
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      await bridge.ready;
+      expect(await roundTripInitStatus()).toBe('ok');
+      const servingSock = (bridge as any).sock;
+
+      // close() and TWO restarts issued back-to-back WITHOUT awaiting the
+      // old cycle. The drain admits both, but they race for one transport:
+      // both recreate the closed ROUTER and both bind — the losing bind's
+      // failed-bind cleanup would close the shared handle out from under
+      // the winner, the original #418 kill (review finding). Exactly one
+      // admitted caller (the first to drain — serve2) takes the transport;
+      // serve3 must be superseded and reject cleanly before touching the
+      // socket.
+      const closePromise = bridge.close();
+      const serve2 = bridge.start();
+      const serve3 = bridge.start();
+      serve2.catch(() => {});
+      serve3.catch(() => {});
+      await closePromise;
+
+      // The superseded caller rejects promptly with the typed error...
+      const loserErr = await rejectOf(serve3);
+      expect(loserErr.name).toBe('BridgeAlreadyRunning');
+      expect(loserErr.message).toMatch(/superseded|already running/);
+
+      // ...while the winner's cycle is still active (settles only on
+      // close()), the winner bound a fresh ROUTER and serves round-trips,
+      // and isClosed() stays truthful throughout.
+      let winnerSettled = false;
+      serve2.then(
+        () => {
+          winnerSettled = true;
+        },
+        () => {
+          winnerSettled = true;
+        },
+      );
+      expect(winnerSettled).toBe(false);
+
+      await bridge.ready;
+      expect(bridge.isClosed()).toBe(false);
+      expect((bridge as any).sock).not.toBe(servingSock);
+      expect((bridge as any).sock.closed).toBe(false);
+      expect(await roundTripInitStatus()).toBe('ok');
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await serve2;
+      await serve1; // the old draining cycle also settles
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
   it('a restart issued before the drained cycle settles is not rejected as an overlap (#263 pattern)', async () => {
     const bridge = new IpcBridge({ server: { port } } as any);
     try {

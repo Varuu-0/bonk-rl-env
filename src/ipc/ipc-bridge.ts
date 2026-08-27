@@ -111,6 +111,16 @@ export class IpcBridge {
   // startPromise guard (#267).
   private _serveCycle: Promise<void> | null = null;
 
+  // Exclusive transport-admission token (issue #418 review): while a start()
+  // invocation holds it, no other start() may proceed into socket recreation
+  // and bind. Close() resets it (a drain re-opens admission for exactly one
+  // restart); the holder clears it on settle. Guarded by the retained cycling
+  // of _serveCycle only against LIVE cycles, so concurrent drain-window
+  // restarts (two start() calls against an unsettled close()) serialize here
+  // instead of double-binding — the losing bind's EADDRINUSE cleanup would
+  // close the shared ROUTER out from under the winner, the original #418 kill.
+  private _drainAdmission: symbol | null = null;
+
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
   // promise instead of the stale, already-resolved first-bind one (#263).
@@ -369,7 +379,8 @@ export class IpcBridge {
       err.name = 'BridgeAlreadyRunning';
       throw err;
     }
-    const cycle = this.runStartCycle();
+    const admission = Symbol('start-cycle');
+    const cycle = this.runStartCycle(admission);
     this._serveCycle = cycle;
     try {
       await cycle;
@@ -381,6 +392,9 @@ export class IpcBridge {
       if (this._serveCycle === cycle) {
         this._serveCycle = null;
       }
+      if (this._drainAdmission === admission) {
+        this._drainAdmission = null;
+      }
     }
   }
 
@@ -389,7 +403,7 @@ export class IpcBridge {
    * an overlapping start() can never reach the shared transport state
    * mutated here (issue #418).
    */
-  private async runStartCycle(): Promise<void> {
+  private async runStartCycle(admission: symbol): Promise<void> {
     // Re-arm `ready` before waiting for a prior close to finish. Callers
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
@@ -411,6 +425,28 @@ export class IpcBridge {
         }
       }
     }
+
+    // Exclusive post-drain admission (issue #418): every concurrently
+    // admitted start() exhausts its drain together (via the previousClose
+    // await above), so more than one exhausted caller could race into
+    // socket recreation and bind. Doing that from two callers is the #418
+    // kill in disguise: the losing bind rejects with EADDRINUSE and its
+    // failed-bind cleanup closes the shared ROUTER — the winner's live
+    // handle — killing the healthy serve loop. Exactly one admitted caller
+    // takes the transport: the first to reach here claims _drainAdmission
+    // (close() reset it, so a fresh drain re-opens admission); every
+    // superseded caller rejects cleanly here, BEFORE touching the shared
+    // socket. The claim runs synchronously (no yield), so the #402
+    // start-then-immediate-close race still snapshots socket/_closed BEFORE
+    // close() runs and classifies its bind rejection correctly.
+    if (this._drainAdmission !== null) {
+      const err = new Error(
+        'IpcBridge.start() superseded by a concurrent start(): another admitted restart already holds the transport admission on this bridge; await that cycle or close() it before starting again',
+      );
+      err.name = 'BridgeAlreadyRunning';
+      throw err;
+    }
+    this._drainAdmission = admission;
 
     const addr = `tcp://${this.bindAddress}:${this.port}`;
     // A closed ZMQ socket is permanently destroyed and can never be
@@ -1263,6 +1299,10 @@ export class IpcBridge {
       return Promise.resolve();
     }
     this._closed = true;
+    // A drain re-opens transport admission: the next start() (or the first
+    // of several concurrently admitted ones) claims _drainAdmission fresh,
+    // so exactly one restart proceeds into recreation/bind (#418 review).
+    this._drainAdmission = null;
     if (this.sessionReapTimer) {
       clearInterval(this.sessionReapTimer);
       this.sessionReapTimer = undefined;
