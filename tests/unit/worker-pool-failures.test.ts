@@ -251,6 +251,16 @@ describe('WorkerPool failure state', () => {
     );
     expect(reactiveMessage).toContain('worker pool is in failed state');
     expect(pool.failedStateError('step')).toBe(reactiveMessage);
+
+    // Post-close boundary: close() flips the state to 'closed' and clears
+    // the recorded failure, and the guard must throw there too — the
+    // documented precondition covers every non-failed state, not just
+    // 'ready'.
+    await pool.close();
+    expect(pool.isFailed()).toBe(false);
+    expect(() => pool!.failedStateError('step')).toThrow(
+      "Internal error: failedStateError('step') requires a failed pool, got state 'closed'",
+    );
   });
 
   it('rejects a shared worker error without reading partial results', async () => {
