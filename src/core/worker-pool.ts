@@ -7,6 +7,13 @@ import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
 import { assertValidAction, encodePlayerInput } from './action-validation';
+import { assertSupportedSeed } from './seed-range';
+
+// The shared seed domain moved to ./seed-range (#460): the pool's reset
+// validation and the direct BonkEnvironment boundary (constructor + reset)
+// must enforce the same [0, 0xFFFFFFFE] integer domain with the same labeled
+// error, so the two transports and the in-process API cannot drift.
+export { MAX_SUPPORTED_RESET_SEED } from './seed-range';
 
 /**
  * Observation data structure extracted from shared memory
@@ -46,12 +53,6 @@ type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
 
 const SYNC_COMPLETED_INDEX = 0;
 const SYNC_STATUS_OFFSET = 1;
-
-// The shared-memory reset path encodes real seeds as seed + 1 (0 is the
-// "no seed" sentinel), so a seed must fit in [0, 0xFFFFFFFE] for seed + 1 to
-// remain a representable uint32. The range is enforced for BOTH transports so
-// the two cannot drift (#226).
-const MAX_SUPPORTED_RESET_SEED = 0xfffffffe;
 
 /**
  * Upper bound on the number of environments a single WorkerPool may run.
@@ -351,6 +352,19 @@ export class WorkerPool {
     const numOpponents = SharedMemoryManager.normalizeNumOpponents(
       config?.numOpponents ?? (config as any)?.num_opponents,
     );
+    // The configured seed seeds every pooled environment's construction
+    // stream (worker.ts derives seed + global env index, with only the
+    // derived offset wrapped into the supported domain). Validate it with
+    // the same shared validator the direct BonkEnvironment boundary and
+    // reset() use (#460 review): an out-of-domain config.seed previously
+    // reached the PRNG's `>>> 0` and silently ran the pool on a different
+    // stream than the caller requested. Absent (undefined/null) keeps the
+    // worker's documented `?? 0` default. Throws before closeInternal(),
+    // so a validation-only re-init rejection cannot tear down an existing
+    // healthy pool (#440 doctrine, same as the numOpponents guard above).
+    if (config?.seed !== undefined && config?.seed !== null) {
+      assertSupportedSeed(config.seed, 'constructor');
+    }
     await this.closeInternal(); // Clean up existing if re-initialized
     if (this.closeEpoch !== startCloseEpoch) {
       // An external close() resolved while this init was pending (suspended
@@ -645,17 +659,16 @@ export class WorkerPool {
     }
 
     // Validate the seed values in BOTH transports, not just shared memory:
-    // message passing forwards raw seeds to `env.reset()`, whose PRNG
-    // silently normalizes any number with `seed >>> 0` (truncating floats,
-    // bit-casting negatives, wrapping values >= 2^32). The same call must
-    // not throw in shared mode and silently reseed with a different value
-    // in message mode. A seed valid in one transport must mean the same
-    // thing in the other.
+    // message passing forwards raw seeds to `env.reset()`, and since #460
+    // the direct boundary also rejects out-of-domain seeds instead of
+    // letting the PRNG's `seed >>> 0` silently normalize them (truncating
+    // floats, bit-casting negatives, wrapping values >= 2^32). The same
+    // call must not throw in shared mode and silently reseed with a
+    // different value in message mode. A seed valid in one transport must
+    // mean the same thing in the other.
     if (seeds) {
       for (const seed of seeds) {
-        if (!Number.isInteger(seed) || seed < 0 || seed > MAX_SUPPORTED_RESET_SEED) {
-          throw new Error(`Seed ${seed} out of supported range [0, ${MAX_SUPPORTED_RESET_SEED}] for reset`);
-        }
+        assertSupportedSeed(seed, 'reset');
       }
     }
 

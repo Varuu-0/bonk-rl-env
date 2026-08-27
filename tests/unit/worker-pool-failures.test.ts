@@ -203,6 +203,7 @@ vi.mock('../../src/config/config-loader', () => ({
 }));
 
 import { WorkerPool, MAX_NUM_ENVS } from '../../src/core/worker-pool';
+import { MAX_SUPPORTED_RESET_SEED } from '../../src/core/seed-range';
 
 describe('WorkerPool failure state', () => {
   let pool: WorkerPool | undefined;
@@ -620,6 +621,55 @@ describe('WorkerPool failure state', () => {
       expect((pool as any).state).toBe('ready');
       const results = await pool.step([0]);
       expect(results).toHaveLength(1);
+    });
+
+    it('rejects an out-of-domain config seed in both transports before any worker or buffer exists (#460)', async () => {
+      for (const useShared of [false, true]) {
+        const p = new WorkerPool(1);
+        for (const badSeed of [2 ** 32, -1, 1.9, MAX_SUPPORTED_RESET_SEED + 1]) {
+          await expect(p.init(2, { seed: badSeed }, useShared)).rejects.toThrow(
+            `Invalid seed ${badSeed}: expected an integer in [0, ${MAX_SUPPORTED_RESET_SEED}]`,
+          );
+        }
+        expect(fakes.FakeWorker.instances).toHaveLength(0);
+        expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(0);
+        expect((p as any).state).toBe('idle');
+        await p.close();
+      }
+    });
+
+    it('keeps an existing healthy pool serving after a rejected seed re-init (validation-only, #440 doctrine)', async () => {
+      pool = new WorkerPool(1);
+
+      await pool.init(1, { seed: 42 }, false);
+      expect((pool as any).state).toBe('ready');
+      expect(fakes.FakeWorker.instances).toHaveLength(1);
+      const survivingWorker = fakes.FakeWorker.instances[0];
+
+      await expect(pool.init(1, { seed: 2 ** 32 }, false)).rejects.toThrow(
+        `Invalid seed ${2 ** 32}: expected an integer in [0, ${MAX_SUPPORTED_RESET_SEED}]`,
+      );
+
+      // The validation threw before closeInternal(): the healthy pool and
+      // its live worker survive (same instance, not torn down, none
+      // re-spawned) and keep serving.
+      expect((pool as any).state).toBe('ready');
+      expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+      expect(survivingWorker.terminated).toBe(false);
+      const results = await pool.step([0]);
+      expect(results).toHaveLength(1);
+    });
+
+    it('still initializes successfully with a valid config seed', async () => {
+      pool = new WorkerPool(1);
+
+      // Shared mode with the fakes (as in the MAX_NUM_ENVS acceptance test
+      // above) so per-env batch lengths are modeled; the message-mode
+      // fakes reply with one batch per worker regardless of env count.
+      await pool.init(2, { seed: MAX_SUPPORTED_RESET_SEED }, true);
+      expect((pool as any).state).toBe('ready');
+      const results = await pool.step([0, 0]);
+      expect(results).toHaveLength(2);
     });
   });
 

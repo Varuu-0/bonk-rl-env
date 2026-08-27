@@ -36,7 +36,7 @@ describe('Worker thread', () => {
           id: 'test-1',
           status: 'ok',
           data: { mode: 'message' },
-        })
+        }),
       );
     }, 10000);
 
@@ -47,6 +47,26 @@ describe('Worker thread', () => {
     // would then hit the shared memory success paths, which call Atomics.wait()
     // and block forever in a single-threaded test context.
     // Shared memory init is tested via integration/e2e tests with real worker threads.
+
+    it('rejects an out-of-domain init seed with the shared validator instead of wrapping (#460)', () => {
+      // A driver posting init directly to the worker (bypassing
+      // WorkerPool.initInternal's validation) must get the same labeled
+      // rejection: only the derived per-env offset wraps, never the
+      // caller-supplied base seed.
+      messageHandler({
+        type: 'init',
+        numEnvs: 1,
+        config: { seed: 2 ** 32 },
+        id: 'init-bad-seed',
+      });
+      expect(mockParentPort.postMessage).toHaveBeenCalledWith(
+        expect.objectContaining({
+          id: 'init-bad-seed',
+          status: 'error',
+          error: 'Invalid seed 4294967296: expected an integer in [0, 4294967294]',
+        }),
+      );
+    }, 10000);
   });
 
   describe('reset message', () => {
@@ -70,7 +90,7 @@ describe('Worker thread', () => {
           id: 'reset-1',
           status: 'ok',
           data: expect.any(Array),
-        })
+        }),
       );
     }, 10000);
 
@@ -84,7 +104,7 @@ describe('Worker thread', () => {
         expect.objectContaining({
           id: 'reset-seeds',
           status: 'ok',
-        })
+        }),
       );
     }, 10000);
   });
@@ -104,9 +124,7 @@ describe('Worker thread', () => {
       messageHandler({
         type: 'step',
         id: 'step-1',
-        actions: [
-          { left: false, right: false, up: false, down: false, heavy: false },
-        ],
+        actions: [{ left: false, right: false, up: false, down: false, heavy: false }],
       });
       expect(mockParentPort.postMessage).toHaveBeenCalledWith(
         expect.objectContaining({
@@ -114,14 +132,12 @@ describe('Worker thread', () => {
           status: 'ok',
           data: expect.any(Array),
           telemetry: { tick: expect.any(Number) },
-        })
+        }),
       );
     }, 10000);
 
     it('auto-resets environment when done is true', () => {
-      const actions = [
-        { left: false, right: false, up: false, down: false, heavy: false },
-      ];
+      const actions = [{ left: false, right: false, up: false, down: false, heavy: false }];
 
       messageHandler({ type: 'step', id: 'step-pre', actions });
       mockParentPort.postMessage.mockClear();
@@ -161,7 +177,7 @@ describe('Worker thread', () => {
           id: 'step-shared-no-mem',
           status: 'error',
           error: expect.stringContaining('Shared memory not initialized'),
-        })
+        }),
       );
     }, 10000);
   });
@@ -193,7 +209,7 @@ describe('Worker thread', () => {
           id: 'wait-no-mem',
           status: 'error',
           error: 'Shared memory not initialized',
-        })
+        }),
       );
     }, 10000);
   });
@@ -209,7 +225,7 @@ describe('Worker thread', () => {
           id: 'telemetry-1',
           status: 'ok',
           data: expect.anything(),
-        })
+        }),
       );
     }, 10000);
   });
@@ -226,7 +242,7 @@ describe('Worker thread', () => {
           id: 'error-step',
           status: 'error',
           error: expect.any(String),
-        })
+        }),
       );
     }, 10000);
   });
