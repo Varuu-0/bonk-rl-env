@@ -69,7 +69,12 @@ export interface DifferentialVerdict {
   ticksOutsideTolerance: number;
   /** Worst error per field across all compared discs (data rows). */
   worst: {
-    dx: number; dy: number; dvx: number; dvy: number; da: number; dav: number;
+    dx: number;
+    dy: number;
+    dvx: number;
+    dvy: number;
+    da: number;
+    dav: number;
   };
   perTick: TickComparison[];
   /** Count of ticks skipped because the trace carried no inputs and no discs. */
@@ -97,10 +102,7 @@ const DEFAULT_TOLERANCES: DifferentialTolerances = {
  * player at its recorded spawn, returning an environment whose `step` advances
  * the same physics the native trace describes. The caller owns close().
  */
-export function buildTraceEnvironment(
-  trace: NativeTrace,
-  opts: ComparatorOptions = {},
-): BonkEnvironment {
+export function buildTraceEnvironment(trace: NativeTrace, opts: ComparatorOptions = {}): BonkEnvironment {
   // Merge the trace's native settings (and any explicit overrides) into the
   // RAW map's settings before normalization, so the adapter's settings
   // sanitizer forwards them into mapDef.settings — the only path
@@ -109,15 +111,13 @@ export function buildTraceEnvironment(
   // config.physics object is silently dropped by the environment. The map is
   // shallow-cloned so the caller's trace object is never mutated.
   const rawMap: any = trace.map;
-  const mapObj: any = (rawMap !== null && typeof rawMap === 'object' && !Array.isArray(rawMap))
-    ? { ...rawMap }
-    : rawMap;
+  const mapObj: any = rawMap !== null && typeof rawMap === 'object' && !Array.isArray(rawMap) ? { ...rawMap } : rawMap;
   const overrides = { ...(trace.settings ?? {}), ...(opts.settingsOverrides ?? {}) };
   if (Object.keys(overrides).length > 0 && mapObj !== null && typeof mapObj === 'object') {
     mapObj.settings = { ...(mapObj.settings ?? {}), ...overrides };
   }
   const mapDef = normalizeMap(mapObj);
-  const players = trace.players.map(p => p.id);
+  const players = trace.players.map((p) => p.id);
 
   const env = new BonkEnvironment({
     numOpponents: Math.max(0, players.length - 1),
@@ -168,10 +168,7 @@ function isAlignedTraceDisc(value: unknown, slot: number): value is NativeTraceD
  * Replay a native trace through a fresh environment and compare every tick.
  * Returns the verdict plus per-tick diffs for inspection.
  */
-export function compareTrace(
-  trace: NativeTrace,
-  opts: ComparatorOptions = {},
-): DifferentialVerdict {
+export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): DifferentialVerdict {
   const tol = { ...DEFAULT_TOLERANCES, ...(opts.tolerances ?? {}) };
   const env = buildTraceEnvironment(trace, opts);
   try {
@@ -187,6 +184,15 @@ export function compareTrace(
     const aliveSeen = new Set<number>();
 
     for (const recorded of trace.ticks) {
+      // Drain deferred respawns BEFORE applying this tick's inputs (#430):
+      // mirrors BonkEnvironment.step()'s #409 ordering. A disc queued by the
+      // previous tick's death pass must be alive at its spawn when applyInput
+      // runs, or the recorded revival-tick input byte is silently dropped by
+      // the engine's alive-guard and the replay diverges from native/engine.
+      // tick()'s own drain is idempotent, so this extra call is a no-op
+      // whenever nothing is queued.
+      physics.processRespawns();
+
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {
@@ -244,9 +250,12 @@ export function compareTrace(
           dav: Math.abs(st.angularVel - rec.av),
         };
         if (
-          !Number.isFinite(row.dx) || !Number.isFinite(row.dy) ||
-          !Number.isFinite(row.dvx) || !Number.isFinite(row.dvy) ||
-          !Number.isFinite(row.da) || !Number.isFinite(row.dav)
+          !Number.isFinite(row.dx) ||
+          !Number.isFinite(row.dy) ||
+          !Number.isFinite(row.dvx) ||
+          !Number.isFinite(row.dvy) ||
+          !Number.isFinite(row.da) ||
+          !Number.isFinite(row.dav)
         ) {
           mismatches.push({ id, reason: 'non-finite disc diff' });
           withinTolerance = false;
@@ -261,9 +270,12 @@ export function compareTrace(
         worst.dav = Math.max(worst.dav, row.dav);
 
         if (
-          row.dx > tol.position || row.dy > tol.position ||
-          row.dvx > tol.velocity || row.dvy > tol.velocity ||
-          row.da > tol.angle || row.dav > tol.angularVelocity
+          row.dx > tol.position ||
+          row.dy > tol.position ||
+          row.dvx > tol.velocity ||
+          row.dvy > tol.velocity ||
+          row.da > tol.angle ||
+          row.dav > tol.angularVelocity
         ) {
           withinTolerance = false;
         }
