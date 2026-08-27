@@ -391,13 +391,19 @@ export class IpcBridge {
     // Those two exemptions keep the previously supported racy
     // close()/start() and drain-window restart patterns working; a live
     // cycle (serving or mid-bind) always rejects. The check runs before
-    // the first await, so no shared state is mutated on rejection.
+    // the first await, so no shared state is mutated on rejection. NOTE:
+    // an exemption here only admits a caller UP TO the exclusive post-drain
+    // admission re-check inside runStartCycle (after the previousClose
+    // drain, before any socket recreation/bind) — exactly one admitted
+    // caller wins there and owns the transport; every superseded caller
+    // rejects with the same typed error before touching the shared socket,
+    // so a drain can never admit two racing rebinds (issue #418 review).
     const activeCycle = this._serveCycle;
     if (activeCycle && this.closePromise === null && !this.sock.closed) {
       const err = new Error(
         'IpcBridge.start() called while already running: a serve cycle is still active on this bridge; await that cycle or close() it before starting again',
       );
-      err.name = 'BridgeAlreadyRunning';
+      err.name = 'BridgeOverlappingStart';
       throw err;
     }
     const admission = Symbol('start-cycle');
@@ -469,7 +475,7 @@ export class IpcBridge {
       const err = new Error(
         'IpcBridge.start() superseded by a concurrent start(): another admitted restart already holds the transport admission on this bridge; await that cycle or close() it before starting again',
       );
-      err.name = 'BridgeAlreadyRunning';
+      err.name = 'BridgeOverlappingStart';
       throw err;
     }
     this._drainAdmission = admission;

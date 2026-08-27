@@ -117,7 +117,7 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       // Overlapping call: fails fast with a clear, programmatically
       // distinguishable error...
       const overlapErr = await rejectOf(bridge.start());
-      expect(overlapErr.name).toBe('BridgeAlreadyRunning');
+      expect(overlapErr.name).toBe('BridgeOverlappingStart');
       expect(overlapErr.message).toMatch(/already running/);
 
       // ...WITHOUT touching the running instance's transport or state:
@@ -205,7 +205,7 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
 
       // The superseded caller rejects promptly with the typed error...
       const loserErr = await rejectOf(serve3);
-      expect(loserErr.name).toBe('BridgeAlreadyRunning');
+      expect(loserErr.name).toBe('BridgeOverlappingStart');
       expect(loserErr.message).toMatch(/superseded|already running/);
 
       // ...while the winner's cycle is still active (settles only on
@@ -275,7 +275,7 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
 
       // Overlap rejected while cycle 1 is live...
       const overlapErr = await rejectOf(bridge.start());
-      expect(overlapErr.name).toBe('BridgeAlreadyRunning');
+      expect(overlapErr.name).toBe('BridgeOverlappingStart');
       await bridge.close();
       await serve1;
 
