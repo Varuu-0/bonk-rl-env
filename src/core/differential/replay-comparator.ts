@@ -25,7 +25,7 @@
 import { BonkEnvironment } from '../environment';
 import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
-import { isNativeTraceDisc } from './native-trace';
+import { isNativeTraceDisc, isReplayableInputByte } from './native-trace';
 import type { NativeTrace, NativeTraceDisc } from './native-trace';
 import { decodeEncodedAction } from '../action-validation';
 
@@ -153,6 +153,21 @@ function decodeInput(bits: number | undefined): PlayerInput {
 }
 
 /**
+ * Comparator-side input gate (issue #450): a recorded Discrete(64) byte only
+ * drives replay when it is a finite integer inside the shared encoded range
+ * — the same invariant `parseNativeTrace` enforces at parse time, re-checked
+ * here because a caller can compare an unparsed (or error-ignoring) trace.
+ * A corrupt byte must not drive replayed input: the slot falls back to the
+ * neutral action and is flagged, so the tick fails loudly instead of silently
+ * executing a fabricated button press (e.g. -1 would set every bit). A slot
+ * beyond the recorded array carries no byte at all and keeps the documented
+ * neutral fallback without being flagged.
+ */
+function isReplayableTraceInput(value: unknown): value is number {
+  return isReplayableInputByte(value);
+}
+
+/**
  * Comparator-side disc gate: a disc only counts as replayable/comparable when
  * it is a fully-valid native disc AND its `id` matches the array slot it sits
  * in (the slot-alignment invariant `parseNativeTrace` enforces at parse time).
@@ -193,11 +208,23 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // whenever nothing is queued.
       physics.processRespawns();
 
-      // Replay this tick's inputs for each recorded player.
+      // Replay this tick's inputs for each recorded player. A corrupt byte
+      // must not drive replay (#450): the slot falls back to the neutral
+      // action — the same fallback a missing byte takes — and is flagged
+      // below, failing the tick loudly instead of silently executing a
+      // fabricated button press.
       const inputs = recorded.inputs ?? [];
+      const corruptInputSlots: number[] = [];
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (isAlignedTraceDisc(recorded.discs[id], id)) {
+        if (!isAlignedTraceDisc(recorded.discs[id], id)) continue;
+        if (id >= inputs.length) {
+          // No recorded byte for this slot: the documented neutral fallback.
+          physics.applyInput(id, decodeInput(undefined));
+        } else if (isReplayableTraceInput(inputs[id])) {
           physics.applyInput(id, decodeInput(inputs[id]));
+        } else {
+          corruptInputSlots.push(id);
+          physics.applyInput(id, decodeInput(0));
         }
       }
       // Neutral input for any traced player without a record so the world still
@@ -208,6 +235,14 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       const mismatches: TickComparison['mismatches'] = [];
       let withinTolerance = true;
       let deathAgreements = 0;
+
+      // Corrupt input bytes (#450) fail the tick: the replayed slot was
+      // downgraded to the neutral fallback, so the tick cannot be vouched
+      // for even when the kinematic diff happens to stay within tolerance.
+      for (const id of corruptInputSlots) {
+        mismatches.push({ id, reason: 'malformed input byte' });
+        withinTolerance = false;
+      }
 
       // The discs array is index-aligned by player id: entries[i] is player i.
       recorded.discs.forEach((rec, id) => {

@@ -20,6 +20,8 @@
  *  - LIVE_STATE_EXTRACTION.md §9.1  — tick = per-round rebase of native `fig`.
  *  - DEOBFUSCATION.md §33.1          — native settings defaults/guards.
  */
+import { MAX_ENCODED_ACTION } from '../action-validation';
+
 export const TRACE_SCHEMA = 'bonk.rl.env.native-trace';
 export const TRACE_SCHEMA_VERSION = 1;
 
@@ -131,6 +133,32 @@ export function isNativeTraceDisc(value: unknown): value is NativeTraceDisc {
 }
 
 /**
+ * Return the first validation failure for an encoded Discrete(64) input byte,
+ * or null when it is valid: a finite integer inside the shared encoded range
+ * [0, MAX_ENCODED_ACTION] (issue #450). Anything else — negative, fractional,
+ * non-finite, or a non-number — would coerce through decodeEncodedAction into
+ * a fabricated button press (e.g. -1 sets every bit), so the parser rejects it
+ * before it can reach replay.
+ */
+function inputByteError(value: unknown): string | null {
+  if (typeof value !== 'number' || !Number.isFinite(value)) {
+    return `expected a finite number, got ${String(value)}`;
+  }
+  if (!Number.isInteger(value)) {
+    return `expected an integer, got ${String(value)}`;
+  }
+  if (value < 0 || value > MAX_ENCODED_ACTION) {
+    return `expected an integer in [0, ${MAX_ENCODED_ACTION}], got ${String(value)}`;
+  }
+  return null;
+}
+
+/** Return true for an encoded input byte that is safe to replay (issue #450). */
+export function isReplayableInputByte(value: unknown): value is number {
+  return inputByteError(value) === null;
+}
+
+/**
  * The single disc acceptance predicate for the parsed output: a disc is
  * comparable only when it is a fully-valid native disc AND its `id` matches
  * its array slot (the index-alignment invariant). Returns the message suffix
@@ -156,8 +184,12 @@ function discOutputError(value: unknown, slot: number): string | null {
  * errors and omitted from the returned trace; malformed or slot-misaligned
  * disc entries are replaced with null (absent) so the index-aligned discs
  * array stays safe for downstream iteration even when a caller ignores the
- * errors. The embedded map is normalized by the replay comparator (which owns
- * the normalizeMap import).
+ * errors. An `inputs` array (per-player Discrete(64) bytes, issue #450) must
+ * be either absent or a fully-valid encoded set — every corrupt byte is
+ * reported (naming the tick, player id, and offending value) and the whole
+ * violating set is dropped from the returned trace, so a caller that ignores
+ * the errors can never replay a fabricated button press. The embedded map is
+ * normalized by the replay comparator (which owns the normalizeMap import).
  */
 export function parseNativeTrace(raw: unknown): ParsedTrace {
   const errors: string[] = [];
@@ -219,6 +251,18 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
           errors.push(`tick ${tick.t} disc ${id} ${err}`);
         }
       });
+      if (tick.inputs !== undefined) {
+        if (!Array.isArray(tick.inputs)) {
+          errors.push(`tick ${tick.t} inputs must be an array when present`);
+        } else {
+          tick.inputs.forEach((byte, id) => {
+            const err = inputByteError(byte);
+            if (err !== null) {
+              errors.push(`tick ${tick.t} input ${id} is malformed: ${err}`);
+            }
+          });
+        }
+      }
     }
   }
 
@@ -229,38 +273,64 @@ export function parseNativeTrace(raw: unknown): ParsedTrace {
     map: t.map,
     settings: t.settings,
     players: Array.isArray(t.players)
-      ? t.players.filter((p): p is NativeTracePlayer =>
-          p !== null && typeof p === 'object' && !Array.isArray(p) &&
-          typeof p.id === 'number' && p.id >= 0)
+      ? t.players.filter(
+          (p): p is NativeTracePlayer =>
+            p !== null && typeof p === 'object' && !Array.isArray(p) && typeof p.id === 'number' && p.id >= 0,
+        )
       : [],
     spawns: Array.isArray(t.spawns)
-      ? t.spawns.filter((s): s is NativeTraceSpawn =>
-          s !== null && typeof s === 'object' && !Array.isArray(s) &&
-          typeof s.id === 'number' && s.id >= 0 &&
-          typeof s.x === 'number' && Number.isFinite(s.x) &&
-          typeof s.y === 'number' && Number.isFinite(s.y))
+      ? t.spawns.filter(
+          (s): s is NativeTraceSpawn =>
+            s !== null &&
+            typeof s === 'object' &&
+            !Array.isArray(s) &&
+            typeof s.id === 'number' &&
+            s.id >= 0 &&
+            typeof s.x === 'number' &&
+            Number.isFinite(s.x) &&
+            typeof s.y === 'number' &&
+            Number.isFinite(s.y),
+        )
       : [],
     ticks: Array.isArray(t.ticks)
       ? t.ticks
-          .filter((tk): tk is NativeTraceTick =>
-            tk !== null && typeof tk === 'object' && !Array.isArray(tk) &&
-            typeof tk.t === 'number' && tk.t >= 0 &&
-            Array.isArray(tk.discs))
-          .map((tk) => ({
-            ...tk,
-            // Malformed discs (including `alive: false`, which the
-            // `alive: true` literal type forbids) and slot-misaligned discs
-            // (id != slot) never leak into the typed output: they are replaced
-            // with null, keeping the array index-aligned by player id
-            // (§9.2 alive == presence). discOutputError is the same predicate
-            // the error loop above used, so errors and output cannot diverge.
-            discs: tk.discs.map((disc, id) =>
-              disc === null || disc === undefined
-                ? null
-                : discOutputError(disc, id) === null
-                  ? disc
-                  : null),
-          }))
+          .filter(
+            (tk): tk is NativeTraceTick =>
+              tk !== null &&
+              typeof tk === 'object' &&
+              !Array.isArray(tk) &&
+              typeof tk.t === 'number' &&
+              tk.t >= 0 &&
+              Array.isArray(tk.discs),
+          )
+          .map((tk) => {
+            // Malformed inputs (issue #450) never leak into the typed output:
+            // an input set must be either absent or a fully-valid encoded
+            // array, because a corrupt byte would replay as a fabricated
+            // button press (e.g. -1 sets every bit). A violating set is
+            // dropped entirely — the comparator falls back to a neutral
+            // input for a missing byte — mirroring how malformed discs are
+            // nulled. inputByteError is the same predicate the error loop
+            // above used, so reported errors and the typed output cannot
+            // silently diverge.
+            const inputs =
+              Array.isArray(tk.inputs) && tk.inputs.every((byte) => inputByteError(byte) === null)
+                ? tk.inputs
+                : undefined;
+            return {
+              ...tk,
+              inputs,
+              // Malformed discs (including `alive: false`, which the
+              // `alive: true` literal type forbids) and slot-misaligned discs
+              // (id != slot) never leak into the typed output: they are replaced
+              // with null, keeping the array index-aligned by player id
+              // (§9.2 alive == presence). discOutputError is the same predicate
+              // the error loop above used, so errors and output cannot diverge.
+              discs: tk.discs.map((disc, id) =>
+                disc === null || disc === undefined ? null : discOutputError(disc, id) === null ? disc : null,
+              ),
+            };
+          })
       : [],
   };
 
