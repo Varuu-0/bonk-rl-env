@@ -412,14 +412,18 @@ export class IpcBridge {
     try {
       await cycle;
     } finally {
-      // Only the owner clears the guard: with the racy patterns above two
-      // start() invocations can briefly overlap (old cycle draining while
-      // the new one serves), and the older settlement must not unlock the
-      // transport for a third call while the newer cycle still holds it.
-      if (this._serveCycle === cycle) {
-        this._serveCycle = null;
-      }
+      // Slot-clear is gated on ADMISSION ownership, not on field identity: a
+      // superseded caller (rejected at the post-drain admission claim) is
+      // often the LAST _serveCycle writer — clearing because its own promise
+      // still sat in the field would null the retained slot while the
+      // admission winner keeps serving, letting a later start() bypass the
+      // entry guard, re-arm bridge.ready to a promise nothing settles, and
+      // strand standalone `await bridge.ready` callers (issue #418 review).
+      // Only the invocation that owns the admission may release both the
+      // retained cycle and its token; a superseded loser leaves the field
+      // untouched (close() is the authoritative drain-side release).
       if (this._drainAdmission === admission) {
+        this._serveCycle = null;
         this._drainAdmission = null;
       }
     }
@@ -1334,6 +1338,11 @@ export class IpcBridge {
     // A drain re-opens transport admission: the next start() (or the first
     // of several concurrently admitted ones) claims _drainAdmission fresh,
     // so exactly one restart proceeds into recreation/bind (#418 review).
+    // Release the retained-cycle slot here too: superseded losers never
+    // clear it (their finally is gated on admission ownership), so close()
+    // is the authoritative drain-side release that keeps the slot truthful
+    // once nothing is serving.
+    this._serveCycle = null;
     this._drainAdmission = null;
     // A shutdown before any start() bind cycle can never reach the
     // markBound()/markBindFailed() drains inside start(), so the
