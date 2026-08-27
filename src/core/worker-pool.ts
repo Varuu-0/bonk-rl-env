@@ -144,6 +144,16 @@ export class WorkerPool {
   private failure: Error | null = null;
   private cleanupPromise: Promise<void> | null = null;
 
+  // Bumped synchronously by every external close() (#427). initInternal
+  // captures the value when init() is called — before it may queue behind
+  // the operation lock — and re-checks it after each await, so a close()
+  // that lands while an init is pending (running or merely queued) aborts
+  // it instead of letting it resume into 'ready'. init's own internal
+  // pre-clean also runs closeInternal without bumping the epoch, so it
+  // never cancels itself. reset/step need no epoch: assertReady and their
+  // post-await 'closed' guards already honor an interrupting close.
+  private closeEpoch: number = 0;
+
   // Serializes the buffer-mutating operations (init/reset/step) so callers
   // driving the same WorkerPool concurrently — e.g. a BonkEnv programmatic
   // reset/step and a ZMQ IPC request on an adopted pool in enableIpcServer
@@ -242,10 +252,24 @@ export class WorkerPool {
   }
 
   async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
-    return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory));
+    // Capture at CALL time, before queueing (#427 review): an init that is
+    // still pending when close() runs must reject rather than begin
+    // initializing after the close has settled. Queued reset/step calls get
+    // the same treatment from assertReady's closed-state rejection.
+    const startCloseEpoch = this.closeEpoch;
+    return this.withOperationLock(() => this.initInternal(totalEnvs, config, startCloseEpoch, useSharedMemory));
   }
 
-  private async initInternal(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
+  private async initInternal(
+    totalEnvs: number,
+    config: any = {},
+    // Required (no default): the epoch must be captured at init() CALL time
+    // to cancel inits that were queued when close() ran (#427 review). A
+    // default re-capturing here would silently reopen that race for any
+    // direct caller.
+    startCloseEpoch: number,
+    useSharedMemory?: boolean,
+  ) {
     if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
       throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
     }
@@ -269,6 +293,14 @@ export class WorkerPool {
       config?.numOpponents ?? (config as any)?.num_opponents,
     );
     await this.closeInternal(); // Clean up existing if re-initialized
+    if (this.closeEpoch !== startCloseEpoch) {
+      // An external close() resolved while this init was pending (suspended
+      // here, waiting on the operation lock, or past its reply wait): the
+      // caller already observed a completed shutdown, so abort before
+      // touching pool state. No worker exists yet (the spawn loop is below),
+      // leaving the pool terminally closed (#427).
+      throw new Error('Worker pool initialization aborted because the pool was closed');
+    }
     this.state = 'initializing';
     this.failure = null;
 
@@ -375,6 +407,13 @@ export class WorkerPool {
       // Wait for all workers to initialize
       const results = await Promise.all(promises);
 
+      if (this.closeEpoch !== startCloseEpoch) {
+        // An external close() interrupted the worker-reply wait: its cleanup
+        // already rejected these replies and terminated every spawned
+        // worker, so init must never reach 'ready' (#427).
+        throw new Error('Worker pool initialization aborted because the pool was closed');
+      }
+
       // Cache the static info fields (frameSkip, capZones, aiTeam) the
       // workers shipped at init, keyed by global env index. These are
       // constant per environment; only the dynamic info fields travel
@@ -434,6 +473,16 @@ export class WorkerPool {
 
       this.state = 'ready';
     } catch (error) {
+      // Cast defeats the literal narrowing from the assignments above: a
+      // concurrent close() may have changed the state across the awaited
+      // worker replies.
+      const currentState = this.state as WorkerPoolState;
+      if (currentState === 'closed') {
+        // A close() interrupted this init: keep the terminal 'closed' state
+        // and rethrow untouched, mirroring resetInternal/stepInternal, so a
+        // deliberate shutdown is never relabeled as a pool failure (#427).
+        throw error;
+      }
       const failure = this.createFailure('initialization', error);
       await this.failPool(failure);
       throw failure;
@@ -1172,6 +1221,10 @@ export class WorkerPool {
   // programmatic and IPC callers sharing one adopted pool cannot interleave
   // worker signaling and corrupt the reused buffers (#223).
   async close() {
+    // Bump the close epoch synchronously so any init() suspended inside
+    // initInternal observes the shutdown at its next checkpoint and aborts
+    // instead of resuming to 'ready' after this close resolves (#427).
+    this.closeEpoch++;
     return this.closeInternal();
   }
 
@@ -1392,7 +1445,10 @@ export class WorkerPool {
   }
 
   private async failPool(error: Error): Promise<void> {
-    if (this.state !== 'failed') {
+    // 'closed' is terminal (#427): an operation that a close() interrupted
+    // must never relabel the pool as failed. The cleanup below is still
+    // awaited so any teardown the interrupting close started is honored.
+    if (this.state !== 'failed' && this.state !== 'closed') {
       this.state = 'failed';
       this.failure = error;
       this.wakeSharedWaiters();
