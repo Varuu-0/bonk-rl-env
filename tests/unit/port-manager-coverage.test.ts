@@ -1,9 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import {
-  PortManager,
-  getGlobalPortManager,
-  resetGlobalPortManager,
-} from '../../src/utils/port-manager';
+import { PortManager, getGlobalPortManager, resetGlobalPortManager } from '../../src/utils/port-manager';
 
 describe('PortManager - Coverage Extension', () => {
   describe('isPortAvailable - error path (lines 127-131)', () => {
@@ -129,6 +125,12 @@ describe('PortManager - Coverage Extension', () => {
 
     beforeEach(() => {
       pm = new PortManager({ startPort: 6000, endPort: 6005 });
+    });
+
+    // Allocation claims are registered process-wide (#432), so every test
+    // must release its ports or later tests would see them as taken.
+    afterEach(() => {
+      pm.releaseAll();
     });
 
     it('reserves a port at the start boundary', () => {
