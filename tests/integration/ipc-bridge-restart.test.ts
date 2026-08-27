@@ -327,11 +327,21 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
   let port: number;
 
   beforeAll(() => {
-    // Per-suite dedicated port bands (vitest forks run in parallel, so an
-    // overlap would make two suites race to bind the same port):
-    //   15600-16399 — ipc-bridge suites (dealer/req/options/restart/multiclient/failed-session)
-    //   16400-17010 — bonk-env-ipc-server.test.ts (IPC_SERVER_TEST_START = 16400, sparse bands)
-    //   17100-17199 — this #431 suite (chosen above 16400-17010)
+    // Observed port-band ownership across the ipc test suites (vitest forks
+    // run in parallel, so two suites allocating the same port would race to
+    // bind it). Bands here are NOT strictly per-suite: some are shared or
+    // overlapping, e.g. 15700-15799 is used by e2e/bind-address/multiclient,
+    // and ipc-bridge-failed-session's 16400-16449 overlaps bonk-env-ipc-server's
+    // own 16400 base.
+    //   15600-15699 ipc-bridge-dealer-socket
+    //   15700-15799 ipc-bridge-e2e / bind-address / multiclient (shared)
+    //   15800-15899 ipc-bridge-restart (ready-capture describe)
+    //   15900-15999 ipc-bridge-options
+    //   16000-16099 ipc-bridge-req-socket
+    //   16100-16199 ipc-bridge-restart (restart-lifecycle describe)
+    //   16200-16449 ipc-bridge-failed-session (16400-16449 overlaps bonk-env-ipc-server)
+    //   16400-17010 bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
+    //   17100-17199 this #431 suite — chosen disjoint, above every band above
     portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
