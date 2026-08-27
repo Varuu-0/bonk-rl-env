@@ -134,8 +134,14 @@ function recordSimTrace(
   const NEUTRAL: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
   for (let t = 0; t < ticks; t++) {
     const tickInputs = inputsForTick?.(t);
+    // Resolve each player's pre-step input exactly once: applyInput and the
+    // recorded byte map below are both fed from this array, so the engine's
+    // inputs and the trace's bytes can never drift apart.
+    const resolved: PlayerInput[] = [];
     for (let i = 0; i <= numOpponents; i++) {
-      physics.applyInput(i, tickInputs?.applied[i] ?? NEUTRAL);
+      const input = tickInputs?.applied[i] ?? NEUTRAL;
+      resolved[i] = input;
+      physics.applyInput(i, input);
     }
     physics.tick();
 
@@ -158,11 +164,9 @@ function recordSimTrace(
       };
     }
     if (tickInputs) {
-      // Derive the recorded byte map from the same resolved inputs the engine
-      // applies, so trace bytes and dynamics are consistent by construction.
       const inputs: Record<number, number> = {};
       for (let i = 0; i <= numOpponents; i++) {
-        inputs[i] = encodePlayerInput(tickInputs.applied[i] ?? NEUTRAL);
+        inputs[i] = encodePlayerInput(resolved[i]);
       }
       rec.push({ t, discs: states, inputs });
     } else {
