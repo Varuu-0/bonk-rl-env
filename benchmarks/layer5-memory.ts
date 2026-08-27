@@ -115,11 +115,22 @@ function benchResetCycles(): BenchmarkResult {
 
   const env = new BonkEnvironment({ numOpponents: 1, frameSkip: 1 });
 
+  // Same live-episode contract as benchMemoryStability: with frameSkip=1
+  // the default-map episode dies naturally at ~tick 44, so a raw
+  // env.step() loop would spend the rest of each 100-step window replaying
+  // the settled terminal result with zero physics work (#421), while the
+  // outer env.reset() hid that from any per-cycle accounting (#461).
+  // stepLive resets episodes as they end, and the SPS numerator only
+  // counts steps that actually advanced physics.
   const start = performance.now();
+  let liveSteps = 0;
+  let resets = 0;
   for (let r = 0; r < RESETS; r++) {
     env.reset();
     for (let i = 0; i < STEPS_PER_RESET; i++) {
-      env.step(0);
+      const outcome = stepLive(env, 0);
+      if (outcome.live) liveSteps++;
+      if (outcome.reset) resets++;
     }
   }
   const elapsed = performance.now() - start;
@@ -128,7 +139,10 @@ function benchResetCycles(): BenchmarkResult {
   const finalHeap = getHeapMB();
   const heapGrowth = finalHeap - baselineHeap;
   const totalSteps = RESETS * STEPS_PER_RESET;
-  const sps = totalSteps / (elapsed / 1000);
+  // Live-step SPS, matching the sibling loops: with frameSkip=1 every
+  // step is live today, but dividing by the tracked count keeps this
+  // honest if the loop config ever changes.
+  const sps = liveSteps / (elapsed / 1000);
 
   const heapStable = heapGrowth < 10;
 
@@ -144,6 +158,8 @@ function benchResetCycles(): BenchmarkResult {
       { label: 'Heap growth', value: +heapGrowth.toFixed(2), unit: 'MB' },
       { label: 'SPS', value: Math.round(sps), unit: 'steps/sec' },
       { label: 'Total steps', value: totalSteps, unit: '' },
+      { label: 'Live steps', value: liveSteps, unit: '' },
+      { label: 'Episodes completed', value: resets, unit: '' },
       { label: 'Resets', value: RESETS, unit: '' },
     ],
   };
