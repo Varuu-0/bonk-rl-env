@@ -453,7 +453,9 @@ describe('standalone server remote-shutdown lifecycle (issue #424)', () => {
         // leaked spy would cascade into the zero-tick assertions below.
         // Snapshot BEFORE restoring — mockRestore clears recorded calls.
         client.close();
-        forcedReports = reportSpy.mock.calls.filter((args) => args[0] === true).length;
+        // Destructure the first positional argument so a signature reorder of
+        // reportNow fails this assertion loudly instead of silently counting 0.
+        forcedReports = reportSpy.mock.calls.filter(([force]) => force === true).length;
         reportWrites = writeSpy.mock.calls.length;
         reportSpy.mockRestore();
         writeSpy.mockRestore();
