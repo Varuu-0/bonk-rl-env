@@ -327,21 +327,28 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
   let port: number;
 
   beforeAll(() => {
-    // Observed port-band ownership across the ipc test suites (vitest forks
-    // run in parallel, so two suites allocating the same port would race to
-    // bind it). Bands here are NOT strictly per-suite: some are shared or
-    // overlapping, e.g. 15700-15799 is used by e2e/bind-address/multiclient,
-    // and ipc-bridge-failed-session's 16400-16449 overlaps bonk-env-ipc-server's
-    // own 16400 base.
-    //   15600-15699 ipc-bridge-dealer-socket
-    //   15700-15799 ipc-bridge-e2e / bind-address / multiclient (shared)
-    //   15800-15899 ipc-bridge-restart (ready-capture describe)
-    //   15900-15999 ipc-bridge-options
-    //   16000-16099 ipc-bridge-req-socket
-    //   16100-16199 ipc-bridge-restart (restart-lifecycle describe)
-    //   16200-16449 ipc-bridge-failed-session (16400-16449 overlaps bonk-env-ipc-server)
-    //   16400-17010 bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
-    //   17100-17199 this #431 suite — chosen disjoint, above every band above
+    // Disjoint port bands across the ipc test suites (vitest forks run in
+    // parallel, so two suites allocating the same port would race to bind
+    // it). Every band below is exclusive to ONE concurrently-running suite;
+    // the e2e suite bound at 15700-15799 only when the separate Tier-3
+    // drive runs (never concurrent with Tier 2).
+    //   6000-6600    env-manager (single-file, sequential describes)
+    //   7000-7475    env-lifecycle (single-file, sequential describes)
+    //   7500-7600    env-manager-worker-pool-coverage
+    //   7700-7799    env-manager-worker-pool-coverage (endPoint exclusive of 7800)
+    //   7800-8000    env-config-forwarding
+    //   8100-8500    env-manager-batch-shape (single-file, sequential describes)
+    //   15600-15699  ipc-bridge-dealer-socket
+    //   15700-15799  ipc-bridge-bind-address (+ ipc-bridge-e2e, Tier-3 only)
+    //   15800-15899  ipc-bridge-restart (ready-capture describe)
+    //   15900-15999  ipc-bridge-options
+    //   16000-16099  ipc-bridge-req-socket
+    //   16100-16199  ipc-bridge-restart (restart-lifecycle describe)
+    //   16200-16399  ipc-bridge-failed-session
+    //   16400-17010  bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
+    //   17100-17199  this #431 describe
+    //   17200-17299  ipc-bridge-multiclient
+    //   17400-17449  ipc-bridge-failed-session (host-failure init tests)
     portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
