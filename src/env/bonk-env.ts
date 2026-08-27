@@ -140,15 +140,57 @@ export class BonkEnv {
   }
 
   /**
+   * Verifies that this env's port is actually free on the OS before
+   * anything binds or advertises it, relocating via a probed allocation
+   * when another process already holds it (issue #432). The replacement
+   * port is claimed before the old one is released so the swap is atomic
+   * from every allocator's point of view; this.portReserved continues to
+   * cover the new port.
+   *
+   * The guard deliberately mirrors the constructor's truthiness check so
+   * an explicitly configured port and a falsy `port: 0` (which the
+   * constructor treats as "allocate") are classified identically.
+   * Explicitly configured truthy ports are respected as-is: a caller who
+   * names a port gets that port's fate, including a loud EADDRINUSE on
+   * bind (#223).
+   *
+   * The probe is a point-in-time check on loopback (the bridge's default
+   * bind address). It runs once before the worker spawn and again right
+   * before the IPC bridge binds, so a port taken over during the
+   * multi-second spawn is relocated at the last moment and the residual
+   * check-to-bind window is milliseconds, not seconds. A bridge configured
+   * to bind a non-default address is not covered by the loopback probe —
+   * a genuine late EADDRINUSE still surfaces through the #223 start()
+   * rejection/teardown path instead of being masked.
+   */
+  private async ensureUsablePort(): Promise<void> {
+    if (this.config.port) {
+      return;
+    }
+    if (await PortManager.isPortAvailable(this.port)) {
+      return;
+    }
+    console.warn(`[BonkEnv:${this.id}] Port ${this.port} is held by another process; reallocating`);
+    const replacement = await this.portManager.allocateAvailable();
+    this.portManager.release(this.port);
+    this.port = replacement;
+  }
+
+  /**
    * Body of a start() attempt. Runs with this.startPromise already set, so
    * the failure path must NOT call the public stop() — stop() awaits the
    * in-flight start() and would deadlock. Teardown goes through
    * teardownFailedStart() instead.
    */
   private async performStart(): Promise<void> {
-    console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
-
     try {
+      // Verify/relocate the advertised port against the OS before spawning
+      // workers or binding (issue #432): a port held by an unrelated
+      // process must be skipped here rather than discovered as an opaque
+      // ZMQ bind failure after pool.init() has already spawned workers.
+      await this.ensureUsablePort();
+
+      console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
       // Create worker pool
       const pool = new WorkerPool();
       this.pool = pool;
@@ -169,6 +211,11 @@ export class BonkEnv {
       // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
       // of silently completing (issue #223).
       if (this.config.enableIpcServer === true) {
+        // Re-probe right before the bind: the first probe ran before the
+        // multi-second worker spawn, so re-verify now and relocate if the
+        // port was taken over in the meantime — this shrinks the residual
+        // check-to-bind window to milliseconds (issue #432).
+        await this.ensureUsablePort();
         const bridge = new IpcBridge({ server: { port: this.port } });
         this.bridge = bridge;
         // Serve the env's own worker pool so external clients share
