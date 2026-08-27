@@ -44,7 +44,7 @@ const fakes = vi.hoisted(() => {
     postMessage(message: any): void {
       if (message.type === 'init') {
         const manager = FakeSharedMemoryManager.instances.find(
-          candidate => candidate.getBuffer() === message.sharedBuffer,
+          (candidate) => candidate.getBuffer() === message.sharedBuffer,
         );
         manager?.connect(message.syncBuffer, message.workerIndex, this);
         if (control.initBehaviors[this.index] === 'error') {
@@ -223,10 +223,34 @@ describe('WorkerPool failure state', () => {
     await expect(pool.init(2, {}, true)).rejects.toThrow('synthetic init failure');
 
     expect(fakes.FakeWorker.instances).toHaveLength(2);
-    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(true);
+    expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(2);
-    expect(fakes.FakeSharedMemoryManager.instances.every(manager => manager.disposed)).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances.every((manager) => manager.disposed)).toBe(true);
     await expect(pool.step([0, 0])).rejects.toThrow('worker pool is in failed state');
+  });
+
+  it('failedStateError mirrors assertReady on a failed pool and throws on a non-failed one (review of #436)', async () => {
+    pool = new WorkerPool(2);
+    await pool.init(2, {}, true);
+
+    // Healthy pool: misuse is a call-site bug and must throw instead of
+    // silently fabricating a plausible "...(unknown failure)" client error.
+    expect(() => pool!.failedStateError('step')).toThrow(
+      "Internal error: failedStateError('step') requires a failed pool, got state 'ready'",
+    );
+
+    fakes.control.commandBehaviors = ['complete', 'error'];
+    await expect(pool.step([0, 0])).rejects.toThrow('Worker 1 reported an error');
+    expect(pool.isFailed()).toBe(true);
+
+    // The shared formatter reproduces the exact reactive message that a
+    // retried step receives from assertReady — no duplicated template.
+    const reactiveMessage = await pool.step([0, 0]).then(
+      () => 'unexpected step success on a failed pool',
+      (error: Error) => error.message,
+    );
+    expect(reactiveMessage).toContain('worker pool is in failed state');
+    expect(pool.failedStateError('step')).toBe(reactiveMessage);
   });
 
   it('rejects a shared worker error without reading partial results', async () => {
@@ -236,8 +260,8 @@ describe('WorkerPool failure state', () => {
 
     await expect(pool.step([0, 0])).rejects.toThrow('Worker 1 reported an error');
 
-    expect(fakes.FakeSharedMemoryManager.instances.every(manager => manager.readCalls === 0)).toBe(true);
-    expect(fakes.FakeSharedMemoryManager.instances.every(manager => manager.disposed)).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances.every((manager) => manager.readCalls === 0)).toBe(true);
+    expect(fakes.FakeSharedMemoryManager.instances.every((manager) => manager.disposed)).toBe(true);
     await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
   });
 
@@ -247,9 +271,7 @@ describe('WorkerPool failure state', () => {
     await pool.init(1, {}, true);
     fakes.control.commandBehaviors = ['timeout'];
 
-    await expect(pool.step([0])).rejects.toThrow(
-      'Shared-memory step timed out after 20ms waiting for worker(s) 0',
-    );
+    await expect(pool.step([0])).rejects.toThrow('Shared-memory step timed out after 20ms waiting for worker(s) 0');
 
     expect(fakes.FakeSharedMemoryManager.instances[0].readCalls).toBe(0);
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
@@ -262,9 +284,7 @@ describe('WorkerPool failure state', () => {
     await pool.init(1, {}, true);
     fakes.control.commandBehaviors = ['timeout'];
 
-    await expect(pool.reset()).rejects.toThrow(
-      'Shared-memory reset timed out after 20ms waiting for worker(s) 0',
-    );
+    await expect(pool.reset()).rejects.toThrow('Shared-memory reset timed out after 20ms waiting for worker(s) 0');
 
     expect(fakes.FakeSharedMemoryManager.instances[0].readCalls).toBe(0);
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
@@ -287,9 +307,7 @@ describe('WorkerPool failure state', () => {
     await pool.init(1, {}, true);
     fakes.control.commandBehaviors = ['exit'];
 
-    await expect(pool.step([0])).rejects.toThrow(
-      'Worker 0 failed: Worker 0 exited unexpectedly with code 1',
-    );
+    await expect(pool.step([0])).rejects.toThrow('Worker 0 failed: Worker 0 exited unexpectedly with code 1');
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
@@ -304,9 +322,7 @@ describe('WorkerPool failure state', () => {
     const pendingStep = pool.step([0]);
     fakes.FakeWorker.instances[0].emit('exit', 1);
 
-    await expect(pendingStep).rejects.toThrow(
-      'Worker 0 failed: Worker 0 exited unexpectedly with code 1',
-    );
+    await expect(pendingStep).rejects.toThrow('Worker 0 failed: Worker 0 exited unexpectedly with code 1');
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
@@ -320,9 +336,7 @@ describe('WorkerPool failure state', () => {
     const pendingStep = pool.step([0]);
     await pool.close();
 
-    await expect(pendingStep).rejects.toThrow(
-      'Shared-memory step interrupted because worker pool is closed',
-    );
+    await expect(pendingStep).rejects.toThrow('Shared-memory step interrupted because worker pool is closed');
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(true);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(true);
@@ -373,7 +387,7 @@ describe('WorkerPool failure state', () => {
 
     await expect(pool.step([0, 0])).rejects.toThrow('timed out');
 
-    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(true);
+    expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
     await expect(pool.step([0, 0])).rejects.toThrow('worker pool is in failed state');
   });
 
@@ -385,7 +399,7 @@ describe('WorkerPool failure state', () => {
 
     await expect(pool.reset()).rejects.toThrow('timed out');
 
-    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(true);
+    expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
     await expect(pool.reset()).rejects.toThrow('worker pool is in failed state');
   });
 
@@ -396,7 +410,7 @@ describe('WorkerPool failure state', () => {
 
     await expect(pool.step([0, 0])).rejects.toThrow('synthetic step failure');
 
-    expect(fakes.FakeWorker.instances.every(worker => worker.terminated)).toBe(false);
+    expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(false);
     fakes.control.stepBehaviors = ['ok', 'ok'];
     const results = await pool.step([0, 0]);
     expect(results).toHaveLength(2);
@@ -495,7 +509,9 @@ describe('WorkerPool failure state', () => {
     await pool.init(1, {}, true);
     await pool.reset([1]);
 
-    await expect(pool.step([null as any])).rejects.toThrow('Invalid action: expected a PlayerInput object or an encoded number, got null');
+    await expect(pool.step([null as any])).rejects.toThrow(
+      'Invalid action: expected a PlayerInput object or an encoded number, got null',
+    );
 
     expect(fakes.FakeWorker.instances[0].terminated).toBe(false);
     expect(fakes.FakeSharedMemoryManager.instances[0].disposed).toBe(false);
@@ -649,9 +665,7 @@ describe('WorkerPool failure state', () => {
     it('keeps the pool usable after a rejected oversized init', async () => {
       pool = new WorkerPool(1);
 
-      await expect(pool.init(MAX_NUM_ENVS + 1, {}, true)).rejects.toThrow(
-        'Invalid environment count',
-      );
+      await expect(pool.init(MAX_NUM_ENVS + 1, {}, true)).rejects.toThrow('Invalid environment count');
 
       await pool.init(1, {}, true);
       expect((pool as any).state).toBe('ready');
@@ -664,9 +678,7 @@ describe('WorkerPool failure state', () => {
     it('rejects a zero-worker pool in message mode with a clear error and no workers', async () => {
       pool = new WorkerPool(0);
 
-      await expect(pool.init(2, {}, false)).rejects.toThrow(
-        'Invalid worker count: expected a positive integer, got 0',
-      );
+      await expect(pool.init(2, {}, false)).rejects.toThrow('Invalid worker count: expected a positive integer, got 0');
 
       expect(fakes.FakeWorker.instances).toHaveLength(0);
       expect((pool as any).state).toBe('idle');
@@ -675,9 +687,7 @@ describe('WorkerPool failure state', () => {
     it('rejects a zero-worker pool in shared-memory mode with the same error and no workers', async () => {
       pool = new WorkerPool(0);
 
-      await expect(pool.init(2, {}, true)).rejects.toThrow(
-        'Invalid worker count: expected a positive integer, got 0',
-      );
+      await expect(pool.init(2, {}, true)).rejects.toThrow('Invalid worker count: expected a positive integer, got 0');
 
       expect(fakes.FakeWorker.instances).toHaveLength(0);
       expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(0);
