@@ -907,28 +907,35 @@ export class IpcBridge {
               session.numEnvs = numEnvs;
               response = { status: 'ok' };
             } catch (error) {
-              // A pool that fails initialization is not
-              // usable, so drop the session (whether it was
-              // just created or is a re-init of an existing
-              // one) and free its workers. Retaining an
-              // invalidated existing session would let a
-              // persistently failing init hold a client-cap
-              // slot forever.
-              if (this.sessions.get(sessionKey) === session) {
+              // Tear down only when the failed init actually consumed the
+              // pool (#440). A pre-teardown config validation (e.g.
+              // numOpponents > MAX_OPPONENTS) rejects BEFORE
+              // closeInternal(), so an existing healthy pool is left
+              // 'ready' with live workers: dropping its session here would
+              // destroy live episode state over one bad re-init and fail
+              // every later step/reset with "Worker pool not initialized"
+              // (the same transient-input doctrine as ACTION_ENCODE steps
+              // and the dropFailedPoolSession isFailed() guard). A
+              // brand-new session preserves nothing usable, and a
+              // post-teardown failure leaves state 'failed' via failPool,
+              // so both still take the legacy cleanup below: retaining an
+              // invalidated session must not hold a client-cap slot
+              // forever (#390/#400).
+              const poolSurvived = !session.pool.isFailed() && session.initialized;
+              if (!poolSurvived && this.sessions.get(sessionKey) === session) {
                 this.sessions.delete(sessionKey);
                 try {
                   await session.pool.close();
                 } catch (closeError) {
                   console.error('[IPC] Error closing failed client session:', closeError);
                 }
+                // After an eviction, session mode stays engaged (the
+                // local/bypass fallback is not blanket-restored):
+                // evicting a client must never re-admit it to the
+                // local/bypass pool. Only the single pinned programmatic
+                // caller is allowed there, and the bridge is not
+                // deadlocked — a new identity can still init.
               }
-              // The session map is empty again, but session
-              // mode stays engaged (fallback is not
-              // blanket-restored): evicting a client must
-              // never re-admit it to the local/bypass pool.
-              // Only the single pinned programmatic caller is
-              // allowed there, and the bridge is not
-              // deadlocked — a new identity can still init.
               throw error;
             }
           }
