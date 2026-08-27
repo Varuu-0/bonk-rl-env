@@ -155,11 +155,13 @@ export class BonkEnv {
    * bind (#223).
    *
    * The probe is a point-in-time check on loopback (the bridge's default
-   * bind address). The gap between probe and actual ZMQ bind spans the
-   * multi-second worker spawn, and a bridge configured to bind a
-   * non-default address is not covered — a genuine late EADDRINUSE still
-   * surfaces through the #223 start() rejection/teardown path instead of
-   * being masked.
+   * bind address). It runs once before the worker spawn and again right
+   * before the IPC bridge binds, so a port taken over during the
+   * multi-second spawn is relocated at the last moment and the residual
+   * check-to-bind window is milliseconds, not seconds. A bridge configured
+   * to bind a non-default address is not covered by the loopback probe —
+   * a genuine late EADDRINUSE still surfaces through the #223 start()
+   * rejection/teardown path instead of being masked.
    */
   private async ensureUsablePort(): Promise<void> {
     if (this.config.port) {
@@ -209,6 +211,11 @@ export class BonkEnv {
       // reachable. A bind failure (e.g. EADDRINUSE) rejects start() instead
       // of silently completing (issue #223).
       if (this.config.enableIpcServer === true) {
+        // Re-probe right before the bind: the first probe ran before the
+        // multi-second worker spawn, so re-verify now and relocate if the
+        // port was taken over in the meantime — this shrinks the residual
+        // check-to-bind window to milliseconds (issue #432).
+        await this.ensureUsablePort();
         const bridge = new IpcBridge({ server: { port: this.port } });
         this.bridge = bridge;
         // Serve the env's own worker pool so external clients share
