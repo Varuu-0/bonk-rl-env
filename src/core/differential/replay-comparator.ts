@@ -184,6 +184,15 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
     const aliveSeen = new Set<number>();
 
     for (const recorded of trace.ticks) {
+      // Drain deferred respawns BEFORE applying this tick's inputs (#430):
+      // mirrors BonkEnvironment.step()'s #409 ordering. A disc queued by the
+      // previous tick's death pass must be alive at its spawn when applyInput
+      // runs, or the recorded revival-tick input byte is silently dropped by
+      // the engine's alive-guard and the replay diverges from native/engine.
+      // tick()'s own drain is idempotent, so this extra call is a no-op
+      // whenever nothing is queued.
+      physics.processRespawns();
+
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {

@@ -765,7 +765,31 @@ export class IpcBridge {
           // (e.g. the Python BonkVecEnv's hardcoded `true` against a
           // `false` host) must NOT be a hard error — the client only
           // consumes the JSON replies and keeps working.
-          if (numEnvs === this.localSession.numEnvs) {
+          // Issue #436: an async failure between requests (worker crash/
+          // exit, shared-memory timeout, post-signal error) leaves the
+          // adopted pool failed while numEnvs still holds its stale
+          // pre-failure value, so a matching-count init would ACK success
+          // on a corpse pool and only the client's first failing step (or
+          // the ≤60s reaper) would engage recovery. Consult live pool
+          // health at ACK time instead: recover immediately and report the
+          // real failure, so the client's plain re-init lands on the
+          // rebuilt pool. This extends the #400 invariant — a pool that
+          // failed is as unusable as one that never initialized — to the
+          // init door itself.
+          if (this.localSession.pool.isFailed()) {
+            activeSession = this.localSession;
+            this.beginSessionRequest(this.localSession);
+            // Compose the reply before recovering: close() clears the
+            // pool's recorded failure, and the pool's shared formatter
+            // keeps this proactive rejection word-identical to the
+            // reactive step/reset failed-state errors.
+            const failedInitError = this.localSession.pool.failedStateError('init');
+            await this.recoverFailedHostPool();
+            response = {
+              status: 'error',
+              error: failedInitError,
+            };
+          } else if (numEnvs === this.localSession.numEnvs) {
             activeSession = this.localSession;
             this.beginSessionRequest(this.localSession);
             response = {
