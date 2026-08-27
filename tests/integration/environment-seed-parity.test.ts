@@ -19,16 +19,19 @@ const STEPS = 30;
 
 function directTrace(seed: number): number[] {
   const env = new BonkEnvironment({ numOpponents: 1, seed });
-  env.reset(seed);
-  const out: number[] = [];
-  for (let i = 0; i < STEPS; i++) {
-    const r = env.step(0);
-    out.push(r.observation.playerX, r.observation.playerY);
+  try {
+    env.reset(seed);
+    const out: number[] = [];
+    for (let i = 0; i < STEPS; i++) {
+      const r = env.step(0);
+      out.push(r.observation.playerX, r.observation.playerY);
+    }
+    // The pool transports quantize observations to Float32 (issue #236);
+    // quantize the direct trace the same way so the traces are comparable.
+    return out.map(Math.fround);
+  } finally {
+    env.close();
   }
-  env.close();
-  // The pool transports quantize observations to Float32 (issue #236);
-  // quantize the direct trace the same way so the traces are comparable.
-  return out.map(Math.fround);
 }
 
 async function poolTrace(useSharedMemory: boolean, seed: number): Promise<number[]> {
@@ -67,10 +70,13 @@ describe('direct env vs WorkerPool seed parity (issue #460)', () => {
 
   it('boundary seeds remain valid on every surface after #460', async () => {
     const envLow = new BonkEnvironment({ numOpponents: 1, seed: 0 });
-    expect(() => envLow.reset(0)).not.toThrow();
-    envLow.close();
     const envHigh = new BonkEnvironment({ numOpponents: 1, seed: 0xfffffffe });
-    expect(() => envHigh.reset(0xfffffffe)).not.toThrow();
-    envHigh.close();
+    try {
+      expect(() => envLow.reset(0)).not.toThrow();
+      expect(() => envHigh.reset(0xfffffffe)).not.toThrow();
+    } finally {
+      envLow.close();
+      envHigh.close();
+    }
   });
 });

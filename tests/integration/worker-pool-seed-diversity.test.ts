@@ -9,6 +9,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { WorkerPool } from '../../src/core/worker-pool';
+import { MAX_SUPPORTED_RESET_SEED } from '../../src/core/seed-range';
 
 describe('Worker-pool per-env construction seeds (review of #200)', () => {
   it('pooled environments stepped without reset seeds do not run identical trajectories', async () => {
@@ -24,10 +25,7 @@ describe('Worker-pool per-env construction seeds (review of #200)', () => {
         const results = await pool.step([0, 0]);
         for (let envIdx = 0; envIdx < 2; envIdx++) {
           const o = results[envIdx].observation;
-          signatures[envIdx].push([
-            o.playerX, o.playerY,
-            o.opponents[0].x, o.opponents[0].y,
-          ]);
+          signatures[envIdx].push([o.playerX, o.playerY, o.opponents[0].x, o.opponents[0].y]);
         }
       }
 
@@ -52,10 +50,7 @@ describe('Worker-pool per-env construction seeds (review of #200)', () => {
         const results = await pool.step([0, 0]);
         for (let envIdx = 0; envIdx < 2; envIdx++) {
           const o = results[envIdx].observation;
-          signatures[envIdx].push([
-            o.playerX, o.playerY,
-            o.opponents[0].x, o.opponents[0].y,
-          ]);
+          signatures[envIdx].push([o.playerX, o.playerY, o.opponents[0].x, o.opponents[0].y]);
         }
       }
 
@@ -86,5 +81,25 @@ describe('Worker-pool per-env construction seeds (review of #200)', () => {
     const first = await runOnce();
     const second = await runOnce();
     expect(first).toEqual(second);
+  });
+
+  it('init with a seed at the supported ceiling succeeds with wrapped derived seeds (#460)', async () => {
+    // Before the #460 wrap, init(4, { seed: MAX_SUPPORTED_RESET_SEED })
+    // derived MAX+1.. for the trailing envs and the constructor guard
+    // aborted the whole init; the derived per-env seeds now wrap into the
+    // supported domain so the pool still comes up usable. The derivation
+    // itself is pinned by the unit tests; here the observable is that the
+    // pooled environments construct, stay distinct, and serve resets.
+    const pool = new WorkerPool(1);
+    try {
+      await pool.init(4, { seed: MAX_SUPPORTED_RESET_SEED }, false);
+      const obs = await pool.reset();
+      expect(obs).toHaveLength(4);
+      for (const o of obs) {
+        expect(o).toHaveProperty('playerX');
+      }
+    } finally {
+      await pool.close();
+    }
   });
 });

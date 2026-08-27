@@ -15,7 +15,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
-import { MAX_SUPPORTED_RESET_SEED } from '../../src/core/seed-range';
+import { deriveConstructionSeed, MAX_SUPPORTED_RESET_SEED } from '../../src/core/seed-range';
 
 const resetRangeError = (value: number) =>
   new RegExp(`Seed ${value} out of supported range \\[0, ${MAX_SUPPORTED_RESET_SEED}\\] for reset`);
@@ -109,7 +109,11 @@ describe('BonkEnvironment seed validation (#460)', () => {
     expect(() => envHigh.reset(MAX_SUPPORTED_RESET_SEED)).not.toThrow();
     expect((envHigh as any).config.seed).toBe(MAX_SUPPORTED_RESET_SEED);
     envHigh.close();
-    // Integral floats stay legal (Python transport parity, as for frameSkip).
+    // Integral floats stay legal on the JS surface because ToUint32-like
+    // acceptance was the pre-#460 behavior for them; this leniency is
+    // JS-only — the Python client raises TypeError for non-Integral seeds
+    // (python/envs/bonk_env.py), and cross-transport float parity was
+    // never the contract.
     const envFloat = new BonkEnvironment({ numOpponents: 1, seed: 1 });
     expect(() => envFloat.reset(7.0)).not.toThrow();
     expect((envFloat as any).config.seed).toBe(7);
@@ -117,57 +121,28 @@ describe('BonkEnvironment seed validation (#460)', () => {
   });
 
   // Golden fingerprints captured on the pre-fix build (commit a64e470):
-  // the rng state after 40 idle steps from reset(seed), the score line and
-  // the observation tail. Valid seeds must keep byte-identical streams.
-  const golden: Record<number, { rngState: number; score: string; doneTicks: number[]; obsTail: number[] }> = {
-    0: {
-      rngState: 1489130928,
-      score: '0-0',
-      doneTicks: [],
-      obsTail: [-100, 681.166667, -100, 706.5, -100, 732.5, -100, 759.166667],
-    },
-    1: {
-      rngState: 1489130929,
-      score: '0-0',
-      doneTicks: [],
-      obsTail: [-100, 681.166667, -100, 706.5, -100, 732.5, -100, 759.166667],
-    },
-    42: {
-      rngState: 1489130970,
-      score: '0-0',
-      doneTicks: [],
-      obsTail: [-100, 681.166667, -100, 706.5, -100, 732.5, -100, 759.166667],
-    },
-    12345: {
-      rngState: 1489143273,
-      score: '0-0',
-      doneTicks: [],
-      obsTail: [-100, 681.166667, -100, 706.5, -100, 732.5, -100, 759.166667],
-    },
-    [MAX_SUPPORTED_RESET_SEED]: {
-      rngState: 1489130926,
-      score: '0-0',
-      doneTicks: [39],
-      obsTail: [-100, 681.166667, -100, 706.5, -100, 732.5, -100, 759.166667],
-    },
+  // the Mulberry32 state after 40 idle steps from reset(seed) — a pure
+  // function of the seed's stream. Deliberately stream-only: pinning
+  // death ticks or observation tails here would couple this test to
+  // engine/map changes (RNG-driven permanent-death timing) for
+  // non-#460 reasons.
+  const goldenRngState: Record<number, number> = {
+    0: 1489130928,
+    1: 1489130929,
+    42: 1489130970,
+    12345: 1489143273,
+    [MAX_SUPPORTED_RESET_SEED]: 1489130926,
   };
 
-  it('produces byte-identical sequences for previously-valid seeds (golden check)', () => {
-    for (const [seedStr, expected] of Object.entries(golden)) {
+  it('produces byte-identical PRNG streams for previously-valid seeds (golden check)', () => {
+    for (const [seedStr, expectedState] of Object.entries(goldenRngState)) {
       const seed = Number(seedStr);
       const env = new BonkEnvironment({ numOpponents: 1, seed });
       env.reset(seed);
-      const doneTicks: number[] = [];
-      const obs: number[] = [];
       for (let i = 0; i < 40; i++) {
-        const r = env.step(0);
-        if (r.done) doneTicks.push(i);
-        obs.push(+r.observation.playerX.toFixed(6), +r.observation.playerY.toFixed(6));
+        env.step(0);
       }
-      expect((env as any).rng.getState()).toBe(expected.rngState);
-      expect(`${(env as any).scoreBlue}-${(env as any).scoreRed}`).toBe(expected.score);
-      expect(doneTicks).toEqual(expected.doneTicks);
-      expect(obs.slice(-8)).toEqual(expected.obsTail);
+      expect((env as any).rng.getState()).toBe(expectedState);
       env.close();
 
       // The constructor seed slot seeds the identical stream without an
@@ -178,7 +153,7 @@ describe('BonkEnvironment seed validation (#460)', () => {
       for (let i = 0; i < 40; i++) {
         envCtor.step(0);
       }
-      expect((envCtor as any).rng.getState()).toBe(expected.rngState);
+      expect((envCtor as any).rng.getState()).toBe(expectedState);
       envCtor.close();
     }
   });
@@ -191,5 +166,39 @@ describe('BonkEnvironment seed validation (#460)', () => {
     const envCtor = new BonkEnvironment({ numOpponents: 1, seed: 1234 });
     expect((envCtor as any).rng.getState()).toBe(1234);
     envCtor.close();
+  });
+});
+
+describe('pooled derived construction seeds (review of #460)', () => {
+  it('is the identity for every in-range base seed and offset', () => {
+    for (const base of [0, 1, 42, 12345, MAX_SUPPORTED_RESET_SEED - 100]) {
+      for (const offset of [0, 1, 7, 99]) {
+        expect(deriveConstructionSeed(base, offset)).toBe(base + offset);
+      }
+    }
+  });
+
+  it('wraps into the supported domain instead of exceeding it (clamp would duplicate streams)', () => {
+    // init(4, { seed: MAX }) must derive MAX, 0, 1, 2 — all distinct and
+    // all accepted by the constructor guard.
+    const derived = [0, 1, 2, 3].map((i) => deriveConstructionSeed(MAX_SUPPORTED_RESET_SEED, i));
+    expect(derived).toEqual([MAX_SUPPORTED_RESET_SEED, 0, 1, 2]);
+    for (const seed of derived) {
+      expect(Number.isInteger(seed)).toBe(true);
+      expect(seed).toBeGreaterThanOrEqual(0);
+      expect(seed).toBeLessThanOrEqual(MAX_SUPPORTED_RESET_SEED);
+      const env = new BonkEnvironment({ numOpponents: 1, seed });
+      env.close();
+    }
+  });
+
+  it('still strictly validates the configured base seed (only the derived offset wraps)', () => {
+    // The wrap applies to base + offset, never to a caller-supplied
+    // out-of-domain base: an invalid configured seed must keep failing
+    // loudly rather than silently wrapping onto a different stream.
+    expect(() => new BonkEnvironment({ numOpponents: 1, seed: MAX_SUPPORTED_RESET_SEED + 1 })).toThrow(
+      new RegExp(`Invalid seed ${MAX_SUPPORTED_RESET_SEED + 1}: expected an integer in`),
+    );
+    expect(() => new BonkEnvironment({ numOpponents: 1, seed: -1 })).toThrow(/Invalid seed -1/);
   });
 });
