@@ -57,7 +57,13 @@ export interface DiscAxesDiff {
 export interface TickComparison {
   tick: number;
   compared: DiscAxesDiff[];
-  /** Per-slot corruptions (e.g. a corrupt input byte) that fail the tick. */
+  /**
+   * Per-slot failures that fail the tick, of two kinds: corrupt recorded
+   * data (a malformed input byte, a malformed disc entry) and engine-vs-native
+   * divergence ('native absent but engine alive', 'native present but engine
+   * dead/absent', 'non-finite disc diff'). `id` is always a real player id —
+   * whole-tick corruptions belong in `tickErrors`, not here.
+   */
   playerErrors: Array<{ id: number; reason: string }>;
   /**
    * Whole-tick corruptions that fail the tick but belong to no player slot
@@ -239,6 +245,7 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
 
       const compared: DiscAxesDiff[] = [];
       const mismatches: TickComparison['playerErrors'] = [];
+      const tickErrors: string[] = [];
       let withinTolerance = true;
       let deathAgreements = 0;
 
@@ -251,13 +258,16 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         mismatches.push({ id, reason: 'malformed input byte' });
         withinTolerance = false;
       }
-      // Malformed input-set container (#450): a whole-tick corruption kept out
-      // of the per-player list and carried as a tick-level error instead — it
-      // belongs to no player slot, so the sentinel id would overload the
-      // contract. Flagged once, outside the aligned-disc loop, so a tick with
-      // zero aligned discs still fails instead of silently passing on a trace
-      // parseNativeTrace rejects.
+      // Malformed input-set container (#450): a whole-tick corruption carried
+      // as a tick-level error instead of a per-player entry — it belongs to no
+      // player slot, so the sentinel id would overload the contract. Flagged
+      // once, outside the aligned-disc loop, so a tick with zero aligned discs
+      // still fails instead of silently passing on a trace parseNativeTrace
+      // rejects. The tick stays comparable data (tickErrors counts toward
+      // hadData below), so it lands in ticksOutsideTolerance — never in
+      // skippedNoData.
       if (inputsMalformed) {
+        tickErrors.push('malformed input set');
         withinTolerance = false;
       }
 
@@ -333,14 +343,18 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         }
       });
 
-      const hadData = compared.length > 0 || mismatches.length > 0 || deathAgreements > 0;
+      // A tick carrying a tick-level error is comparable data (its corruption
+      // was examined and failed the gate), so it must land in
+      // ticksCompared/ticksOutsideTolerance — never in skippedNoData, whose
+      // count is reserved for ticks with genuinely nothing to examine.
+      const hadData = compared.length > 0 || mismatches.length > 0 || tickErrors.length > 0 || deathAgreements > 0;
       if (!hadData) skippedNoData++;
       if (!withinTolerance) ticksOutsideTolerance++;
       perTick.push({
         tick: recorded.t,
         compared,
         playerErrors: mismatches,
-        tickErrors: inputsMalformed ? ['malformed input set'] : [],
+        tickErrors,
         withinTolerance,
       });
     }

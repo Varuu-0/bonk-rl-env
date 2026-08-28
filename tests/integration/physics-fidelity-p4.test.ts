@@ -1062,9 +1062,10 @@ describe('P4: differential validation — replay comparator', () => {
   it('flags a malformed input-set container even with zero aligned discs (issue #450)', () => {
     // parseNativeTrace rejects a present-but-non-array `inputs` outright; the
     // comparator must fail the tick too — even when every disc entry is null,
-    // so the aligned-disc loop never runs. The flag is tick-level (id -1),
-    // outside the disc loop, so an error-ignoring caller cannot vouch for a
-    // trace the parser rejected by rolling a tick with no comparable discs.
+    // so the aligned-disc loop never runs. The flag is tick-level
+    // (`tickErrors`), outside the disc loop, so an error-ignoring caller
+    // cannot vouch for a trace the parser rejected by rolling a tick with no
+    // comparable discs.
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     bad.ticks[0].inputs = 21 as any;
     bad.ticks[0].discs = [null, null];
@@ -1079,6 +1080,47 @@ describe('P4: differential validation — replay comparator', () => {
     // own per-slot 'native absent' errors — that collateral is expected and
     // is not what this test pins.
     expect(verdict.perTick[0].tickErrors).toEqual(['malformed input set']);
+    // The flagged tick is comparable data: it lands in ticksCompared /
+    // ticksOutsideTolerance, never in skippedNoData.
+    expect(verdict.ticksCompared).toBe(bad.ticks.length);
+    expect(verdict.skippedNoData).toBe(0);
+  });
+
+  it('a malformed-inputs tick with no other data counts as compared, not skipped (issue #450)', () => {
+    // Regression pin (Kilo review round 5, PR #462): when the id -1 sentinel
+    // was replaced with the tickErrors field, `hadData` lost its signal — a
+    // malformed-inputs tick with zero aligned discs and dead engine discs had
+    // nothing in compared/playerErrors/deathAgreements and silently landed in
+    // skippedNoData, undercounting ticksCompared. The tick-level error itself
+    // must keep the tick comparable.
+    const noData: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: loadMap(SIMPLE_1V1),
+      settings: { re: false },
+      players: [
+        { id: 0, team: 1 },
+        { id: 1, team: 2 },
+      ],
+      // OOB spawns + re:false: every engine disc is dead by the first tick,
+      // so tick 0's only comparable signal is the malformed input container.
+      spawns: [
+        { id: 0, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 0 },
+        { id: 1, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 50 },
+      ],
+      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] as const })),
+    };
+    noData.ticks[0].inputs = 21 as any;
+    const verdict = compareTrace(noData, { seed: 7 });
+    // Tick 0 is flagged and examined (comparable data), never skipped.
+    expect(verdict.perTick[0].tickErrors).toEqual(['malformed input set']);
+    expect(verdict.perTick[0].withinTolerance).toBe(false);
+    expect(verdict.ticksCompared).toBe(1);
+    expect(verdict.skippedNoData).toBe(3);
+    expect(verdict.ticksOutsideTolerance).toBe(1);
+    // The gate still fails: the flagged tick is outside tolerance.
+    expect(verdict.pass).toBe(false);
   });
 
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
