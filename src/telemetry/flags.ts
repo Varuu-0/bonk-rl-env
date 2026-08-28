@@ -293,6 +293,8 @@ export function parseFlags(): TelemetryFlags {
  *   including argv flags, exactly like applyEnvOverrides().
  * - A valid MANIFOLD_PROFILE / MANIFOLD_DEBUG selection implies telemetry,
  *   exactly like the equivalent --profile/--debug CLI flags.
+ * - argv master-switch and level tokens resolve last-wins in token order,
+ *   exactly like parseFlags() applies them (#459 review).
  * The config-file layer (config telemetry.enabled, reportIntervalMs, ...) is
  * an initialize()-path concern and is intentionally not consulted here.
  *
@@ -342,8 +344,11 @@ export function isAnyTelemetryEnabled(): boolean {
   // like config-loader.ts so a CRLF-carrying env value resolves identically
   // on both paths (#459 review).
   const envProfileLevel = process.env.PROFILE_LEVEL;
-  if (envProfileLevel !== undefined && ['minimal', 'standard', 'detailed'].includes(envProfileLevel.trim())) {
-    return true;
+  if (envProfileLevel !== undefined) {
+    const profileLevelValue = envProfileLevel.trim();
+    if (profileLevelValue === 'minimal' || profileLevelValue === 'standard' || profileLevelValue === 'detailed') {
+      return true;
+    }
   }
 
   // Selecting a debug level implies telemetry, exactly like the CLI
@@ -357,8 +362,11 @@ export function isAnyTelemetryEnabled(): boolean {
   // MANIFOLD_DEBUG so the established name wins when both are set. Trimmed
   // like config-loader.ts (#459 review).
   const envDebugLevel = process.env.DEBUG_LEVEL;
-  if (envDebugLevel !== undefined && ['none', 'error', 'verbose'].includes(envDebugLevel.trim())) {
-    return true;
+  if (envDebugLevel !== undefined) {
+    const debugLevelValue = envDebugLevel.trim();
+    if (debugLevelValue === 'none' || debugLevelValue === 'error' || debugLevelValue === 'verbose') {
+      return true;
+    }
   }
 
   const argv = process.argv;
@@ -368,8 +376,10 @@ export function isAnyTelemetryEnabled(): boolean {
   // (#459 review): a bare master switch enables, an inline
   // --telemetry-enabled=<value> sets the value, and a later token overrides
   // an earlier one, so the fast path can never disagree with the
-  // initialize() resolution on the same argv.
-  let masterSwitchEnabled = false;
+  // initialize() resolution on the same argv. Level selections participate
+  // in the same ordering: they imply telemetry at their token and a later
+  // explicit disable overrides them.
+  let argvEnabled = false;
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
@@ -377,35 +387,37 @@ export function isAnyTelemetryEnabled(): boolean {
     // Check for master switch
     if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '--telemetry-enabled' || arg === '-t') {
       // Flag present without value = enabled
-      masterSwitchEnabled = true;
+      argvEnabled = true;
       continue;
     }
     if (arg.startsWith('--telemetry-enabled=')) {
       const value = arg.slice('--telemetry-enabled='.length).toLowerCase();
       if (value === 'true' || value === '1' || value === 'yes') {
-        masterSwitchEnabled = true;
+        argvEnabled = true;
       } else if (value === 'false' || value === '0' || value === 'no') {
-        masterSwitchEnabled = false;
+        argvEnabled = false;
       }
       // A garbage inline value does not touch the switch, exactly like
       // parseFlags() leaves the default in place for that token.
       continue;
     }
 
-    // Keep the fast path exactly aligned with parseFlags(): only the
-    // space-separated, valid-value forms imply telemetry.
+    // Level selections imply telemetry at their own token position, so a
+    // later explicit --telemetry-enabled=false overrides them — the same
+    // token-order last-wins parseFlags()/parseCliFlags() apply.
     const nextArg = argv[i + 1];
     if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
-      return true;
+      argvEnabled = true;
+      continue;
     }
     if ((arg === '--debug' || arg === '--debug-level' || arg === '-d') &&
         (nextArg === 'none' || nextArg === 'error' || nextArg === 'verbose')) {
-      return true;
+      argvEnabled = true;
     }
   }
 
-  return masterSwitchEnabled;
+  return argvEnabled;
 }
 
 /**

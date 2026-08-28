@@ -88,6 +88,37 @@ describe('TelemetryController', () => {
       expect(controller.getFlags().enableTelemetry).toBe(true);
       expect(isTelemetryEnabled()).toBe(true);
     });
+
+    it('isTelemetryEnabled returns true with --enable-telemetry (documented alias)', () => {
+      process.argv = ['node', 'script.js', '--enable-telemetry'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    // Last-wins parity with parseFlags()/parseCliFlags() (#459 review): the
+    // controller's initialize() resolution must agree with the worker
+    // fallback on the same argv.
+    it('--telemetry --telemetry-enabled=false leaves the controller disabled (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(false);
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --telemetry enables the controller (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--profile minimal --telemetry-enabled=false leaves the controller disabled (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(false);
+      expect(isTelemetryEnabled()).toBe(false);
+    });
   });
 
   describe('enabled via environment', () => {

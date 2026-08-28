@@ -1041,6 +1041,7 @@ function parseCliFlags(config: AppConfig): AppConfig {
         break;
 
       case '--telemetry':
+      case '--enable-telemetry':
       case '--telemetry-enabled':
       case '-t':
         config.telemetry.enabled = true;

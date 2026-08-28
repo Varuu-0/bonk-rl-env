@@ -913,6 +913,32 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.enabled).toBe(true);
     });
 
+    it('--enable-telemetry enables telemetry (documented alias, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--enable-telemetry'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    // Last-wins parity with parseFlags()/isAnyTelemetryEnabled() (#459
+    // review): a later explicit disable overrides an earlier bare switch.
+    it('--telemetry --telemetry-enabled=false disables telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --telemetry enables telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('--profile minimal --telemetry-enabled=false disables telemetry (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
     it('--debug-level sets debug level', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const cfg = loadConfig(testDir);

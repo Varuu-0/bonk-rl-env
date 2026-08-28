@@ -349,6 +349,28 @@ describe('Flags uncovered paths', () => {
       expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
     });
 
+    // Token-order last-wins, matching the isAnyTelemetryEnabled() fast path
+    // and parseCliFlags() (#459 review).
+    it('parses --telemetry --telemetry-enabled=false as disabled (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=false --telemetry as enabled (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('parses --profile minimal --telemetry-enabled=false as disabled (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
     it('parses --debug-level long form and enables telemetry', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const flags = parseFlags();
@@ -1485,6 +1507,29 @@ describe('Flags uncovered paths', () => {
 
     it('returns true for --debug-level flag', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    // Last-wins parity with parseFlags()/parseCliFlags() (#459 review): a
+    // later explicit disable overrides an earlier bare switch, and a later
+    // bare switch re-enables after an explicit disable.
+    it('returns false for --telemetry --telemetry-enabled=false (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=false --telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --profile minimal --telemetry-enabled=false (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=false --profile minimal (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--profile', 'minimal'];
       expect(isAnyTelemetryEnabled()).toBe(true);
     });
   });

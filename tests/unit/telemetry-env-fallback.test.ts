@@ -231,6 +231,31 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       expect(isTelemetryEnabled()).toBe(false);
     });
 
+    // Parity pin (#459 review): master-switch tokens resolve last-wins in
+    // token order on the fallback path exactly like parseFlags()/
+    // parseCliFlags(), so a later explicit disable overrides an earlier bare
+    // enable (and vice versa) instead of the fast path short-circuiting on
+    // the first token it sees.
+    it('--telemetry --telemetry-enabled=false leaves telemetry disabled (last-wins parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --telemetry enables telemetry (last-wins parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false', '--telemetry'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--profile minimal --telemetry-enabled=false leaves telemetry disabled (level-then-disable parity)', () => {
+      process.argv = ['node', 'worker.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --debug verbose enables telemetry (disable-then-level parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
     it('--debug-level verbose enables telemetry without env vars', () => {
       process.argv = ['node', 'worker.js', '--debug-level', 'verbose'];
       expect(isTelemetryEnabled()).toBe(true);
