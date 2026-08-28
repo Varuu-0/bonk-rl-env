@@ -344,6 +344,11 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
     //   7800-7900, 7900-8000   env-config-forwarding
     //   8100-8500              env-manager-batch-shape (sequential describes in one file)
     //   15560-15561            ipc-bridge-bypass (hardcoded, one file)
+    //   15590-15606            ipc-shared-memory ("IpcBridge lifecycle" portCounter = 15590;
+    //                           COUNTER-ALLOCATED, forward-spans as createBridge calls are
+    //                           added — its live start() binds 15591 today (line 556) and the
+    //                           counter reaches 15606 across that describe, so the 15562-15599
+    //                           gap is NOT free and 15600-15606 borders dealer-socket below)
     //   15600-15699            ipc-bridge-dealer-socket
     //   15700-15799            ipc-bridge-bind-address (+ ipc-bridge-e2e, Tier-3 only)
     //   15800-15899            ipc-bridge-restart (#263 restart describe)
@@ -356,7 +361,7 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
     //   17100-17199            this #431 describe
     //   17200-17299            ipc-bridge-multiclient
     //   17400-17449            ipc-bridge-failed-session (host-failure init tests)
-    //   19992-19999            ipc-shared-memory (hardcoded, one file)
+    //   19992-19999            ipc-shared-memory (hardcoded constructor/getPort checks, no live bind)
     portManager = new PortManager({ startPort: 17100, endPort: 17199 });
     port = portManager.allocate();
   });
