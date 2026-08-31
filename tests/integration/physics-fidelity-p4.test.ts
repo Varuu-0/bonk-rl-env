@@ -28,15 +28,11 @@ import {
   serializeNativeTrace,
   TRACE_SCHEMA_VERSION,
 } from '../../src/core/differential';
-import {
-  buildTraceEnvironment,
-  compareTrace,
-} from '../../src/core/differential/replay-comparator';
-import {
-  verifyFixtureGates,
-  verifyJointGates,
-} from '../../src/core/differential/exact-match-gates';
+import { buildTraceEnvironment, compareTrace } from '../../src/core/differential/replay-comparator';
+import { verifyFixtureGates, verifyJointGates } from '../../src/core/differential/exact-match-gates';
+import { encodePlayerInput } from '../../src/core/action-validation';
 import { OUT_OF_BOUNDS_DISTANCE } from '../../src/core/physics-engine';
+import type { PlayerInput } from '../../src/core/physics-engine';
 import type { NativeTrace } from '../../src/core/differential/native-trace';
 
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
@@ -58,14 +54,23 @@ function makeLsjTrace(anchorA: { x: number; y: number }): NativeTrace {
       { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
     ],
     spawns: [{ x: 0, y: 0, blue: true, red: true }],
-    physicsJoints: [{
-      index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
-      anchorA,
-      axis: { x: 0, y: 1 },
-      lowerTranslation: -40, upperTranslation: 40,
-      length: 40, enableLimit: false, enableMotor: true,
-      motorSpeed: 300, maxMotorForce: 25,
-    }],
+    physicsJoints: [
+      {
+        index: 0,
+        type: 'lsj',
+        bodyA: 0,
+        bodyB: 1,
+        anchorA,
+        axis: { x: 0, y: 1 },
+        lowerTranslation: -40,
+        upperTranslation: 40,
+        length: 40,
+        enableLimit: false,
+        enableMotor: true,
+        motorSpeed: 300,
+        maxMotorForce: 25,
+      },
+    ],
   };
   return {
     schema: 'bonk.rl.env.native-trace',
@@ -78,10 +83,27 @@ function makeLsjTrace(anchorA: { x: number; y: number }): NativeTrace {
   };
 }
 
-/** Deterministic sim recording: step an engine N ticks with neutral (zero)
- *  inputs and capture recorder ticks, yielding a trace the comparator replays.
- *  Player 0 is the AI slot; extra players are the opponent slots. */
-function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, seed = 7): { trace: NativeTrace; env: BonkEnvironment } {
+/** Per-tick input program for recordSimTrace: `applied[i]` is the PlayerInput
+ *  applied pre-step for player i (missing entries fall back to neutral). The
+ *  tick's recorded Discrete(64) byte map is derived from `applied` with
+ *  encodePlayerInput — the same object feeds both the engine and the trace —
+ *  so the recorded bytes can never contradict the applied inputs. */
+interface SimTraceTickInputs {
+  applied: PlayerInput[];
+}
+
+/** Deterministic sim recording: step an engine N ticks and capture recorder
+ *  ticks, yielding a trace the comparator replays. Player 0 is the AI slot;
+ *  extra players are the opponent slots. With no inputsForTick provider the
+ *  run is neutral-input (every player gets the zero byte applied, nothing
+ *  recorded); a provider supplies the per-tick applied inputs. */
+function recordSimTrace(
+  mapRaw: unknown,
+  ticks: number,
+  numOpponents: number,
+  seed = 7,
+  inputsForTick?: (t: number) => SimTraceTickInputs,
+): { trace: NativeTrace; env: BonkEnvironment } {
   const mapDef: any = normalizeMap(mapRaw);
   const env = new BonkEnvironment({
     numOpponents,
@@ -106,23 +128,50 @@ function recordSimTrace(mapRaw: unknown, ticks: number, numOpponents: number, se
   }
   const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
 
-  // Apply the neutral inputs first, then step, then capture — the same order
+  // Apply the tick's inputs first, then step, then capture — the same order
   // the comparator replays (inputs → tick → read), so recorded tick t holds
   // the post-step state of the t-th replay step and diffs are directly aligned.
+  const NEUTRAL: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
   for (let t = 0; t < ticks; t++) {
-    physics.applyInput(0, { left: false, right: false, up: false, down: false, heavy: false, grapple: false });
-    if (numOpponents >= 1) physics.applyInput(1, { left: false, right: false, up: false, down: false, heavy: false, grapple: false });
+    const tickInputs = inputsForTick?.(t);
+    // Resolve each player's pre-step input exactly once: applyInput and the
+    // recorded byte map below are both fed from this array, so the engine's
+    // inputs and the trace's bytes can never drift apart.
+    const resolved: PlayerInput[] = [];
+    for (let i = 0; i <= numOpponents; i++) {
+      const input = tickInputs?.applied[i] ?? NEUTRAL;
+      resolved[i] = input;
+      physics.applyInput(i, input);
+    }
     physics.tick();
 
     const states: any[] = [];
     for (let i = 0; i <= numOpponents; i++) {
       const body = physics.playerBodies?.get(i);
-      if (!body || !physics.playerAlive.get(i)) { states[i] = undefined; continue; }
+      if (!body || !physics.playerAlive.get(i)) {
+        states[i] = undefined;
+        continue;
+      }
       const pos = body.GetPosition();
       const vel = body.GetLinearVelocity();
-      states[i] = { x: pos.x * physics.scale, y: pos.y * physics.scale, xv: vel.x * physics.scale, yv: vel.y * physics.scale, a: body.GetAngle(), av: body.GetAngularVelocity() };
+      states[i] = {
+        x: pos.x * physics.scale,
+        y: pos.y * physics.scale,
+        xv: vel.x * physics.scale,
+        yv: vel.y * physics.scale,
+        a: body.GetAngle(),
+        av: body.GetAngularVelocity(),
+      };
     }
-    rec.push({ t, discs: states });
+    if (tickInputs) {
+      const inputs: Record<number, number> = {};
+      for (let i = 0; i <= numOpponents; i++) {
+        inputs[i] = encodePlayerInput(resolved[i]);
+      }
+      rec.push({ t, discs: states, inputs });
+    } else {
+      rec.push({ t, discs: states });
+    }
   }
 
   return { trace: rec.toTrace(), env };
@@ -137,10 +186,22 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       tps: 30,
       map: raw,
       settings: { re: false, nc: false, pq: 1, gd: 25, fl: false },
-      players: [{ id: 0, team: 1 }, { id: 1, team: 2 }],
-      spawns: [{ id: 0, x: -100, y: -25 }, { id: 1, x: 100, y: -25 }],
+      players: [
+        { id: 0, team: 1 },
+        { id: 1, team: 2 },
+      ],
+      spawns: [
+        { id: 0, x: -100, y: -25 },
+        { id: 1, x: 100, y: -25 },
+      ],
       ticks: [
-        { t: 0, discs: [{ id: 0, x: -100, y: -25, xv: 0, yv: 0, a: 0, av: 0, alive: true }, { id: 1, x: 100, y: -25, xv: 0, yv: 0, a: 0, av: 0, alive: true }] },
+        {
+          t: 0,
+          discs: [
+            { id: 0, x: -100, y: -25, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+            { id: 1, x: 100, y: -25, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+          ],
+        },
       ],
     };
     const parsed = parseNativeTrace(JSON.parse(serializeNativeTrace(trace)));
@@ -152,8 +213,15 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
   it('rejects wrong schema/version as errors', () => {
     const parsed = parseNativeTrace({ schema: 'nope', version: 1, tps: 30, players: [], spawns: [], ticks: [] });
     expect(parsed.errors.length).toBeGreaterThan(0);
-    const v2 = parseNativeTrace({ schema: 'bonk.rl.env.native-trace', version: 99, tps: 30, players: [], spawns: [], ticks: [] });
-    expect(v2.errors.some(e => /unsupported schema version/.test(e))).toBe(true);
+    const v2 = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: 99,
+      tps: 30,
+      players: [],
+      spawns: [],
+      ticks: [],
+    });
+    expect(v2.errors.some((e) => /unsupported schema version/.test(e))).toBe(true);
   });
 
   it('reports malformed disc entries while preserving null absent discs', () => {
@@ -164,10 +232,12 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       map: {},
       players: [{ id: 0 }],
       spawns: [],
-      ticks: [{
-        t: 0,
-        discs: [null, 5, { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0 }],
-      }],
+      ticks: [
+        {
+          t: 0,
+          discs: [null, 5, { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0 }],
+        },
+      ],
     });
     expect(parsed.errors).toEqual([
       'tick 0 disc 1 is malformed: not an object',
@@ -186,13 +256,15 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       map: {},
       players: [{ id: 0 }],
       spawns: [],
-      ticks: [{
-        t: 0,
-        discs: [
-          { id: 1.5, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
-          { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
-        ],
-      }],
+      ticks: [
+        {
+          t: 0,
+          discs: [
+            { id: 1.5, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+            { id: 2, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: true },
+          ],
+        },
+      ],
     });
     expect(parsed.errors).toEqual([
       'tick 0 disc 0 is malformed: id must be a non-negative integer',
@@ -215,10 +287,12 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       map: {},
       players: [{ id: 0 }],
       spawns: [],
-      ticks: [{
-        t: 0,
-        discs: [{ id: 0, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: false }],
-      }],
+      ticks: [
+        {
+          t: 0,
+          discs: [{ id: 0, x: 0, y: 0, xv: 0, yv: 0, a: 0, av: 0, alive: false }],
+        },
+      ],
     });
     expect(parsed.errors).toEqual([
       'tick 0 disc 0 is malformed: alive must be true (presence in state.discs means alive)',
@@ -323,10 +397,7 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
       spawns: [],
       ticks: [{ t: 0 }, { t: -1, discs: [] }],
     });
-    expect(parsed.errors).toEqual([
-      'tick 0 has no discs array',
-      'tick index invalid: -1',
-    ]);
+    expect(parsed.errors).toEqual(['tick 0 has no discs array', 'tick index invalid: -1']);
     expect(parsed.trace.ticks).toEqual([]);
   });
 
@@ -406,11 +477,63 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
         { index: 1, name: 'red', x: 100, y: 0, red: true },
       ],
       bodies: [
-        { bodyIndex: 0, name: 'anchor', type: 'rect', bodyType: 'static', static: true, x: 0, y: 0, width: 40, height: 10, density: 0, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
-        { bodyIndex: 1, name: 'slider', type: 'rect', bodyType: 'dynamic', static: false, x: 0, y: 0, width: 20, height: 20, density: 1, restitution: 0, friction: 0, collidesGroup1: true, collidesGroup2: true, collidesGroup3: true, collidesGroup4: true, collidesPlayers: true },
+        {
+          bodyIndex: 0,
+          name: 'anchor',
+          type: 'rect',
+          bodyType: 'static',
+          static: true,
+          x: 0,
+          y: 0,
+          width: 40,
+          height: 10,
+          density: 0,
+          restitution: 0,
+          friction: 0,
+          collidesGroup1: true,
+          collidesGroup2: true,
+          collidesGroup3: true,
+          collidesGroup4: true,
+          collidesPlayers: true,
+        },
+        {
+          bodyIndex: 1,
+          name: 'slider',
+          type: 'rect',
+          bodyType: 'dynamic',
+          static: false,
+          x: 0,
+          y: 0,
+          width: 20,
+          height: 20,
+          density: 1,
+          restitution: 0,
+          friction: 0,
+          collidesGroup1: true,
+          collidesGroup2: true,
+          collidesGroup3: true,
+          collidesGroup4: true,
+          collidesPlayers: true,
+        },
       ],
       physicsJoints: [
-        { index: 0, type: 'lpj', bodyA: 0, bodyB: 1, data: { cc: false, bf: 0, dl: false }, length: 0, collideConnected: false, breakForce: 0, deleteOnBreak: false, anchorA: { x: 0, y: 0 }, angle: 0, lowerTranslation: -50, upperTranslation: 50, enableLimit: true, maxMotorForce: 0 },
+        {
+          index: 0,
+          type: 'lpj',
+          bodyA: 0,
+          bodyB: 1,
+          data: { cc: false, bf: 0, dl: false },
+          length: 0,
+          collideConnected: false,
+          breakForce: 0,
+          deleteOnBreak: false,
+          anchorA: { x: 0, y: 0 },
+          angle: 0,
+          lowerTranslation: -50,
+          upperTranslation: 50,
+          enableLimit: true,
+          maxMotorForce: 0,
+        },
       ],
     };
     const trace: NativeTrace = {
@@ -444,7 +567,7 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       joint.m_lowerTranslation = -50;
       const lagged = verifyJointGates(env, trace);
       expect(lagged.ok).toBe(false);
-      expect(lagged.mismatches.some(m => /prismatic lowerTranslation mismatch/.test(m))).toBe(true);
+      expect(lagged.mismatches.some((m) => /prismatic lowerTranslation mismatch/.test(m))).toBe(true);
     } finally {
       env.close();
     }
@@ -474,7 +597,7 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       built.m_maxMotorForce = 25;
       const lagged = verifyJointGates(env, trace);
       expect(lagged.ok).toBe(false);
-      expect(lagged.mismatches.some(m => /prismatic maxMotorForce mismatch/.test(m))).toBe(true);
+      expect(lagged.mismatches.some((m) => /prismatic maxMotorForce mismatch/.test(m))).toBe(true);
     } finally {
       env.close();
     }
@@ -499,7 +622,7 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
       built.m_motorSpeed = 300;
       const regressed = verifyJointGates(env, trace);
       expect(regressed.ok).toBe(false);
-      expect(regressed.mismatches.some(m => /prismatic motorSpeed mismatch/.test(m))).toBe(true);
+      expect(regressed.mismatches.some((m) => /prismatic motorSpeed mismatch/.test(m))).toBe(true);
     } finally {
       env.close();
     }
@@ -512,9 +635,25 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
     // engine-built values — not the authored motorSpeed — so an authored
     // non-300 motorSpeed (e.g. 500) on a degenerate lsj must NOT false-fail.
     const scenarios: Array<{ name: string; mutate: (j: any) => void }> = [
-      { name: 'length 0', mutate: (j) => { j.length = 0; } },
-      { name: 'null anchorA', mutate: (j) => { j.anchorA = null; } },
-      { name: 'ground-anchored (ba -1)', mutate: (j) => { j.bodyA = -1; j.length = 0; } },
+      {
+        name: 'length 0',
+        mutate: (j) => {
+          j.length = 0;
+        },
+      },
+      {
+        name: 'null anchorA',
+        mutate: (j) => {
+          j.anchorA = null;
+        },
+      },
+      {
+        name: 'ground-anchored (ba -1)',
+        mutate: (j) => {
+          j.bodyA = -1;
+          j.length = 0;
+        },
+      },
     ];
     for (const s of scenarios) {
       const rawMap: any = {
@@ -523,14 +662,23 @@ describe('P4: differential validation — fixture/joint exact-match gates', () =
           { bodyIndex: 1, name: 'spring', type: 'rect', x: 0, y: 40, width: 20, height: 20, static: false, density: 1 },
         ],
         spawns: [{ x: 0, y: 0, blue: true, red: true }],
-        physicsJoints: [{
-          index: 0, type: 'lsj', bodyA: 0, bodyB: 1,
-          anchorA: { x: 0, y: 40 },
-          axis: { x: 0, y: 1 },
-          lowerTranslation: -40, upperTranslation: 40,
-          length: 40, enableLimit: false, enableMotor: true,
-          motorSpeed: 500, maxMotorForce: 25,
-        }],
+        physicsJoints: [
+          {
+            index: 0,
+            type: 'lsj',
+            bodyA: 0,
+            bodyB: 1,
+            anchorA: { x: 0, y: 40 },
+            axis: { x: 0, y: 1 },
+            lowerTranslation: -40,
+            upperTranslation: 40,
+            length: 40,
+            enableLimit: false,
+            enableMotor: true,
+            motorSpeed: 500,
+            maxMotorForce: 25,
+          },
+        ],
       };
       s.mutate(rawMap.physicsJoints[0]);
       const trace: NativeTrace = {
@@ -671,7 +819,9 @@ describe('P4: differential validation — replay comparator', () => {
     for (const tick of bad.ticks) {
       for (const d of tick.discs) if (d) d.x += 3;
     }
-    const verdict = compareTrace(bad, { tolerances: { position: 0.5, velocity: 1.0, angle: 0.05, angularVelocity: 0.5 } });
+    const verdict = compareTrace(bad, {
+      tolerances: { position: 0.5, velocity: 1.0, angle: 0.05, angularVelocity: 0.5 },
+    });
     expect(verdict.pass).toBe(false);
     expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
     expect(verdict.worst.dx).toBeGreaterThan(2.5);
@@ -681,7 +831,7 @@ describe('P4: differential validation — replay comparator', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     for (const tick of bad.ticks) tick.discs[1] = null; // opponent never exists natively
     const verdict = compareTrace(bad, { seed: 0 });
-    expect(verdict.perTick.some(t => t.mismatches.length > 0)).toBe(true);
+    expect(verdict.perTick.some((t) => t.mismatches.length > 0)).toBe(true);
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
     expect(verdict.pass).toBe(false);
@@ -719,7 +869,7 @@ describe('P4: differential validation — replay comparator', () => {
     });
     expect(verdict.pass).toBe(false);
     expect(applied).not.toContain(0);
-    expect(applied.filter(id => id === 1).length).toBeGreaterThan(0);
+    expect(applied.filter((id) => id === 1).length).toBeGreaterThan(0);
   });
 
   it('does not apply replayed inputs to slot-misaligned disc entries', () => {
@@ -749,8 +899,73 @@ describe('P4: differential validation — replay comparator', () => {
     });
     expect(verdict.pass).toBe(false);
     expect(applied).not.toContain(1);
-    expect(applied.filter(id => id === 0).length).toBeGreaterThan(0);
+    expect(applied.filter((id) => id === 0).length).toBeGreaterThan(0);
     expect(verdict.perTick[0].mismatches).toContainEqual({ id: 1, reason: 'malformed disc entry' });
+  });
+
+  it("delivers the dying disc's recorded input byte on its fatal tick (#423)", () => {
+    // Capture applies a tick's input bytes PRE-step, unconditionally: a disc
+    // that dies during tick K was still alive when K's step began, so its
+    // fatal-tick byte shaped the recorded transition into K's absent (null)
+    // state. The comparator must replay those semantics — gating applyInput
+    // on POST-step disc presence silently dropped exactly that byte (#423).
+    // Player 0 holds RIGHT for the whole round (`re` is off in the WDB map,
+    // so the mid-run OOB death is final): every tick carries a non-neutral
+    // byte, including the fatal one.
+    const HELD_RIGHT: PlayerInput = { left: false, right: true, up: false, down: false, heavy: false, grapple: false };
+    const NEUTRAL: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+    const HELD_RIGHT_BYTE = encodePlayerInput(HELD_RIGHT);
+    const { trace: traceWithInputs, env } = recordSimTrace(loadMap(WDB_GROUND_JOINTS), 60, 1, 7, () => ({
+      applied: [HELD_RIGHT, NEUTRAL],
+    }));
+
+    try {
+      // Sanity: player 0 really dies mid-run while still recorded holding RIGHT.
+      let deathTick = -1;
+      for (let t = 1; t < traceWithInputs.ticks.length; t++) {
+        if (traceWithInputs.ticks[t].discs[0] === null && traceWithInputs.ticks[t - 1].discs[0] !== null) {
+          deathTick = t;
+          break;
+        }
+      }
+      expect(deathTick).toBeGreaterThan(0);
+      expect(traceWithInputs.ticks[deathTick].inputs?.[0]).toBe(HELD_RIGHT_BYTE);
+
+      // Replay through the comparator with an input spy keyed by tick index.
+      const appliedPerTick: Array<Map<number, number>> = [];
+      let idx = -1;
+      const verdict = compareTrace(traceWithInputs, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+        onReady: (replayEnv) => {
+          const p: any = (replayEnv as any).physics;
+          const origApply = p.applyInput.bind(p);
+          const origTick = p.tick.bind(p);
+          p.applyInput = (id: number, input: PlayerInput) => {
+            if (!appliedPerTick[idx]) appliedPerTick[idx] = new Map();
+            appliedPerTick[idx].set(id, encodePlayerInput(input));
+            return origApply(id, input);
+          };
+          p.tick = () => {
+            idx++;
+            return origTick();
+          };
+        },
+      });
+
+      // THE REGRESSION ASSERTION: the fatal-tick byte reaches the engine
+      // instead of being gated away by the post-step null disc entry.
+      expect(appliedPerTick[deathTick]?.get(0)).toBe(HELD_RIGHT_BYTE);
+
+      // Verdict stability: a faithful engine reproduces the capture exactly,
+      // including the fatal force — delivering the byte causes no false fail.
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      env.close();
+    }
   });
 
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {
@@ -763,7 +978,10 @@ describe('P4: differential validation — replay comparator', () => {
       // back at its spawn point, and a disc that never leaves the death circle
       // would come back alive — breaking the all-skipped premise.
       settings: { re: false },
-      players: [{ id: 0, team: 1 }, { id: 1, team: 2 }],
+      players: [
+        { id: 0, team: 1 },
+        { id: 1, team: 2 },
+      ],
       // Both discs are placed one unit beyond the engine's OOB death circle
       // (OUT_OF_BOUNDS_DISTANCE map units from the origin death center) before
       // the first replay tick, so every native-absent entry agrees with a dead

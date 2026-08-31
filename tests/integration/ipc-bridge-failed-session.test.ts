@@ -1,5 +1,5 @@
 /**
- * ipc-bridge-failed-session.test.ts — Regression coverage for issue #400
+ * ipc-bridge-failed-session.test.ts — Regression coverage for issues #400 and #440
  *
  * When a client session's WorkerPool fails AFTER init (shared-memory step/reset
  * timeout, worker crash/exit, or a post-signal error), the pool transitions to
@@ -21,12 +21,21 @@
  * - a matching-count init that arrives AFTER an async host-pool failure
  *   reports the real failed-state error at ACK time instead of acking ok on
  *   the corpse (issue #436), so the client recovers with its immediate retry.
+ *
+ * Issue #440: an init failure that does NOT consume the pool must not evict
+ * anything. WorkerPool.initInternal validates numOpponents BEFORE
+ * closeInternal(), so a re-init rejected by that validation leaves the old
+ * pool 'ready' with live workers — deleting the session and closing the pool
+ * destroyed a healthy mid-episode environment over one bad request. Only a
+ * genuinely failing init (post-teardown worker/env failure, state 'failed')
+ * still takes the eviction path.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as zmq from 'zeromq';
 import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { WorkerPool } from '../../src/core/worker-pool';
 import { PortManager } from '../../src/utils/port-manager';
+import { MAX_OPPONENTS } from '../../src/core/opponent-capacity';
 
 // Fail fast with a clear message instead of hanging a whole suite when a
 // reply never arrives (e.g. a regression that swallows a request).
@@ -402,6 +411,127 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
         }
         portManager.release(port);
       }
+    },
+  );
+});
+
+describe('IpcBridge keeps a healthy session on a validation-only re-init rejection (issue #440)', () => {
+  let bridge: IpcBridge;
+  let client: zmq.Dealer;
+  let portManager: PortManager;
+  let port: number;
+  // The bridge keys sessions by the client's ZMQ routing identity in hex.
+  const sessionKey = Buffer.from('reinit440', 'utf8').toString('hex');
+
+  beforeAll(async () => {
+    // 16400-17000 belongs to bonk-env-ipc-server.test.ts and vitest runs
+    // suites concurrently (pool: 'forks'), so pick a band no other suite
+    // reserves to avoid intermittent EADDRINUSE in beforeAll.
+    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
+    port = portManager.allocate();
+    bridge = new IpcBridge({ server: { port } } as any);
+    // Rejection handler required: a bind failure must surface via
+    // bridge.ready below, not as a process-killing unhandled rejection (#252).
+    void bridge.start().catch(() => {
+      /* bind failures surface via bridge.ready */
+    });
+
+    client = new zmq.Dealer({ routingId: 'reinit440' });
+    await client.connect(`tcp://127.0.0.1:${port}`);
+    await bridge.ready;
+  }, 30000);
+
+  afterAll(async () => {
+    try {
+      client.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await bridge.close();
+    } catch {
+      /* ignore */
+    }
+    portManager.release(port);
+  }, 10000);
+
+  function sessions(): Map<string, any> {
+    return (bridge as any).sessions as Map<string, any>;
+  }
+
+  function init(config: Record<string, unknown> = {}): Promise<any> {
+    return sendCommand(client, { command: 'init', numEnvs: 1, useSharedMemory: true, config });
+  }
+
+  it(
+    'a re-init rejected by pre-teardown config validation keeps the session and pool serving',
+    { timeout: 60000 },
+    async () => {
+      const initResponse = await init({ seed: 7 });
+      expect(initResponse.status).toBe('ok');
+      expect(sessions().has(sessionKey)).toBe(true);
+
+      // Advance the episode and record the per-step tick delta so preserved
+      // episode state is observable regardless of the configured frameSkip.
+      let tickBefore = 0;
+      let delta = 1;
+      for (let i = 0; i < 3; i++) {
+        const stepResponse = await sendCommand(client, { command: 'step', actions: [1] });
+        expect(stepResponse.status).toBe('ok');
+        const tick = stepResponse.data[0].info.tick;
+        if (i === 1) delta = tick - tickBefore;
+        tickBefore = tick;
+      }
+
+      // One out-of-range opponent count (camelCase and snake_case spellings)
+      // must be a per-request input error: labeled reply, nothing torn down.
+      for (const config of [{ numOpponents: MAX_OPPONENTS + 1 }, { num_opponents: MAX_OPPONENTS + 1 }]) {
+        const badReinit = await init(config);
+        expect(badReinit.status).toBe('error');
+        expect(badReinit.error).toContain(`Invalid numOpponents ${MAX_OPPONENTS + 1}`);
+      }
+
+      // The session survives with its still-ready pool.
+      expect(sessions().has(sessionKey)).toBe(true);
+      const session = sessions().get(sessionKey);
+      expect(session.pool.isFailed()).toBe(false);
+
+      // The same environment keeps serving and the episode continues
+      // exactly where it left off.
+      const stepAfter = await sendCommand(client, { command: 'step', actions: [0] });
+      expect(stepAfter.status).toBe('ok');
+      expect(stepAfter.data[0].info.tick).toBe(tickBefore + delta);
+      const resetAfter = await sendCommand(client, { command: 'reset', seeds: [7] });
+      expect(resetAfter.status).toBe('ok');
+    },
+  );
+
+  it(
+    'a genuinely failing re-init (post-teardown worker failure) still evicts the session',
+    { timeout: 60000 },
+    async () => {
+      // Replaces the healthy session from the previous test with a fresh pool.
+      const initResponse = await init({});
+      expect(initResponse.status).toBe('ok');
+      expect(sessions().has(sessionKey)).toBe(true);
+
+      // frameSkip 0 passes the pool-level pre-teardown validation but fails
+      // during worker env construction AFTER closeInternal() tore the old
+      // workers down (#393): failPool runs, so eviction stays correct here.
+      const badInit = await init({ frameSkip: 0 });
+      expect(badInit.status).toBe('error');
+      expect(badInit.error).toContain('Invalid frameSkip 0');
+
+      expect(sessions().has(sessionKey)).toBe(false);
+      const stepAfter = await sendCommand(client, { command: 'step', actions: [0] });
+      expect(stepAfter.status).toBe('error');
+      expect(stepAfter.error).toBe('Worker pool not initialized');
+
+      // A plain re-init from the same identity recovers cleanly.
+      const recovery = await init({});
+      expect(recovery.status).toBe('ok');
+      const stepOk = await sendCommand(client, { command: 'step', actions: [0] });
+      expect(stepOk.status).toBe('ok');
     },
   );
 });

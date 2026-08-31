@@ -20,6 +20,7 @@ import { normalizeMap } from './map-adapter';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { assertValidAction, decodeEncodedAction } from './action-validation';
+import { assertSupportedSeed } from './seed-range';
 export { MAX_OPPONENTS } from './opponent-capacity';
 
 // ─── Constants ───────────────────────────────────────────────────────
@@ -578,6 +579,17 @@ export class BonkEnvironment {
       );
     }
 
+    // The constructor seed slot shares the pool's supported domain
+    // [0, MAX_SUPPORTED_RESET_SEED] (#460): the PRNG normalizes any number
+    // with `seed >>> 0`, silently bit-casting negatives, wrapping values
+    // >= 2^32 and truncating fractions onto a DIFFERENT stream than the
+    // caller requested. Every other seeding surface (both pool transports,
+    // the IPC bridge, the Python client) already rejects exactly these
+    // values, so accepting them here would make a rollout recorded through
+    // the direct API unreproducible through any other surface. Only an
+    // absent seed (undefined/null) falls back to a random one above (#200).
+    assertSupportedSeed(this.config.seed, 'constructor');
+
     this.rng = new PRNG(this.config.seed);
     this.physics = new PhysicsEngine({
       ticksPerSecond: config.physics?.ticksPerSecond,
@@ -693,6 +705,13 @@ export class BonkEnvironment {
    */
   reset(seed?: number): Observation {
     if (seed !== undefined) {
+      // Same supported domain as the constructor slot, the pool's two
+      // transports, the IPC bridge and the Python client (#460): an
+      // out-of-domain seed previously bit-cast through the PRNG's
+      // `seed >>> 0` onto an unrelated stream, diverging silently from
+      // the replay the caller requested. Validate before any mutation so
+      // a rejected reset leaves the environment untouched.
+      assertSupportedSeed(seed, 'reset');
       this.config.seed = seed;
       this.rng.setSeed(seed);
     }

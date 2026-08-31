@@ -1,6 +1,11 @@
 import * as zmq from 'zeromq';
 import * as net from 'net';
-import { WorkerPool, MAX_NUM_ENVS } from '../core/worker-pool';
+import {
+  WorkerPool,
+  MAX_NUM_ENVS,
+  describeInvalidUseSharedMemory,
+  normalizeUseSharedMemory,
+} from '../core/worker-pool';
 import { globalProfiler, wrap, TelemetryIndices, setLatestWorkerTelemetry } from '../telemetry/profiler';
 import {
   isTelemetryEnabled as isTelemetryControllerEnabled,
@@ -99,8 +104,16 @@ export class IpcBridge {
   // fan-out is what settles every capture exactly once (#435); never swap
   // this for a single per-cycle pair or pre-start captures hang again.
   private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
+  // Whether any start() bind cycle has ever armed a signal. Once true, every
+  // armed resolver is settled by that cycle's own bind outcome (markBound/
+  // markBindFailed, including the #402 cancellation classification), so
+  // close() must stay out of the way. While still false, NO bind-outcome
+  // path can ever run: close() is the only remaining settler, and without a
+  // pre-drain there the constructor-armed signal strands forever (#458).
+  private _startedOnce: boolean = false;
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
+<<<<<<< HEAD
   // True while a start() cycle's native bind() is still pending. During a
   // restart's pre-bind window _closed is still stale-true from the PREVIOUS
   // cycle (it only resets after the next bind commits), so close() cannot
@@ -113,6 +126,27 @@ export class IpcBridge {
   // cancelled so the parked cycle aborts with BridgeClosedDuringStart
   // instead of re-binding right after that shutdown resolves (#431).
   private parkedStart: { cancelled: boolean } | null = null;
+=======
+  // Retained promise of the in-flight serve cycle (start() only exits on
+  // close()/failure). The start() guard reads it synchronously before any
+  // state mutation: an overlapping start() must fail fast WITHOUT re-arming
+  // ready or touching the shared ROUTER — whose EADDRINUSE cleanup would
+  // otherwise destroy the live socket of the healthy first cycle (issue
+  // #418). A promise (not a boolean) so an older draining cycle can never
+  // clear the guard for a newer overlapping one. Mirrors BonkEnv's
+  // startPromise guard (#267).
+  private _serveCycle: Promise<void> | null = null;
+
+  // Exclusive transport-admission token (issue #418 review): while a start()
+  // invocation holds it, no other start() may proceed into socket recreation
+  // and bind. Close() resets it (a drain re-opens admission for exactly one
+  // restart); the holder clears it on settle. Guarded by the retained cycling
+  // of _serveCycle only against LIVE cycles, so concurrent drain-window
+  // restarts (two start() calls against an unsettled close()) serialize here
+  // instead of double-binding — the losing bind's EADDRINUSE cleanup would
+  // close the shared ROUTER out from under the winner, the original #418 kill.
+  private _drainAdmission: symbol | null = null;
+>>>>>>> origin/main
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
@@ -287,6 +321,20 @@ export class IpcBridge {
   }
 
   /**
+   * The canonical error for a close() that runs before any start() bind
+   * cycle: rejected on every outstanding ready promise — the constructor-armed
+   * signal and any read taken after the close — so pre-bind shutdown settles
+   * readiness awaiters with one consistent, distinguishable terminal outcome
+   * instead of hanging them forever (#458). Sibling of closedDuringStartError
+   * (#402), which covers the close-during-an-armed-bind-cycle transition.
+   */
+  private closedBeforeStartError(): Error {
+    const err = new Error('bridge was closed before start');
+    err.name = 'BridgeClosedBeforeStart';
+    return err;
+  }
+
+  /**
    * Normalize a configured bind address into a ZMQ endpoint-ready host.
    * Empty/whitespace values fall back to the loopback default; `*` (the
    * libzmq all-interfaces wildcard) passes through; bare IPv6 literals are
@@ -349,7 +397,75 @@ export class IpcBridge {
   // Wrapped send function for telemetry
   private _wrappedSend: Function;
 
-  async start() {
+  async start(): Promise<void> {
+    // Overlapping-call guard (#418): fail fast when another start() is
+    // actively holding the transport — proceeding would swap the live
+    // cycle's readiness signal via rearmReady(), and a duplicate bind's
+    // EADDRINUSE cleanup would close the shared, currently serving ROUTER,
+    // silently killing the healthy first cycle. A cycle that is no longer
+    // live is NOT an overlap: an in-flight closePromise owns the old
+    // cycle's cancellation (the previousClose await in runStartCycle
+    // serializes the restart behind it, #316), and a destroyed transport
+    // (sock.closed after a settled teardown) can no longer serve — the
+    // recreation path in runStartCycle then serves the restart (#263).
+    // Those two exemptions keep the previously supported racy
+    // close()/start() and drain-window restart patterns working; a live
+    // cycle (serving or mid-bind) always rejects. The check runs before
+    // the first await, so no shared state is mutated on rejection. NOTE:
+    // an exemption here only admits a caller UP TO the exclusive post-drain
+    // admission re-check inside runStartCycle (after the previousClose
+    // drain, before any socket recreation/bind) — exactly one admitted
+    // caller wins there and owns the transport; every superseded caller
+    // rejects with the same typed error before touching the shared socket,
+    // so a drain can never admit two racing rebinds (issue #418 review).
+    const activeCycle = this._serveCycle;
+    if (activeCycle && this.closePromise === null && !this.sock.closed) {
+      const err = new Error(
+        'IpcBridge.start() called while already running: a serve cycle is still active on this bridge; await that cycle or close() it before starting again',
+      );
+      err.name = 'BridgeOverlappingStart';
+      throw err;
+    }
+    const admission = Symbol('start-cycle');
+    // The body re-registers the admission WINNER into _serveCycle after the
+    // post-drain claim (it runs after the wrapper's initial assignment in
+    // the close-drain path, see runStartCycle); publish its identity here so
+    // that re-register is possible.
+    const holder: { cycle?: Promise<void> } = {};
+    const cycle = this.runStartCycle(admission, holder);
+    holder.cycle = cycle;
+    this._serveCycle = cycle;
+    try {
+      await cycle;
+    } finally {
+      // Slot-clear is gated on ADMISSION ownership, not on field identity: a
+      // superseded caller (rejected at the post-drain admission claim) is
+      // often the LAST _serveCycle writer — clearing because its own promise
+      // still sat in the field would null the retained slot while the
+      // admission winner keeps serving, letting a later start() bypass the
+      // entry guard, re-arm bridge.ready to a promise nothing settles, and
+      // strand standalone `await bridge.ready` callers (issue #418 review).
+      // Only the invocation that owns the admission may release both the
+      // retained cycle and its token; a superseded loser leaves the field
+      // untouched (close() is the authoritative drain-side release).
+      if (this._drainAdmission === admission) {
+        this._serveCycle = null;
+        this._drainAdmission = null;
+      }
+    }
+  }
+
+  /**
+   * Body of one start() invocation. Runs with _serveCycle already set, so
+   * an overlapping start() can never reach the shared transport state
+   * mutated here (issue #418).
+   */
+  private async runStartCycle(admission: symbol, holder: { cycle?: Promise<void> }): Promise<void> {
+    // From here on every armed resolver is settled by THIS cycle's bind
+    // outcome (markBound/markBindFailed), so close() must not pre-drain
+    // with the pre-bind error (#458); the #402 close-during-start
+    // cancellation identity also depends on that gate.
+    this._startedOnce = true;
     // Re-arm `ready` before waiting for a prior close to finish. Callers
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
@@ -389,6 +505,41 @@ export class IpcBridge {
         this.markBindFailed(closedDuringStart);
         throw closedDuringStart;
       }
+    }
+
+    // Exclusive post-drain admission (issue #418): every concurrently
+    // admitted start() exhausts its drain together (via the previousClose
+    // await above), so more than one exhausted caller could race into
+    // socket recreation and bind. Doing that from two callers is the #418
+    // kill in disguise: the losing bind rejects with EADDRINUSE and its
+    // failed-bind cleanup closes the shared ROUTER — the winner's live
+    // handle — killing the healthy serve loop. Exactly one admitted caller
+    // takes the transport: the first to reach here claims _drainAdmission
+    // (close() reset it, so a fresh drain re-opens admission); every
+    // superseded caller rejects cleanly here, BEFORE touching the shared
+    // socket. The claim runs synchronously (no yield), so the #402
+    // start-then-immediate-close race still snapshots socket/_closed BEFORE
+    // close() runs and classifies its bind rejection correctly.
+    if (this._drainAdmission !== null) {
+      const err = new Error(
+        'IpcBridge.start() superseded by a concurrent start(): another admitted restart already holds the transport admission on this bridge; await that cycle or close() it before starting again',
+      );
+      err.name = 'BridgeOverlappingStart';
+      throw err;
+    }
+    this._drainAdmission = admission;
+    // Re-register the admission winner as the retained serve-cycle slot. In
+    // the close-drain path this runs after the wrapper's initial assignment,
+    // and a superseded caller may have overwritten the slot since — leaving
+    // it naming its own dead promise while the winner still serves would let
+    // the entry guard read a settled loser instead of the live cycle (issue
+    // #418 review). The winner (the only caller that holds _drainAdmission)
+    // re-publishes its own cycle here, synchronously with the claim. In the
+    // no-close path the claim already ran synchronously during the wrapper's
+    // assignment, so holder.cycle is still unwritten and the slot is already
+    // correct.
+    if (holder.cycle !== undefined) {
+      this._serveCycle = holder.cycle;
     }
 
     const addr = `tcp://${this.bindAddress}:${this.port}`;
@@ -790,6 +941,21 @@ export class IpcBridge {
             status: 'error',
             error: `Invalid numEnvs: expected an integer in [1, ${MAX_NUM_ENVS}], got ${numEnvs}`,
           };
+        } else if (payload.useSharedMemory !== undefined && typeof payload.useSharedMemory !== 'boolean') {
+          // Reject a malformed transport request up front (#433), mirroring
+          // the numEnvs guards above: a truthy non-boolean (the JSON string
+          // "false" being the canonical mistake for non-Python clients)
+          // previously flowed into WorkerPool.init verbatim and silently
+          // served the SharedArrayBuffer transport the caller asked to
+          // disable. Failing here is a per-request error that never touches
+          // worker state or a client-cap slot, and the message is
+          // word-identical to the pool-level rejection.
+          response = {
+            status: 'error',
+            error: `Invalid useSharedMemory: expected a boolean (true or false), got ${describeInvalidUseSharedMemory(
+              payload.useSharedMemory,
+            )}`,
+          };
         } else if (this._hostPool) {
           // The pool was adopted from an enclosing BonkEnv and is
           // already initialized with that env's numEnvs and config.
@@ -895,28 +1061,35 @@ export class IpcBridge {
               session.numEnvs = numEnvs;
               response = { status: 'ok' };
             } catch (error) {
-              // A pool that fails initialization is not
-              // usable, so drop the session (whether it was
-              // just created or is a re-init of an existing
-              // one) and free its workers. Retaining an
-              // invalidated existing session would let a
-              // persistently failing init hold a client-cap
-              // slot forever.
-              if (this.sessions.get(sessionKey) === session) {
+              // Tear down only when the failed init actually consumed the
+              // pool (#440). A pre-teardown config validation (e.g.
+              // numOpponents > MAX_OPPONENTS) rejects BEFORE
+              // closeInternal(), so an existing healthy pool is left
+              // 'ready' with live workers: dropping its session here would
+              // destroy live episode state over one bad re-init and fail
+              // every later step/reset with "Worker pool not initialized"
+              // (the same transient-input doctrine as ACTION_ENCODE steps
+              // and the dropFailedPoolSession isFailed() guard). A
+              // brand-new session preserves nothing usable, and a
+              // post-teardown failure leaves state 'failed' via failPool,
+              // so both still take the legacy cleanup below: retaining an
+              // invalidated session must not hold a client-cap slot
+              // forever (#390/#400).
+              const poolSurvived = !session.pool.isFailed() && session.initialized;
+              if (!poolSurvived && this.sessions.get(sessionKey) === session) {
                 this.sessions.delete(sessionKey);
                 try {
                   await session.pool.close();
                 } catch (closeError) {
                   console.error('[IPC] Error closing failed client session:', closeError);
                 }
+                // After an eviction, session mode stays engaged (the
+                // local/bypass fallback is not blanket-restored):
+                // evicting a client must never re-admit it to the
+                // local/bypass pool. Only the single pinned programmatic
+                // caller is allowed there, and the bridge is not
+                // deadlocked — a new identity can still init.
               }
-              // The session map is empty again, but session
-              // mode stays engaged (fallback is not
-              // blanket-restored): evicting a client must
-              // never re-admit it to the local/bypass pool.
-              // Only the single pinned programmatic caller is
-              // allowed there, and the bridge is not
-              // deadlocked — a new identity can still init.
               throw error;
             }
           }
@@ -1186,8 +1359,13 @@ export class IpcBridge {
     // Remember the host env's effective config and useSharedMemory so a
     // matching-count client init can be validated/echoed instead of
     // silently discarding the client's settings on an env-owned pool (#252).
+    // The echo is the documented effective-settings surface, so store the
+    // strictly-normalized value: a matching-count init reply must never
+    // echo a non-boolean transport flag back to clients (#433). The host
+    // pool itself rejects malformed values at init time, so this only
+    // guards direct adoptPool callers.
     this._hostConfig = options.config ?? null;
-    this._hostUseSharedMemory = options.useSharedMemory;
+    this._hostUseSharedMemory = normalizeUseSharedMemory(options.useSharedMemory);
   }
 
   /**
@@ -1268,6 +1446,28 @@ export class IpcBridge {
       return Promise.resolve();
     }
     this._closed = true;
+    // A drain re-opens transport admission: the next start() (or the first
+    // of several concurrently admitted ones) claims _drainAdmission fresh,
+    // so exactly one restart proceeds into recreation/bind (#418 review).
+    // Release the retained-cycle slot here too: superseded losers never
+    // clear it (their finally is gated on admission ownership), so close()
+    // is the authoritative drain-side release that keeps the slot truthful
+    // once nothing is serving.
+    this._serveCycle = null;
+    this._drainAdmission = null;
+    // A shutdown before any start() bind cycle can never reach the
+    // markBound()/markBindFailed() drains inside start(), so the
+    // constructor-armed readiness signal would stay pending forever and
+    // every `await bridge.ready` awaiter — captures taken before this
+    // close and reads taken after it — would hang silently (#458, the one
+    // lifecycle transition the #435 fan-out did not cover). Drain every
+    // outstanding signal here with the distinguishable sibling of the #402
+    // cancellation error. Once a bind cycle HAS been armed, its own outcome
+    // settles every signal (including close-during-start, #402), so leave
+    // the list alone: pre-draining there would mislabel the cancellation.
+    if (!this._startedOnce) {
+      this.markBindFailed(this.closedBeforeStartError());
+    }
     if (this.sessionReapTimer) {
       clearInterval(this.sessionReapTimer);
       this.sessionReapTimer = undefined;

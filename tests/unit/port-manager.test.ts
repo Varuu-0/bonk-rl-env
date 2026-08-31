@@ -8,6 +8,12 @@ describe('PortManager', () => {
     pm = new PortManager({ startPort: 6000, endPort: 6010 });
   });
 
+  // Allocation claims are registered process-wide (#432), so every test
+  // must release its ports or later allocations would skip them.
+  afterEach(() => {
+    pm.releaseAll();
+  });
+
   describe('allocatePort', () => {
     it('returns a valid port within the range', () => {
       const port = pm.allocate();

@@ -196,7 +196,13 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // Replay this tick's inputs for each recorded player.
       const inputs = recorded.inputs ?? [];
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (isAlignedTraceDisc(recorded.discs[id], id)) {
+        const entry: NativeTraceDisc | null | undefined = recorded.discs[id];
+        // Inputs act PRE-step (capture applies them before stepping the tick),
+        // keyed by player id — so a null entry is a disc that was still alive
+        // when its fatal step began and its recorded byte must drive that step
+        // (#423): absence is death, not malformed data. Only malformed or
+        // slot-misaligned entries are barred from driving inputs.
+        if (entry === null || entry === undefined || isAlignedTraceDisc(entry, id)) {
           physics.applyInput(id, decodeInput(inputs[id]));
         }
       }
