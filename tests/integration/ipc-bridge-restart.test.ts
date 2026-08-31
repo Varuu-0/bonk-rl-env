@@ -348,7 +348,10 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
     //                           COUNTER-ALLOCATED, forward-spans as createBridge calls are
     //                           added — its live start() binds 15591 today (line 556) and the
     //                           counter reaches 15606 across that describe, so the 15562-15599
-    //                           gap is NOT free and 15600-15606 borders dealer-socket below)
+    //                           gap is NOT free. 15600-15606 (ipc-shared-memory's
+    //                           counter-allocated live binder) lies INSIDE dealer-socket's
+    //                           15600-15699 band, not adjacent to it - a future live start()
+    //                           bound to one of those seven ports would race dealer-socket)
     //   15600-15699            ipc-bridge-dealer-socket
     //   15700-15799            ipc-bridge-bind-address (+ ipc-bridge-e2e, Tier-3 only)
     //   15800-15899            ipc-bridge-restart (#263 restart describe)
