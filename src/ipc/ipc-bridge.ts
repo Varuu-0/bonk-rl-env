@@ -113,7 +113,6 @@ export class IpcBridge {
   private _startedOnce: boolean = false;
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
-<<<<<<< HEAD
   // True while a start() cycle's native bind() is still pending. During a
   // restart's pre-bind window _closed is still stale-true from the PREVIOUS
   // cycle (it only resets after the next bind commits), so close() cannot
@@ -126,7 +125,6 @@ export class IpcBridge {
   // cancelled so the parked cycle aborts with BridgeClosedDuringStart
   // instead of re-binding right after that shutdown resolves (#431).
   private parkedStart: { cancelled: boolean } | null = null;
-=======
   // Retained promise of the in-flight serve cycle (start() only exits on
   // close()/failure). The start() guard reads it synchronously before any
   // state mutation: an overlapping start() must fail fast WITHOUT re-arming
@@ -146,7 +144,6 @@ export class IpcBridge {
   // instead of double-binding — the losing bind's EADDRINUSE cleanup would
   // close the shared ROUTER out from under the winner, the original #418 kill.
   private _drainAdmission: symbol | null = null;
->>>>>>> origin/main
 
   // Current bind signal for this serve cycle. Replaced on every start()
   // (see rearmReady) so a restart after close() resolves/rejects a fresh
