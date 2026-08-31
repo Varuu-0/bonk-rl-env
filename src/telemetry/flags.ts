@@ -404,14 +404,19 @@ export function isAnyTelemetryEnabled(): boolean {
 
     // Level selections imply telemetry at their own token position, so a
     // later explicit --telemetry-enabled=false overrides them. All three
-    // resolution paths share two rules, anchored on how
+    // resolution paths share one rule, anchored on how
     // telemetry-controller.initialize() decides enablement: a valid
     // --debug/--profile token marks enableTelemetry on the controller flags
     // and config.telemetry.enabled in parseCliFlags(), in token order; and
     // an explicit env master switch
     // (MANIFOLD_TELEMETRY/TELEMETRY_ENABLED=false) evaluated above wins
-    // over any level token, keeping telemetry disabled on every path no
-    // matter what argv carries (#459 review).
+    // over any level token. Scoped to level tokens: on the fast path and in
+    // initialize() (env applied after argv / env checked first) the env
+    // switch also beats CLI master-switch tokens, but on the server path
+    // (config-loader.ts parseCliFlags, env applied before argv) a later CLI
+    // master-switch token (--telemetry/-t/--telemetry-enabled[=…)) still
+    // overrides it via last-wins — only level tokens are gated there
+    // (#459 review).
     const nextArg = argv[i + 1];
     if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
