@@ -829,11 +829,13 @@ export class IpcBridge {
       // whatever now occupies the host slot.
       return;
     }
-    // Do not orphan the owner silently: BonkEnv keeps its own pool reference
-    // for direct step()/reset()/getPool() use, and that reference now points
-    // at a closed corpse while IPC clients get the rebuilt pool.
+    // Do not orphan the owner silently: the owner registered an
+    // onHostPoolFailed hook at adoption. BonkEnv's hook drops its own
+    // reference to the corpse and deactivates direct step()/reset();
+    // embedders that adopted without a hook keep their reference and must
+    // consult the pool themselves.
     console.warn(
-      '[IPC] Adopted host pool failed; rebuilding a fresh bridge-owned pool for IPC clients. The owner retains the dead pool reference until it re-acquires or restarts.',
+      '[IPC] Adopted host pool failed; rebuilding a fresh bridge-owned pool for IPC clients and notifying the owner.',
     );
     if (this._onHostPoolFailed) {
       try {
@@ -1293,11 +1295,13 @@ export class IpcBridge {
    *
    * If the adopted pool later FAILS after init, the bridge closes the corpse
    * and un-admits it: IPC clients recover by rebuilding a fresh
-   * bridge-owned pool via a plain re-init. The owner's own pool reference is
-   * then orphaned on the closed pool, so `onHostPoolFailed` (invoked with
-   * the dead pool, before the replacement) lets the owner react — log,
-   * invalidate its reference, or restart. An owner handler must not throw;
-   * throws are logged and swallowed so recovery always completes.
+   * bridge-owned pool via a plain re-init. The owner's own pool reference
+   * would otherwise stay pinned to the closed pool, so `onHostPoolFailed`
+   * (invoked with the dead pool, before the replacement) lets the owner
+   * react — BonkEnv invalidates its reference and deactivates direct
+   * step()/reset(); raw adoptPool callers may log or restart instead. An
+   * owner handler must not throw; throws are logged and swallowed so
+   * recovery always completes.
    */
   adoptPool(
     pool: WorkerPool,

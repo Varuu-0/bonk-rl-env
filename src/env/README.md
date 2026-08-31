@@ -4,23 +4,24 @@ Gymnasium-compatible environment wrappers that provide a clean API for RL traini
 
 ## Files
 
-| File | Purpose |
-|------|---------|
-| `bonk-env.ts` | `BonkEnv` class — single simulation instance with worker pool, async `start()`/`stop()`/`reset()`/`step()` |
-| `env-manager.ts` | `EnvManager` class — manages multiple `BonkEnv` instances, batch action dispatch, VecEnv-style interface |
+| File             | Purpose                                                                                                    |
+| ---------------- | ---------------------------------------------------------------------------------------------------------- |
+| `bonk-env.ts`    | `BonkEnv` class — single simulation instance with worker pool, async `start()`/`stop()`/`reset()`/`step()` |
+| `env-manager.ts` | `EnvManager` class — manages multiple `BonkEnv` instances, batch action dispatch, VecEnv-style interface   |
 
 ## BonkEnv API
 
 ```typescript
 class BonkEnv {
-  id: string;                    // Unique identifier (e.g., "env-1")
-  port: number;                  // IPC port if server mode enabled
+  id: string; // Unique identifier (e.g., "env-1")
+  port: number; // IPC port if server mode enabled
 
   async start(): Promise<void>;
   async stop(): Promise<void>;
   async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any>;
   async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]>;
   isActive(): boolean;
+  isFailed(): boolean; // true once the worker pool failed; recover with stop() + start()
 }
 ```
 
@@ -49,7 +50,7 @@ class EnvManager {
 
 ## Batch semantics
 
-`EnvManager`'s batch methods cover every *internal* environment of the
+`EnvManager`'s batch methods cover every _internal_ environment of the
 manager's pools: a `BonkEnv` configured with `numEnvs: N` contributes `N`
 entries to each batch. `resetAll(seeds)` and `stepAll(actions)` therefore
 expect exactly one seed / exactly one action per internal environment
