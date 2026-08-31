@@ -23,7 +23,7 @@ describe('IpcBridge per-client worker-pool isolation (issue #193)', () => {
   let port: number;
 
   beforeAll(async () => {
-    portManager = new PortManager({ startPort: 15700, endPort: 15799 });
+    portManager = new PortManager({ startPort: 17200, endPort: 17299 });
     port = portManager.allocate();
     bridge = new IpcBridge({ server: { port } } as any);
     // start() runs the serve loop until close(), so do not await it.
@@ -33,13 +33,25 @@ describe('IpcBridge per-client worker-pool isolation (issue #193)', () => {
     await clientA.connect(`tcp://127.0.0.1:${port}`);
     clientB = new zmq.Dealer({ routingId: 'clientB' });
     await clientB.connect(`tcp://127.0.0.1:${port}`);
-    await new Promise(r => setTimeout(r, 300));
+    await new Promise((r) => setTimeout(r, 300));
   }, 30000);
 
   afterAll(async () => {
-    try { clientA.close(); } catch { /* ignore */ }
-    try { clientB.close(); } catch { /* ignore */ }
-    try { await bridge.close(); } catch { /* ignore */ }
+    try {
+      clientA.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      clientB.close();
+    } catch {
+      /* ignore */
+    }
+    try {
+      await bridge.close();
+    } catch {
+      /* ignore */
+    }
     portManager.release(port);
   }, 10000);
 
@@ -49,7 +61,10 @@ describe('IpcBridge per-client worker-pool isolation (issue #193)', () => {
     return JSON.parse(response.toString());
   }
 
-  async function stepTick(client: zmq.Dealer, envs: number): Promise<{ status: string; tick?: number; results?: number; error?: string }> {
+  async function stepTick(
+    client: zmq.Dealer,
+    envs: number,
+  ): Promise<{ status: string; tick?: number; results?: number; error?: string }> {
     const response = await sendCommand(client, {
       command: 'step',
       actions: new Array(envs).fill(0),

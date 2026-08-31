@@ -352,7 +352,7 @@ describe('IpcBridge recovers sharing clients from a dead adopted host pool (issu
     'an init arriving after an async host-pool failure reports the real error instead of ok on a corpse (#436)',
     { timeout: 60000 },
     async () => {
-      const portManager = new PortManager({ startPort: 16400, endPort: 16449 });
+      const portManager = new PortManager({ startPort: 17400, endPort: 17449 });
       const port = portManager.allocate();
       const onHostPoolFailed = vi.fn();
       const { bridge, client, pool } = await startHostBridge('hostclient3', port, { onHostPoolFailed });

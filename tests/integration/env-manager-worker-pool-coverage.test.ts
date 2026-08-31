@@ -10,12 +10,16 @@ describe('EnvManager uncovered paths', () => {
   beforeEach(() => {
     manager = new EnvManager({
       portManager: { startPort: 7500, endPort: 7600 },
-      defaultEnvConfig: { numEnvs: 1, useSharedMemory: false }
+      defaultEnvConfig: { numEnvs: 1, useSharedMemory: false },
     });
   });
 
   afterEach(async () => {
-    try { await manager.shutdownAll(); } catch { /* ignore */ }
+    try {
+      await manager.shutdownAll();
+    } catch {
+      /* ignore */
+    }
   });
 
   describe('shutdownAll error handling (line ~168)', () => {
@@ -31,10 +35,7 @@ describe('EnvManager uncovered paths', () => {
 
       await manager.shutdownAll();
 
-      expect(errorSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Error stopping environment'),
-        expect.any(Error)
-      );
+      expect(errorSpy).toHaveBeenCalledWith(expect.stringContaining('Error stopping environment'), expect.any(Error));
 
       errorSpy.mockRestore();
     });
@@ -103,7 +104,7 @@ describe('EnvManager uncovered paths', () => {
 
     it('creates a new instance when none exists', () => {
       const gm = getGlobalEnvManager({
-        portManager: { startPort: 7700, endPort: 7800 }
+        portManager: { startPort: 7700, endPort: 7799 },
       });
 
       expect(gm).toBeInstanceOf(EnvManager);
@@ -118,7 +119,7 @@ describe('EnvManager uncovered paths', () => {
 
     it('uses provided options for the instance', () => {
       const gm = getGlobalEnvManager({
-        portManager: { startPort: 7700, endPort: 7800 }
+        portManager: { startPort: 7700, endPort: 7799 },
       });
 
       const pm = gm.getPortManager();
@@ -244,7 +245,7 @@ describe('WorkerPool uncovered paths', () => {
       await pool.reset([1, 2]);
       const results = await pool.step([
         { left: true, right: false, up: false, down: false, heavy: false, grapple: false },
-        0
+        0,
       ]);
 
       expect(results).toHaveLength(2);
