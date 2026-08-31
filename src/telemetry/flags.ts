@@ -19,6 +19,8 @@ const DEFAULT_FLAGS: TelemetryFlags = {
   debugLevel: 'none',
   outputFormat: 'console',
   dashboardPort: 3001,
+  // Milliseconds between reports (issue #425); resolved to a tick window
+  // by TelemetryController.initialize().
   reportInterval: 5000,
   retentionDays: 7,
 };
@@ -112,6 +114,8 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'dashboardPort', valid: false, value: 3001 };
 
     case '--report-interval':
+      // Documented in milliseconds (issue #425): the raw value is stored
+      // here and resolved to a tick window in TelemetryController.initialize().
       const interval = parseInt(value, 10);
       if (!isNaN(interval) && interval > 0) {
         return { key: 'reportInterval', valid: true, value: interval };

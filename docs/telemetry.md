@@ -32,7 +32,7 @@ npx tsx src/main.ts -t --profile detailed --debug verbose
 | `--debug` | `-d` | Debug output level | `none` |
 | `--output` | `-o` | Output format | `console` |
 | `--dashboard-port` | — | HTTP port for telemetry dashboard | `3001` |
-| `--report-interval` | — | Milliseconds between telemetry reports | `5000` |
+| `--report-interval` | — | Milliseconds between telemetry reports (converted to ticks at the configured tick rate) | `5000` |
 | `--retention` | — | Days to retain telemetry data files | `7` |
 
 ### Profile Levels
@@ -185,7 +185,7 @@ const config = {
     outputFormat: 'console',
     retentionDays: 7,
     dashboardPort: 3001,
-    reportInterval: 5000,
+    reportIntervalMs: 5000,
   }
 };
 ```

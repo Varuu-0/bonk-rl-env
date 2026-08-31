@@ -74,7 +74,7 @@ interface TelemetryConfig {
   outputFormat: 'console' | 'file' | 'both';
   retentionDays: number;
   dashboardPort: number;
-  reportInterval: number;
+  reportIntervalMs: number;
 }
 ```
 
