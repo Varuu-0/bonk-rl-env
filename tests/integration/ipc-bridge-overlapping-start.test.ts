@@ -11,6 +11,15 @@
  * whose shutdown is already owned by close() (in-flight closePromise) or
  * whose transport is already destroyed keep using the #316/#263
  * serialization paths instead of being rejected.
+ *
+ * The second describe (issue #478) covers the close-during-bind admission
+ * window: a start() admitted behind an in-flight close whose previous
+ * cycle's native bind is still unwinding must serialize on that unwind
+ * instead of racing libzmq's delayed-close state, and the cut-off outcome
+ * must settle bridge.ready distinguishably (BridgeClosedDuringStart) and
+ * re-arm it recoverably instead of draining it with the opaque EBUSY text
+ * ("Socket is blocked by a bind or unbind operation") — which left
+ * bridge.ready permanently rejected with no listener on the port.
  */
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
 import * as net from 'net';
@@ -405,4 +414,311 @@ describe('IpcBridge overlapping start() calls (issue #418)', () => {
       if (bridge && !bridge.isClosed()) await bridge.close().catch(() => {});
     }
   }, 60000);
+});
+
+/**
+ * Regression coverage for issue #478: IpcBridge.start() admitted during the
+ * close-during-bind window. libzmq (node-zeromq v6) processes a Close()
+ * issued during an in-flight native bind by ONLY marking a delayed-close
+ * request — the socket stays open and Bind()-blocked until that op settles,
+ * and `sock.closed` (State::Closed) still reads false. A restart admitted by
+ * the drain-window exemption used to rebind immediately, lose the race, and
+ * drain the freshly re-armed bridge.ready with libzmq's opaque EBUSY text —
+ * a permanently poisoned readiness signal with no serving socket. The fix
+ * serializes the restart on the previous transport's unwind and classifies
+ * any leftover EBUSY as BridgeClosedDuringStart with a recoverable re-arm.
+ *
+ * Ports 17212-17310 belong to this file's suites (17211 is the #418
+ * describe's fixed allocation); the bands stay disjoint from every other
+ * ipc-bridge suite (see the band comment above).
+ */
+describe('IpcBridge start() during the close-during-bind unwind window (issue #478)', () => {
+  let portManager: PortManager;
+
+  beforeAll(() => {
+    portManager = new PortManager({ startPort: 17212, endPort: 17310 });
+  });
+
+  afterAll(() => {
+    portManager.releaseAll();
+  }, 10000);
+
+  /**
+   * Bounded settlement probe: resolves 'resolved'/'rejected' when the
+   * promise settles within `ms`, or 'pending' — the pre-fix symptom was a
+   * TERMINAL rejection, the post-fix contract is settle-within-deadline.
+   */
+  async function settleWithin(promise: Promise<unknown>, ms: number): Promise<'resolved' | 'rejected' | 'pending'> {
+    return Promise.race([
+      promise.then(
+        () => 'resolved' as const,
+        () => 'rejected' as const,
+      ),
+      new Promise<'pending'>((resolve) => setTimeout(() => resolve('pending'), ms)),
+    ]);
+  }
+
+  async function rejectOf(promise: Promise<unknown>): Promise<any> {
+    try {
+      await promise;
+    } catch (err) {
+      return err;
+    }
+    throw new Error('expected promise to reject');
+  }
+
+  /** DEALER round-trip bound to an explicit port (see #418 helper above). */
+  async function roundTripInitStatusOn(targetPort: number): Promise<string> {
+    const client = new zmq.Dealer({ receiveTimeout: 5000, sendTimeout: 5000 });
+    try {
+      await client.connect(`tcp://127.0.0.1:${targetPort}`);
+      await new Promise((r) => setTimeout(r, 100));
+      await client.send(JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false }));
+      const [reply] = await client.receive();
+      return JSON.parse(reply.toString()).status;
+    } finally {
+      client.close();
+    }
+  }
+
+  /** Port-free probe for an explicit port (see #418 helper above). */
+  async function waitPortFree(targetPort: number, deadline = Date.now() + 5000): Promise<void> {
+    const endpoint = `tcp://127.0.0.1:${targetPort}`;
+    while (Date.now() < deadline) {
+      const probe = new zmq.Router();
+      let bound = false;
+      try {
+        await probe.bind(endpoint);
+        bound = true;
+        return;
+      } catch (err) {
+        if ((err as { code?: string })?.code !== 'EADDRINUSE') {
+          throw err;
+        }
+      } finally {
+        if (bound) {
+          try {
+            await probe.unbind(endpoint);
+          } catch {
+            /* best-effort probe teardown */
+          }
+        }
+        probe.close();
+      }
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    throw new Error(`port ${targetPort} did not become free`);
+  }
+
+  /**
+   * Non-throwing bindability probe: true when a throwaway ROUTER can bind
+   * the endpoint right now, false while any listener (including one
+   * mid-unwind) still owns the port.
+   */
+  async function portBindable(targetPort: number): Promise<boolean> {
+    const endpoint = `tcp://127.0.0.1:${targetPort}`;
+    const probe = new zmq.Router();
+    let bound = false;
+    try {
+      await probe.bind(endpoint);
+      bound = true;
+      return true;
+    } catch {
+      return false;
+    } finally {
+      if (bound) {
+        try {
+          await probe.unbind(endpoint);
+        } catch {
+          /* best-effort probe teardown */
+        }
+        probe.close();
+      } else {
+        probe.close();
+      }
+    }
+  }
+
+  it('a start() admitted during the bind-unwind window fails cleanly and the next start() settles bridge.ready', async () => {
+    const testPort = portManager.allocate();
+    const bridge = new IpcBridge({ server: { port: testPort } } as any);
+    const sockFirst = (bridge as any).sock;
+    try {
+      // The exact #478 shape: close() fires while the first bind is still
+      // in flight (ready is never awaited first), and a new start() is
+      // admitted by the drain-window exemption before the old transport
+      // finished unwinding.
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      const closePromise = bridge.close();
+      const serve2 = bridge.start();
+      serve2.catch(() => {});
+      await closePromise;
+
+      // serve1 is the cancelled cycle: the canonical, distinguishable
+      // identity — NEVER the opaque libzmq text that used to escape here.
+      const err1 = await rejectOf(serve1);
+      expect(err1.name).toBe('BridgeClosedDuringStart');
+      expect(String(err1?.message ?? err1)).not.toMatch(/blocked by a bind or unbind/i);
+
+      // The window's exposed signal must SETTLE (never pending forever):
+      // it resolves when the restarted cycle's bind lands, or rejects with
+      // the same typed cut-off identity in the pathological arm. Pre-fix
+      // it drained TERMINALLY with the opaque EBUSY error and no listener.
+      const windowReady = bridge.ready;
+      const windowOutcome = await settleWithin(windowReady, 45000);
+      expect(windowOutcome).not.toBe('pending');
+      if (windowOutcome === 'rejected') {
+        const windowErr = await windowReady.catch((e) => e);
+        expect(windowErr?.name).toBe('BridgeClosedDuringStart');
+        expect(String(windowErr?.message ?? windowErr)).not.toMatch(/blocked by a bind or unbind/i);
+      }
+
+      // THE next start(): re-points readiness synchronously and its bind
+      // outcome resolves it. Observe the window's DISPOSITION first:
+      // EITHER the admitted restart recovers (its bind lands ⇒ readiness
+      // re-points and resolves — typically within the unwind, long before
+      // any bound) OR it settles with the typed cut-off identity (the
+      // budget-expiry arm under extreme load). While the cycle still winds
+      // the transport admission is held, so an eager start() would
+      // supersede against it — hence the single observe loop. An opaque
+      // EBUSY escape fails the identity assertions below either way.
+      let recovered = false;
+      let settled = false;
+      let serve3: Promise<void> | null = null;
+      const observeDeadline = Date.now() + 240000;
+      while (!recovered && !settled && Date.now() < observeDeadline) {
+        if ((await settleWithin(bridge.ready, 1000)) === 'resolved') {
+          recovered = true;
+          break;
+        }
+        if ((await settleWithin(serve2, 0)) !== 'pending') {
+          settled = true;
+        }
+      }
+      if (settled) {
+        const windowErr = await bridge.ready.catch((e) => e);
+        expect(windowErr?.name).toBe('BridgeClosedDuringStart');
+        expect(String(windowErr?.message ?? windowErr)).not.toMatch(/blocked by a bind or unbind/i);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          serve3 = bridge.start();
+          serve3.catch(() => {});
+          const r = await settleWithin(bridge.ready, 240000);
+          if (r === 'resolved') {
+            recovered = true;
+            break;
+          }
+          const recoveryErr = await bridge.ready.catch((e) => e);
+          expect(recoveryErr?.name).toBe('BridgeClosedDuringStart');
+          expect(String(recoveryErr?.message ?? recoveryErr)).not.toMatch(/blocked by a bind or unbind/i);
+          await serve3.catch(() => {});
+        }
+      }
+      expect(recovered).toBe(true);
+
+      expect(bridge.isClosed()).toBe(false);
+      expect((bridge as any).sock).not.toBe(sockFirst);
+      expect((bridge as any).sock.closed).toBe(false);
+      expect(await roundTripInitStatusOn(testPort)).toBe('ok');
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await (serve3 ?? serve2);
+      await waitPortFree(testPort);
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 300000);
+
+  it('the close-during-bind window never poisons bridge.ready: it settles distinguishably and the instance stays restartable', async () => {
+    const testPort = portManager.allocate();
+    const bridge = new IpcBridge({ server: { port: testPort } } as any);
+    try {
+      const serve1 = bridge.start();
+      serve1.catch(() => {});
+      const closePromise = bridge.close(); // close during the first bind's flight
+      const serve2 = bridge.start(); // admitted mid-unwind (#478 window)
+      serve2.catch(() => {});
+
+      await closePromise;
+      // The exposed signal during the window must SETTLE within a bounded
+      // deadline. Pre-fix it ended up terminally rejected with the opaque
+      // EBUSY error and no listener ("permanently poisoned"); post-fix it
+      // settles with the distinguishable cut-off identity — while the
+      // admitted restart may still recover and bind behind it.
+      const windowReady = bridge.ready;
+      const windowOutcome = await settleWithin(windowReady, 45000);
+      expect(windowOutcome).not.toBe('pending');
+      const windowErr = windowOutcome === 'rejected' ? await windowReady.catch((e) => e) : null;
+      expect(windowErr === null || windowErr?.name === 'BridgeClosedDuringStart').toBe(true);
+      expect(windowErr === null || !/blocked by a bind or unbind/i.test(String(windowErr?.message ?? windowErr))).toBe(
+        true,
+      );
+
+      // Observe the window's DISPOSITION with the same single-loop design
+      // as the test above: the admitted restart either recovers (readiness
+      // re-points and resolves) or settles with the typed cut-off identity
+      // (the pathological budget-expiry arm). Pre-fix the signal stayed
+      // terminally rejected with the opaque EBUSY error and no listener —
+      // the never-pending-forever pin below is what that arm broke.
+      let settled = false;
+      const observeDeadline = Date.now() + 240000;
+      while (!settled && Date.now() < observeDeadline) {
+        if ((await settleWithin(bridge.ready, 1000)) === 'resolved') {
+          break;
+        }
+        if ((await settleWithin(serve2, 0)) !== 'pending') {
+          settled = true;
+        }
+      }
+      const windowSel = await settleWithin(bridge.ready, 1000);
+      expect(windowSel).not.toBe('pending');
+      if (windowSel === 'rejected') {
+        const windowErr = await bridge.ready.catch((e) => e);
+        expect(windowErr?.name).toBe('BridgeClosedDuringStart');
+        expect(String(windowErr?.message ?? windowErr)).not.toMatch(/blocked by a bind or unbind/i);
+      }
+
+      // Drain to a definite physical state (both arms): close() offered
+      // before a recovering bind lands is a documented no-op because
+      // _closed is still set, so keep offering until the port actually
+      // releases.
+      const drainDeadline = Date.now() + 60000;
+      let drained = false;
+      while (!drained && Date.now() < drainDeadline) {
+        await bridge.close().catch(() => {});
+        if (await portBindable(testPort)) {
+          drained = true;
+        } else {
+          await new Promise((r) => setTimeout(r, 50));
+        }
+      }
+      expect(drained).toBe(true);
+      await serve2.catch(() => {});
+
+      // Recovery: the SAME instance must be fully restartable — the pre-fix
+      // bridge could not be trusted again without a new instance. After the
+      // drain above every window cycle has settled, so the retry starts
+      // race for nothing; escape hatches keep the identity pin exact.
+      let serve3: Promise<void> | null = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        serve3 = bridge.start();
+        serve3.catch(() => {});
+        const r = await settleWithin(bridge.ready, 240000);
+        if (r === 'resolved') break;
+        const recoveryErr = await bridge.ready.catch((e) => e);
+        expect(recoveryErr?.name).toBe('BridgeClosedDuringStart');
+        expect(String(recoveryErr?.message ?? recoveryErr)).not.toMatch(/blocked by a bind or unbind/i);
+        await serve3.catch(() => {});
+      }
+      expect((await settleWithin(bridge.ready, 60000)) === 'resolved').toBe(true);
+      expect(bridge.isClosed()).toBe(false);
+      expect(await roundTripInitStatusOn(testPort)).toBe('ok');
+
+      await expect(bridge.close()).resolves.toBeUndefined();
+      await serve3;
+      await waitPortFree(testPort);
+    } finally {
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 240000);
 });

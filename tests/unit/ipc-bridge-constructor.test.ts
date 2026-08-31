@@ -708,6 +708,76 @@ describe('IpcBridge start()/close() race (#402)', () => {
     // handle cannot leak before the next start() recreates it again.
     expect(closeSpy.mock.calls.length).toBe(closeCallsBeforeRestart + 1);
   });
+
+  it('normalizes a leftover-unwind EBUSY rebind failure into BridgeClosedDuringStart with a recoverable re-arm (#478)', async () => {
+    // Complete one open->close cycle so the restart takes the recreation
+    // path with stale _closed (#263/#316) and a closed mock transport —
+    // modelling the post-unwind state. The rebind then loses the unwind
+    // race with libzmq's delayed close: EBUSY "Socket is blocked by a bind
+    // or unbind operation". Pre-fix that opaque ErrnoException was drained
+    // into bridge.ready verbatim, terminally poisoning it (issue #478).
+    const bridge = new IpcBridge({ server: { port: 12392 } });
+    await bridge.close();
+    const closeCallsBeforeRestart = closeSpy.mock.calls.length;
+
+    const ebusy = new Error('Socket is blocked by a bind or unbind operation');
+    (ebusy as NodeJS.ErrnoException).code = 'EBUSY';
+    bindSpy.mockRejectedValueOnce(ebusy);
+
+    // The transient cycle's armed signal: start() re-armed synchronously at
+    // entry, so reading the property BEFORE awaiting the invocation captures
+    // exactly the promise the cut-off drain settles (the #458 pre-drain of
+    // the constructor signal happened during the close() above and is a
+    // different, already-covered transition).
+    const startInvocation = bridge.start();
+    const windowReady = bridge.ready;
+    const startOutcome = await startInvocation.then(
+      () => 'resolved',
+      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+    );
+    // The transient unwinding contention must surface with the canonical
+    // cut-off identity on start(), never the unclassified libzmq error —
+    // and never the EADDRINUSE-class genuine-failure identity either.
+    expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+
+    // Every outstanding signal rejects with the SAME identity (fan-out).
+    const readyOutcome = await Promise.race([
+      windowReady.then(
+        () => 'ready resolved',
+        (e: any) => `ready rejected: ${e?.message ?? e}`,
+      ),
+      new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+    ]);
+    expect(readyOutcome).toBe('ready rejected: bridge was closed during start');
+
+    // The #326 cleanup ran on the blocked handle.
+    expect(closeSpy.mock.calls.length).toBe(closeCallsBeforeRestart + 1);
+
+    // The drain/rearm pairing (#478): the failed transient consumes the
+    // exposed signal TERMINALLY (a rejection IS the settlement — no
+    // ownerless pending rearm that close()/start() would have to chase);
+    // the property keeps naming it until the NEXT start() re-points it
+    // synchronously at entry, and that start()'s own bind re-arms
+    // resolution.
+    expect(bridge.ready).toBe(windowReady);
+    const serveRetry = bridge.start();
+    const retryReady = bridge.ready;
+    expect(retryReady).not.toBe(windowReady);
+    try {
+      expect(
+        await Promise.race([
+          retryReady.then(
+            () => 'ready resolved',
+            (e: any) => `ready rejected: ${e?.message ?? e}`,
+          ),
+          new Promise<string>((resolve) => setTimeout(() => resolve('ready STILL PENDING'), 1500)),
+        ]),
+      ).toBe('ready resolved');
+    } finally {
+      await bridge.close();
+      await serveRetry;
+    }
+  });
 });
 
 describe('IpcBridge ready capture order (#435)', () => {

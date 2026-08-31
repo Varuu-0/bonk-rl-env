@@ -273,6 +273,53 @@ export class IpcBridge {
     return new zmq.Router(this.socketOptions);
   }
 
+  /**
+   * How long a restart may wait for the PREVIOUS transport's in-flight
+   * bind/unbind to unwind before attempting to rebind the advertised port,
+   * and how often the wait re-checks the transport. The budget bounds the
+   * pathological case (a libzmq op that never settles) so the restart
+   * degrades into the classified transient failure below instead of
+   * hanging the documented close()+start() lifecycle forever (issue #478).
+   */
+  private static readonly TRANSPORT_UNWIND_BUDGET_MS = 15_000;
+  private static readonly TRANSPORT_UNWIND_POLL_MS = 10;
+
+  /**
+   * Recognize libzmq's "Socket is blocked by a bind or unbind operation"
+   * (EBUSY): node-zeromq v6 throws this ErrnoException from a socket whose
+   * own state machine is mid bind/unbind, OR from a fresh socket created
+   * while the previous transport still owns the port unwinding. It signals
+   * transient unwinding contention, never a genuine port conflict.
+   */
+  private static isBindUnwindBlockedError(err: unknown): boolean {
+    if ((err as NodeJS.ErrnoException)?.code === 'EBUSY') {
+      return true;
+    }
+    return err instanceof Error && /blocked by a bind or unbind operation/i.test(err.message);
+  }
+
+  /**
+   * Wait until the CURRENT transport finishes closing, up to
+   * TRANSPORT_UNWIND_BUDGET_MS. This is the #478 close-during-bind window:
+   * close() issued while a native zmq_bind was still in flight can only
+   * mark node-zeromq's delayed-close request — the socket stays OPEN and
+   * Bind()-blocked until that op settles, so a restart that rebinds now
+   * would race the unwind and lose with the opaque EBUSY error below.
+   * Polling sock.closed is the unwind event itself: node-zeromq flips the
+   * CLOSED state inside the in-flight op's completion handler (which also
+   * processes the delayed close), in BOTH outcomes of that op — reject or
+   * resolve. Deliberately NOT an await on the previous serve cycle's
+   * promise: a cycle whose bind was killed by close() may resolve its bind
+   * and keep serving in the for-await loop (#431 family, PR #455 scope),
+   * a promise that never settles — awaiting it would deadlock the restart.
+   */
+  private async waitForTransportUnwind(): Promise<void> {
+    const deadline = Date.now() + IpcBridge.TRANSPORT_UNWIND_BUDGET_MS;
+    while (!this.sock.closed && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, IpcBridge.TRANSPORT_UNWIND_POLL_MS));
+    }
+  }
+
   private markBound(): void {
     const pending = this._readyResolvers;
     this._readyResolvers = [];
@@ -281,6 +328,15 @@ export class IpcBridge {
     for (const { resolve } of pending) {
       resolve();
     }
+    // Re-point the exposed signal to a fresh RESOLVED promise. A ZMQ bind
+    // settles a promise once, and any outstanding armed entry is consumed
+    // above, so the exposed `ready` must never keep naming a promise whose
+    // outcome already fired — otherwise a live restarted cycle's consumer
+    // could hold a capture that an OLDER cut-off drain (issue #478) had
+    // rejected while the fresh cycle went on to bind and serve. Consumers
+    // read from here on get an immediately-satisfied signal; the next
+    // start() re-arms a fresh pending one at its entry as before.
+    this._ready = Promise.resolve();
   }
 
   private markBindFailed(err: unknown): void {
@@ -288,6 +344,20 @@ export class IpcBridge {
     this._readyResolvers = [];
     // Mirror markBound(): every outstanding ready promise rejects with the
     // same bind failure start() surfaces, including EADDRINUSE (#435).
+    //
+    // Drain/rearm pairing audit (issue #478): EVERY drain path — the
+    // close()-side pre-drain (#458), the #402/#478 cut-off classes, and
+    // genuine bind failures — settles the armed set exactly once and
+    // deliberately rearms NOTHING: the exposed `ready` must settle (reject)
+    // immediately with the terminal cause instead of pending forever on an
+    // owner that may never come (a pending ownerless rearm could never be
+    // closed out cleanly — close() early-returns while _closed is set —
+    // and would strand `await ready` on instances that never start again;
+    // the rejection IS the settlement). The re-arm points stay exactly
+    // two, both deterministic: each start() invocation's synchronous
+    // entry re-arm (rearmReady, the #316 contract), and markBound()'s
+    // resolve-swap on a successful bind so a live restarted cycle always
+    // re-points the exposed signal past any older drain of its capture.
     for (const { reject } of pending) {
       reject(err);
     }
@@ -455,7 +525,12 @@ export class IpcBridge {
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
     this.rearmReady();
+    // Whether THIS invocation drained a prior in-flight close. Only that
+    // path can inherit a transport whose native bind/unbind op is still
+    // unwinding behind a delayed close (issue #478).
+    let drainedPriorClose = false;
     if (this.closePromise) {
+      drainedPriorClose = true;
       const previousClose = this.closePromise;
       try {
         await previousClose;
@@ -508,6 +583,25 @@ export class IpcBridge {
       this._serveCycle = holder.cycle;
     }
 
+    // THE #478 close-during-bind admission window. A start() admitted behind
+    // a drained closePromise whose previous cycle had a native bind in
+    // flight inherits node-zeromq's delayed-close state: Close() during an
+    // in-flight async op only marks request_close — the socket remains
+    // open, its state machine stays Bind()-blocked until the op settles,
+    // and `sock.closed` (State::Closed only) still reads false. Binding now
+    // races that unwind and rejects with libzmq's opaque "Socket is blocked
+    // by a bind or unbind operation" (EBUSY), which the catch below used to
+    // drain into the freshly re-armed bridge.ready — a permanently poisoned
+    // (terminal, unclassified) readiness signal with no listener at all.
+    // Wait for the previous transport to ACTUALLY finish closing (#456
+    // drain-window doctrine: a restart admitted by a drain serializes on
+    // the drain before touching the transport) before recreating and
+    // rebinding; bounded so a wedged libzmq op degrades into the classified
+    // transient failure instead of hanging the restart.
+    if (drainedPriorClose && !this.sock.closed) {
+      await this.waitForTransportUnwind();
+    }
+
     const addr = `tcp://${this.bindAddress}:${this.port}`;
     // A closed ZMQ socket is permanently destroyed and can never be
     // re-bound (bind() throws "Socket is closed"). Recreate the transport
@@ -543,6 +637,29 @@ export class IpcBridge {
       if ((this._closed && !closedBeforeBind) || this.sock.closed) {
         const closedDuringStart = this.closedDuringStartError();
         this.markBindFailed(closedDuringStart);
+        throw closedDuringStart;
+      }
+      // Leftover unwind contention from the previous transport (issue #478):
+      // the delayed close only processes inside the in-flight op's
+      // completion handler, so a restart whose unwind wait expired (or lost
+      // a narrow state flap) can still lose the rebind race with EBUSY.
+      // That is transient unwinding contention caused by the concurrent
+      // close, NOT a genuine port conflict like EADDRINUSE: surface the
+      // canonical BridgeClosedDuringStart identity on both start() and
+      // ready instead of the opaque libzmq error, and close the blocked
+      // handle for the #326 cleanup. The consumed exposed signal settles
+      // terminally here (see the markBindFailed pairing audit); the next
+      // start() re-points it synchronously and its own bind outcome
+      // resolves it — never an ownerless pending, never a stranded
+      // awaiter.
+      if (IpcBridge.isBindUnwindBlockedError(err)) {
+        const closedDuringStart = this.closedDuringStartError();
+        this.markBindFailed(closedDuringStart);
+        try {
+          this.sock.close();
+        } catch {
+          // Preserve the original classification if socket cleanup fails.
+        }
         throw closedDuringStart;
       }
       this.markBindFailed(err);
