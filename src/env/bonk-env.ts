@@ -47,6 +47,11 @@ export class BonkEnv {
   private bridge: IpcBridge | null = null;
   private portManager: PortManager;
   private isRunning: boolean = false;
+  // Sticky adopted-host failure flag (issue #479): set by the
+  // onHostPoolFailed hook when the IPC bridge recovers a failed adopted
+  // pool. Remains true across stop() until the next start() attempt begins,
+  // so embedders can distinguish "never started" from "pool was orphaned".
+  private hostPoolFailed: boolean = false;
   // True while THIS env holds the reservation for this.port.
   // PortManager.isAllocated() only tracks Set membership, not ownership:
   // after a failed start releases the reservation, another env can be
@@ -191,8 +196,11 @@ export class BonkEnv {
       await this.ensureUsablePort();
 
       console.log(`[BonkEnv:${this.id}] Starting on port ${this.port}`);
-      // Create worker pool
+      // Create worker pool. A fresh start attempt clears any sticky
+      // adopted-host failure left over from the previous lifecycle
+      // (issue #479).
       const pool = new WorkerPool();
+      this.hostPoolFailed = false;
       this.pool = pool;
 
       // Initialize the worker pool with the configured number of envs,
@@ -225,14 +233,23 @@ export class BonkEnv {
         bridge.adoptPool(pool, this.config.numEnvs ?? 1, {
           config: envConfig,
           useSharedMemory,
-          // If the adopted pool fails after init, the bridge closes
-          // it and rebuilds a fresh pool for IPC clients; this env's
-          // own pool reference is then orphaned on the dead pool, so
-          // say so loudly instead of leaving direct step()/reset()
-          // callers puzzled by "worker pool is closed" failures.
+          // If the adopted pool fails after init, the bridge closes it and
+          // rebuilds a fresh pool for IPC clients (#400). The bridge has
+          // already closed the corpse before this hook runs, so only env-side
+          // state needs invalidation: drop the dead reference so getPool()
+          // cannot hand it back, flip isRunning so isActive() stops lying,
+          // and mark the failure. this.bridge is deliberately kept alive —
+          // it still serves IPC clients from the rebuilt pool, and calling
+          // stop() here would tear the bridge down mid-recovery (this hook
+          // runs inside the bridge's recovery pass). This handler must stay
+          // synchronous and free of side effects beyond these field writes.
+          // Direct callers recover with stop() + start() or a new BonkEnv.
           onHostPoolFailed: () => {
+            this.hostPoolFailed = true;
+            this.pool = null;
+            this.isRunning = false;
             console.warn(
-              `[BonkEnv:${this.id}] Adopted worker pool failed; the IPC bridge rebuilt a fresh pool for IPC clients. Direct step()/reset()/getPool() on this env target the dead pool until the env is restarted.`,
+              `[BonkEnv:${this.id}] Adopted worker pool failed; the IPC bridge rebuilt a fresh pool for IPC clients. Direct step()/reset()/getPool() are unavailable until stop() + start() (or a new BonkEnv).`,
             );
           },
         });
@@ -273,7 +290,11 @@ export class BonkEnv {
         console.log(`[BonkEnv:${this.id}] IPC server bound to port ${this.port}`);
       }
 
-      this.isRunning = true;
+      // Keying on pool identity guards the corner where the adopted pool
+      // failed after init and the bridge's recovery hook already cleared
+      // this.pool while the bind was still settling (issue #479): the env
+      // must not resurrect isRunning over a pool it no longer holds.
+      this.isRunning = this.pool === pool;
       console.log(`[BonkEnv:${this.id}] Started successfully`);
     } catch (error) {
       // init() can spawn workers and, in IPC mode, bind the socket
@@ -386,7 +407,7 @@ export class BonkEnv {
    */
   async reset(seeds?: number[], options?: ResultOwnershipOptions): Promise<any> {
     if (!this.isRunning || !this.pool) {
-      throw new Error(`Environment ${this.id} is not running`);
+      throw this.notRunningError();
     }
 
     // The low-level pool intentionally tolerates a short seed list (#183,
@@ -420,23 +441,58 @@ export class BonkEnv {
    */
   async step(actions: any[], options?: ResultOwnershipOptions): Promise<StepResult[]> {
     if (!this.isRunning || !this.pool) {
-      throw new Error(`Environment ${this.id} is not running`);
+      throw this.notRunningError();
     }
 
     return this.pool.step(actions, options);
   }
 
   /**
-   * Check if the environment is currently running.
+   * The not-running rejection for direct calls. After an adopted host pool
+   * failed and the bridge rebuilt for IPC clients (issue #479), the message
+   * names the orphaned state and the recovery path instead of the misleading
+   * "worker pool is closed" wording, so an embedder can tell this apart from
+   * a never-started environment.
+   */
+  private notRunningError(): Error {
+    if (this.hostPoolFailed) {
+      return new Error(
+        `Environment ${this.id} is not running: the adopted worker pool failed and the IPC bridge rebuilt a fresh pool for IPC clients. Direct step()/reset() are unavailable; recover with stop() + start() or a new BonkEnv.`,
+      );
+    }
+    return new Error(`Environment ${this.id} is not running`);
+  }
+
+  /**
+   * Check if the environment is currently usable. False when stopped or
+   * never started, when an adopted host pool was orphaned by bridge
+   * recovery (issue #479), or while the live pool sits in its failed state
+   * before any recovery ran — a failed pool cannot serve step()/reset(), so
+   * reporting active in any of those states would be a lie.
    * @returns true if running, false otherwise
    */
   isActive(): boolean {
-    return this.isRunning;
+    return this.isRunning && !this.isFailed();
+  }
+
+  /**
+   * True when this env can no longer serve step()/reset() because its worker
+   * pool failed: either the adopted pool failed and the IPC bridge rebuilt
+   * its own pool for clients (issue #479), or the live pool is in its failed
+   * state before any recovery. Sticky across stop() for the adopted case
+   * until the next start() attempt begins, so a long-lived loop can watch
+   * this and restart the env instead of probing getPool() for a corpse.
+   * @returns true if the pool has failed and the env needs a restart
+   */
+  isFailed(): boolean {
+    return this.hostPoolFailed || (this.pool?.isFailed() ?? false);
   }
 
   /**
    * Get the worker pool instance (for advanced usage).
-   * @returns The WorkerPool instance or null if not running
+   * @returns The WorkerPool instance, or null when not running or after an
+   *   adopted host pool failed and bridge recovery dropped the dead
+   *   reference (issue #479)
    */
   getPool(): WorkerPool | null {
     return this.pool;
