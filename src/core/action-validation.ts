@@ -8,14 +8,7 @@ import type { PlayerInput } from './physics-engine';
  * a future field change cannot leave transports hardcoding a stale width
  * (issue #330).
  */
-export const ACTION_FIELDS: ReadonlyArray<keyof PlayerInput> = [
-    'left',
-    'right',
-    'up',
-    'down',
-    'heavy',
-    'grapple',
-];
+export const ACTION_FIELDS: ReadonlyArray<keyof PlayerInput> = ['left', 'right', 'up', 'down', 'heavy', 'grapple'];
 
 /**
  * The number of bits used by the action encoders/decoders, which caps the
@@ -29,11 +22,15 @@ export const ACTION_ENCODING_BITS = ACTION_FIELDS.length;
  * heavy=16, grapple=32). Shared with the encoders/decoders so every transport
  * applies the exact bit layout validated here.
  */
-export const ACTION_BIT_FLAGS: ReadonlyArray<number> = ACTION_FIELDS.map(
-    (_, index) => 1 << index,
-);
+export const ACTION_BIT_FLAGS: ReadonlyArray<number> = ACTION_FIELDS.map((_, index) => 1 << index);
 
-const MAX_ENCODED_ACTION = (1 << ACTION_ENCODING_BITS) - 1;
+/**
+ * The encoded-action range cap shared with every consumer of the Discrete(64)
+ * byte space ([0, 63]): the native-trace parser validates recorded bytes
+ * against it and the transports validate live actions against it, so a future
+ * field change cannot leave a stale bound behind (issue #450).
+ */
+export const MAX_ENCODED_ACTION = (1 << ACTION_ENCODING_BITS) - 1;
 
 /**
  * Encodes a validated PlayerInput object into its shared six-bit number using
@@ -41,11 +38,11 @@ const MAX_ENCODED_ACTION = (1 << ACTION_ENCODING_BITS) - 1;
  * message-passing) applies the exact bit layout validated here.
  */
 export function encodePlayerInput(action: PlayerInput): number {
-    let encoded = 0;
-    for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
-        if (action[ACTION_FIELDS[i]]) encoded |= ACTION_BIT_FLAGS[i];
-    }
-    return encoded;
+  let encoded = 0;
+  for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
+    if (action[ACTION_FIELDS[i]]) encoded |= ACTION_BIT_FLAGS[i];
+  }
+  return encoded;
 }
 
 /**
@@ -53,18 +50,18 @@ export function encodePlayerInput(action: PlayerInput): number {
  * object, mirroring encodePlayerInput (issue #330).
  */
 export function decodeEncodedAction(bits: number): PlayerInput {
-    const decoded: PlayerInput = {
-        left: false,
-        right: false,
-        up: false,
-        down: false,
-        heavy: false,
-        grapple: false,
-    };
-    for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
-        decoded[ACTION_FIELDS[i]] = !!(bits & ACTION_BIT_FLAGS[i]);
-    }
-    return decoded;
+  const decoded: PlayerInput = {
+    left: false,
+    right: false,
+    up: false,
+    down: false,
+    heavy: false,
+    grapple: false,
+  };
+  for (let i = 0; i < ACTION_ENCODING_BITS; i++) {
+    decoded[ACTION_FIELDS[i]] = !!(bits & ACTION_BIT_FLAGS[i]);
+  }
+  return decoded;
 }
 
 /**
@@ -85,48 +82,38 @@ export function decodeEncodedAction(bits: number): PlayerInput {
  * ±Infinity) are rejected.
  */
 export function assertValidAction(action: unknown): asserts action is PlayerInput | number {
-    if (typeof action === 'number') {
-        if (!Number.isFinite(action)) {
-            throw new Error(
-                `Invalid action: expected a finite encoded number, got ${String(action)}`,
-            );
-        }
-        if (!Number.isInteger(action) || action < 0 || action > MAX_ENCODED_ACTION) {
-            throw new Error(
-                `Invalid action: expected an encoded action in [0, ${MAX_ENCODED_ACTION}], got ${action}`,
-            );
-        }
-        return;
+  if (typeof action === 'number') {
+    if (!Number.isFinite(action)) {
+      throw new Error(`Invalid action: expected a finite encoded number, got ${String(action)}`);
     }
-    if (action === null || typeof action !== 'object') {
-        throw new Error(
-            `Invalid action: expected a PlayerInput object or an encoded number, got ${action === null ? 'null' : typeof action}`,
-        );
+    if (!Number.isInteger(action) || action < 0 || action > MAX_ENCODED_ACTION) {
+      throw new Error(`Invalid action: expected an encoded action in [0, ${MAX_ENCODED_ACTION}], got ${action}`);
     }
-    if (Array.isArray(action)) {
-        throw new Error('Invalid action: expected a PlayerInput object, got array');
-    }
-    const record = action as Record<string, unknown>;
-    let hasField = false;
-    for (const field of ACTION_FIELDS) {
-        const value = record[field];
-        if (value === undefined) continue;
-        hasField = true;
-        if (typeof value !== 'boolean') {
-            throw new Error(
-                `Invalid action: field "${field}" must be boolean, got ${typeof value}`,
-            );
-        }
-    }
-    const unknownKey = Object.keys(record).find(
-        key => !ACTION_FIELDS.includes(key as keyof PlayerInput),
+    return;
+  }
+  if (action === null || typeof action !== 'object') {
+    throw new Error(
+      `Invalid action: expected a PlayerInput object or an encoded number, got ${action === null ? 'null' : typeof action}`,
     );
-    if (unknownKey !== undefined) {
-        throw new Error(
-            `Invalid action: unknown field "${unknownKey}" (expected only ${ACTION_FIELDS.join(', ')})`,
-        );
+  }
+  if (Array.isArray(action)) {
+    throw new Error('Invalid action: expected a PlayerInput object, got array');
+  }
+  const record = action as Record<string, unknown>;
+  let hasField = false;
+  for (const field of ACTION_FIELDS) {
+    const value = record[field];
+    if (value === undefined) continue;
+    hasField = true;
+    if (typeof value !== 'boolean') {
+      throw new Error(`Invalid action: field "${field}" must be boolean, got ${typeof value}`);
     }
-    if (!hasField) {
-        throw new Error('Invalid action: expected a PlayerInput object, got no recognized boolean action fields');
-    }
+  }
+  const unknownKey = Object.keys(record).find((key) => !ACTION_FIELDS.includes(key as keyof PlayerInput));
+  if (unknownKey !== undefined) {
+    throw new Error(`Invalid action: unknown field "${unknownKey}" (expected only ${ACTION_FIELDS.join(', ')})`);
+  }
+  if (!hasField) {
+    throw new Error('Invalid action: expected a PlayerInput object, got no recognized boolean action fields');
+  }
 }

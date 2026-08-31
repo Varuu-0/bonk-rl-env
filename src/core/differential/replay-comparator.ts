@@ -1,4 +1,4 @@
-/**
+﻿/**
  * replay-comparator.ts — P4 differential validation: replay a recorded native
  * trace against the local engine and compare per-tick disc state.
  *
@@ -25,7 +25,7 @@
 import { BonkEnvironment } from '../environment';
 import { normalizeMap } from '../map-adapter';
 import type { PlayerInput } from '../physics-engine';
-import { isNativeTraceDisc } from './native-trace';
+import { isNativeTraceDisc, isReplayableInputByte } from './native-trace';
 import type { NativeTrace, NativeTraceDisc } from './native-trace';
 import { decodeEncodedAction } from '../action-validation';
 
@@ -57,7 +57,20 @@ export interface DiscAxesDiff {
 export interface TickComparison {
   tick: number;
   compared: DiscAxesDiff[];
-  mismatches: Array<{ id: number; reason: string }>;
+  /**
+   * Per-slot failures that fail the tick, of two kinds: corrupt recorded
+   * data (a malformed input byte, a malformed disc entry) and engine-vs-native
+   * divergence ('native absent but engine alive', 'native present but engine
+   * dead/absent', 'non-finite disc diff'). `id` is always a real player id —
+   * whole-tick corruptions belong in `tickErrors`, not here.
+   */
+  playerErrors: Array<{ id: number; reason: string }>;
+  /**
+   * Whole-tick corruptions that fail the tick but belong to no player slot
+   * (e.g. a present-but-non-array `inputs` container). Kept separate from
+   * `playerErrors` so the player-id space stays un-overloaded.
+   */
+  tickErrors: string[];
   /** True when every compared disc was within tolerance. */
   withinTolerance: boolean;
 }
@@ -193,8 +206,24 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
       // whenever nothing is queued.
       physics.processRespawns();
 
-      // Replay this tick's inputs for each recorded player.
-      const inputs = recorded.inputs ?? [];
+      // Replay this tick's inputs for each recorded player. A corrupt byte
+      // must not drive replay (#450): the slot falls back to the neutral
+      // action — the same fallback a missing byte takes — and is flagged
+      // below, failing the tick loudly instead of silently executing a
+      // fabricated button press. The bytes are vetted in one O(n) pass up
+      // front (inputs.length is caller-controlled, so no includes() rescan
+      // per slot), and the vetting is independent of disc state: a corrupt
+      // byte on a null or misaligned slot is corruption all the same.
+      // A present-but-non-array container (which parseNativeTrace rejects
+      // outright) is a tick-level corruption, flagged once below — outside
+      // the aligned-disc loop, so a tick with zero aligned discs still fails
+      // instead of silently passing on a trace the parser rejected.
+      const inputs = Array.isArray(recorded.inputs) ? recorded.inputs : [];
+      const inputsMalformed = recorded.inputs !== undefined && !Array.isArray(recorded.inputs);
+      const corruptBytes = new Set<number>();
+      for (let id = 0; id < inputs.length; id++) {
+        if (!isReplayableInputByte(inputs[id])) corruptBytes.add(id);
+      }
       for (let id = 0; id < recorded.discs.length; id++) {
         const entry: NativeTraceDisc | null | undefined = recorded.discs[id];
         // Inputs act PRE-step (capture applies them before stepping the tick),
@@ -202,18 +231,59 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         // when its fatal step began and its recorded byte must drive that step
         // (#423): absence is death, not malformed data. Only malformed or
         // slot-misaligned entries are barred from driving inputs.
-        if (entry === null || entry === undefined || isAlignedTraceDisc(entry, id)) {
-          physics.applyInput(id, decodeInput(inputs[id]));
+        const drivesRecordedByte = entry === null || entry === undefined || isAlignedTraceDisc(entry, id);
+        if (inputsMalformed) {
+          // Present-but-non-array input set (#450): untrusted as a whole — no
+          // recorded byte may drive replay; driving slots take the neutral
+          // fallback and the tick-level flag below carries the failure.
+          if (drivesRecordedByte) physics.applyInput(id, decodeInput(0));
+        } else if (drivesRecordedByte) {
+          if (corruptBytes.has(id)) {
+            // Corrupt byte in range (#450): fall back to the neutral action —
+            // the same fallback a missing byte takes — and flag below; never
+            // execute the fabricated decode of a corrupt byte, even on a
+            // fatal-tick slot whose byte would otherwise drive the step.
+            physics.applyInput(id, decodeInput(0));
+          } else if (id < inputs.length) {
+            physics.applyInput(id, decodeInput(inputs[id]));
+          } else {
+            // No recorded byte for this slot: the documented neutral fallback.
+            physics.applyInput(id, decodeInput(undefined));
+          }
         }
+        // Malformed or slot-misaligned entries drive nothing (both gates).
       }
       // Neutral input for any traced player without a record so the world still
       // advances (matches the no-data fallback path).
       physics.tick();
 
       const compared: DiscAxesDiff[] = [];
-      const mismatches: TickComparison['mismatches'] = [];
+      const mismatches: TickComparison['playerErrors'] = [];
+      const tickErrors: string[] = [];
       let withinTolerance = true;
       let deathAgreements = 0;
+
+      // Corrupt input bytes (#450) fail the tick: the replayed slot was
+      // downgraded to the neutral fallback, so the tick cannot be vouched
+      // for even when the kinematic diff happens to stay within tolerance.
+      // The vetting pass is disc-independent, so bytes on null or misaligned
+      // slots are flagged too — they are unplayable by definition.
+      for (const id of corruptBytes) {
+        mismatches.push({ id, reason: 'malformed input byte' });
+        withinTolerance = false;
+      }
+      // Malformed input-set container (#450): a whole-tick corruption carried
+      // as a tick-level error instead of a per-player entry — it belongs to no
+      // player slot, so the sentinel id would overload the contract. Flagged
+      // once, outside the aligned-disc loop, so a tick with zero aligned discs
+      // still fails instead of silently passing on a trace parseNativeTrace
+      // rejects. The tick stays comparable data (tickErrors counts toward
+      // hadData below), so it lands in ticksOutsideTolerance — never in
+      // skippedNoData.
+      if (inputsMalformed) {
+        tickErrors.push('malformed input set');
+        withinTolerance = false;
+      }
 
       // The discs array is index-aligned by player id: entries[i] is player i.
       recorded.discs.forEach((rec, id) => {
@@ -287,10 +357,20 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         }
       });
 
-      const hadData = compared.length > 0 || mismatches.length > 0 || deathAgreements > 0;
+      // A tick carrying a tick-level error is comparable data (its corruption
+      // was examined and failed the gate), so it must land in
+      // ticksCompared/ticksOutsideTolerance — never in skippedNoData, whose
+      // count is reserved for ticks with genuinely nothing to examine.
+      const hadData = compared.length > 0 || mismatches.length > 0 || tickErrors.length > 0 || deathAgreements > 0;
       if (!hadData) skippedNoData++;
       if (!withinTolerance) ticksOutsideTolerance++;
-      perTick.push({ tick: recorded.t, compared, mismatches, withinTolerance });
+      perTick.push({
+        tick: recorded.t,
+        compared,
+        playerErrors: mismatches,
+        tickErrors,
+        withinTolerance,
+      });
     }
 
     const comparedTicks = perTick.length - skippedNoData;

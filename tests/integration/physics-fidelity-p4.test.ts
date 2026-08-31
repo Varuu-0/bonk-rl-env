@@ -210,6 +210,144 @@ describe('P4: differential validation — trace schema (DEOBFUSCATION/LIVE_STATE
     expect(parsed.trace.ticks[0].discs[0]?.x).toBe(-100);
   });
 
+  it('round-trips recorded Discrete(64) input bytes with no errors (issue #450 golden)', () => {
+    // Well-formed inputs are the passthrough case: every byte in [0, 63]
+    // parses clean and survives the serialize→parse round-trip byte-exactly,
+    // so validation must never perturb a faithful recording.
+    const trace: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }, { id: 1 }],
+      spawns: [],
+      ticks: [
+        { t: 0, inputs: [0, 63], discs: [null, null] },
+        { t: 1, inputs: [21, 5], discs: [null, null] },
+        { t: 2, discs: [null, null] }, // inputs absent → neutral fallback stays legal
+      ],
+    };
+    const parsed = parseNativeTrace(JSON.parse(serializeNativeTrace(trace)));
+    expect(parsed.errors).toEqual([]);
+    expect(parsed.trace.ticks[0].inputs).toEqual([0, 63]);
+    expect(parsed.trace.ticks[1].inputs).toEqual([21, 5]);
+    expect(parsed.trace.ticks[2].inputs).toBeUndefined();
+  });
+
+  it('rejects corrupt tick.inputs bytes, naming tick, player id, and value (issue #450)', () => {
+    // Discrete(64) bytes are integers in [0, 63]. A corrupt byte coerced
+    // through decodeEncodedAction fabricates button presses (e.g. -1 sets
+    // every bit, 100 mixes out-of-space bits, 1.5 truncates), so each one
+    // must be reported instead of silently replayed.
+    const cases: Array<{ name: string; inputs: unknown[]; error: string }> = [
+      {
+        name: 'negative',
+        inputs: [63, -1],
+        error: 'tick 0 input 1 is malformed: expected an integer in [0, 63], got -1',
+      },
+      {
+        name: 'out of range',
+        inputs: [0, 64],
+        error: 'tick 0 input 1 is malformed: expected an integer in [0, 63], got 64',
+      },
+      { name: 'fractional', inputs: [1.5], error: 'tick 0 input 0 is malformed: expected an integer, got 1.5' },
+      { name: 'non-finite', inputs: [NaN], error: 'tick 0 input 0 is malformed: expected a finite number, got NaN' },
+      {
+        name: 'infinite byte',
+        inputs: [Infinity],
+        error: 'tick 0 input 0 is malformed: expected a finite number, got Infinity',
+      },
+      { name: 'string byte', inputs: ['2'], error: 'tick 0 input 0 is malformed: expected a finite number, got 2' },
+      {
+        name: 'null byte',
+        inputs: [0, null],
+        error: 'tick 0 input 1 is malformed: expected a finite number, got null',
+      },
+    ];
+    for (const c of cases) {
+      const parsed = parseNativeTrace({
+        schema: 'bonk.rl.env.native-trace',
+        version: TRACE_SCHEMA_VERSION,
+        tps: 30,
+        map: {},
+        players: [{ id: 0 }],
+        spawns: [],
+        ticks: [{ t: 0, inputs: c.inputs as any, discs: [null] }],
+      });
+      expect(parsed.errors, c.name).toEqual([c.error]);
+      // The corrupt set never leaks into the typed output: the tick is
+      // reported with NO trusted inputs, so a caller that ignores the errors
+      // replays the neutral fallback instead of a fabricated button press.
+      expect(parsed.trace.ticks[0].inputs, c.name).toBeUndefined();
+    }
+  });
+
+  it('rejects a non-array inputs field and a corrupt byte amid valid ones (issue #450)', () => {
+    const nonArray = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }],
+      spawns: [],
+      ticks: [{ t: 3, inputs: 21 as any, discs: [null] }],
+    });
+    expect(nonArray.errors).toEqual(['tick 3 inputs must be an array when present']);
+    expect(nonArray.trace.ticks[0].inputs).toBeUndefined();
+
+    // One corrupt byte poisons the whole set: the valid sibling bytes are not
+    // trusted either, because a corrupt entry may have shifted the array.
+    const mixed = parseNativeTrace({
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }, { id: 1 }, { id: 2 }],
+      spawns: [],
+      ticks: [{ t: 0, inputs: [63, 21, 100], discs: [null, null, null] }],
+    });
+    expect(mixed.errors).toEqual(['tick 0 input 2 is malformed: expected an integer in [0, 63], got 100']);
+    expect(mixed.trace.ticks[0].inputs).toBeUndefined();
+  });
+
+  it('rejects sparse inputs arrays: a hole is named like any other malformed byte (issue #450)', () => {
+    // A sparse array's holes are invisible to forEach/every — they would slip
+    // past both validation passes and leak into the typed output, making
+    // parse→serialize→parse unstable (a hole serializes as null, and the
+    // re-parse then rejects the whole set). Indexing reads a hole as
+    // undefined and rejects it like any other malformed byte, so no parse
+    // ever yields a trusted input set containing one.
+    const sparse: unknown[] = [0];
+    sparse[2] = 2; // index 1 is a hole
+    // Shared trace fixture: parseNativeTrace is non-mutating, so the same
+    // literal feeds both gates below — the raw (sparse) object for the first
+    // gate, its JSON round-trip (hole densified to null) for the second.
+    const rawTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: {},
+      players: [{ id: 0 }, { id: 1 }],
+      spawns: [],
+      ticks: [{ t: 0, inputs: sparse as any, discs: [null, null] }],
+    };
+    const first = parseNativeTrace(rawTrace);
+    expect(first.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got undefined']);
+    expect(first.trace.ticks[0].inputs).toBeUndefined();
+
+    // Round-trip stability, both directions: the raw sparse array serializes
+    // with the hole densified to null and the re-parse rejects it just the
+    // same (corrupt-in is rejected-out consistently, never silently trusted)
+    // — and the typed output, with the corrupt set dropped, re-parses with
+    // zero errors (the parser never emits a trace that fails its own gates).
+    const densified = parseNativeTrace(JSON.parse(JSON.stringify(rawTrace)));
+    expect(densified.errors).toEqual(['tick 0 input 1 is malformed: expected a finite number, got null']);
+    expect(densified.trace.ticks[0].inputs).toBeUndefined();
+    const clean = parseNativeTrace(JSON.parse(JSON.stringify(first.trace)));
+    expect(clean.errors).toEqual([]);
+    expect(clean.trace.ticks[0].inputs).toBeUndefined();
+  });
+
   it('rejects wrong schema/version as errors', () => {
     const parsed = parseNativeTrace({ schema: 'nope', version: 1, tps: 30, players: [], spawns: [], ticks: [] });
     expect(parsed.errors.length).toBeGreaterThan(0);
@@ -831,7 +969,7 @@ describe('P4: differential validation — replay comparator', () => {
     const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
     for (const tick of bad.ticks) tick.discs[1] = null; // opponent never exists natively
     const verdict = compareTrace(bad, { seed: 0 });
-    expect(verdict.perTick.some((t) => t.mismatches.length > 0)).toBe(true);
+    expect(verdict.perTick.some((t) => t.playerErrors.length > 0)).toBe(true);
     // Death agreement is part of the gate: a living engine disc where native
     // reports absence must fail the run, not just annotate it.
     expect(verdict.pass).toBe(false);
@@ -846,7 +984,7 @@ describe('P4: differential validation — replay comparator', () => {
     const verdict = compareTrace(bad, { seed: 0 });
     expect(verdict.pass).toBe(false);
     expect(verdict.ticksOutsideTolerance).toBeGreaterThan(0);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 0, reason: 'malformed disc entry' });
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 0, reason: 'malformed disc entry' });
     for (const value of Object.values(verdict.worst)) expect(Number.isFinite(value)).toBe(true);
   });
 
@@ -900,7 +1038,119 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.pass).toBe(false);
     expect(applied).not.toContain(1);
     expect(applied.filter((id) => id === 0).length).toBeGreaterThan(0);
-    expect(verdict.perTick[0].mismatches).toContainEqual({ id: 1, reason: 'malformed disc entry' });
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 1, reason: 'malformed disc entry' });
+  });
+
+  it('does not replay a corrupt input byte and fails the tick loudly (issue #450)', () => {
+    // parseNativeTrace enforces the encoded-range invariant at parse time; the
+    // comparator must enforce it too, because a caller can compare an unparsed
+    // (or error-ignoring) trace. A corrupt byte coerced through
+    // decodeEncodedAction would fabricate button presses (e.g. -1 sets every
+    // bit), so the slot must fall back to the neutral action and the tick must
+    // fail the verdict even if the kinematic diff stays within tolerance.
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    bad.ticks[0].inputs = [-1, 63];
+    const applied: Array<{ id: number; input: unknown }> = [];
+    const verdict = compareTrace(bad, {
+      seed: 0,
+      onReady: (env) => {
+        const physics: any = (env as any).physics;
+        const orig = physics.applyInput.bind(physics);
+        physics.applyInput = (id: number, input: unknown) => {
+          applied.push({ id, input });
+          return orig(id, input as any);
+        };
+      },
+    });
+    expect(verdict.pass).toBe(false);
+    expect(verdict.perTick[0].playerErrors).toContainEqual({ id: 0, reason: 'malformed input byte' });
+    // Slot 0's replayed action is the neutral fallback (every button
+    // released), never the fabricated decode of the corrupt byte.
+    const slot0 = applied.filter((a) => a.id === 0)[0];
+    expect(slot0).toBeTruthy();
+    expect(slot0.input).toEqual({
+      left: false,
+      right: false,
+      up: false,
+      down: false,
+      heavy: false,
+      grapple: false,
+    });
+    // The valid sibling byte (63) still replays its true decoded action.
+    const slot1 = applied.filter((a) => a.id === 1)[0];
+    expect(slot1).toBeTruthy();
+    expect(slot1.input).toEqual({
+      left: true,
+      right: true,
+      up: true,
+      down: true,
+      heavy: true,
+      grapple: true,
+    });
+  });
+
+  it('flags a malformed input-set container even with zero aligned discs (issue #450)', () => {
+    // parseNativeTrace rejects a present-but-non-array `inputs` outright; the
+    // comparator must fail the tick too — even when every disc entry is null,
+    // so the aligned-disc loop never runs. The flag is tick-level
+    // (`tickErrors`), outside the disc loop, so an error-ignoring caller
+    // cannot vouch for a trace the parser rejected by rolling a tick with no
+    // comparable discs.
+    const bad: NativeTrace = JSON.parse(JSON.stringify(trace));
+    bad.ticks[0].inputs = 21 as any;
+    bad.ticks[0].discs = [null, null];
+    const verdict = compareTrace(bad, { seed: 0 });
+    expect(verdict.pass).toBe(false);
+    // Only the corrupted tick fails — the flag is the sole cause, not
+    // collateral kinematic drift.
+    expect(verdict.ticksOutsideTolerance).toBe(1);
+    expect(verdict.perTick[0].withinTolerance).toBe(false);
+    // The corruption is tick-level: it is reported in `tickErrors` (the
+    // container belongs to no player slot). The null disc entries flag their
+    // own per-slot 'native absent' errors — that collateral is expected and
+    // is not what this test pins.
+    expect(verdict.perTick[0].tickErrors).toEqual(['malformed input set']);
+    // The flagged tick is comparable data: it lands in ticksCompared /
+    // ticksOutsideTolerance, never in skippedNoData.
+    expect(verdict.ticksCompared).toBe(bad.ticks.length);
+    expect(verdict.skippedNoData).toBe(0);
+  });
+
+  it('a malformed-inputs tick with no other data counts as compared, not skipped (issue #450)', () => {
+    // Regression pin (Kilo review round 5, PR #462): when the id -1 sentinel
+    // was replaced with the tickErrors field, `hadData` lost its signal — a
+    // malformed-inputs tick with zero aligned discs and dead engine discs had
+    // nothing in compared/playerErrors/deathAgreements and silently landed in
+    // skippedNoData, undercounting ticksCompared. The tick-level error itself
+    // must keep the tick comparable.
+    const noData: NativeTrace = {
+      schema: 'bonk.rl.env.native-trace',
+      version: TRACE_SCHEMA_VERSION,
+      tps: 30,
+      map: loadMap(SIMPLE_1V1),
+      settings: { re: false },
+      players: [
+        { id: 0, team: 1 },
+        { id: 1, team: 2 },
+      ],
+      // OOB spawns + re:false: every engine disc is dead by the first tick,
+      // so tick 0's only comparable signal is the malformed input container.
+      spawns: [
+        { id: 0, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 0 },
+        { id: 1, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 50 },
+      ],
+      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] })),
+    };
+    noData.ticks[0].inputs = 21 as any;
+    const verdict = compareTrace(noData, { seed: 7 });
+    // Tick 0 is flagged and examined (comparable data), never skipped.
+    expect(verdict.perTick[0].tickErrors).toEqual(['malformed input set']);
+    expect(verdict.perTick[0].withinTolerance).toBe(false);
+    expect(verdict.ticksCompared).toBe(1);
+    expect(verdict.skippedNoData).toBe(3);
+    expect(verdict.ticksOutsideTolerance).toBe(1);
+    // The gate still fails: the flagged tick is outside tolerance.
+    expect(verdict.pass).toBe(false);
   });
 
   it("delivers the dying disc's recorded input byte on its fatal tick (#423)", () => {
