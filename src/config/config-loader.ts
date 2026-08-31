@@ -1065,6 +1065,11 @@ function parseCliFlags(config: AppConfig): AppConfig {
         if (next) {
           if (next === 'none' || next === 'error' || next === 'verbose') {
             config.telemetry.debugLevel = next;
+            // A valid debug level implies telemetry, exactly like the
+            // --profile branch above and parseFlags()' --debug handling, so
+            // all three resolution paths agree on level-then-disable
+            // orderings (#459 review).
+            config.telemetry.enabled = true;
             i++;
           }
         }

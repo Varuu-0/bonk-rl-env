@@ -403,8 +403,12 @@ export function isAnyTelemetryEnabled(): boolean {
     }
 
     // Level selections imply telemetry at their own token position, so a
-    // later explicit --telemetry-enabled=false overrides them — the same
-    // token-order last-wins parseFlags()/parseCliFlags() apply.
+    // later explicit --telemetry-enabled=false overrides them. All three
+    // resolution paths share this semantic, anchored on how
+    // telemetry-controller.initialize() decides enablement: a valid
+    // --debug/--profile token marks enableTelemetry on the controller flags
+    // and config.telemetry.enabled in parseCliFlags(), in token order (#459
+    // review).
     const nextArg = argv[i + 1];
     if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {

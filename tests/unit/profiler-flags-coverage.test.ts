@@ -371,6 +371,20 @@ describe('Flags uncovered paths', () => {
       expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
     });
 
+    it('parses --telemetry-enabled=false --debug verbose as enabled (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    it('parses --debug verbose --telemetry-enabled=false as disabled (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
     it('parses --debug-level long form and enables telemetry', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const flags = parseFlags();
@@ -1531,6 +1545,16 @@ describe('Flags uncovered paths', () => {
     it('returns true for --telemetry-enabled=false --profile minimal (disable-then-level parity, #459 review)', () => {
       process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--profile', 'minimal'];
       expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true for --telemetry-enabled=false --debug verbose (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --debug verbose --telemetry-enabled=false (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
     });
   });
 });

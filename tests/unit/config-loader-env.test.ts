@@ -939,6 +939,20 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.enabled).toBe(false);
     });
 
+    it('--telemetry-enabled=false --debug verbose enables telemetry (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('--debug verbose --telemetry-enabled=false disables telemetry (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
     it('--debug-level sets debug level', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const cfg = loadConfig(testDir);
