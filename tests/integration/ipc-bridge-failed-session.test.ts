@@ -29,6 +29,11 @@
  * destroyed a healthy mid-episode environment over one bad request. Only a
  * genuinely failing init (post-teardown worker/env failure, state 'failed')
  * still takes the eviction path.
+ *
+ * Issue #488 generalizes the pre-teardown shield beyond numOpponents/seed:
+ * maxTicks, frameSkip, and aiPlayerId are validated with the same shared
+ * BonkEnvironment validators before closeInternal(), so an invalid
+ * re-init of any of those fields also keeps the healthy pool serving.
  */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 import * as zmq from 'zeromq';
@@ -36,6 +41,7 @@ import { IpcBridge } from '../../src/ipc/ipc-bridge';
 import { WorkerPool } from '../../src/core/worker-pool';
 import { PortManager } from '../../src/utils/port-manager';
 import { MAX_OPPONENTS } from '../../src/core/opponent-capacity';
+import { MAX_FRAME_SKIP } from '../../src/core/environment';
 
 // Fail fast with a clear message instead of hanging a whole suite when a
 // reply never arrives (e.g. a regression that swallows a request).
@@ -483,12 +489,29 @@ describe('IpcBridge keeps a healthy session on a validation-only re-init rejecti
         tickBefore = tick;
       }
 
-      // One out-of-range opponent count (camelCase and snake_case spellings)
-      // must be a per-request input error: labeled reply, nothing torn down.
-      for (const config of [{ numOpponents: MAX_OPPONENTS + 1 }, { num_opponents: MAX_OPPONENTS + 1 }]) {
+      // Out-of-range/invalid config values (numOpponents camel+snake, then
+      // the #488 per-env fields maxTicks/frameSkip/aiPlayerId) must all be
+      // per-request input errors: labeled reply, nothing torn down.
+      const badConfigs: Array<[Record<string, unknown>, RegExp]> = [
+        [{ numOpponents: MAX_OPPONENTS + 1 }, new RegExp(`Invalid numOpponents ${MAX_OPPONENTS + 1}`)],
+        [{ num_opponents: MAX_OPPONENTS + 1 }, new RegExp(`Invalid numOpponents ${MAX_OPPONENTS + 1}`)],
+        [{ maxTicks: -1 }, /Invalid maxTicks -1: expected a positive integer/],
+        [{ max_ticks: 0 }, /Invalid maxTicks 0: expected a positive integer/],
+        [{ frameSkip: 0 }, new RegExp(`Invalid frameSkip 0: expected an integer in \\[1, ${MAX_FRAME_SKIP}\\]`)],
+        [
+          { frame_skip: MAX_FRAME_SKIP * 10 },
+          new RegExp(`Invalid frameSkip ${MAX_FRAME_SKIP * 10}: expected an integer in \\[1, ${MAX_FRAME_SKIP}\\]`),
+        ],
+        [
+          { aiPlayerId: 99, numOpponents: 1 },
+          /Invalid aiPlayerId 99: with 1 opponent\(s\) the player slots are 0\.\.1/,
+        ],
+        [{ aiPlayerId: 5, num_opponents: 2 }, /Invalid aiPlayerId 5: with 2 opponent\(s\) the player slots are 0\.\.2/],
+      ];
+      for (const [config, errorRe] of badConfigs) {
         const badReinit = await init(config);
-        expect(badReinit.status).toBe('error');
-        expect(badReinit.error).toContain(`Invalid numOpponents ${MAX_OPPONENTS + 1}`);
+        expect(badReinit.status, `init(${JSON.stringify(config)})`).toBe('error');
+        expect(badReinit.error, `init(${JSON.stringify(config)})`).toMatch(errorRe);
       }
 
       // The session survives with its still-ready pool.
@@ -507,7 +530,7 @@ describe('IpcBridge keeps a healthy session on a validation-only re-init rejecti
   );
 
   it(
-    'a genuinely failing re-init (post-teardown worker failure) still evicts the session',
+    'a genuinely failing re-init (post-teardown pool failure) still evicts the session',
     { timeout: 60000 },
     async () => {
       // Replaces the healthy session from the previous test with a fresh pool.
@@ -515,12 +538,24 @@ describe('IpcBridge keeps a healthy session on a validation-only re-init rejecti
       expect(initResponse.status).toBe('ok');
       expect(sessions().has(sessionKey)).toBe(true);
 
-      // frameSkip 0 passes the pool-level pre-teardown validation but fails
-      // during worker env construction AFTER closeInternal() tore the old
-      // workers down (#393): failPool runs, so eviction stays correct here.
-      const badInit = await init({ frameSkip: 0 });
+      // Since #488 every config field the worker constructor rejects
+      // (maxTicks/frameSkip/aiPlayerId) is pre-teardown validated, so a
+      // config-only re-init can no longer fail after closeInternal(). The
+      // remaining genuine failure class is an in-worker crash during a
+      // re-init: pool.init tears down the old workers, the new worker dies,
+      // failPool marks the pool 'failed', and the error reaches the bridge.
+      // Simulate exactly that so the legacy eviction path stays covered
+      // (matching-count init after failPool = #436 shape, client-session).
+      const session = sessions().get(sessionKey);
+      const crashMessage = 'synthetic in-worker crash during re-init';
+      vi.spyOn(session.pool, 'init').mockImplementationOnce(async () => {
+        await (session.pool as any).failPool(new Error(crashMessage));
+        throw new Error(crashMessage);
+      });
+
+      const badInit = await init({});
       expect(badInit.status).toBe('error');
-      expect(badInit.error).toContain('Invalid frameSkip 0');
+      expect(badInit.error).toContain(crashMessage);
 
       expect(sessions().has(sessionKey)).toBe(false);
       const stepAfter = await sendCommand(client, { command: 'step', actions: [0] });
