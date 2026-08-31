@@ -3,7 +3,10 @@
  *
  * Independently constructed allocators share the process-wide registry, so
  * two default managers can never hand out the same port, and the probed
- * allocation path skips ports held by unrelated processes.
+ * allocation path skips ports held by unrelated processes. The static
+ * findAvailablePort() helper obeys the same discipline (#468): it skips
+ * registry-claimed candidates, commits its choice, and released ports
+ * return to the pool.
  *
  * Port scoping: the default-range tests deliberately exercise the real
  * default 6000-7000 range — that is the headline #432 scenario. Cross-FILE
@@ -210,6 +213,97 @@ describe('PortManager.allocateAvailable concurrency (#432 review)', () => {
       const [p1, p2] = await Promise.all([manager.allocateAvailable(), manager.allocateAvailable()]);
       expect(p1).not.toBe(p2);
       expect(manager.getAllocatedCount()).toBe(2);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('PortManager.findAvailablePort registry discipline (#468)', () => {
+  // Committed helper choices linger for this file's process lifetime (the
+  // helper's hidden claimant is never released), so every test below gets
+  // its own slice of 6930-6999 — above the cross-instance bands above and
+  // below the next suite's fixed 7000 range, so even the deliberate
+  // blocker listener here stays off every other suite's ports.
+  const HELPER_BASE = 6930;
+
+  it('never returns a port claimed by another manager even when OS-free', async () => {
+    const first = makeManager({ startPort: HELPER_BASE, endPort: HELPER_BASE + 9 });
+    const p1 = first.allocate();
+
+    // p1 is only registry-claimed — no socket is bound there — so a
+    // registry-blind probe would hand it straight back.
+    await expect(PortManager.findAvailablePort(HELPER_BASE)).resolves.not.toBe(p1);
+  });
+
+  it('a manager never receives a port the helper already handed out', async () => {
+    const handed = await PortManager.findAvailablePort(HELPER_BASE + 10);
+
+    const second = makeManager({ startPort: HELPER_BASE + 10, endPort: HELPER_BASE + 18 });
+    expect(second.allocate()).not.toBe(handed);
+  });
+
+  it('successive helper calls return distinct ports', async () => {
+    const p1 = await PortManager.findAvailablePort(HELPER_BASE + 20);
+    const p2 = await PortManager.findAvailablePort(HELPER_BASE + 20);
+
+    expect(p1).not.toBe(p2);
+  });
+
+  it('released ports become available to the helper again', async () => {
+    const first = makeManager({ startPort: HELPER_BASE + 30, endPort: HELPER_BASE + 38 });
+    const p1 = first.allocate();
+
+    await expect(PortManager.findAvailablePort(HELPER_BASE + 30)).resolves.not.toBe(p1);
+
+    first.releaseAll();
+
+    await expect(PortManager.findAvailablePort(HELPER_BASE + 30)).resolves.toBe(p1);
+  });
+
+  it('a caller-owned manager can adopt the helper claim with reserve', async () => {
+    const handed = await PortManager.findAvailablePort(HELPER_BASE + 40);
+
+    const owner = makeManager({ startPort: HELPER_BASE + 40, endPort: HELPER_BASE + 48 });
+    owner.reserve(handed);
+
+    expect(owner.isAllocated(handed)).toBe(true);
+
+    owner.releaseAll();
+
+    await expect(PortManager.findAvailablePort(HELPER_BASE + 40)).resolves.toBe(handed);
+  });
+
+  it('still skips a port occupied by an unrelated process', async () => {
+    // 7000 is the next suites' first registered port, and a real listener
+    // there can collide with a parallel fork that binds it for real
+    // (EADDRINUSE in whichever file loses the race); the lowered
+    // HELPER_BASE keeps this blocker inside 6930-6999 instead.
+    const blocker = await occupy(HELPER_BASE + 50);
+
+    try {
+      await expect(PortManager.findAvailablePort(HELPER_BASE + 50)).resolves.not.toBe(HELPER_BASE + 50);
+    } finally {
+      await closeServer(blocker);
+      const idx = openServers.indexOf(blocker);
+      if (idx !== -1) openServers.splice(idx, 1);
+    }
+  });
+
+  it('overlapping helper calls return distinct ports', async () => {
+    // Keep both calls suspended on the first candidate so they scan the
+    // same candidates before either commits: without the no-await
+    // re-check both would hand out the first candidate. The mocked scan
+    // must stay below 7000 too: its committed choices linger for this
+    // file's process lifetime.
+    const spy = vi.spyOn(PortManager, 'isPortAvailable').mockResolvedValue(true);
+
+    try {
+      const [p1, p2] = await Promise.all([
+        PortManager.findAvailablePort(HELPER_BASE + 60),
+        PortManager.findAvailablePort(HELPER_BASE + 60),
+      ]);
+      expect(p1).not.toBe(p2);
     } finally {
       spy.mockRestore();
     }
