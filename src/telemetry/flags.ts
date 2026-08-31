@@ -30,6 +30,21 @@ const DEFAULT_FLAGS: TelemetryFlags = {
 let _explicitFlagKeys: Set<string> = new Set();
 
 /**
+ * Strictly parse a whole-string integer from an env/CLI value — the local
+ * mirror of config-loader.ts's parseInteger() (INTEGER_NUMERIC_RE +
+ * Number.isSafeInteger). Used for the documented RETENTION_DAYS knob so
+ * "30abc" is rejected on the controller path exactly like the server path,
+ * without importing the whole config-loader into worker bundles (#459
+ * review).
+ */
+function parseStrictInteger(rawValue: string): number | null {
+  const trimmed = rawValue.trim();
+  if (!/^[+-]?\d+$/.test(trimmed)) return null;
+  const value = Number(trimmed);
+  return Number.isSafeInteger(value) ? value : null;
+}
+
+/**
  * Returns the set of explicitly-provided flag keys from the last parseFlags()/applyEnvOverrides() run.
  */
 export function getExplicitFlagKeys(): Set<string> {
@@ -44,6 +59,8 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
   // Master switch
   '--telemetry': 'enableTelemetry',
   '--enable-telemetry': 'enableTelemetry',
+  // Documented long form (config.example.json, issue #459)
+  '--telemetry-enabled': 'enableTelemetry',
   '-t': 'enableTelemetry',
 
   // Profiling level
@@ -56,10 +73,14 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
 
   // Debug level
   '--debug': 'debugLevel',
+  // Documented long form (config.example.json, issue #459)
+  '--debug-level': 'debugLevel',
   '-d': 'debugLevel',
 
   // Output format
   '--output': 'outputFormat',
+  // Documented long form (config.example.json, issue #459)
+  '--output-format': 'outputFormat',
   '-o': 'outputFormat',
 
   // Dashboard port
@@ -70,6 +91,8 @@ const FLAG_ALIASES: Record<string, keyof TelemetryFlags> = {
 
   // Retention days
   '--retention': 'retentionDays',
+  // Documented long form (config.example.json, issue #459)
+  '--retention-days': 'retentionDays',
 };
 
 /**
@@ -88,6 +111,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'profileLevel', valid: false, value: 'standard' };
 
     case '--debug':
+    case '--debug-level':
     case '-d':
       if (value === 'none' || value === 'error' || value === 'verbose') {
         return { key: 'debugLevel', valid: true, value };
@@ -96,6 +120,7 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'debugLevel', valid: false, value: 'none' };
 
     case '--output':
+    case '--output-format':
     case '-o':
       if (value === 'console' || value === 'file' || value === 'both') {
         return { key: 'outputFormat', valid: true, value };
@@ -120,8 +145,12 @@ function parseValueFlag(flag: string, value: string): { key: keyof TelemetryFlag
       return { key: 'reportInterval', valid: false, value: 5000 };
 
     case '--retention':
-      const days = parseInt(value, 10);
-      if (!isNaN(days) && days > 0) {
+    case '--retention-days':
+      // Same strict integer contract as config-loader's RETENTION_DAYS knob,
+      // so '30abc' can never become 30 on one layer and 7 on the other
+      // (#459 review).
+      const days = parseStrictInteger(value);
+      if (days !== null && days > 0) {
         return { key: 'retentionDays', valid: true, value: days };
       }
       console.warn(`Invalid retention days: ${value}. Using 7.`);
@@ -166,6 +195,22 @@ export function parseFlags(): TelemetryFlags {
 
     // Skip non-flag arguments
     if (!arg.startsWith('-')) {
+      continue;
+    }
+
+    // Documented master switch with an inline value (#459 review): honor
+    // --telemetry-enabled=true/false exactly like isAnyTelemetryEnabled()'s
+    // fast path, instead of silently skipping the '='-joined token and
+    // letting the fallback and this parser disagree on the same argv.
+    if (arg.startsWith('--telemetry-enabled=')) {
+      const value = arg.slice('--telemetry-enabled='.length).toLowerCase();
+      if (value === 'true' || value === '1' || value === 'yes') {
+        flags.enableTelemetry = true;
+        _explicitFlagKeys.add('enableTelemetry');
+      } else if (value === 'false' || value === '0' || value === 'no') {
+        flags.enableTelemetry = false;
+        _explicitFlagKeys.add('enableTelemetry');
+      }
       continue;
     }
 
@@ -240,12 +285,16 @@ export function parseFlags(): TelemetryFlags {
  * Mirrors the CLI + env activation surface that parseFlags() +
  * applyEnvOverrides() resolve inside initialize(), so workers and embedded
  * consumers — which never call initialize() and never load config.json —
- * honor MANIFOLD_PROFILE / MANIFOLD_DEBUG / MANIFOLD_TELEMETRY the same way
+ * honor MANIFOLD_PROFILE / MANIFOLD_DEBUG / MANIFOLD_TELEMETRY (and their
+ * documented config.example.json spellings TELEMETRY_ENABLED / PROFILE_LEVEL /
+ * DEBUG_LEVEL, issue #459) the same way
  * the standalone server does on its CLI/env path (issue #389):
  * - The explicit MANIFOLD_TELEMETRY master switch wins over everything,
  *   including argv flags, exactly like applyEnvOverrides().
  * - A valid MANIFOLD_PROFILE / MANIFOLD_DEBUG selection implies telemetry,
  *   exactly like the equivalent --profile/--debug CLI flags.
+ * - argv master-switch and level tokens resolve last-wins in token order,
+ *   exactly like parseFlags() applies them (#459 review).
  * The config-file layer (config telemetry.enabled, reportIntervalMs, ...) is
  * an initialize()-path concern and is intentionally not consulted here.
  *
@@ -268,11 +317,38 @@ export function isAnyTelemetryEnabled(): boolean {
     }
   }
 
+  // Documented master switch (config.example.json, issue #459), evaluated
+  // after MANIFOLD_TELEMETRY so the established name wins when both are set.
+  // Matched case-insensitively and trimmed so a CRLF-carrying value from an
+  // env file means the same thing here as in config-loader.ts (#459 review).
+  const envTelemetryEnabled = process.env.TELEMETRY_ENABLED;
+  if (envTelemetryEnabled !== undefined) {
+    const telemetryValue = envTelemetryEnabled.trim().toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
+      return true;
+    }
+    if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
+      return false;
+    }
+  }
+
   // Selecting a profile level implies telemetry, exactly like the CLI
   // --profile/-l flags in parseFlags() (issue #385).
   const envProfile = process.env.MANIFOLD_PROFILE;
   if (envProfile === 'minimal' || envProfile === 'standard' || envProfile === 'detailed') {
     return true;
+  }
+
+  // Documented spelling (config.example.json, issue #459), evaluated after
+  // MANIFOLD_PROFILE so the established name wins when both are set. Trimmed
+  // like config-loader.ts so a CRLF-carrying env value resolves identically
+  // on both paths (#459 review).
+  const envProfileLevel = process.env.PROFILE_LEVEL;
+  if (envProfileLevel !== undefined) {
+    const profileLevelValue = envProfileLevel.trim();
+    if (profileLevelValue === 'minimal' || profileLevelValue === 'standard' || profileLevelValue === 'detailed') {
+      return true;
+    }
   }
 
   // Selecting a debug level implies telemetry, exactly like the CLI
@@ -282,38 +358,78 @@ export function isAnyTelemetryEnabled(): boolean {
     return true;
   }
 
+  // Documented spelling (config.example.json, issue #459), evaluated after
+  // MANIFOLD_DEBUG so the established name wins when both are set. Trimmed
+  // like config-loader.ts (#459 review).
+  const envDebugLevel = process.env.DEBUG_LEVEL;
+  if (envDebugLevel !== undefined) {
+    const debugLevelValue = envDebugLevel.trim();
+    if (debugLevelValue === 'none' || debugLevelValue === 'error' || debugLevelValue === 'verbose') {
+      return true;
+    }
+  }
+
   const argv = process.argv;
+
+  // Master-switch tokens resolve last-wins across the full argv list,
+  // exactly like parseFlags()/parseCliFlags() apply them in token order
+  // (#459 review): a bare master switch enables, an inline
+  // --telemetry-enabled=<value> sets the value, and a later token overrides
+  // an earlier one, so the fast path can never disagree with the
+  // initialize() resolution on the same argv. Level selections participate
+  // in the same ordering: they imply telemetry at their token and a later
+  // explicit disable overrides them.
+  let argvEnabled = false;
 
   for (let i = 2; i < argv.length; i++) {
     const arg = argv[i];
 
     // Check for master switch
-    if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '-t') {
-      // Check if it's followed by '=true' or '=1'
-      const value = arg.split('=')[1];
-      if (value === undefined) {
-        // Flag present without value = enabled
-        return true;
-      }
+    if (arg === '--telemetry' || arg === '--enable-telemetry' || arg === '--telemetry-enabled' || arg === '-t') {
+      // Flag present without value = enabled
+      argvEnabled = true;
+      continue;
+    }
+    if (arg.startsWith('--telemetry-enabled=')) {
+      const value = arg.slice('--telemetry-enabled='.length).toLowerCase();
       if (value === 'true' || value === '1' || value === 'yes') {
-        return true;
+        argvEnabled = true;
+      } else if (value === 'false' || value === '0' || value === 'no') {
+        argvEnabled = false;
       }
+      // A garbage inline value does not touch the switch, exactly like
+      // parseFlags() leaves the default in place for that token.
+      continue;
     }
 
-    // Keep the fast path exactly aligned with parseFlags(): only the
-    // space-separated, valid-value forms imply telemetry.
+    // Level selections imply telemetry at their own token position, so a
+    // later explicit --telemetry-enabled=false overrides them. All three
+    // resolution paths share one rule, anchored on how
+    // telemetry-controller.initialize() decides enablement: a valid
+    // --debug/--profile token marks enableTelemetry on the controller flags
+    // and config.telemetry.enabled in parseCliFlags(), in token order; and
+    // an explicit env master switch
+    // (MANIFOLD_TELEMETRY/TELEMETRY_ENABLED=false) evaluated above wins
+    // over any level token. Scoped to level tokens: on the fast path and in
+    // initialize() (env applied after argv / env checked first) the env
+    // switch also beats CLI master-switch tokens, but on the server path
+    // (config-loader.ts parseCliFlags, env applied before argv) a later CLI
+    // master-switch token (--telemetry/-t/--telemetry-enabled[=…)) still
+    // overrides it via last-wins — only level tokens are gated there
+    // (#459 review).
     const nextArg = argv[i + 1];
     if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
-      return true;
+      argvEnabled = true;
+      continue;
     }
-    if ((arg === '--debug' || arg === '-d') &&
+    if ((arg === '--debug' || arg === '--debug-level' || arg === '-d') &&
         (nextArg === 'none' || nextArg === 'error' || nextArg === 'verbose')) {
-      return true;
+      argvEnabled = true;
     }
   }
 
-  return false;
+  return argvEnabled;
 }
 
 /**
@@ -324,6 +440,60 @@ export function isAnyTelemetryEnabled(): boolean {
  * @returns Merged flags with environment overrides
  */
 export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
+  // Documented env names (config.example.json, issue #459). The level/format
+  // selectors are applied BEFORE their MANIFOLD_* counterparts so the
+  // established MANIFOLD_* names keep winning when both spellings are set.
+  // The TELEMETRY_ENABLED master switch is applied after the level selectors
+  // (an explicit switch beats an implied activation) but before
+  // MANIFOLD_TELEMETRY (the established master switch still wins).
+  // Values are trimmed so a CRLF-carrying env-file value resolves identically
+  // to config-loader.ts (#459 review).
+  const envOutputFormat = process.env.OUTPUT_FORMAT;
+  if (envOutputFormat !== undefined) {
+    const outputFormat = envOutputFormat.trim();
+    if (outputFormat === 'console' || outputFormat === 'file' || outputFormat === 'both') {
+      flags.outputFormat = outputFormat;
+      _explicitFlagKeys.add('outputFormat');
+    }
+  }
+
+  const envProfileLevel = process.env.PROFILE_LEVEL;
+  if (envProfileLevel !== undefined) {
+    const profileLevel = envProfileLevel.trim();
+    if (profileLevel === 'minimal' || profileLevel === 'standard' || profileLevel === 'detailed') {
+      flags.profileLevel = profileLevel;
+      // Selecting a profile level implies telemetry, exactly like the CLI
+      // --profile-level flag and the MANIFOLD_PROFILE override below.
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  const envDebugLevel = process.env.DEBUG_LEVEL;
+  if (envDebugLevel !== undefined) {
+    const debugLevel = envDebugLevel.trim();
+    if (debugLevel === 'none' || debugLevel === 'error' || debugLevel === 'verbose') {
+      flags.debugLevel = debugLevel;
+      // Selecting a debug level implies telemetry, exactly like the CLI
+      // --debug-level flag and the MANIFOLD_DEBUG override below.
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  // Documented retention window (config.example.json, issue #459). Parsed
+  // with the same strict whole-string integer contract as config-loader.ts
+  // so "30abc" is rejected on both paths instead of silently becoming 30
+  // here and 7 there (#459 review).
+  const envRetentionDays = process.env.RETENTION_DAYS;
+  if (envRetentionDays !== undefined) {
+    const days = parseStrictInteger(envRetentionDays);
+    if (days !== null && days >= 1) {
+      flags.retentionDays = days;
+      _explicitFlagKeys.add('retentionDays');
+    }
+  }
+
   // Check for environment variable: MANIFOLD_TELEMETRY_OUTPUT
   const envOutput = process.env.MANIFOLD_TELEMETRY_OUTPUT;
   if (envOutput !== undefined) {
@@ -353,6 +523,25 @@ export function applyEnvOverrides(flags: TelemetryFlags): TelemetryFlags {
       // Selecting a debug level implies telemetry, exactly like the CLI
       // --debug/-d flags in parseFlags() (issue #385).
       flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    }
+  }
+
+  // Check for environment variable: TELEMETRY_ENABLED — the documented
+  // spelling of the MANIFOLD_TELEMETRY master switch (config.example.json,
+  // issue #459). Applied after the level selectors (an explicit switch beats
+  // an implied activation) but before MANIFOLD_TELEMETRY so the established
+  // master switch still wins when both spellings are set.
+  const envTelemetryEnabled = process.env.TELEMETRY_ENABLED;
+  if (envTelemetryEnabled !== undefined) {
+    // Trimmed so a CRLF-carrying env-file value resolves identically to
+    // config-loader.ts (#459 review).
+    const telemetryValue = envTelemetryEnabled.trim().toLowerCase();
+    if (telemetryValue === 'true' || telemetryValue === '1' || telemetryValue === 'yes') {
+      flags.enableTelemetry = true;
+      _explicitFlagKeys.add('enableTelemetry');
+    } else if (telemetryValue === 'false' || telemetryValue === '0' || telemetryValue === 'no') {
+      flags.enableTelemetry = false;
       _explicitFlagKeys.add('enableTelemetry');
     }
   }

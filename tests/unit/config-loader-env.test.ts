@@ -26,6 +26,11 @@ describe('config-loader env vars and CLI', () => {
     'MANIFOLD_TELEMETRY_OUTPUT',
     'MANIFOLD_PROFILE',
     'MANIFOLD_DEBUG',
+    'TELEMETRY_ENABLED',
+    'PROFILE_LEVEL',
+    'DEBUG_LEVEL',
+    'OUTPUT_FORMAT',
+    'RETENTION_DAYS',
     'DASHBOARD_PORT',
     'REPORT_INTERVAL_MS',
     'TEST_MODE',
@@ -502,6 +507,148 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.debugLevel).toBe('none');
     });
 
+    // Documented telemetry env names (config.example.json, issue #459).
+    it('TELEMETRY_ENABLED=true enables telemetry', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('TELEMETRY_ENABLED=1 enables telemetry', () => {
+      process.env.TELEMETRY_ENABLED = '1';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('TELEMETRY_ENABLED=yes enables telemetry', () => {
+      process.env.TELEMETRY_ENABLED = 'yes';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('TELEMETRY_ENABLED=false disables telemetry', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('invalid TELEMETRY_ENABLED does not override config.json', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+      process.env.TELEMETRY_ENABLED = 'maybe';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('MANIFOLD_TELEMETRY wins over TELEMETRY_ENABLED when both are set', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      expect(loadConfig(testDir).telemetry.enabled).toBe(false);
+      resetConfig();
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.MANIFOLD_TELEMETRY = 'true';
+      expect(loadConfig(testDir).telemetry.enabled).toBe(true);
+    });
+
+    it('PROFILE_LEVEL sets profile level', () => {
+      process.env.PROFILE_LEVEL = 'detailed';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.profileLevel).toBe('detailed');
+    });
+
+    it('PROFILE_LEVEL trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.PROFILE_LEVEL = 'detailed\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.profileLevel).toBe('detailed');
+    });
+
+    it('PROFILE_LEVEL rejects invalid value', () => {
+      process.env.PROFILE_LEVEL = 'basic';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.profileLevel).toBe('standard');
+    });
+
+    it('MANIFOLD_PROFILE wins over PROFILE_LEVEL when both are set', () => {
+      process.env.PROFILE_LEVEL = 'minimal';
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.profileLevel).toBe('detailed');
+    });
+
+    it('DEBUG_LEVEL sets debug level', () => {
+      process.env.DEBUG_LEVEL = 'verbose';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('DEBUG_LEVEL trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.DEBUG_LEVEL = 'verbose\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('DEBUG_LEVEL rejects invalid value', () => {
+      process.env.DEBUG_LEVEL = 'basic';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('none');
+    });
+
+    it('MANIFOLD_DEBUG wins over DEBUG_LEVEL when both are set', () => {
+      process.env.DEBUG_LEVEL = 'error';
+      process.env.MANIFOLD_DEBUG = 'verbose';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('OUTPUT_FORMAT sets output format', () => {
+      process.env.OUTPUT_FORMAT = 'both';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('both');
+    });
+
+    it('OUTPUT_FORMAT trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.OUTPUT_FORMAT = 'file\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('file');
+    });
+
+    it('OUTPUT_FORMAT rejects invalid value', () => {
+      process.env.OUTPUT_FORMAT = 'json';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('console');
+    });
+
+    it('MANIFOLD_TELEMETRY_OUTPUT wins over OUTPUT_FORMAT when both are set', () => {
+      process.env.OUTPUT_FORMAT = 'console';
+      process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('file');
+    });
+
+    it('RETENTION_DAYS overrides the retention days', () => {
+      process.env.RETENTION_DAYS = '30';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.retentionDays).toBe(30);
+    });
+
+    it('RETENTION_DAYS rejects invalid values', () => {
+      process.env.RETENTION_DAYS = '0';
+      expect(loadConfig(testDir).telemetry.retentionDays).toBe(7);
+      resetConfig();
+      process.env.RETENTION_DAYS = 'abc';
+      expect(loadConfig(testDir).telemetry.retentionDays).toBe(7);
+    });
+
+    it('RETENTION_DAYS rejects partial-numeric values like 30abc (#459 review)', () => {
+      process.env.RETENTION_DAYS = '30abc';
+      expect(loadConfig(testDir).telemetry.retentionDays).toBe(7);
+    });
+
+    it('TELEMETRY_ENABLED trims a CRLF-carrying env-file value (#459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
     it('DASHBOARD_PORT overrides the dashboard port', () => {
       process.env.DASHBOARD_PORT = '8081';
       const cfg = loadConfig(testDir);
@@ -720,6 +867,180 @@ describe('config-loader env vars and CLI', () => {
       process.argv = ['node', 'script.js', '--output', 'xml'];
       const cfg = loadConfig(testDir);
       expect(cfg.telemetry.outputFormat).toBe('console');
+    });
+
+    // Documented long-form telemetry flags (config.example.json, issue #459).
+    it('--telemetry-enabled enables telemetry', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('CLI --telemetry-enabled overrides env TELEMETRY_ENABLED', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--telemetry-enabled'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    // Inline value form of the documented master switch (#459 review):
+    // honored by parseCliFlags() the same way the telemetry fallback and
+    // telemetry/flags.ts honor it, instead of silently skipping the token.
+    it('--telemetry-enabled=true enables telemetry', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('--telemetry-enabled=false disables telemetry', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('CLI --telemetry-enabled=false overrides env TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('--telemetry-enabled=garbage leaves the config.json value in place', () => {
+      fs.writeFileSync(configPath, JSON.stringify({ telemetry: { enabled: true } }));
+      process.argv = ['node', 'script.js', '--telemetry-enabled=maybe'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('--enable-telemetry enables telemetry (documented alias, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--enable-telemetry'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    // Last-wins parity with parseFlags()/isAnyTelemetryEnabled() (#459
+    // review): a later explicit disable overrides an earlier bare switch.
+    it('--telemetry --telemetry-enabled=false disables telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --telemetry enables telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+    });
+
+    it('--profile minimal --telemetry-enabled=false disables telemetry (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --debug verbose enables telemetry (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('--debug verbose --telemetry-enabled=false disables telemetry (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    // Explicit env master switches gate CLI level tokens on the server path
+    // (#459 review) — parity with parseFlags()+applyEnvOverrides() (the
+    // controller's initialize() pipeline, where env overrides CLI flags) and
+    // the isAnyTelemetryEnabled() fast path.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
+    it('TELEMETRY_ENABLED=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
+    it('level tokens still enable telemetry when no env master switch is set (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      let cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+      resetConfig();
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
+    it('--debug-level sets debug level', () => {
+      process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('--debug-level rejects invalid value', () => {
+      process.argv = ['node', 'script.js', '--debug-level', 'basic'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.debugLevel).toBe('none');
+    });
+
+    it('--output-format sets output format', () => {
+      process.argv = ['node', 'script.js', '--output-format', 'file'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('file');
+    });
+
+    it('--output-format rejects invalid value', () => {
+      process.argv = ['node', 'script.js', '--output-format', 'prometheus'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.outputFormat).toBe('console');
+    });
+
+    it('--retention-days sets retention days', () => {
+      process.argv = ['node', 'script.js', '--retention-days', '14'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.retentionDays).toBe(14);
+    });
+
+    it('--retention-days rejects invalid value', () => {
+      process.argv = ['node', 'script.js', '--retention-days', '0'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.retentionDays).toBe(7);
+    });
+
+    it('--retention-days rejects partial-numeric values like 30abc (#459 review)', () => {
+      process.argv = ['node', 'script.js', '--retention-days', '30abc'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.retentionDays).toBe(7);
     });
 
     it('--dashboard-port sets dashboard port', () => {
