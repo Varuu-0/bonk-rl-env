@@ -251,7 +251,8 @@ declare interface GameSettings {
 /**
  * Skin shape ids for avatar layers
  */
-export enum eAvatarShape { // Idealy large enums like this should be moved to another file
+export enum eAvatarShape {
+  // Idealy large enums like this should be moved to another file
   Alien1,
   Alien2,
   Alien3,
@@ -511,8 +512,11 @@ export interface TelemetryFlags {
   dashboardPort: number;
 
   /**
-   * Number of ticks between telemetry reports.
-   * @default 5000
+   * Telemetry report window in ticks, resolved at initialization from the
+   * millisecond surfaces (the --report-interval CLI flag or the config
+   * file's reportIntervalMs; issue #425). The built-in default is 5000 ms,
+   * which resolves to 150 ticks at the assumed 30 TPS.
+   * @default 150
    */
   reportInterval: number;
 

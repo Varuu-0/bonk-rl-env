@@ -33,6 +33,24 @@ let fallbackEnabled: boolean | null = null;
 /** Physics tick rate assumed when converting the ms report interval to ticks. */
 const DEFAULT_TICKS_PER_SECOND = 30;
 
+/**
+ * Built-in default report interval in milliseconds — the README/docs contract
+ * (issue #425). initialize() resolves it to the tick window the scheduler
+ * consumes.
+ */
+const DEFAULT_REPORT_INTERVAL_MS = 5000;
+
+/**
+ * Convert a millisecond report interval into the tick window the telemetry
+ * scheduler consumes (issue #425). Both user-facing surfaces (the
+ * --report-interval CLI flag and the config file's reportIntervalMs) are
+ * documented in milliseconds, so this is the single ms -> ticks conversion
+ * point. Sub-tick intervals clamp to one tick so a report is never starved.
+ */
+export function reportIntervalMsToTicks(reportIntervalMs: number, ticksPerSecond: number): number {
+  return Math.max(1, Math.round((reportIntervalMs / 1000) * ticksPerSecond));
+}
+
 interface TelemetryFileEntry {
   timestamp: string;
   tick: number;
@@ -125,11 +143,16 @@ export class TelemetryController {
       flags.enableTelemetry = true;
     }
 
-    // Convert the documented millisecond report interval into a tick window
-    // unless the CLI set the tick-based --report-interval explicitly.
-    if (configTelemetry?.reportIntervalMs !== undefined && !getExplicitFlagKeys().has('reportInterval')) {
-      flags.reportInterval = Math.max(1, Math.round((configTelemetry.reportIntervalMs / 1000) * ticksPerSecond));
-    }
+    // Issue #425: the CLI --report-interval and the config-file
+    // reportIntervalMs are both documented as milliseconds, so resolve the
+    // window in milliseconds (an explicit CLI value wins over the config
+    // file, which wins over the built-in 5000 ms default) and convert to
+    // ticks exactly once, here at the controller boundary where the
+    // scheduler expects a tick count.
+    const reportIntervalMs = getExplicitFlagKeys().has('reportInterval')
+      ? flags.reportInterval
+      : (configTelemetry?.reportIntervalMs ?? flags.reportInterval);
+    flags.reportInterval = reportIntervalMsToTicks(reportIntervalMs, ticksPerSecond);
 
     // Cache the flags
     cachedFlags = flags;
