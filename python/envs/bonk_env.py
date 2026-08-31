@@ -230,24 +230,48 @@ class BonkVecEnv(VecEnv):
         try:
             self.socket.send_json(message)
         except zmq.Again as exc:
+            # A DEALER send only raises Again when the message could not be
+            # enqueued, so the request was never delivered and the
+            # request/reply sequence is broken exactly like a receive
+            # timeout (#486): tear the transport down and mark the env
+            # closed rather than letting the next call race a dead socket.
+            self._fail_transport(f"a send timeout while dispatching '{command}'")
             raise TimeoutError(
                 f"Timed out after {timeout_ms} ms sending '{command}' request to Bonk backend"
             ) from exc
+        except zmq.ZMQError:
+            # A non-timeout ZMQ send error (socket closed mid-send, context
+            # terminated, connection dropped) is the same unrecoverable
+            # transport state; re-raise the original error after marking the
+            # env closed so later calls hit the labeled _ensure_open gate.
+            self._fail_transport(f"a send failure while dispatching '{command}'")
+            raise
 
     def _recv_json(self, command, timeout_ms=None):
         timeout_ms = self._timeout_ms if timeout_ms is None else timeout_ms
         try:
             return self.socket.recv_json()
         except zmq.Again as exc:
-            self._closed = True
-            self._closed_reason = f"a receive timeout while waiting for '{command}'"
-            try:
-                self._close_transport()
-            except Exception:
-                pass
+            self._fail_transport(f"a receive timeout while waiting for '{command}'")
             raise TimeoutError(
                 f"Timed out after {timeout_ms} ms waiting for '{command}' response from Bonk backend"
             ) from exc
+        except zmq.ZMQError:
+            # Symmetric with _send_json: any other ZMQ receive error leaves
+            # the transport unusable, so apply the same closed-state
+            # recovery instead of surfacing raw socket failures on reuse.
+            self._fail_transport(f"a receive failure while waiting for '{command}'")
+            raise
+
+    def _fail_transport(self, reason):
+        """Mark the env unusable and tear down the transport after a failure
+        that leaves the request/reply sequence broken."""
+        self._closed = True
+        self._closed_reason = reason
+        try:
+            self._close_transport()
+        except Exception:
+            pass
 
     def _close_transport(self):
         socket, context = self.socket, self.context
