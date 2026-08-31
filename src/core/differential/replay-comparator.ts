@@ -1,4 +1,4 @@
-/**
+﻿/**
  * replay-comparator.ts — P4 differential validation: replay a recorded native
  * trace against the local engine and compare per-tick disc state.
  *
@@ -225,19 +225,33 @@ export function compareTrace(trace: NativeTrace, opts: ComparatorOptions = {}): 
         if (!isReplayableInputByte(inputs[id])) corruptBytes.add(id);
       }
       for (let id = 0; id < recorded.discs.length; id++) {
-        if (!isAlignedTraceDisc(recorded.discs[id], id)) continue;
+        const entry: NativeTraceDisc | null | undefined = recorded.discs[id];
+        // Inputs act PRE-step (capture applies them before stepping the tick),
+        // keyed by player id — so a null entry is a disc that was still alive
+        // when its fatal step began and its recorded byte must drive that step
+        // (#423): absence is death, not malformed data. Only malformed or
+        // slot-misaligned entries are barred from driving inputs.
+        const drivesRecordedByte = entry === null || entry === undefined || isAlignedTraceDisc(entry, id);
         if (inputsMalformed) {
-          // Present-but-non-array input set: neutral fallback per aligned
-          // slot; the tick-level flag below carries the failure.
-          physics.applyInput(id, decodeInput(0));
-        } else if (id >= inputs.length) {
-          // No recorded byte for this slot: the documented neutral fallback.
-          physics.applyInput(id, decodeInput(undefined));
-        } else if (corruptBytes.has(id)) {
-          physics.applyInput(id, decodeInput(0));
-        } else {
-          physics.applyInput(id, decodeInput(inputs[id]));
+          // Present-but-non-array input set (#450): untrusted as a whole — no
+          // recorded byte may drive replay; driving slots take the neutral
+          // fallback and the tick-level flag below carries the failure.
+          if (drivesRecordedByte) physics.applyInput(id, decodeInput(0));
+        } else if (drivesRecordedByte) {
+          if (corruptBytes.has(id)) {
+            // Corrupt byte in range (#450): fall back to the neutral action —
+            // the same fallback a missing byte takes — and flag below; never
+            // execute the fabricated decode of a corrupt byte, even on a
+            // fatal-tick slot whose byte would otherwise drive the step.
+            physics.applyInput(id, decodeInput(0));
+          } else if (id < inputs.length) {
+            physics.applyInput(id, decodeInput(inputs[id]));
+          } else {
+            // No recorded byte for this slot: the documented neutral fallback.
+            physics.applyInput(id, decodeInput(undefined));
+          }
         }
+        // Malformed or slot-misaligned entries drive nothing (both gates).
       }
       // Neutral input for any traced player without a record so the world still
       // advances (matches the no-data fallback path).

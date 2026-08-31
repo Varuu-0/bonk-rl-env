@@ -1,5 +1,5 @@
 /**
- * bench-sustained-physics.test.ts — Regression coverage for issue #421.
+ * bench-sustained-physics.test.ts — Regression coverage for issues #421/#461.
  *
  * The native benchmarks (layer3/layer5/layer6) originally stepped a
  * BonkEnvironment while ignoring `done`: once an episode ends the
@@ -21,6 +21,14 @@
  *     terminal results), for truncation and natural-death endings;
  *   - with frameSkip > 1 the terminal-hold replay steps are excluded from
  *     the live count instead of diluting the measurement.
+ *
+ * The #461 variant pins the layer5 reset-cycles loop specifically: that
+ * loop calls an explicit env.reset() at the top of every fixed window, and
+ * the outer reset hid mid-window freezes from any per-cycle accounting —
+ * a raw loop still spent the post-death tail of each window replaying the
+ * settled terminal result. The fixed shape must provably start every
+ * window on the physics path (first stepLive returns tick 1, live) and
+ * keep every counted step on the physics path across all windows.
  */
 import { describe, it, expect } from 'vitest';
 import { BonkEnvironment } from '../../src/core/environment';
@@ -48,6 +56,9 @@ const lethalMap: MapDef = {
   spawnPoints: { team_blue: { x: 0, y: -300 }, team_red: { x: 200, y: -100 } },
   bodies: [{ name: 'lethal', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true, isLethal: true }],
 };
+
+/** One measured step of a replica bench loop: stepLive classification plus the step's tick. */
+type StepRecord = { live: boolean; reset: boolean; done: boolean; tick: number };
 
 describe('issue #421: sustained benchmark measurement keeps episodes live', () => {
   it('a loop that ignores done never advances past the terminal tick (defect pin)', () => {
@@ -89,7 +100,7 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
     mapData: MapDef,
     config: { maxTicks: number; frameSkip: number },
     measuredSteps: number,
-  ): Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> => {
+  ): StepRecord[] => {
     const env = new BonkEnvironment({
       mapData,
       ...config,
@@ -102,7 +113,7 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
       // Warmup like the benches, resetting through any early end.
       for (let i = 0; i < 50; i++) stepLive(env, Math.floor((i * 13) % 64));
 
-      const records: Array<{ live: boolean; reset: boolean; done: boolean; tick: number }> = [];
+      const records: StepRecord[] = [];
       for (let i = 0; i < measuredSteps; i++) {
         const outcome = stepLive(env, Math.floor((i * 29) % 64));
         records.push({
@@ -218,5 +229,102 @@ describe('issue #421: sustained benchmark measurement keeps episodes live', () =
     // the measured window) is followed by a fresh episode at tick 1.
     const trailingResets = records[records.length - 1].reset ? 1 : 0;
     expect(restarts).toBe(resets - trailingResets);
+  });
+});
+
+describe('issue #461: reset-cycles loop keeps episodes live across reset windows', () => {
+  // Small replica of the layer5 benchResetCycles loop shape (#461): an
+  // explicit env.reset() at the top of every fixed window, then a fixed
+  // step count inside it. 150-step windows match the #421 horizon proven
+  // to contain natural deaths on this map — the same shape the bench's
+  // 100-step windows hit on the default map (episode dies at ~tick 44).
+  const WINDOWS = 4;
+  const STEPS_PER_WINDOW = 150;
+
+  const runResetCyclesLoop = (mode: 'stepLive' | 'raw'): StepRecord[] => {
+    const env = new BonkEnvironment({
+      mapData: lethalMap,
+      maxTicks: 10_000,
+      frameSkip: 1,
+      numOpponents: 0,
+      randomOpponent: false,
+      seed: 42,
+    });
+    try {
+      const records: StepRecord[] = [];
+      for (let w = 0; w < WINDOWS; w++) {
+        env.reset();
+        for (let i = 0; i < STEPS_PER_WINDOW; i++) {
+          if (mode === 'stepLive') {
+            const outcome = stepLive(env, 0);
+            records.push({
+              live: outcome.live,
+              reset: outcome.reset,
+              done: outcome.result.done,
+              tick: outcome.result.info.tick,
+            });
+          } else {
+            const res = env.step(0);
+            records.push({ live: false, reset: false, done: res.done, tick: res.info.tick });
+          }
+        }
+      }
+      return records;
+    } finally {
+      env.close();
+    }
+  };
+
+  it('the raw loop freezes for the post-death tail of every window (defect pin)', () => {
+    const records = runResetCyclesLoop('raw');
+    for (let w = 0; w < WINDOWS; w++) {
+      const window = records.slice(w * STEPS_PER_WINDOW, (w + 1) * STEPS_PER_WINDOW);
+      // The outer reset starts the window on the physics path...
+      expect(window[0].tick).toBe(1);
+      // ...but the episode dies well inside the window and every
+      // remaining step replays the settled terminal result with zero
+      // physics work — the mid-window freeze the outer reset hid (#461).
+      const terminalRecords = window.filter((r) => r.done);
+      expect(terminalRecords.length).toBeGreaterThan(0);
+      const terminalTick = terminalRecords[0].tick;
+      expect(terminalTick).toBeLessThan(STEPS_PER_WINDOW);
+      expect(terminalRecords.every((r) => r.tick === terminalTick)).toBe(true);
+      expect(window[window.length - 1].tick).toBe(terminalTick);
+    }
+  });
+
+  it('the stepLive replica keeps every counted step on the physics path across all windows', () => {
+    const records = runResetCyclesLoop('stepLive');
+    // frameSkip=1: stepLive resets on the final report of each ended
+    // episode, so every counted step is live and the SPS numerator
+    // tracks real Box2D work instead of no-op replays (#461).
+    expect(records.every((r) => r.live)).toBe(true);
+    expect(records.filter((r) => r.reset).length).toBe(records.filter((r) => r.done).length);
+    // The outer reset at each window top provably restarts on the physics
+    // path: the first counted step of every window reports tick 1, live.
+    for (let w = 0; w < WINDOWS; w++) {
+      const first = records[w * STEPS_PER_WINDOW];
+      expect(first.tick).toBe(1);
+      expect(first.live).toBe(true);
+    }
+    // Every counted step advances Box2D: tick +1 between consecutive steps
+    // except across an episode restart — either the previous step was a
+    // stepLive reset or it was the last step of a window, whose outer
+    // env.reset() truncated the in-progress episode (#461's outer-reset
+    // cycle).
+    for (let i = 1; i < records.length; i++) {
+      if (records[i - 1].reset || i % STEPS_PER_WINDOW === 0) {
+        expect(records[i].tick).toBe(1);
+      } else {
+        expect(records[i].tick).toBe(records[i - 1].tick + 1);
+      }
+    }
+    // Each window contains at least one natural death — the #461 bug
+    // class the fixed shape provably never hits (see the defect pin
+    // above: a raw loop spends that tail frozen).
+    for (let w = 0; w < WINDOWS; w++) {
+      const window = records.slice(w * STEPS_PER_WINDOW, (w + 1) * STEPS_PER_WINDOW);
+      expect(window.some((r) => r.done)).toBe(true);
+    }
   });
 });

@@ -30,7 +30,9 @@ import {
 } from '../../src/core/differential';
 import { buildTraceEnvironment, compareTrace } from '../../src/core/differential/replay-comparator';
 import { verifyFixtureGates, verifyJointGates } from '../../src/core/differential/exact-match-gates';
+import { encodePlayerInput } from '../../src/core/action-validation';
 import { OUT_OF_BOUNDS_DISTANCE } from '../../src/core/physics-engine';
+import type { PlayerInput } from '../../src/core/physics-engine';
 import type { NativeTrace } from '../../src/core/differential/native-trace';
 
 const SIMPLE_1V1 = path.join(process.cwd(), 'maps', 'bonk_Simple_1v1_123.json');
@@ -81,14 +83,26 @@ function makeLsjTrace(anchorA: { x: number; y: number }): NativeTrace {
   };
 }
 
-/** Deterministic sim recording: step an engine N ticks with neutral (zero)
- *  inputs and capture recorder ticks, yielding a trace the comparator replays.
- *  Player 0 is the AI slot; extra players are the opponent slots. */
+/** Per-tick input program for recordSimTrace: `applied[i]` is the PlayerInput
+ *  applied pre-step for player i (missing entries fall back to neutral). The
+ *  tick's recorded Discrete(64) byte map is derived from `applied` with
+ *  encodePlayerInput — the same object feeds both the engine and the trace —
+ *  so the recorded bytes can never contradict the applied inputs. */
+interface SimTraceTickInputs {
+  applied: PlayerInput[];
+}
+
+/** Deterministic sim recording: step an engine N ticks and capture recorder
+ *  ticks, yielding a trace the comparator replays. Player 0 is the AI slot;
+ *  extra players are the opponent slots. With no inputsForTick provider the
+ *  run is neutral-input (every player gets the zero byte applied, nothing
+ *  recorded); a provider supplies the per-tick applied inputs. */
 function recordSimTrace(
   mapRaw: unknown,
   ticks: number,
   numOpponents: number,
   seed = 7,
+  inputsForTick?: (t: number) => SimTraceTickInputs,
 ): { trace: NativeTrace; env: BonkEnvironment } {
   const mapDef: any = normalizeMap(mapRaw);
   const env = new BonkEnvironment({
@@ -114,13 +128,21 @@ function recordSimTrace(
   }
   const rec = new NativeTraceRecorder({ map: mapRaw, players, spawns });
 
-  // Apply the neutral inputs first, then step, then capture — the same order
+  // Apply the tick's inputs first, then step, then capture — the same order
   // the comparator replays (inputs → tick → read), so recorded tick t holds
   // the post-step state of the t-th replay step and diffs are directly aligned.
+  const NEUTRAL: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
   for (let t = 0; t < ticks; t++) {
-    physics.applyInput(0, { left: false, right: false, up: false, down: false, heavy: false, grapple: false });
-    if (numOpponents >= 1)
-      physics.applyInput(1, { left: false, right: false, up: false, down: false, heavy: false, grapple: false });
+    const tickInputs = inputsForTick?.(t);
+    // Resolve each player's pre-step input exactly once: applyInput and the
+    // recorded byte map below are both fed from this array, so the engine's
+    // inputs and the trace's bytes can never drift apart.
+    const resolved: PlayerInput[] = [];
+    for (let i = 0; i <= numOpponents; i++) {
+      const input = tickInputs?.applied[i] ?? NEUTRAL;
+      resolved[i] = input;
+      physics.applyInput(i, input);
+    }
     physics.tick();
 
     const states: any[] = [];
@@ -141,7 +163,15 @@ function recordSimTrace(
         av: body.GetAngularVelocity(),
       };
     }
-    rec.push({ t, discs: states });
+    if (tickInputs) {
+      const inputs: Record<number, number> = {};
+      for (let i = 0; i <= numOpponents; i++) {
+        inputs[i] = encodePlayerInput(resolved[i]);
+      }
+      rec.push({ t, discs: states, inputs });
+    } else {
+      rec.push({ t, discs: states });
+    }
   }
 
   return { trace: rec.toTrace(), env };
@@ -1109,7 +1139,7 @@ describe('P4: differential validation — replay comparator', () => {
         { id: 0, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 0 },
         { id: 1, x: OUT_OF_BOUNDS_DISTANCE + 1, y: 50 },
       ],
-      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] as const })),
+      ticks: Array.from({ length: 4 }, (_, t) => ({ t, discs: [null, null] })),
     };
     noData.ticks[0].inputs = 21 as any;
     const verdict = compareTrace(noData, { seed: 7 });
@@ -1121,6 +1151,71 @@ describe('P4: differential validation — replay comparator', () => {
     expect(verdict.ticksOutsideTolerance).toBe(1);
     // The gate still fails: the flagged tick is outside tolerance.
     expect(verdict.pass).toBe(false);
+  });
+
+  it("delivers the dying disc's recorded input byte on its fatal tick (#423)", () => {
+    // Capture applies a tick's input bytes PRE-step, unconditionally: a disc
+    // that dies during tick K was still alive when K's step began, so its
+    // fatal-tick byte shaped the recorded transition into K's absent (null)
+    // state. The comparator must replay those semantics — gating applyInput
+    // on POST-step disc presence silently dropped exactly that byte (#423).
+    // Player 0 holds RIGHT for the whole round (`re` is off in the WDB map,
+    // so the mid-run OOB death is final): every tick carries a non-neutral
+    // byte, including the fatal one.
+    const HELD_RIGHT: PlayerInput = { left: false, right: true, up: false, down: false, heavy: false, grapple: false };
+    const NEUTRAL: PlayerInput = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+    const HELD_RIGHT_BYTE = encodePlayerInput(HELD_RIGHT);
+    const { trace: traceWithInputs, env } = recordSimTrace(loadMap(WDB_GROUND_JOINTS), 60, 1, 7, () => ({
+      applied: [HELD_RIGHT, NEUTRAL],
+    }));
+
+    try {
+      // Sanity: player 0 really dies mid-run while still recorded holding RIGHT.
+      let deathTick = -1;
+      for (let t = 1; t < traceWithInputs.ticks.length; t++) {
+        if (traceWithInputs.ticks[t].discs[0] === null && traceWithInputs.ticks[t - 1].discs[0] !== null) {
+          deathTick = t;
+          break;
+        }
+      }
+      expect(deathTick).toBeGreaterThan(0);
+      expect(traceWithInputs.ticks[deathTick].inputs?.[0]).toBe(HELD_RIGHT_BYTE);
+
+      // Replay through the comparator with an input spy keyed by tick index.
+      const appliedPerTick: Array<Map<number, number>> = [];
+      let idx = -1;
+      const verdict = compareTrace(traceWithInputs, {
+        seed: 0,
+        tolerances: { position: 0.02, velocity: 0.02, angle: 0.01, angularVelocity: 0.01 },
+        onReady: (replayEnv) => {
+          const p: any = (replayEnv as any).physics;
+          const origApply = p.applyInput.bind(p);
+          const origTick = p.tick.bind(p);
+          p.applyInput = (id: number, input: PlayerInput) => {
+            if (!appliedPerTick[idx]) appliedPerTick[idx] = new Map();
+            appliedPerTick[idx].set(id, encodePlayerInput(input));
+            return origApply(id, input);
+          };
+          p.tick = () => {
+            idx++;
+            return origTick();
+          };
+        },
+      });
+
+      // THE REGRESSION ASSERTION: the fatal-tick byte reaches the engine
+      // instead of being gated away by the post-step null disc entry.
+      expect(appliedPerTick[deathTick]?.get(0)).toBe(HELD_RIGHT_BYTE);
+
+      // Verdict stability: a faithful engine reproduces the capture exactly,
+      // including the fatal force — delivering the byte causes no false fail.
+      expect(verdict.pass).toBe(true);
+      expect(verdict.ticksOutsideTolerance).toBe(0);
+      expect(verdict.worst.dx).toBeLessThan(1e-6);
+      expect(verdict.worst.dy).toBeLessThan(1e-6);
+    } finally {
+      env.close();
+    }
   });
 
   it('an all-skipped trace with no comparable data must not pass the differential gate', () => {

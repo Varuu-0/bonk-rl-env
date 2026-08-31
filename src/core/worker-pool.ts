@@ -7,6 +7,13 @@ import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
 import { assertValidAction, encodePlayerInput } from './action-validation';
+import { assertSupportedSeed } from './seed-range';
+
+// The shared seed domain moved to ./seed-range (#460): the pool's reset
+// validation and the direct BonkEnvironment boundary (constructor + reset)
+// must enforce the same [0, 0xFFFFFFFE] integer domain with the same labeled
+// error, so the two transports and the in-process API cannot drift.
+export { MAX_SUPPORTED_RESET_SEED } from './seed-range';
 
 /**
  * Observation data structure extracted from shared memory
@@ -47,12 +54,6 @@ type WorkerPoolState = 'idle' | 'initializing' | 'ready' | 'failed' | 'closed';
 const SYNC_COMPLETED_INDEX = 0;
 const SYNC_STATUS_OFFSET = 1;
 
-// The shared-memory reset path encodes real seeds as seed + 1 (0 is the
-// "no seed" sentinel), so a seed must fit in [0, 0xFFFFFFFE] for seed + 1 to
-// remain a representable uint32. The range is enforced for BOTH transports so
-// the two cannot drift (#226).
-const MAX_SUPPORTED_RESET_SEED = 0xfffffffe;
-
 /**
  * Upper bound on the number of environments a single WorkerPool may run.
  *
@@ -86,6 +87,61 @@ export const MAX_NUM_ENVS = 2048;
 const WORKER_IDLE = 0;
 const WORKER_COMPLETE = 1;
 const WORKER_ERROR = -1;
+
+/**
+ * Describe an invalid `useSharedMemory` value for the labeled validation
+ * error shared by the pool and the IPC bridge (#433). Strings quote their
+ * exact contents (truncated) because the JSON string `"false"` is the
+ * canonical repro; other non-serializable types only name their JS type so
+ * an error message can never embed an arbitrary payload structure.
+ */
+export function describeInvalidUseSharedMemory(value: unknown): string {
+  if (value === null) return 'null';
+  switch (typeof value) {
+    case 'string': {
+      const quoted = value.length > 64 ? `${value.slice(0, 64)}…` : value;
+      return `string "${quoted}"`;
+    }
+    case 'number':
+      return `number (${value})`;
+    case 'bigint':
+      return `bigint (${value})`;
+    case 'object':
+      return Array.isArray(value) ? 'array' : 'object';
+    default:
+      return typeof value;
+  }
+}
+
+/**
+ * Strict normalization of the `useSharedMemory` init option, the choke
+ * point every init surface converges on (#433).
+ *
+ * The value used to be consumed verbatim: any truthy non-boolean — including
+ * the JSON string `"false"` a non-Python IPC client might send — silently
+ * enabled the SharedArrayBuffer transport the caller asked to disable, while
+ * falsy non-boolean values (`null`, `0`) silently forced message mode. Both
+ * bypassed the SharedArrayBuffer capability check that guards the
+ * config-default path.
+ *
+ * Repo doctrine for boolean options is strict (action fields, physics
+ * sleeping flags, and map settings all accept only real booleans), and no
+ * string alias for this field is documented anywhere (README, docs/, and the
+ * bundled Python client all send real booleans; the lenient `false`/`0`/`no`
+ * coercion lives only on the USE_SHARED_MEMORY environment-variable surface
+ * in config-loader). So only `true`/`false` are accepted, `undefined` keeps
+ * the "no preference" config-default semantics, and every other type is
+ * rejected with a labeled error naming the offending type/value.
+ */
+export function normalizeUseSharedMemory(value: unknown): boolean | undefined {
+  if (value === undefined) return undefined;
+  if (typeof value !== 'boolean') {
+    throw new Error(
+      `Invalid useSharedMemory: expected a boolean (true or false), got ${describeInvalidUseSharedMemory(value)}`,
+    );
+  }
+  return value;
+}
 
 export class WorkerPool {
   private workers: Worker[] = [];
@@ -143,6 +199,16 @@ export class WorkerPool {
   private state: WorkerPoolState = 'idle';
   private failure: Error | null = null;
   private cleanupPromise: Promise<void> | null = null;
+
+  // Bumped synchronously by every external close() (#427). initInternal
+  // captures the value when init() is called — before it may queue behind
+  // the operation lock — and re-checks it after each await, so a close()
+  // that lands while an init is pending (running or merely queued) aborts
+  // it instead of letting it resume into 'ready'. init's own internal
+  // pre-clean also runs closeInternal without bumping the epoch, so it
+  // never cancels itself. reset/step need no epoch: assertReady and their
+  // post-await 'closed' guards already honor an interrupting close.
+  private closeEpoch: number = 0;
 
   // Serializes the buffer-mutating operations (init/reset/step) so callers
   // driving the same WorkerPool concurrently — e.g. a BonkEnv programmatic
@@ -242,10 +308,24 @@ export class WorkerPool {
   }
 
   async init(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
-    return this.withOperationLock(() => this.initInternal(totalEnvs, config, useSharedMemory));
+    // Capture at CALL time, before queueing (#427 review): an init that is
+    // still pending when close() runs must reject rather than begin
+    // initializing after the close has settled. Queued reset/step calls get
+    // the same treatment from assertReady's closed-state rejection.
+    const startCloseEpoch = this.closeEpoch;
+    return this.withOperationLock(() => this.initInternal(totalEnvs, config, startCloseEpoch, useSharedMemory));
   }
 
-  private async initInternal(totalEnvs: number, config: any = {}, useSharedMemory?: boolean) {
+  private async initInternal(
+    totalEnvs: number,
+    config: any = {},
+    // Required (no default): the epoch must be captured at init() CALL time
+    // to cancel inits that were queued when close() ran (#427 review). A
+    // default re-capturing here would silently reopen that race for any
+    // direct caller.
+    startCloseEpoch: number,
+    useSharedMemory?: boolean,
+  ) {
     if (!Number.isInteger(totalEnvs) || totalEnvs < 1) {
       throw new Error(`Invalid environment count: expected a positive integer, got ${totalEnvs}`);
     }
@@ -263,19 +343,57 @@ export class WorkerPool {
     if (!Number.isInteger(this.numWorkers) || this.numWorkers < 1) {
       throw new Error(`Invalid worker count: expected a positive integer, got ${this.numWorkers}`);
     }
+    // Strictly validate the transport request BEFORE teardown (#392/#440
+    // doctrine): a malformed useSharedMemory must reject without closing an
+    // existing healthy pool (#433).
+    const requestedSharedMemory = normalizeUseSharedMemory(useSharedMemory);
     // Validate before teardown or worker spawning (#392), keeping an
     // oversized count from reaching Box2D world construction.
     const numOpponents = SharedMemoryManager.normalizeNumOpponents(
       config?.numOpponents ?? (config as any)?.num_opponents,
     );
+    // The configured seed seeds every pooled environment's construction
+    // stream (worker.ts derives seed + global env index, with only the
+    // derived offset wrapped into the supported domain). Validate it with
+    // the same shared validator the direct BonkEnvironment boundary and
+    // reset() use (#460 review): an out-of-domain config.seed previously
+    // reached the PRNG's `>>> 0` and silently ran the pool on a different
+    // stream than the caller requested. Absent (undefined/null) keeps the
+    // worker's documented `?? 0` default. Throws before closeInternal(),
+    // so a validation-only re-init rejection cannot tear down an existing
+    // healthy pool (#440 doctrine, same as the numOpponents guard above).
+    if (config?.seed !== undefined && config?.seed !== null) {
+      assertSupportedSeed(config.seed, 'constructor');
+    }
     await this.closeInternal(); // Clean up existing if re-initialized
+    if (this.closeEpoch !== startCloseEpoch) {
+      // An external close() resolved while this init was pending (suspended
+      // here, waiting on the operation lock, or past its reply wait): the
+      // caller already observed a completed shutdown, so abort before
+      // touching pool state. No worker exists yet (the spawn loop is below),
+      // leaving the pool terminally closed (#427).
+      throw new Error('Worker pool initialization aborted because the pool was closed');
+    }
     this.state = 'initializing';
     this.failure = null;
 
-    // Determine if we should use shared memory
+    // Determine if we should use shared memory. The capability check that
+    // guards the config default also governs an explicit request (#433):
+    // an explicit `true` degrades to message-passing (loudly) on a runtime
+    // without SharedArrayBuffer instead of crashing inside the constructor,
+    // an explicit `false` always selects message-passing, and the config
+    // default is coerced to a real boolean so a hand-edited config file can
+    // never leak a truthy non-boolean into the transport decision.
     const sharedMemorySupported = SharedMemoryManager.isSupported();
+    if (requestedSharedMemory === true && !sharedMemorySupported) {
+      console.warn(
+        '[WorkerPool] useSharedMemory=true requested, but SharedArrayBuffer is not available in this runtime; falling back to message-passing mode',
+      );
+    }
     this.useSharedMemory =
-      useSharedMemory !== undefined ? useSharedMemory : getConfig().workerPool.useSharedMemory && sharedMemorySupported;
+      requestedSharedMemory === undefined
+        ? getConfig().workerPool.useSharedMemory === true && sharedMemorySupported
+        : requestedSharedMemory && sharedMemorySupported;
 
     // Set default ring size
     this.ringSize = getConfig().workerPool.ringBufferSize;
@@ -375,6 +493,13 @@ export class WorkerPool {
       // Wait for all workers to initialize
       const results = await Promise.all(promises);
 
+      if (this.closeEpoch !== startCloseEpoch) {
+        // An external close() interrupted the worker-reply wait: its cleanup
+        // already rejected these replies and terminated every spawned
+        // worker, so init must never reach 'ready' (#427).
+        throw new Error('Worker pool initialization aborted because the pool was closed');
+      }
+
       // Cache the static info fields (frameSkip, capZones, aiTeam) the
       // workers shipped at init, keyed by global env index. These are
       // constant per environment; only the dynamic info fields travel
@@ -434,6 +559,16 @@ export class WorkerPool {
 
       this.state = 'ready';
     } catch (error) {
+      // Cast defeats the literal narrowing from the assignments above: a
+      // concurrent close() may have changed the state across the awaited
+      // worker replies.
+      const currentState = this.state as WorkerPoolState;
+      if (currentState === 'closed') {
+        // A close() interrupted this init: keep the terminal 'closed' state
+        // and rethrow untouched, mirroring resetInternal/stepInternal, so a
+        // deliberate shutdown is never relabeled as a pool failure (#427).
+        throw error;
+      }
       const failure = this.createFailure('initialization', error);
       await this.failPool(failure);
       throw failure;
@@ -524,17 +659,16 @@ export class WorkerPool {
     }
 
     // Validate the seed values in BOTH transports, not just shared memory:
-    // message passing forwards raw seeds to `env.reset()`, whose PRNG
-    // silently normalizes any number with `seed >>> 0` (truncating floats,
-    // bit-casting negatives, wrapping values >= 2^32). The same call must
-    // not throw in shared mode and silently reseed with a different value
-    // in message mode. A seed valid in one transport must mean the same
-    // thing in the other.
+    // message passing forwards raw seeds to `env.reset()`, and since #460
+    // the direct boundary also rejects out-of-domain seeds instead of
+    // letting the PRNG's `seed >>> 0` silently normalize them (truncating
+    // floats, bit-casting negatives, wrapping values >= 2^32). The same
+    // call must not throw in shared mode and silently reseed with a
+    // different value in message mode. A seed valid in one transport must
+    // mean the same thing in the other.
     if (seeds) {
       for (const seed of seeds) {
-        if (!Number.isInteger(seed) || seed < 0 || seed > MAX_SUPPORTED_RESET_SEED) {
-          throw new Error(`Seed ${seed} out of supported range [0, ${MAX_SUPPORTED_RESET_SEED}] for reset`);
-        }
+        assertSupportedSeed(seed, 'reset');
       }
     }
 
@@ -1172,6 +1306,10 @@ export class WorkerPool {
   // programmatic and IPC callers sharing one adopted pool cannot interleave
   // worker signaling and corrupt the reused buffers (#223).
   async close() {
+    // Bump the close epoch synchronously so any init() suspended inside
+    // initInternal observes the shutdown at its next checkpoint and aborts
+    // instead of resuming to 'ready' after this close resolves (#427).
+    this.closeEpoch++;
     return this.closeInternal();
   }
 
@@ -1392,7 +1530,10 @@ export class WorkerPool {
   }
 
   private async failPool(error: Error): Promise<void> {
-    if (this.state !== 'failed') {
+    // 'closed' is terminal (#427): an operation that a close() interrupted
+    // must never relabel the pool as failed. The cleanup below is still
+    // awaited so any teardown the interrupting close started is honored.
+    if (this.state !== 'failed' && this.state !== 'closed') {
       this.state = 'failed';
       this.failure = error;
       this.wakeSharedWaiters();

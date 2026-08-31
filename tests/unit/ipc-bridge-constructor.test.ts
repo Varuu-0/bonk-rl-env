@@ -863,6 +863,79 @@ describe('IpcBridge ready capture order (#435)', () => {
     await closePromise;
   });
 
+  // Pre-bind shutdown (#458): close() before the first start() is the one
+  // lifecycle transition with NO bind-outcome drain inside start(), so the
+  // constructor-armed signal would strand pending forever. Vitest fails the
+  // run on unhandled rejections, so every assertion below additionally pins
+  // that the drained promises stay handled (constructor/rearm swallow-catch).
+
+  it('rejects a ready promise captured BEFORE a close() that precedes any start() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12398 } });
+    // The exact embedder pattern the getter's JSDoc advertises: capture the
+    // readiness signal, then abort startup without ever serving.
+    const earlyReady = bridge.ready;
+    await bridge.close();
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('rejects a ready promise read AFTER a close() that precedes any start() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12399 } });
+    await bridge.close();
+    // Post-close readers get the same drained (now rejected) generation, so
+    // a shared readiness helper cannot wedge on a fresh read either.
+    expect(await settleOutcome(bridge.ready)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('settles a ready promise captured concurrently with a pre-start close (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12400 } });
+    // Race capture and shutdown from independent async contexts: whichever
+    // order the two interleave in, the outstanding generation must settle —
+    // never hang.
+    const readyOutcome = settleOutcome(bridge.ready, 1000);
+    const closeOutcome = bridge.close().then(
+      () => 'closed',
+      () => 'closed-rejected',
+    );
+    expect(await closeOutcome).toBe('closed');
+    expect(await readyOutcome).toBe('rejected(bridge was closed before start)');
+    // A read taken after the same close settles identically.
+    expect(await settleOutcome(bridge.ready)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('keeps a drained pre-start close idempotent on repeated close() (#458)', async () => {
+    const bridge = new IpcBridge({ server: { port: 12401 } });
+    const earlyReady = bridge.ready;
+    await bridge.close();
+    await expect(bridge.close()).resolves.toBeUndefined();
+    expect(await settleOutcome(earlyReady)).toBe('rejected(bridge was closed before start)');
+  });
+
+  it('still restarts after a pre-start close: the fresh signal resolves on the new bind (#458)', async () => {
+    const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const bridge = new IpcBridge({ server: { port: 12402 } });
+      const stranded = bridge.ready;
+      await bridge.close();
+      expect(await settleOutcome(stranded)).toBe('rejected(bridge was closed before start)');
+
+      // The restart contract (#263) is unchanged: a later start() arms a
+      // fresh signal that resolves with the new bind, and the drained
+      // rejection never leaks into the new cycle.
+      const serve = bridge.start();
+      const restartedSignal = bridge.ready;
+      expect(restartedSignal).not.toBe(stranded);
+      try {
+        expect(await settleOutcome(restartedSignal)).toBe('resolved');
+        expect(bridge.isClosed()).toBe(false);
+      } finally {
+        await bridge.close();
+        await serve;
+      }
+    } finally {
+      consoleErrorSpy.mockRestore();
+    }
+  });
+
   /** Close the bridge and wait for its serve loop to exit cleanly. */
   async function roundTripClose(bridge: IpcBridge, serve: Promise<void>): Promise<void> {
     await bridge.close();
@@ -973,9 +1046,12 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
 
   it('releases a newly-created session when its init fails so another client can use the cap slot', async () => {
     const initError = new Error('worker startup failed');
+    // A genuine post-teardown init failure leaves state 'failed' (failPool
+    // ran in initInternal's own catch); only such dead pools are evicted.
     const failedSessionPool = {
       init: vi.fn().mockRejectedValue(initError),
       close: vi.fn().mockResolvedValue(undefined),
+      isFailed: vi.fn(() => true),
     };
     const consoleErrorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
     const bridge = new IpcBridge({ server: { port: 12376, maxClientSessions: 1 } } as any);
@@ -1000,7 +1076,7 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     }
   });
 
-  it('drops an existing session whose re-init fails so it never holds a cap slot', async () => {
+  it('drops an existing session whose re-init fails the pool so it never holds a cap slot', async () => {
     const initError = new Error('worker startup failed');
     const bridge = new IpcBridge({ server: { port: 12377, maxClientSessions: 1 } } as any);
     const handleRequest = (bridge as any).handleRequest.bind(bridge);
@@ -1011,6 +1087,11 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
 
     const session = (bridge as any).sessions.get(client.toString('hex'));
     session.pool.init.mockRejectedValueOnce(initError);
+    // Model a genuine post-teardown failure: failPool ran inside
+    // initInternal's own catch, so the pool reports failed and eviction is
+    // correct. A rejection that leaves the pool ready keeps its session
+    // (issue #440) — see the validation-only test below.
+    (session.pool as any).isFailed.mockReturnValue(true);
     const closeSpy = vi.spyOn(session.pool, 'close');
 
     await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
@@ -1023,6 +1104,35 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     await handleRequest(Buffer.from('next-client'), JSON.stringify({ command: 'init', numEnvs: 1 }));
     expect(lastResponse().status).toBe('ok');
     expect((bridge as any).sessions.size).toBe(1);
+  });
+
+  it('keeps an existing session whose re-init was rejected while the pool stayed ready (#440)', async () => {
+    const initError = new Error('Invalid numOpponents 65: expected at most 64 opponents');
+    const bridge = new IpcBridge({ server: { port: 12379, maxClientSessions: 1 } } as any);
+    const handleRequest = (bridge as any).handleRequest.bind(bridge);
+    const client = Buffer.from('reinit-client-440');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+    expect(lastResponse().status).toBe('ok');
+
+    const session = (bridge as any).sessions.get(client.toString('hex'));
+    // Pre-teardown validation rejects BEFORE closeInternal(): the pool stays
+    // 'ready' (not failed), so the bridge must not evict or close anything.
+    session.pool.init.mockRejectedValueOnce(initError);
+    const closeSpy = vi.spyOn(session.pool, 'close');
+
+    await handleRequest(client, JSON.stringify({ command: 'init', numEnvs: 1 }));
+
+    expect(lastResponse()).toMatchObject({
+      status: 'error',
+      error: 'Invalid numOpponents 65: expected at most 64 opponents',
+    });
+    expect(closeSpy).not.toHaveBeenCalled();
+    expect((bridge as any).sessions.size).toBe(1);
+
+    // The surviving session still serves its original pool.
+    await handleRequest(client, JSON.stringify({ command: 'step', actions: [0] }));
+    expect(lastResponse().status).toBe('ok');
   });
 
   it('keeps the local pool pinned to a programmatic caller across a failed init (no silent re-admission)', async () => {
@@ -1040,6 +1150,7 @@ describe('IpcBridge per-client session cap (issue #193)', () => {
     const failedPool = {
       init: vi.fn().mockRejectedValue(initError),
       close: vi.fn().mockResolvedValue(undefined),
+      isFailed: vi.fn(() => true),
     };
     mocks.WorkerPool.mockImplementationOnce(function FailedWorkerPool() {
       return failedPool;

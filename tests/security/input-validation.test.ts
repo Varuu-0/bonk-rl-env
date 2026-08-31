@@ -7,9 +7,7 @@ describe('Input validation', () => {
   it('rejects out-of-range action (100) with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
     try {
-      expect(() => env.step(100)).toThrow(
-        'Invalid action: expected an encoded action in [0, 63], got 100',
-      );
+      expect(() => env.step(100)).toThrow('Invalid action: expected an encoded action in [0, 63], got 100');
     } finally {
       env.close();
     }
@@ -18,9 +16,7 @@ describe('Input validation', () => {
   it('rejects negative action with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
     try {
-      expect(() => env.step(-1)).toThrow(
-        'Invalid action: expected an encoded action in [0, 63], got -1',
-      );
+      expect(() => env.step(-1)).toThrow('Invalid action: expected an encoded action in [0, 63], got -1');
     } finally {
       env.close();
     }
@@ -29,18 +25,24 @@ describe('Input validation', () => {
   it('rejects float action with a labeled error', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
     try {
-      expect(() => env.step(3.14)).toThrow(
-        'Invalid action: expected an encoded action in [0, 63], got 3.14',
-      );
+      expect(() => env.step(3.14)).toThrow('Invalid action: expected an encoded action in [0, 63], got 3.14');
     } finally {
       env.close();
     }
   });
 
-  it('handles negative seed in reset without crash', () => {
+  it('rejects negative seed in reset with a labeled error (#460)', () => {
     const env = new BonkEnvironment({ maxTicks: 100 });
-    expect(() => env.reset(-42)).not.toThrow();
-    env.close();
+    try {
+      // A negative seed used to bit-cast through the PRNG's `seed >>> 0`
+      // onto a different stream (#460); it now rejects with the same
+      // labeled error the pool transports raise, leaving the environment
+      // usable for a subsequent valid reset.
+      expect(() => env.reset(-42)).toThrow('Seed -42 out of supported range [0, 4294967294] for reset');
+      expect(() => env.reset(42)).not.toThrow();
+    } finally {
+      env.close();
+    }
   });
 
   it('handles addBody with missing required fields without crash', () => {
