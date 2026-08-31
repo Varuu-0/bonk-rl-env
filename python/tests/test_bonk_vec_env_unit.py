@@ -226,20 +226,102 @@ def test_reset_receive_timeout_invalidates_session_and_rejects_later_requests(mo
 
 
 def test_step_send_and_receive_timeouts_name_the_command(monkeypatch):
+    # Since #486 the send timeout terminates the session, so each half needs
+    # its own env; the closed-state side effects are asserted by
+    # test_send_timeout_marks_env_closed_and_severs_transport below.
     env, _, socket = _make_mocked_env(monkeypatch, timeout_ms=123)
     socket.send_json.side_effect = zmq.Again()
 
     with pytest.raises(TimeoutError, match="123 ms sending 'step' request"):
         env.step_async([0])
 
-    socket.send_json.side_effect = None
+    env, _, socket = _make_mocked_env(monkeypatch, timeout_ms=123)
     socket.recv_json.side_effect = zmq.Again()
     with pytest.raises(TimeoutError, match="123 ms waiting for 'step' response"):
         env.step_wait()
 
-    socket.recv_json.side_effect = None
-    socket.recv_json.return_value = {"status": "ok"}
+
+@pytest.mark.parametrize("operation", ["reset", "step_async"])
+def test_send_timeout_marks_env_closed_and_severs_transport(monkeypatch, operation):
+    """#486: a send timeout must recover exactly like _recv_json's receive
+    timeout: mark the env closed, tear the transport down, and gate every
+    later call behind the labeled RuntimeError."""
+    command = "reset" if operation == "reset" else "step"
+    env, context, socket = _make_mocked_env(monkeypatch, timeout_ms=123, linger_ms=0)
+    socket.send_json.side_effect = zmq.Again()
+
+    with pytest.raises(TimeoutError, match=rf"123 ms sending '{command}' request"):
+        if operation == "reset":
+            env.reset(seeds=[7])
+        else:
+            env.step_async([0])
+
+    assert env._closed is True
+    assert env._closed_reason == f"a send timeout while dispatching '{command}'"
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+    assert env.socket is None
+    assert env.context is None
+
+    # Even a late reply cannot be consumed: the half-broken DEALER is gone.
+    socket.send_json.reset_mock()
+    socket.recv_json.reset_mock()
+    for call in (
+        lambda: env.reset(seeds=[8]),
+        lambda: env.step_async([0]),
+        env.step_wait,
+    ):
+        with pytest.raises(
+            RuntimeError, match="cannot use BonkVecEnv after a send timeout"
+        ):
+            call()
+
+    socket.send_json.assert_not_called()
+    socket.recv_json.assert_not_called()
+
+    # close() stays idempotent and must not double-free the transport.
     env.close()
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+
+
+def test_send_zmq_failure_marks_env_closed_and_rejects_later_requests(monkeypatch):
+    """#486 audit: a non-timeout send error (socket closed mid-send, context
+    terminated, dropped connection) is the same unrecoverable state; the
+    original ZMQError propagates but later calls get the transport gate."""
+    env, context, socket = _make_mocked_env(monkeypatch, timeout_ms=123, linger_ms=0)
+    socket.send_json.side_effect = zmq.ZMQError(zmq.ETERM)
+
+    with pytest.raises(zmq.ZMQError):
+        env.step_async([0])
+
+    assert env._closed is True
+    assert env._closed_reason == "a send failure while dispatching 'step'"
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+
+    with pytest.raises(RuntimeError, match="cannot use BonkVecEnv after a send failure"):
+        env.step_wait()
+
+
+def test_receive_zmq_failure_marks_env_closed_and_rejects_later_requests(monkeypatch):
+    """#486 audit symmetry: a non-timeout receive error applies the same
+    closed-state recovery as _send_json."""
+    env, context, socket = _make_mocked_env(monkeypatch, timeout_ms=123, linger_ms=0)
+    socket.recv_json.side_effect = zmq.ZMQError(zmq.ETERM)
+
+    with pytest.raises(zmq.ZMQError):
+        env.step_wait()
+
+    assert env._closed is True
+    assert env._closed_reason == "a receive failure while waiting for 'step'"
+    socket.close.assert_called_once_with(linger=0)
+    context.term.assert_called_once_with()
+
+    with pytest.raises(
+        RuntimeError, match="cannot use BonkVecEnv after a receive failure"
+    ):
+        env.step_async([0])
 
 
 @pytest.mark.parametrize(
