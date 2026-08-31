@@ -569,6 +569,37 @@ function parseLegacyInteger(rawValue: string): number | null {
   return Number.isNaN(value) ? null : value;
 }
 
+/**
+ * Resolve this launch's env master-switch state for telemetry, with the same
+ * precedence applyEnvOverrides() applies to the same variables: the
+ * established MANIFOLD_TELEMETRY name wins when both spellings carry valid
+ * values, the documented TELEMETRY_ENABLED spelling applies otherwise, and
+ * an invalid MANIFOLD_TELEMETRY value falls through to the documented
+ * spelling instead of blocking it.
+ *
+ * Returns `true` (explicit enable), `false` (explicit disable), or
+ * `undefined` (no explicit env master switch). `false` is the load-bearing
+ * case: it gates CLI level tokens (--profile/--debug) in parseCliFlags() so
+ * they cannot re-enable telemetry that the env master switch disabled,
+ * keeping loadConfig() in lockstep with telemetry-controller.initialize()
+ * (env overrides CLI flags) and the isAnyTelemetryEnabled() fast path (#459
+ * review).
+ */
+function envMasterSwitchState(): boolean | undefined {
+  const env = process.env;
+  if (env.MANIFOLD_TELEMETRY !== undefined) {
+    const v = env.MANIFOLD_TELEMETRY.toLowerCase();
+    if (v === 'true' || v === '1' || v === 'yes') return true;
+    if (v === 'false' || v === '0' || v === 'no') return false;
+  }
+  if (env.TELEMETRY_ENABLED !== undefined) {
+    const v = env.TELEMETRY_ENABLED.trim().toLowerCase();
+    if (v === 'true' || v === '1' || v === 'yes') return true;
+    if (v === 'false' || v === '0' || v === 'no') return false;
+  }
+  return undefined;
+}
+
 function isPowerOfTwo(value: number): boolean {
   return (
     Number.isSafeInteger(value) && value >= 2 && value <= MAX_RING_BUFFER_SIZE && Number.isInteger(Math.log2(value))
@@ -979,6 +1010,17 @@ function parseCliFlags(config: AppConfig): AppConfig {
   const argv = process.argv;
   const argc = argv.length;
 
+  // An explicit env master switch (MANIFOLD_TELEMETRY / TELEMETRY_ENABLED)
+  // that disabled telemetry wins over CLI level tokens (#459 review): the
+  // env-var layer applied TELEMETRY_ENABLED=false above and the CLI
+  // --profile/--debug tokens must not re-enable it, keeping loadConfig() in
+  // lockstep with telemetry-controller.initialize() (env overrides CLI) and
+  // the isAnyTelemetryEnabled() fast path. Resolved with the same
+  // precedence applyEnvOverrides() uses: MANIFOLD_TELEMETRY is the
+  // established name and wins when both spellings carry valid values; an
+  // invalid value falls through to the documented spelling.
+  const envDisabledTelemetry = envMasterSwitchState() === false;
+
   // Master-switch tokens are last-wins across the full argv list (#459
   // review), exactly like telemetry/flags.ts's parseFlags(): a bare master
   // switch enables, an inline --telemetry-enabled= sets the value, and a
@@ -1053,7 +1095,12 @@ function parseCliFlags(config: AppConfig): AppConfig {
         if (next) {
           if (next === 'minimal' || next === 'standard' || next === 'detailed') {
             config.telemetry.profileLevel = next;
-            config.telemetry.enabled = true;
+            // A valid profile level implies telemetry at this token —
+            // unless an explicit env master switch disabled telemetry, in
+            // which case every resolution path keeps it disabled (#459
+            // review). The token-order last-wins with the inline
+            // --telemetry-enabled= form still applies below.
+            if (!envDisabledTelemetry) config.telemetry.enabled = true;
             i++;
           }
         }
@@ -1068,8 +1115,9 @@ function parseCliFlags(config: AppConfig): AppConfig {
             // A valid debug level implies telemetry, exactly like the
             // --profile branch above and parseFlags()' --debug handling, so
             // all three resolution paths agree on level-then-disable
-            // orderings (#459 review).
-            config.telemetry.enabled = true;
+            // orderings (#459 review) — subject to the same explicit env
+            // master-switch gate as the profile branch.
+            if (!envDisabledTelemetry) config.telemetry.enabled = true;
             i++;
           }
         }

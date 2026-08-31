@@ -119,6 +119,41 @@ describe('TelemetryController', () => {
       expect(controller.getFlags().enableTelemetry).toBe(false);
       expect(isTelemetryEnabled()).toBe(false);
     });
+
+    it('--debug verbose enables the controller (level token without env switch, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(controller.getFlags().debugLevel).toBe('verbose');
+    });
+
+    it('--profile minimal enables the controller (level token without env switch, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(true);
+      expect(controller.getFlags().profileLevel).toBe('minimal');
+    });
+
+    // An explicit env master switch wins over CLI level tokens (env applied
+    // after parseFlags() in initialize(), #459 review) — matching
+    // parseCliFlags()'s env gate and the isAnyTelemetryEnabled() fast path.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling the controller (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(false);
+      expect(controller.getFlags().debugLevel).toBe('verbose');
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling the controller (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const controller = TelemetryController.getInstance();
+      expect(controller.getFlags().enableTelemetry).toBe(false);
+      expect(controller.getFlags().profileLevel).toBe('minimal');
+      expect(isTelemetryEnabled()).toBe(false);
+    });
   });
 
   describe('enabled via environment', () => {

@@ -953,6 +953,54 @@ describe('config-loader env vars and CLI', () => {
       expect(cfg.telemetry.debugLevel).toBe('verbose');
     });
 
+    // Explicit env master switches gate CLI level tokens on the server path
+    // (#459 review) — parity with parseFlags()+applyEnvOverrides() (the
+    // controller's initialize() pipeline, where env overrides CLI flags) and
+    // the isAnyTelemetryEnabled() fast path.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
+    it('TELEMETRY_ENABLED=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(false);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
+    it('level tokens still enable telemetry when no env master switch is set (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      let cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.debugLevel).toBe('verbose');
+      resetConfig();
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      cfg = loadConfig(testDir);
+      expect(cfg.telemetry.enabled).toBe(true);
+      expect(cfg.telemetry.profileLevel).toBe('minimal');
+    });
+
     it('--debug-level sets debug level', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const cfg = loadConfig(testDir);

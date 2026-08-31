@@ -385,6 +385,39 @@ describe('Flags uncovered paths', () => {
       expect(flags.debugLevel).toBe('verbose');
     });
 
+    // Env master switch vs CLI level tokens — the controller's initialize()
+    // pipeline resolves parseFlags() first and then applyEnvOverrides(), so
+    // an env master switch resolving to an explicit false wins over the
+    // level tokens (#459 review), exactly like parseCliFlags()'s env gate
+    // and the isAnyTelemetryEnabled() fast path; the level tokens enable
+    // when no env master switch is set.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.profileLevel).toBe('minimal');
+    });
+
+    it('level tokens still enable telemetry when no env master switch is set (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      let flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.profileLevel).toBe('minimal');
+    });
+
     it('parses --debug-level long form and enables telemetry', () => {
       process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
       const flags = parseFlags();

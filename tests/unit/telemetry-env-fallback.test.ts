@@ -256,6 +256,27 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       expect(isTelemetryEnabled()).toBe(true);
     });
 
+    // Explicit env master switches gate CLI level tokens on the fast path
+    // too (#459 review) — env is evaluated before argv here, so they must
+    // agree with the config-loader server path and the controller's
+    // initialize() pipeline.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'worker.js', '--debug', 'verbose'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'worker.js', '--profile', 'minimal'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--profile minimal enables telemetry without env vars (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'worker.js', '--profile', 'minimal'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
     it('--debug-level verbose enables telemetry without env vars', () => {
       process.argv = ['node', 'worker.js', '--debug-level', 'verbose'];
       expect(isTelemetryEnabled()).toBe(true);
