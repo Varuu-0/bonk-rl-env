@@ -204,6 +204,7 @@ vi.mock('../../src/config/config-loader', () => ({
 
 import { WorkerPool, MAX_NUM_ENVS } from '../../src/core/worker-pool';
 import { MAX_SUPPORTED_RESET_SEED } from '../../src/core/seed-range';
+import { MAX_FRAME_SKIP } from '../../src/core/environment';
 
 describe('WorkerPool failure state', () => {
   let pool: WorkerPool | undefined;
@@ -658,6 +659,113 @@ describe('WorkerPool failure state', () => {
       expect(survivingWorker.terminated).toBe(false);
       const results = await pool.step([0]);
       expect(results).toHaveLength(1);
+    });
+
+    describe('pre-teardown per-env config validation (#488)', () => {
+      it('keeps a healthy pool serving after a re-init rejected by maxTicks validation (#488)', async () => {
+        pool = new WorkerPool(1);
+
+        await pool.init(1, { maxTicks: 900, seed: 42 }, false);
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toHaveLength(1);
+        const survivingWorker = fakes.FakeWorker.instances[0];
+
+        await expect(pool.init(1, { maxTicks: -1 }, false)).rejects.toThrow(
+          'Invalid maxTicks -1: expected a positive integer',
+        );
+
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+        expect(survivingWorker.terminated).toBe(false);
+        const results = await pool.step([0]);
+        expect(results).toHaveLength(1);
+      });
+
+      it('rejects a snake_case max_ticks alias in a re-init without tearing down the pool (#488)', async () => {
+        pool = new WorkerPool(1);
+
+        await pool.init(1, { maxTicks: 900, seed: 7 }, false);
+        const survivingWorker = fakes.FakeWorker.instances[0];
+
+        await expect(pool.init(1, { max_ticks: 0 }, false)).rejects.toThrow(
+          'Invalid maxTicks 0: expected a positive integer',
+        );
+
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+        expect(survivingWorker.terminated).toBe(false);
+      });
+
+      it('keeps a healthy pool serving after a re-init rejected by frameSkip validation (#488)', async () => {
+        pool = new WorkerPool(1);
+
+        await pool.init(1, { frameSkip: 4, seed: 42 }, false);
+        const survivingWorker = fakes.FakeWorker.instances[0];
+
+        await expect(pool.init(1, { frameSkip: 0 }, false)).rejects.toThrow(
+          `Invalid frameSkip 0: expected an integer in [1, ${MAX_FRAME_SKIP}]`,
+        );
+
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+        expect(survivingWorker.terminated).toBe(false);
+        const results = await pool.step([0]);
+        expect(results).toHaveLength(1);
+      });
+
+      it('rejects a frameSkip past the MAX_FRAME_SKIP cap in a re-init without tearing down the pool (#488)', async () => {
+        pool = new WorkerPool(1);
+
+        await pool.init(1, { frameSkip: 4, seed: 42 }, false);
+        const survivingWorker = fakes.FakeWorker.instances[0];
+
+        await expect(pool.init(1, { frameSkip: MAX_FRAME_SKIP * 10 }, false)).rejects.toThrow(
+          `Invalid frameSkip ${MAX_FRAME_SKIP * 10}: expected an integer in [1, ${MAX_FRAME_SKIP}]`,
+        );
+
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+        expect(survivingWorker.terminated).toBe(false);
+      });
+
+      it('keeps a healthy pool serving after a re-init rejected by aiPlayerId validation (#488)', async () => {
+        pool = new WorkerPool(1);
+
+        await pool.init(1, { numOpponents: 1, maxTicks: 900, seed: 42 }, false);
+        const survivingWorker = fakes.FakeWorker.instances[0];
+
+        await expect(pool.init(1, { aiPlayerId: 99, numOpponents: 1 }, false)).rejects.toThrow(
+          'Invalid aiPlayerId 99: with 1 opponent(s) the player slots are 0..1',
+        );
+        await expect(pool.init(1, { aiPlayerId: -2 }, false)).rejects.toThrow(
+          'Invalid aiPlayerId -2: expected a non-negative integer player slot',
+        );
+
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toEqual([survivingWorker]);
+        expect(survivingWorker.terminated).toBe(false);
+        const results = await pool.step([0]);
+        expect(results).toHaveLength(1);
+      });
+
+      it('a genuinely failing re-init (post-teardown worker failure) still cleans up correctly (#440 legacy path)', async () => {
+        fakes.control.initBehaviors = ['ok', 'error'];
+        pool = new WorkerPool(1);
+
+        // First init succeeds; the healthy worker survives it.
+        await pool.init(1, { seed: 42 }, false);
+        expect((pool as any).state).toBe('ready');
+        expect(fakes.FakeWorker.instances).toHaveLength(1);
+
+        // Re-init: closeInternal() tears down the healthy worker, the fresh
+        // worker errors, failPool runs, and everything is cleaned up.
+        await expect(pool.init(1, {}, false)).rejects.toThrow('synthetic init failure');
+
+        expect((pool as any).state).toBe('failed');
+        expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
+        expect(fakes.FakeSharedMemoryManager.instances.every((manager) => manager.disposed)).toBe(true);
+        await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
+      });
     });
 
     it('still initializes successfully with a valid config seed', async () => {

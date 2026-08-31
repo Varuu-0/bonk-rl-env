@@ -45,6 +45,55 @@ const MAX_TICKS_DEFAULT = 30 * TPS;
  */
 export const MAX_FRAME_SKIP = 100;
 
+// ─── Shared per-env init-field validators (#488) ─────────────────────
+
+/**
+ * Guards shared by the BonkEnvironment constructor and the pool's
+ * pre-teardown re-init validation (#488). Both sites call the same
+ * functions, so bounds and error wording cannot drift between
+ * WorkerPool.initInternal and the worker-side constructor (#481 doctrine).
+ * A validation-only re-init therefore rejects BEFORE closeInternal() and
+ * leaves the existing healthy pool untouched (#440 doctrine generalized).
+ */
+export function assertValidMaxTicks(maxTicks: number): void {
+  if (!Number.isInteger(maxTicks) || maxTicks < 1) {
+    throw new Error(`Invalid maxTicks ${maxTicks}: expected a positive integer`);
+  }
+}
+
+export function assertValidFrameSkip(frameSkip: number): void {
+  if (!Number.isInteger(frameSkip) || frameSkip < 1 || frameSkip > MAX_FRAME_SKIP) {
+    throw new Error(`Invalid frameSkip ${frameSkip}: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
+  }
+}
+
+export function assertValidAiPlayerId(aiPlayerId: number, numOpponents: number): void {
+  if (!Number.isInteger(aiPlayerId) || aiPlayerId < 0) {
+    throw new Error(`Invalid aiPlayerId ${aiPlayerId}: expected a non-negative integer player slot`);
+  }
+  if (aiPlayerId > numOpponents) {
+    throw new Error(
+      `Invalid aiPlayerId ${aiPlayerId}: with ${numOpponents} opponent(s) the player slots are 0..${numOpponents}`,
+    );
+  }
+}
+
+/**
+ * Validates the RAW per-env init config fields the constructor rejects
+ * (maxTicks, frameSkip, aiPlayerId), applying the same camelCase-wins /
+ * snake_case-fallback resolution and documented defaults the constructor
+ * applies to its resolved values. WorkerPool.initInternal calls this before
+ * closeInternal() (#488); the constructor itself validates its resolved
+ * values with the same three guards, so both surfaces reject with identical
+ * wording and bounds. `config` may be null/undefined (all defaults taken).
+ */
+export function assertValidEnvInitConfig(config: any, numOpponents: number): void {
+  const raw = (config ?? {}) as any;
+  assertValidMaxTicks(raw.maxTicks ?? raw.max_ticks ?? MAX_TICKS_DEFAULT);
+  assertValidFrameSkip(raw.frameSkip ?? raw.frame_skip ?? 1);
+  assertValidAiPlayerId(raw.aiPlayerId ?? 0, numOpponents);
+}
+
 // SPAWN_POSITIONS removed, now read dynamically from map
 
 // ─── Types ───────────────────────────────────────────────────────────
@@ -542,9 +591,7 @@ export class BonkEnvironment {
     // from tick 1 — a permanently-terminal env that auto-resets forever
     // (#266). Reject it loudly at construction (the choke point every
     // surface converges on: programmatic, config.json, worker, IPC).
-    if (!Number.isInteger(this.config.maxTicks) || this.config.maxTicks < 1) {
-      throw new Error(`Invalid maxTicks ${this.config.maxTicks}: expected a positive integer`);
-    }
+    assertValidMaxTicks(this.config.maxTicks);
 
     // frameSkip is the per-cycle tick window the frame-skip machinery
     // compares against directly: NaN freezes action input forever
@@ -557,27 +604,14 @@ export class BonkEnvironment {
     // at the choke point every forwarding surface converges on
     // (programmatic, config.json, worker init, IPC), mirroring the
     // maxTicks guard and the Python client's [1, MAX_FRAME_SKIP] contract.
-    if (
-      !Number.isInteger(this.config.frameSkip) ||
-      this.config.frameSkip < 1 ||
-      this.config.frameSkip > MAX_FRAME_SKIP
-    ) {
-      throw new Error(`Invalid frameSkip ${this.config.frameSkip}: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
-    }
+    assertValidFrameSkip(this.config.frameSkip);
 
     // The AI slot is config-driven, never hardcoded to 0 (#221). An
     // out-of-range slot fails loudly here instead of being silently
     // ignored: with numOpponents opponents the spawned players occupy
     // slots [0, numOpponents] (the AI plus one slot per opponent).
     this.aiPlayerId = this.config.aiPlayerId;
-    if (!Number.isInteger(this.aiPlayerId) || this.aiPlayerId < 0) {
-      throw new Error(`Invalid aiPlayerId ${this.aiPlayerId}: expected a non-negative integer player slot`);
-    }
-    if (this.aiPlayerId > this.config.numOpponents) {
-      throw new Error(
-        `Invalid aiPlayerId ${this.aiPlayerId}: with ${this.config.numOpponents} opponent(s) the player slots are 0..${this.config.numOpponents}`,
-      );
-    }
+    assertValidAiPlayerId(this.aiPlayerId, this.config.numOpponents);
 
     // The constructor seed slot shares the pool's supported domain
     // [0, MAX_SUPPORTED_RESET_SEED] (#460): the PRNG normalizes any number
