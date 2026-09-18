@@ -414,9 +414,9 @@ export function isAnyTelemetryEnabled(): boolean {
     // initialize() (env applied after argv / env checked first) the env
     // switch also beats CLI master-switch tokens, but on the server path
     // (config-loader.ts parseCliFlags, env applied before argv) a later CLI
-    // master-switch token (--telemetry/-t/--telemetry-enabled[=…)) still
-    // overrides it via last-wins — only level tokens are gated there
-    // (#459 review).
+    // master-switch token (--telemetry / --enable-telemetry /
+    // --telemetry-enabled[=…] / -t) still overrides it via last-wins — only
+    // level tokens are gated there (#459 review).
     const nextArg = argv[i + 1];
     if ((arg === '--profile' || arg === '--profile-level' || arg === '-l') &&
         (nextArg === 'minimal' || nextArg === 'standard' || nextArg === 'detailed')) {
