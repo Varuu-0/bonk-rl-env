@@ -103,7 +103,11 @@ export class IpcBridge {
   // the next bind outcome drains it via markBound()/markBindFailed(). That
   // fan-out is what settles every capture exactly once (#435); never swap
   // this for a single per-cycle pair or pre-start captures hang again.
-  private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void }> = [];
+  // Each entry is tagged with the arming cycle's admission token (null for
+  // pre-start captures) so a CANCELLATION drain can settle only the dying
+  // cycle's own signal and leave later cycles' fresh resolvers pending for
+  // their own bind outcome (#431 review).
+  private _readyResolvers: Array<{ resolve: () => void; reject: (reason?: any) => void; cycle: symbol | null }> = [];
   // Whether any start() bind cycle has ever armed a signal. Once true, every
   // armed resolver is settled by that cycle's own bind outcome (markBound/
   // markBindFailed, including the #402 cancellation classification), so
@@ -113,6 +117,29 @@ export class IpcBridge {
   private _startedOnce: boolean = false;
   private boundEndpoint: string | null = null;
   private closePromise: Promise<void> | null = null;
+  // The admission token of the cycle whose native bind() is still pending;
+  // null when no bind is in flight. Tagging with the owning cycle (rather
+  // than a bare boolean) keeps a late-dying cycle's finally from clearing
+  // the flag of a later cycle that already began its own bind (#431
+  // review). During a restart's pre-bind window _closed is still stale-true
+  // from the PREVIOUS cycle (it only resets after the next bind commits), so
+  // close() cannot treat _closed alone as "fully shut down": doing so made an
+  // awaited shutdown resolve as a silent no-op while the restart finished
+  // binding and resurrected serving afterwards (#431).
+  private bindInFlight: symbol | null = null;
+  // The cycle (admission token) whose in-flight bind THIS shutdown canceled,
+  // if any. Set by close() when it tears down a mid-bind transport, because
+  // the dying bind's opaque rejection can surface before zeromq flips
+  // `.closed` on the destroyed handle (and after this teardown settles), so
+  // `cycleSocket.closed` alone would misclassify it as a genuine bind
+  // failure — stealing every outstanding ready capture instead of settling
+  // only the cancelled cycle's own signal (#431 review).
+  private cancelledBind: symbol | null = null;
+  // The start() cycle currently parked on an in-flight close() (the #316
+  // restart-during-close window). A close() arriving while it waits marks it
+  // cancelled so the parked cycle aborts with BridgeClosedDuringStart
+  // instead of re-binding right after that shutdown resolves (#431).
+  private parkedStart: { cancelled: boolean } | null = null;
   // Retained promise of the in-flight serve cycle (start() only exits on
   // close()/failure). The start() guard reads it synchronously before any
   // state mutation: an overlapping start() must fail fast WITHOUT re-arming
@@ -140,7 +167,7 @@ export class IpcBridge {
   // until the bind outcome settles it, so capture order relative to
   // start() cannot strand an awaiter (#435).
   private _ready: Promise<void> = new Promise<void>((resolve, reject) => {
-    this._readyResolvers.push({ resolve, reject });
+    this._readyResolvers.push({ resolve, reject, cycle: null });
   });
 
   /**
@@ -164,14 +191,16 @@ export class IpcBridge {
    * promise (issue #263). The new resolvers are appended to the pending
    * list rather than swapped in, so promises handed out earlier — captured
    * before start() ran, or during an in-flight cycle — are settled by this
-   * cycle's bind outcome too instead of hanging forever (#435). The
-   * rejection is swallowed for the same reason as in the constructor:
-   * consumers such as src/server.ts never await ready, so a bind failure
-   * must not surface as an unhandled rejection.
+   * cycle's bind outcome too instead of hanging forever (#435). Each new
+   * resolver is tagged with `cycle` (the arming admission token) so a
+   * cancellation drain can scope its rejection to the dying cycle
+   * (#431 review). The rejection is swallowed for the same reason as in
+   * the constructor: consumers such as src/server.ts never await ready, so
+   * a bind failure must not surface as an unhandled rejection.
    */
-  private rearmReady(): void {
+  private rearmReady(cycle: symbol): void {
     this._ready = new Promise<void>((resolve, reject) => {
-      this._readyResolvers.push({ resolve, reject });
+      this._readyResolvers.push({ resolve, reject, cycle });
     });
     this._ready.catch(() => {});
   }
@@ -291,6 +320,30 @@ export class IpcBridge {
     for (const { reject } of pending) {
       reject(err);
     }
+  }
+
+  /**
+   * Cancellation-scoped drain (#431 review): reject only the resolvers armed
+   * by the cancelled cycle itself — plus every untagged pre-start capture,
+   * which has no bind outcome of its own — and LEAVE resolvers armed by
+   * other cycles pending for their own outcome. A later cycle can re-arm
+   * `ready` while an earlier cycle is still dying (it parks on the close
+   * that is tearing the earlier bind down); the full #435 fan-out used to
+   * steal that fresh signal, so the later cycle then bound and served with
+   * `bridge.ready` stuck rejected while markBound() drained nothing. Genuine
+   * bind failures still use markBindFailed(), whose full fan-out keeps every
+   * capture settling with the real error (#435).
+   */
+  private markBindCancelled(err: unknown, cycle: symbol): void {
+    const keep: typeof this._readyResolvers = [];
+    for (const resolver of this._readyResolvers) {
+      if (resolver.cycle === null || resolver.cycle === cycle) {
+        resolver.reject(err);
+      } else {
+        keep.push(resolver);
+      }
+    }
+    this._readyResolvers = keep;
   }
 
   /**
@@ -454,9 +507,14 @@ export class IpcBridge {
     // Re-arm `ready` before waiting for a prior close to finish. Callers
     // can read the new readiness promise immediately after invoking
     // start(), even while the previous socket is still unbinding.
-    this.rearmReady();
+    this.rearmReady(admission);
     if (this.closePromise) {
       const previousClose = this.closePromise;
+      // Register this parked cycle so a close() arriving while it waits can
+      // cancel it (#431): without the marker, a shutdown landing during the
+      // park would resolve while this restart still re-binds afterwards.
+      const parked = { cancelled: false };
+      this.parkedStart = parked;
       try {
         await previousClose;
       } catch (error) {
@@ -470,6 +528,20 @@ export class IpcBridge {
         if (this.closePromise === previousClose) {
           this.closePromise = null;
         }
+        if (this.parkedStart === parked) {
+          this.parkedStart = null;
+        }
+      }
+      // A close() that arrived while this cycle was parked owns the
+      // lifecycle: the prior close's teardown has already completed, so
+      // letting this restart bind would resurrect serving right after an
+      // awaited shutdown resolved (#431). Settle ready with the same
+      // distinguishable error the #402 cancellation path uses — ready
+      // still settles (rejected), honoring #316's no-hang guarantee.
+      if (parked.cancelled) {
+        const closedDuringStart = this.closedDuringStartError();
+        this.markBindCancelled(closedDuringStart, admission);
+        throw closedDuringStart;
       }
     }
 
@@ -513,22 +585,42 @@ export class IpcBridge {
     // re-bound (bind() throws "Socket is closed"). Recreate the transport
     // so a later start() after close() binds a fresh ROUTER and serves
     // again (issue #263): re-wrap the send function on the new socket.
-    if (this.sock.closed) {
+    // `_closed` also forces recreation: zeromq defers the native close of a
+    // socket that still has a pending bind, so `.closed` can stay false for
+    // a moment after a shutdown and a restart would otherwise re-bind the
+    // dying handle ("Socket is blocked by a bind or unbind operation")
+    // instead of a fresh one (#431 review).
+    if (this.sock.closed || this._closed) {
       this.sock = this.createSocket();
       this._wrappedSend = wrap(TelemetryIndices.ZMQ_SEND, this.sock.send.bind(this.sock));
     }
+    // Snapshot the transport THIS cycle binds on, BEFORE awaiting the bind.
+    // A concurrent close() can destroy it mid-bind while a later admitted
+    // restart recreates the shared `sock` field: classification and
+    // failed-bind cleanup must read the cycle's OWN handle, never the live
+    // field, or a late cancellation is misclassified as a genuine failure
+    // (rejecting every ready capture, including a later cycle's) and the
+    // cleanup would close the later cycle's fresh socket (#431 review).
+    const cycleSocket = this.sock;
     // Snapshot BEFORE awaiting bind: on a restart after close() (#263/#316)
     // _closed is still true from the previous cycle until the post-bind reset
     // below, so testing _closed alone would misclassify every genuine restart
     // bind failure (e.g. EADDRINUSE) as a cancelled start AND skip the #326
     // cleanup, leaking the freshly recreated Router. During a restart's
-    // in-flight bind a concurrent close() is itself a no-op (the teardown
-    // early-returns while _closed is set), so only a close that FLIPS _closed
-    // during THIS cycle (first starts) or an externally destroyed socket
-    // (sock.closed) is a cancellation; every other rejection here is genuine.
+    // in-flight bind a concurrent close() now runs its real teardown and
+    // destroys the fresh socket (bindInFlight keeps close() from treating
+    // the stale _closed as "already shut down", #431), which surfaces here
+    // as the cycle socket being closed. Only that cancellation — or a close
+    // that FLIPS _closed during THIS cycle (first starts, #402) — classifies
+    // as a BridgeClosedDuringStart; every other rejection here is genuine.
     const closedBeforeBind = this._closed;
+    // Flag the pending native bind so close() can tell this pre-bind window
+    // apart from a genuinely shut-down bridge (#431). Cleared as soon as the
+    // bind settles; from there to markBound() no await runs, so a close()
+    // either cancelled this cycle or observes the fully committed state.
+    this.bindInFlight = admission;
     try {
-      await this.sock.bind(addr);
+      await cycleSocket.bind(addr);
     } catch (err) {
       // A concurrent close()/stopServer() can destroy the ROUTER while the
       // bind is still in flight: close() sees boundEndpoint === null, skips
@@ -540,21 +632,27 @@ export class IpcBridge {
       // library internals never leak to callers; the concurrent close()
       // already destroyed (or is destroying) the handle, so skip the #326
       // failed-bind cleanup here.
-      if ((this._closed && !closedBeforeBind) || this.sock.closed) {
+      if ((this._closed && !closedBeforeBind) || cycleSocket.closed || this.cancelledBind === admission) {
         const closedDuringStart = this.closedDuringStartError();
-        this.markBindFailed(closedDuringStart);
+        this.markBindCancelled(closedDuringStart, admission);
         throw closedDuringStart;
       }
       this.markBindFailed(err);
       // A bind that never succeeded leaves the ROUTER handle open. Close
       // it for both first starts and restart attempts; a later start()
-      // recreates a closed socket before retrying (issue #326).
+      // recreates a closed socket before retrying (issue #326). Only the
+      // cycle's own handle is closed — a restart admitted behind this
+      // failure may already have recreated `this.sock`.
       try {
-        this.sock.close();
+        cycleSocket.close();
       } catch {
         // Preserve the original bind error if socket cleanup fails.
       }
       throw err;
+    } finally {
+      if (this.bindInFlight === admission) {
+        this.bindInFlight = null;
+      }
     }
     // libzmq resolves wildcard binds to a concrete endpoint (for example,
     // tcp://0.0.0.0:<port>). Keep that resolved value because unbind()
@@ -572,23 +670,24 @@ export class IpcBridge {
     // reject BOTH start() and ready with the same clear, distinguishable
     // error so awaiting callers observe one consistent outcome and the
     // cancelled cycle never claims it ever bound.
-    if (this.sock.closed) {
+    if (cycleSocket.closed || this.cancelledBind === admission) {
       const closedDuringStart = this.closedDuringStartError();
-      this.markBindFailed(closedDuringStart);
+      this.markBindCancelled(closedDuringStart, admission);
       throw closedDuringStart;
     }
 
     let endpoint: string;
     try {
-      endpoint = this.sock.lastEndpoint ?? addr;
+      endpoint = cycleSocket.lastEndpoint ?? addr;
     } catch (err) {
       // Same snapshot discipline as the bind catch above: only a close that
-      // flipped _closed during THIS cycle (or a destroyed socket) is a
-      // cancellation; on a restart the stale _closed must not swallow a
-      // genuine read failure (#402).
-      if ((this._closed && !closedBeforeBind) || this.sock.closed) {
+      // flipped _closed during THIS cycle (or a destroyed cycle socket, or a
+      // shutdown recorded as cancelling this cycle) is a cancellation; on a
+      // restart the stale _closed must not swallow a genuine read failure
+      // (#402).
+      if ((this._closed && !closedBeforeBind) || cycleSocket.closed || this.cancelledBind === admission) {
         const closedDuringStart = this.closedDuringStartError();
-        this.markBindFailed(closedDuringStart);
+        this.markBindCancelled(closedDuringStart, admission);
         throw closedDuringStart;
       }
       this.markBindFailed(err);
@@ -602,6 +701,11 @@ export class IpcBridge {
     this.boundEndpoint = endpoint;
     console.log(`[IPC] Bound ZMQ Router socket to ${addr}`);
     this._closed = false;
+    // This cycle committed its bind successfully; any recorded cancellation
+    // targeted an older, now-finished cycle and is no longer relevant.
+    if (this.cancelledBind === admission) {
+      this.cancelledBind = null;
+    }
     // The reaper runs in every mode, including adopted-host mode. BonkEnv
     // adopts its pool before calling start(), so gating the timer on
     // !_hostPool would leave host-mode failure recovery unreachable and,
@@ -1370,15 +1474,46 @@ export class IpcBridge {
    * promise, and the retained reference is dropped the moment the teardown
    * settles so a rejected close can never wedge later close()/start()
    * attempts on a stale rejection (#316).
+   *
+   * A close() issued while a start() cycle is pending cancels that cycle
+   * into BridgeClosedDuringStart instead of letting it bind afterwards
+   * (#431): a cycle whose bind is in flight is cancelled by the teardown
+   * destroying the socket, and a restart parked on an in-flight close is
+   * cancelled by the parkedStart marker. (A start() initiated while a close
+   * is already in flight parks and proceeds once that close settles — the
+   * documented restart-during-close flow (#316) — unless a further close()
+   * arrives while it waits.) Once an awaited close() resolves, nothing can
+   * re-bind or resurrect serving without a start() cycle initiated after
+   * this close began.
    */
   close(): Promise<void> {
+    // Runs BEFORE the join/no-op guards: even a close() that merely joins
+    // the in-flight teardown (or no-ops on a settled bridge) must still
+    // invalidate a restart parked on it, or the awaited shutdown would
+    // resolve while a re-bind is queued behind it (#431).
+    if (this.parkedStart) {
+      this.parkedStart.cancelled = true;
+    }
     if (this.closePromise) {
       return this.closePromise;
     }
-    if (this._closed) {
+    // _closed alone cannot mean "already shut down": during a restart's
+    // pre-bind window it is still stale-true from the previous cycle while a
+    // fresh bind is pending. While a bind is in flight, fall through to the
+    // real teardown — destroying the fresh socket rejects the pending
+    // start() with BridgeClosedDuringStart and guarantees the port stays
+    // free after this shutdown resolves (#431).
+    if (this._closed && this.bindInFlight === null) {
       return Promise.resolve();
     }
     this._closed = true;
+    // Record which cycle (if any) this teardown is cancelling mid-bind
+    // BEFORE the socket is destroyed below, so the dying bind's catch can
+    // classify its opaque rejection as a cancellation even though zeromq
+    // flips `.closed` only once the native close completes (#431 review).
+    if (this.bindInFlight !== null) {
+      this.cancelledBind = this.bindInFlight;
+    }
     // A drain re-opens transport admission: the next start() (or the first
     // of several concurrently admitted ones) claims _drainAdmission fresh,
     // so exactly one restart proceeds into recreation/bind (#418 review).
