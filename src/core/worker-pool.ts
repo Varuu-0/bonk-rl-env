@@ -8,6 +8,7 @@ import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
 import { assertValidAction, encodePlayerInput } from './action-validation';
 import { assertSupportedSeed } from './seed-range';
+import { assertValidEnvInitConfig } from './environment';
 
 // The shared seed domain moved to ./seed-range (#460): the pool's reset
 // validation and the direct BonkEnvironment boundary (constructor + reset)
@@ -365,6 +366,14 @@ export class WorkerPool {
     if (config?.seed !== undefined && config?.seed !== null) {
       assertSupportedSeed(config.seed, 'constructor');
     }
+    // maxTicks, frameSkip, and aiPlayerId were previously rejected only
+    // inside each worker's BonkEnvironment constructor, which runs after
+    // closeInternal() has already terminated the existing healthy workers:
+    // a re-init with e.g. maxTicks: -1 destroyed a serving pool (#488).
+    // Validate them here through the shared constructor validators (same
+    // resolution and wording) so a validation-only re-init rejection cannot
+    // tear down the existing pool (#440 doctrine generalized; #481 guard).
+    assertValidEnvInitConfig(config, numOpponents);
     await this.closeInternal(); // Clean up existing if re-initialized
     if (this.closeEpoch !== startCloseEpoch) {
       // An external close() resolved while this init was pending (suspended
