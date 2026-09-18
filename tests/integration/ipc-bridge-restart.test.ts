@@ -361,11 +361,13 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
     //   16200-16299            ipc-bridge-failed-session
     //   16300-16399            ipc-bridge-failed-session (sequential describes in one file)
     //   16400-17010            bonk-env-ipc-server (IPC_SERVER_TEST_START = 16400, sparse bands)
-    //   17100-17199            this #431 describe
-    //   17200-17299            ipc-bridge-multiclient
+    //   17100-17199            ipc-bridge-failed-session (re-init rejection describe)
+    //   17211-17310            ipc-bridge-overlapping-start (#418/#456)
+    //   17311-17399            ipc-bridge-multiclient
     //   17400-17449            ipc-bridge-failed-session (host-failure init tests)
+    //   17450-17499            this #431 describe
     //   19992-19999            ipc-shared-memory (hardcoded constructor/getPort checks, no live bind)
-    portManager = new PortManager({ startPort: 17100, endPort: 17199 });
+    portManager = new PortManager({ startPort: 17450, endPort: 17499 });
     port = portManager.allocate();
   });
 
@@ -544,6 +546,11 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       expect(bridge.isClosed()).toBe(true);
       await expect(cancelled).rejects.toThrow('bridge was closed during start');
 
+      // libzmq tears the cancelled cycle's listener down asynchronously, so
+      // probe before rebinding — the same discipline as the sibling tests
+      // (lines 434 and 508).
+      await waitForPortFree(port);
+
       // The documented restart flow still works once the dust settles:
       // a NEW start() call must bind and serve round-trips again.
       const serve2 = bridge.start();
@@ -562,6 +569,60 @@ describe('IpcBridge close() during an in-flight restart bind (issue #431)', () =
       await serve2;
     } finally {
       client.close();
+      if (!bridge.isClosed()) await bridge.close().catch(() => {});
+    }
+  }, 60000);
+
+  it('a dying bind cancellation leaves a later parked cycle ready signal for its own bind outcome', async () => {
+    const bridge = new IpcBridge({ server: { port } } as any);
+    const client = new zmq.Dealer();
+    // The parked cycle binds a second port: the cancelled cycle's listener on
+    // the primary port is torn down asynchronously by libzmq, so rebinding
+    // the SAME port here would race a transient EADDRINUSE and mask the
+    // resolver-scoping behavior this test pins.
+    const secondPort = portManager.allocate();
+    try {
+      await startAndShutdown(bridge);
+
+      // Cycle 2: restart binding while close() lands mid-bind. The shutdown
+      // runs the real teardown (the bindInFlight fall-through in close()) and
+      // destroys the fresh socket, so cycle 2's pending bind rejects as a
+      // cancelled cycle.
+      const doomed = bridge.start();
+      const doomedOutcome = doomed.then(
+        () => 'resolved',
+        (e: any) => `rejected(${e?.name ?? e?.message ?? e})`,
+      );
+      const closeP = bridge.close();
+
+      // Cycle 3: initiated during that teardown — re-arms `ready` and parks
+      // on the in-flight close. Its fresh resolvers must survive cycle 2's
+      // cancellation drain, or this cycle binds and serves with
+      // bridge.ready stuck rejected (#431 review: the #435 fan-out used to
+      // steal them and markBound() then drained an empty list).
+      (bridge as any).port = secondPort;
+      const parked = bridge.start();
+      parked.catch(() => {});
+      await closeP;
+      expect(await doomedOutcome).toBe('rejected(BridgeClosedDuringStart)');
+
+      // The parked cycle proceeds, binds and serves; its readiness signal
+      // resolves with it instead of staying rejected.
+      expect(await settleOutcome(bridge.ready)).toBe('resolved');
+      expect(bridge.isClosed()).toBe(false);
+
+      await client.connect(`tcp://127.0.0.1:${secondPort}`);
+      await new Promise((r) => setTimeout(r, 100));
+      await client.send(JSON.stringify({ command: 'init', numEnvs: 1, useSharedMemory: false }));
+      const [reply] = await client.receive();
+      expect(JSON.parse(reply.toString()).status).toBe('ok');
+
+      await bridge.close();
+      expect(bridge.isClosed()).toBe(true);
+      await parked;
+    } finally {
+      client.close();
+      portManager.release(secondPort);
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
     }
   }, 60000);

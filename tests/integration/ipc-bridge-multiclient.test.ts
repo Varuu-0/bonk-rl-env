@@ -23,7 +23,7 @@ describe('IpcBridge per-client worker-pool isolation (issue #193)', () => {
   let port: number;
 
   beforeAll(async () => {
-    portManager = new PortManager({ startPort: 17200, endPort: 17299 });
+    portManager = new PortManager({ startPort: 17311, endPort: 17399 });
     port = portManager.allocate();
     bridge = new IpcBridge({ server: { port } } as any);
     // start() runs the serve loop until close(), so do not await it.
