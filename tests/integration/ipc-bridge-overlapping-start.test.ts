@@ -513,7 +513,11 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
   /**
    * Non-throwing bindability probe: true when a throwaway ROUTER can bind
    * the endpoint right now, false while any listener (including one
-   * mid-unwind) still owns the port.
+   * mid-unwind) still owns the port. Only EADDRINUSE — the busy signal the
+   * takeaway-probe pattern in waitForPortFree also honors — maps to false;
+   * any other probe failure (EBADF on the scratch socket, a malformed
+   * endpoint, ...) is a real problem and must surface immediately instead
+   * of masquerading as port-busy until the drain deadline (review finding).
    */
   async function portBindable(targetPort: number): Promise<boolean> {
     const endpoint = `tcp://127.0.0.1:${targetPort}`;
@@ -523,8 +527,11 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
       await probe.bind(endpoint);
       bound = true;
       return true;
-    } catch {
-      return false;
+    } catch (err) {
+      if ((err as { code?: string })?.code === 'EADDRINUSE') {
+        return false;
+      }
+      throw err;
     } finally {
       if (bound) {
         try {
@@ -583,10 +590,13 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
       // the transport admission is held, so an eager start() would
       // supersede against it — hence the single observe loop. An opaque
       // EBUSY escape fails the identity assertions below either way.
+      // Every inner deadline below fits inside this test's outer timeout
+      // (45s + 120s + 3×60s), so a wedged path fails through OUR
+      // assertions instead of a vitest kill (review finding).
       let recovered = false;
       let settled = false;
       let serve3: Promise<void> | null = null;
-      const observeDeadline = Date.now() + 240000;
+      const observeDeadline = Date.now() + 120000;
       while (!recovered && !settled && Date.now() < observeDeadline) {
         if ((await settleWithin(bridge.ready, 1000)) === 'resolved') {
           recovered = true;
@@ -603,7 +613,7 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
         for (let attempt = 0; attempt < 3; attempt++) {
           serve3 = bridge.start();
           serve3.catch(() => {});
-          const r = await settleWithin(bridge.ready, 240000);
+          const r = await settleWithin(bridge.ready, 60000);
           if (r === 'resolved') {
             recovered = true;
             break;
@@ -627,7 +637,7 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
     } finally {
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
     }
-  }, 300000);
+  }, 480000);
 
   it('the close-during-bind window never poisons bridge.ready: it settles distinguishably and the instance stays restartable', async () => {
     const testPort = portManager.allocate();
@@ -659,9 +669,12 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
       // re-points and resolves) or settles with the typed cut-off identity
       // (the pathological budget-expiry arm). Pre-fix the signal stayed
       // terminally rejected with the opaque EBUSY error and no listener —
-      // the never-pending-forever pin below is what that arm broke.
+      // the never-pending-forever pin below is what that arm broke. All
+      // inner deadlines (45s + 120s + 60s drain + 3×60s + 30s) fit inside
+      // this test's outer timeout, so a wedged path fails through our
+      // assertions instead of a vitest kill (review finding).
       let settled = false;
-      const observeDeadline = Date.now() + 240000;
+      const observeDeadline = Date.now() + 120000;
       while (!settled && Date.now() < observeDeadline) {
         if ((await settleWithin(bridge.ready, 1000)) === 'resolved') {
           break;
@@ -710,7 +723,7 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
         expect(String(recoveryErr?.message ?? recoveryErr)).not.toMatch(/blocked by a bind or unbind/i);
         await serve3.catch(() => {});
       }
-      expect((await settleWithin(bridge.ready, 60000)) === 'resolved').toBe(true);
+      expect((await settleWithin(bridge.ready, 30000)) === 'resolved').toBe(true);
       expect(bridge.isClosed()).toBe(false);
       expect(await roundTripInitStatusOn(testPort)).toBe('ok');
 
@@ -720,5 +733,5 @@ describe('IpcBridge start() during the close-during-bind unwind window (issue #4
     } finally {
       if (!bridge.isClosed()) await bridge.close().catch(() => {});
     }
-  }, 240000);
+  }, 480000);
 });

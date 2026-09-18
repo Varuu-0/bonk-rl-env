@@ -731,14 +731,23 @@ describe('IpcBridge start()/close() race (#402)', () => {
     // different, already-covered transition).
     const startInvocation = bridge.start();
     const windowReady = bridge.ready;
+    let startError: any = null;
     const startOutcome = await startInvocation.then(
       () => 'resolved',
-      (e: any) => `${e?.name}: ${e?.message ?? e}`,
+      (e: any) => {
+        startError = e;
+        return `${e?.name}: ${e?.message ?? e}`;
+      },
     );
     // The transient unwinding contention must surface with the canonical
     // cut-off identity on start(), never the unclassified libzmq error —
     // and never the EADDRINUSE-class genuine-failure identity either.
     expect(startOutcome).toBe('BridgeClosedDuringStart: bridge was closed during start');
+    // The original EBUSY is chained as `cause` so the underlying libzmq
+    // unwinding state stays diagnosable without leaking into the
+    // caller-visible message (review finding).
+    expect(startError?.cause?.code).toBe('EBUSY');
+    expect(/blocked by a bind or unbind/i.test(String(startError?.cause?.message ?? startError?.cause))).toBe(true);
 
     // Every outstanding signal rejects with the SAME identity (fan-out).
     const readyOutcome = await Promise.race([

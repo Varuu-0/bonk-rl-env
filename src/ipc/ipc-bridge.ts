@@ -367,11 +367,17 @@ export class IpcBridge {
    * The canonical error for a start() cancelled by a concurrent close():
    * rejected on BOTH the start() promise and the current ready signal so
    * awaiting callers observe one consistent outcome instead of a resolved
-   * start wedged against a rejected ready (#402).
+   * start wedged against a rejected ready (#402). When the classification
+   * normalizes an underlying failure (the #478 EBUSY unwinding race), that
+   * original error is chained as `cause` so the opaque libzmq condition
+   * stays diagnosable without leaking into the caller-visible message.
    */
-  private closedDuringStartError(): Error {
+  private closedDuringStartError(cause?: unknown): Error {
     const err = new Error('bridge was closed during start');
     err.name = 'BridgeClosedDuringStart';
+    if (cause !== undefined) {
+      (err as Error & { cause?: unknown }).cause = cause;
+    }
     return err;
   }
 
@@ -653,7 +659,10 @@ export class IpcBridge {
       // resolves it — never an ownerless pending, never a stranded
       // awaiter.
       if (IpcBridge.isBindUnwindBlockedError(err)) {
-        const closedDuringStart = this.closedDuringStartError();
+        // Chain the original EBUSY as `cause`: the caller-visible identity
+        // stays the canonical BridgeClosedDuringStart, while operators can
+        // still see the underlying libzmq unwinding state (review finding).
+        const closedDuringStart = this.closedDuringStartError(err);
         this.markBindFailed(closedDuringStart);
         try {
           this.sock.close();
