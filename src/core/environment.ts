@@ -78,20 +78,44 @@ export function assertValidAiPlayerId(aiPlayerId: number, numOpponents: number):
   }
 }
 
+/** The three raw-to-resolved per-env init fields (#488). */
+export interface ResolvedEnvInitFields {
+  maxTicks: number;
+  frameSkip: number;
+  aiPlayerId: number;
+}
+
+/**
+ * Single source of truth for the maxTicks / frameSkip / aiPlayerId
+ * resolution both the BonkEnvironment constructor and the pool's
+ * pre-teardown validation use: camelCase wins, snake_case alias fallback,
+ * documented defaults. Keeping the chains here means a future alias or
+ * default change cannot desync the pool validator from the constructor
+ * (which would let an invalid value pass validation, tear down the healthy
+ * pool, and only then fail in the worker — the exact #488 regression) (#481
+ * drift doctrine, #488 review). `config` may be null/undefined (defaults).
+ */
+export function resolveEnvInitFields(config: any): ResolvedEnvInitFields {
+  const raw = (config ?? {}) as any;
+  return {
+    maxTicks: raw.maxTicks ?? raw.max_ticks ?? MAX_TICKS_DEFAULT,
+    frameSkip: raw.frameSkip ?? raw.frame_skip ?? 1,
+    aiPlayerId: raw.aiPlayerId ?? 0,
+  };
+}
+
 /**
  * Validates the RAW per-env init config fields the constructor rejects
- * (maxTicks, frameSkip, aiPlayerId), applying the same camelCase-wins /
- * snake_case-fallback resolution and documented defaults the constructor
- * applies to its resolved values. WorkerPool.initInternal calls this before
- * closeInternal() (#488); the constructor itself validates its resolved
- * values with the same three guards, so both surfaces reject with identical
- * wording and bounds. `config` may be null/undefined (all defaults taken).
+ * (maxTicks, frameSkip, aiPlayerId) through the shared resolver and guards
+ * above. WorkerPool.initInternal calls this before closeInternal() (#488);
+ * the constructor validates its resolved values with the same guards, so
+ * both surfaces reject with identical wording and bounds.
  */
 export function assertValidEnvInitConfig(config: any, numOpponents: number): void {
-  const raw = (config ?? {}) as any;
-  assertValidMaxTicks(raw.maxTicks ?? raw.max_ticks ?? MAX_TICKS_DEFAULT);
-  assertValidFrameSkip(raw.frameSkip ?? raw.frame_skip ?? 1);
-  assertValidAiPlayerId(raw.aiPlayerId ?? 0, numOpponents);
+  const resolved = resolveEnvInitFields(config);
+  assertValidMaxTicks(resolved.maxTicks);
+  assertValidFrameSkip(resolved.frameSkip);
+  assertValidAiPlayerId(resolved.aiPlayerId, numOpponents);
 }
 
 // SPAWN_POSITIONS removed, now read dynamically from map
@@ -479,7 +503,10 @@ export class BonkEnvironment {
     // absent, which the alias-aware config merge guarantees for keys
     // that only carry injected defaults (#204).
     const rawConfig = config as any;
-    const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
+    // One shared resolution for the three init fields the pool also
+    // pre-validates (#488): the pool calls the same resolver, so aliases and
+    // defaults can never drift between the two sites (#481).
+    const initFields = resolveEnvInitFields(config);
 
     // Validate before map loading or world construction (#392). This keeps an
     // oversized opponent count from exhausting the fixed Box2D broadphase
@@ -546,7 +573,7 @@ export class BonkEnvironment {
 
     this.config = {
       numOpponents,
-      maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
+      maxTicks: initFields.maxTicks,
       randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
       mapData: mapDef,
       // Seed 0 is a valid deterministic seed and must reach the PRNG: a
@@ -556,11 +583,11 @@ export class BonkEnvironment {
       // constructed-env replay (#200). Only an absent seed (undefined/
       // null) falls back to a random one.
       seed: config.seed !== undefined && config.seed !== null ? config.seed : Math.floor(Math.random() * 1000000),
-      frameSkip: frameSkip ?? 1,
+      frameSkip: initFields.frameSkip,
       ppm: this.ppm,
       mapPath: mapFile,
       defaultMapPath: config.defaultMapPath ?? '',
-      aiPlayerId: config.aiPlayerId ?? 0,
+      aiPlayerId: initFields.aiPlayerId,
       oppMoveProb,
       oppUpProb,
       oppDownProb,

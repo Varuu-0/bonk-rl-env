@@ -752,17 +752,22 @@ describe('WorkerPool failure state', () => {
         fakes.control.initBehaviors = ['ok', 'error'];
         pool = new WorkerPool(1);
 
-        // First init succeeds; the healthy worker survives it.
-        await pool.init(1, { seed: 42 }, false);
+        // Shared-memory mode so each spawned worker owns a manager: the
+        // disposal assertions below are then non-vacuous (#488 review).
+        await pool.init(1, { seed: 42 }, true);
         expect((pool as any).state).toBe('ready');
         expect(fakes.FakeWorker.instances).toHaveLength(1);
+        expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(1);
 
-        // Re-init: closeInternal() tears down the healthy worker, the fresh
-        // worker errors, failPool runs, and everything is cleaned up.
-        await expect(pool.init(1, {}, false)).rejects.toThrow('synthetic init failure');
+        // Re-init: closeInternal() tears down the healthy worker and its
+        // manager, the fresh worker errors, failPool runs, and everything is
+        // cleaned up.
+        await expect(pool.init(1, {}, true)).rejects.toThrow('synthetic init failure');
 
         expect((pool as any).state).toBe('failed');
+        expect(fakes.FakeWorker.instances).toHaveLength(2);
         expect(fakes.FakeWorker.instances.every((worker) => worker.terminated)).toBe(true);
+        expect(fakes.FakeSharedMemoryManager.instances).toHaveLength(2);
         expect(fakes.FakeSharedMemoryManager.instances.every((manager) => manager.disposed)).toBe(true);
         await expect(pool.step([0])).rejects.toThrow('worker pool is in failed state');
       });
