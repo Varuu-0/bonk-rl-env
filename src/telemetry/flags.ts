@@ -11,6 +11,14 @@
 import { TelemetryFlags } from '../types/index.d';
 
 /**
+ * Built-in default telemetry report interval in milliseconds (issue #425).
+ * Single source of truth: it seeds DEFAULT_FLAGS.reportInterval and is the
+ * fallback TelemetryController's ms -> ticks conversion uses when a
+ * configured interval is invalid, so the two literals cannot drift apart.
+ */
+export const DEFAULT_REPORT_INTERVAL_MS = 5000;
+
+/**
  * Default telemetry flags - all disabled for maximum performance.
  */
 const DEFAULT_FLAGS: TelemetryFlags = {
@@ -21,7 +29,7 @@ const DEFAULT_FLAGS: TelemetryFlags = {
   dashboardPort: 3001,
   // Milliseconds between reports (issue #425); resolved to a tick window
   // by TelemetryController.initialize().
-  reportInterval: 5000,
+  reportInterval: DEFAULT_REPORT_INTERVAL_MS,
   retentionDays: 7,
 };
 

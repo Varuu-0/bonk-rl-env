@@ -12,7 +12,7 @@
  */
 
 import { TelemetryFlags, TelemetryConfig } from '../types/index.d';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys } from './flags';
+import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys, DEFAULT_REPORT_INTERVAL_MS } from './flags';
 import { globalProfiler } from './profiler';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -34,21 +34,20 @@ let fallbackEnabled: boolean | null = null;
 const DEFAULT_TICKS_PER_SECOND = 30;
 
 /**
- * Built-in default report interval in milliseconds — the README/docs contract
- * (issue #425). initialize() resolves it to the tick window the scheduler
- * consumes.
- */
-const DEFAULT_REPORT_INTERVAL_MS = 5000;
-
-/**
  * Convert a millisecond report interval into the tick window the telemetry
  * scheduler consumes (issue #425). Both user-facing surfaces (the
  * --report-interval CLI flag and the config file's reportIntervalMs) are
  * documented in milliseconds, so this is the single ms -> ticks conversion
- * point. Sub-tick intervals clamp to one tick so a report is never starved.
+ * point. Sub-tick intervals clamp to one tick so a report is never starved,
+ * while invalid inputs (0, negative, NaN, Infinity) fall back to the built-in
+ * defaults instead of resolving to a pathological 1-tick window or NaN — the
+ * latter would silently disable reporting entirely.
  */
 export function reportIntervalMsToTicks(reportIntervalMs: number, ticksPerSecond: number): number {
-  return Math.max(1, Math.round((reportIntervalMs / 1000) * ticksPerSecond));
+  const intervalMs =
+    Number.isFinite(reportIntervalMs) && reportIntervalMs > 0 ? reportIntervalMs : DEFAULT_REPORT_INTERVAL_MS;
+  const tps = Number.isFinite(ticksPerSecond) && ticksPerSecond > 0 ? ticksPerSecond : DEFAULT_TICKS_PER_SECOND;
+  return Math.max(1, Math.round((intervalMs / 1000) * tps));
 }
 
 interface TelemetryFileEntry {
@@ -206,6 +205,12 @@ export class TelemetryController {
   /**
    * Update telemetry flags by merging new values.
    * Only provided flags are updated; others remain unchanged.
+   *
+   * Note: `reportInterval` follows the TelemetryFlags contract — it is the
+   * resolved tick window (the same unit getReportInterval() returns), NOT
+   * milliseconds. Programmatic callers holding a millisecond interval must
+   * convert it first with reportIntervalMsToTicks(ms, ticksPerSecond), since
+   * only initialize() resolves the documented ms surfaces (issue #425).
    */
   updateFlags(flags: Partial<TelemetryFlags>): void {
     const current = this.getFlags();
