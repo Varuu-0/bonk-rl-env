@@ -98,4 +98,29 @@ describe('config.example.json verified physics values', () => {
     const map = JSON.parse(fs.readFileSync(defaultMapPath, 'utf8'));
     expect(map.metadata?.name).toBe('WDB (No Mapshake)');
   });
+
+  it('documents only telemetry surfaces that reach the runtime (issue #459)', () => {
+    // The never-consumed knob fields were removed in #459 — they must not
+    // come back as silent no-ops.
+    expect(config.telemetry.hookPhysicsMethods).toBeUndefined();
+    expect(config.telemetry.memoryRecordInterval).toBeUndefined();
+    expect(config.telemetry._doc_hookPhysicsMethods).toBeUndefined();
+    expect(config.telemetry._doc_memoryRecordInterval).toBeUndefined();
+
+    // The documented master switch and its Env/CLI spellings.
+    expect(config.telemetry._doc_enabled).toContain('TELEMETRY_ENABLED');
+    expect(config.telemetry._doc_enabled).toContain('--telemetry-enabled');
+
+    // The documented enums must match the implemented ones (profileLevel:
+    // minimal/standard/detailed, debugLevel: none/error/verbose,
+    // outputFormat: console/file/both) — the previously advertised
+    // basic/json/prometheus values never existed.
+    expect(config.telemetry._doc_profileLevel).toContain('minimal');
+    expect(config.telemetry._doc_profileLevel).not.toContain('basic');
+    expect(config.telemetry._doc_debugLevel).toContain('error');
+    expect(config.telemetry._doc_debugLevel).not.toContain('basic');
+    expect(config.telemetry._doc_outputFormat).toContain('file');
+    expect(config.telemetry._doc_outputFormat).not.toContain('json');
+    expect(config.telemetry._doc_outputFormat).not.toContain('prometheus');
+  });
 });

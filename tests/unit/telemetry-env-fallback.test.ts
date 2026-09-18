@@ -11,12 +11,18 @@
  * master switch, argv parity, and the one-time activation cache (issue #237).
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import {
-  TelemetryController,
-  isTelemetryEnabled,
-} from '../../src/telemetry/telemetry-controller';
+import { TelemetryController, isTelemetryEnabled } from '../../src/telemetry/telemetry-controller';
 
-const envKeys = ['MANIFOLD_TELEMETRY', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG', 'MANIFOLD_TELEMETRY_OUTPUT'];
+const envKeys = [
+  'MANIFOLD_TELEMETRY',
+  'MANIFOLD_PROFILE',
+  'MANIFOLD_DEBUG',
+  'MANIFOLD_TELEMETRY_OUTPUT',
+  'TELEMETRY_ENABLED',
+  'PROFILE_LEVEL',
+  'DEBUG_LEVEL',
+  'OUTPUT_FORMAT',
+];
 const originalArgv = process.argv;
 
 function clearTelemetryEnv(): void {
@@ -80,6 +86,58 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
       expect(isTelemetryEnabled()).toBe(false);
     });
+
+    // Documented env names (config.example.json, issue #459) on the
+    // worker/embedded fallback path.
+    it('TELEMETRY_ENABLED=true alone enables telemetry on the fallback path', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('TELEMETRY_ENABLED=false alone leaves telemetry disabled', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('PROFILE_LEVEL=standard enables telemetry on the fallback path', () => {
+      process.env.PROFILE_LEVEL = 'standard';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('DEBUG_LEVEL=error enables telemetry on the fallback path', () => {
+      process.env.DEBUG_LEVEL = 'error';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('invalid documented env values do not enable telemetry', () => {
+      process.env.TELEMETRY_ENABLED = 'maybe';
+      process.env.PROFILE_LEVEL = 'basic';
+      process.env.DEBUG_LEVEL = 'trace';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    // CRLF-carrying env-file values must resolve identically on both
+    // resolution paths (#459 review): the fallback trims the documented
+    // spellings exactly like config-loader.ts.
+    it('a CRLF-carrying TELEMETRY_ENABLED value enables telemetry on the fallback path', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('a CRLF-carrying PROFILE_LEVEL value enables telemetry on the fallback path', () => {
+      process.env.PROFILE_LEVEL = 'standard\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('a CRLF-carrying DEBUG_LEVEL value enables telemetry on the fallback path', () => {
+      process.env.DEBUG_LEVEL = 'error\r';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('OUTPUT_FORMAT alone does not enable telemetry', () => {
+      process.env.OUTPUT_FORMAT = 'file';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
   });
 
   describe('explicit MANIFOLD_TELEMETRY=false master switch', () => {
@@ -106,6 +164,32 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
       process.argv = ['node', 'worker.js', '--profile', 'detailed'];
       expect(isTelemetryEnabled()).toBe(false);
     });
+
+    // The documented master switch (config.example.json, issue #459) mirrors
+    // the MANIFOLD_TELEMETRY semantics, with MANIFOLD_* keeping precedence.
+    it('TELEMETRY_ENABLED=false disables telemetry even when PROFILE_LEVEL is set', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.PROFILE_LEVEL = 'standard';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('TELEMETRY_ENABLED=false disables telemetry even when DEBUG_LEVEL is set', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.DEBUG_LEVEL = 'verbose';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY=false wins over TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY=true wins over TELEMETRY_ENABLED=false', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.MANIFOLD_TELEMETRY = 'true';
+      expect(isTelemetryEnabled()).toBe(true);
+    });
   });
 
   describe('CLI/argv behavior unchanged on the fallback path', () => {
@@ -121,6 +205,80 @@ describe('telemetry activation without initialize() (worker/embedded fallback, i
 
     it('--telemetry enables telemetry without env vars', () => {
       process.argv = ['node', 'worker.js', '--telemetry'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    // Documented long forms (config.example.json, issue #459).
+    it('--telemetry-enabled enables telemetry without env vars', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    // Inline value form of the documented master switch (#459 review): the
+    // fallback honors it exactly like parseFlags()/parseCliFlags() do.
+    it('--telemetry-enabled=true enables telemetry without env vars', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=true'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--telemetry-enabled=false leaves telemetry disabled', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=garbage leaves telemetry disabled', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=maybe'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    // Parity pin (#459 review): master-switch tokens resolve last-wins in
+    // token order on the fallback path exactly like parseFlags()/
+    // parseCliFlags(), so a later explicit disable overrides an earlier bare
+    // enable (and vice versa) instead of the fast path short-circuiting on
+    // the first token it sees.
+    it('--telemetry --telemetry-enabled=false leaves telemetry disabled (last-wins parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --telemetry enables telemetry (last-wins parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false', '--telemetry'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--profile minimal --telemetry-enabled=false leaves telemetry disabled (level-then-disable parity)', () => {
+      process.argv = ['node', 'worker.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--telemetry-enabled=false --debug verbose enables telemetry (disable-then-level parity)', () => {
+      process.argv = ['node', 'worker.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    // Explicit env master switches gate CLI level tokens on the fast path
+    // too (#459 review) — env is evaluated before argv here, so they must
+    // agree with the config-loader server path and the controller's
+    // initialize() pipeline.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'worker.js', '--debug', 'verbose'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'worker.js', '--profile', 'minimal'];
+      expect(isTelemetryEnabled()).toBe(false);
+    });
+
+    it('--profile minimal enables telemetry without env vars (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'worker.js', '--profile', 'minimal'];
+      expect(isTelemetryEnabled()).toBe(true);
+    });
+
+    it('--debug-level verbose enables telemetry without env vars', () => {
+      process.argv = ['node', 'worker.js', '--debug-level', 'verbose'];
       expect(isTelemetryEnabled()).toBe(true);
     });
 

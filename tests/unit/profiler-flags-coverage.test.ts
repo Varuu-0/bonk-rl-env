@@ -1,6 +1,21 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { globalProfiler, TelemetryBuffer, TelemetryIndices, Profiler, setLatestWorkerTelemetry, startCollection, stopCollection } from '../../src/telemetry/profiler';
-import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled, getExplicitFlagKeys, type TelemetryFlags } from '../../src/telemetry/flags';
+import {
+  globalProfiler,
+  TelemetryBuffer,
+  TelemetryIndices,
+  Profiler,
+  setLatestWorkerTelemetry,
+  startCollection,
+  stopCollection,
+} from '../../src/telemetry/profiler';
+import {
+  parseFlags,
+  applyEnvOverrides,
+  mergeConfigWithFlags,
+  isAnyTelemetryEnabled,
+  getExplicitFlagKeys,
+  type TelemetryFlags,
+} from '../../src/telemetry/flags';
 
 describe('Profiler uncovered paths', () => {
   beforeEach(() => {
@@ -127,12 +142,8 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Straggler Report'),
-      );
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Worker ID: 1'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Straggler Report'));
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Worker ID: 1'));
       logSpy.mockRestore();
     });
 
@@ -144,9 +155,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('Global Worker Telemetry'),
-      );
+      expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('Global Worker Telemetry'));
       logSpy.mockRestore();
     });
 
@@ -158,9 +167,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('Global Worker Telemetry'),
-      );
+      expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('Global Worker Telemetry'));
       logSpy.mockRestore();
     });
 
@@ -175,9 +182,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Global Worker Telemetry'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Global Worker Telemetry'));
       logSpy.mockRestore();
     });
 
@@ -192,9 +197,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Global Worker Telemetry'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Global Worker Telemetry'));
       logSpy.mockRestore();
     });
 
@@ -209,7 +212,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      const firstCallOutput = logSpy.mock.calls.map(c => c[0]).join('\n');
+      const firstCallOutput = logSpy.mock.calls.map((c) => c[0]).join('\n');
       expect(firstCallOutput).toContain('Global Worker Telemetry');
 
       logSpy.mockClear();
@@ -217,9 +220,7 @@ describe('Profiler uncovered paths', () => {
       for (let t = 0; t < 5000; t++) profiler.tick();
       profiler.report(5000);
 
-      expect(logSpy).not.toHaveBeenCalledWith(
-        expect.stringContaining('Global Worker Telemetry'),
-      );
+      expect(logSpy).not.toHaveBeenCalledWith(expect.stringContaining('Global Worker Telemetry'));
       logSpy.mockRestore();
     });
 
@@ -232,9 +233,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Throughput'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Throughput'));
       expect(tableSpy).toHaveBeenCalled();
       logSpy.mockRestore();
       tableSpy.mockRestore();
@@ -249,9 +248,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('Health & State'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('Health & State'));
       expect(tableSpy).toHaveBeenCalled();
       logSpy.mockRestore();
       tableSpy.mockRestore();
@@ -265,9 +262,7 @@ describe('Profiler uncovered paths', () => {
 
       profiler.report(5000);
 
-      expect(logSpy).toHaveBeenCalledWith(
-        expect.stringContaining('CRITICAL'),
-      );
+      expect(logSpy).toHaveBeenCalledWith(expect.stringContaining('CRITICAL'));
       logSpy.mockRestore();
     });
   });
@@ -275,7 +270,17 @@ describe('Profiler uncovered paths', () => {
 
 describe('Flags uncovered paths', () => {
   const originalArgv = process.argv;
-  const envKeys = ['MANIFOLD_TELEMETRY', 'MANIFOLD_PROFILE', 'MANIFOLD_DEBUG', 'MANIFOLD_TELEMETRY_OUTPUT'];
+  const envKeys = [
+    'MANIFOLD_TELEMETRY',
+    'MANIFOLD_PROFILE',
+    'MANIFOLD_DEBUG',
+    'MANIFOLD_TELEMETRY_OUTPUT',
+    'TELEMETRY_ENABLED',
+    'PROFILE_LEVEL',
+    'DEBUG_LEVEL',
+    'OUTPUT_FORMAT',
+    'RETENTION_DAYS',
+  ];
 
   beforeEach(() => {
     for (const key of envKeys) delete (process.env as any)[key];
@@ -334,6 +339,158 @@ describe('Flags uncovered paths', () => {
       process.argv = ['node', 'script.js', '-d', 'error'];
       const flags = parseFlags();
       expect(flags.debugLevel).toBe('error');
+    });
+
+    // Documented long forms (config.example.json, issue #459).
+    it('parses --telemetry-enabled long form', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    // Token-order last-wins, matching the isAnyTelemetryEnabled() fast path
+    // and parseCliFlags() (#459 review).
+    it('parses --telemetry --telemetry-enabled=false as disabled (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=false --telemetry as enabled (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('parses --profile minimal --telemetry-enabled=false as disabled (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=false --debug verbose as enabled (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    it('parses --debug verbose --telemetry-enabled=false as disabled (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    // Env master switch vs CLI level tokens — the controller's initialize()
+    // pipeline resolves parseFlags() first and then applyEnvOverrides(), so
+    // an env master switch resolving to an explicit false wins over the
+    // level tokens (#459 review), exactly like parseCliFlags()'s env gate
+    // and the isAnyTelemetryEnabled() fast path; the level tokens enable
+    // when no env master switch is set.
+    it('TELEMETRY_ENABLED=false keeps --debug verbose from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      const flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    it('MANIFOLD_TELEMETRY=false keeps --profile minimal from enabling telemetry (env+argv parity, #459 review)', () => {
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      const flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(false);
+      expect(flags.profileLevel).toBe('minimal');
+    });
+
+    it('level tokens still enable telemetry when no env master switch is set (env+argv parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose'];
+      let flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.debugLevel).toBe('verbose');
+      process.argv = ['node', 'script.js', '--profile', 'minimal'];
+      flags = applyEnvOverrides(parseFlags());
+      expect(flags.enableTelemetry).toBe(true);
+      expect(flags.profileLevel).toBe('minimal');
+    });
+
+    it('parses --debug-level long form and enables telemetry', () => {
+      process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
+      const flags = parseFlags();
+      expect(flags.debugLevel).toBe('verbose');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('warns on invalid --debug-level value and uses default', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.argv = ['node', 'script.js', '--debug-level', 'basic'];
+      const flags = parseFlags();
+      expect(flags.debugLevel).toBe('none');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid debug level'));
+      warnSpy.mockRestore();
+    });
+
+    it('parses --output-format long form', () => {
+      process.argv = ['node', 'script.js', '--output-format', 'file'];
+      const flags = parseFlags();
+      expect(flags.outputFormat).toBe('file');
+    });
+
+    it('warns on invalid --output-format value and uses default', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.argv = ['node', 'script.js', '--output-format', 'prometheus'];
+      const flags = parseFlags();
+      expect(flags.outputFormat).toBe('console');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid output format'));
+      warnSpy.mockRestore();
+    });
+
+    it('parses --retention-days long form', () => {
+      process.argv = ['node', 'script.js', '--retention-days', '14'];
+      const flags = parseFlags();
+      expect(flags.retentionDays).toBe(14);
+    });
+
+    // Inline value form of the documented master switch (#459 review): the
+    // fallback (isAnyTelemetryEnabled) detects this token, so parseFlags()
+    // must honor it too instead of silently skipping it.
+    it('parses --telemetry-enabled=true inline form and marks it explicit', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=1 inline form', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=1'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('parses --telemetry-enabled=false inline form and marks it explicit', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('silently leaves the default for a garbage --telemetry-enabled value', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=maybe'];
+      const flags = parseFlags();
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('rejects partial-numeric --retention-days values like 30abc (#459 review)', () => {
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      process.argv = ['node', 'script.js', '--retention-days', '30abc'];
+      const flags = parseFlags();
+      expect(flags.retentionDays).toBe(7);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('Invalid retention days'));
+      warnSpy.mockRestore();
     });
 
     it('warns on invalid debug level and uses default', () => {
@@ -443,113 +600,257 @@ describe('Flags uncovered paths', () => {
   describe('applyEnvOverrides', () => {
     it('overrides enableTelemetry with MANIFOLD_TELEMETRY=true', () => {
       process.env.MANIFOLD_TELEMETRY = 'true';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('overrides enableTelemetry with MANIFOLD_TELEMETRY=1', () => {
       process.env.MANIFOLD_TELEMETRY = '1';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('overrides enableTelemetry with MANIFOLD_TELEMETRY=yes', () => {
       process.env.MANIFOLD_TELEMETRY = 'yes';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('overrides enableTelemetry with uppercase MANIFOLD_TELEMETRY=TRUE (case-insensitive, like config-loader)', () => {
       process.env.MANIFOLD_TELEMETRY = 'TRUE';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('disables enableTelemetry with uppercase MANIFOLD_TELEMETRY=NO', () => {
       process.env.MANIFOLD_TELEMETRY = 'NO';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(false);
     });
 
     it('disables enableTelemetry with MANIFOLD_TELEMETRY=false', () => {
       process.env.MANIFOLD_TELEMETRY = 'false';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(false);
     });
 
     it('disables enableTelemetry with MANIFOLD_TELEMETRY=0', () => {
       process.env.MANIFOLD_TELEMETRY = '0';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(false);
     });
 
     it('disables enableTelemetry with MANIFOLD_TELEMETRY=no', () => {
       process.env.MANIFOLD_TELEMETRY = 'no';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(false);
     });
 
     it('ignores invalid MANIFOLD_TELEMETRY values', () => {
       process.env.MANIFOLD_TELEMETRY = 'maybe';
-      const flags = applyEnvOverrides({ enableTelemetry: true, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('overrides outputFormat with MANIFOLD_TELEMETRY_OUTPUT=file', () => {
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.outputFormat).toBe('file');
     });
 
     it('overrides outputFormat with MANIFOLD_TELEMETRY_OUTPUT=both', () => {
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'both';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.outputFormat).toBe('both');
     });
 
     it('ignores invalid MANIFOLD_TELEMETRY_OUTPUT values', () => {
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'xml';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.outputFormat).toBe('console');
     });
 
     it('overrides profileLevel with MANIFOLD_PROFILE and enables telemetry', () => {
       process.env.MANIFOLD_PROFILE = 'detailed';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.profileLevel).toBe('detailed');
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('marks enableTelemetry explicit when MANIFOLD_PROFILE activates telemetry', () => {
       process.env.MANIFOLD_PROFILE = 'detailed';
-      applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
     });
 
     it('ignores invalid MANIFOLD_PROFILE values and does not enable telemetry', () => {
       process.env.MANIFOLD_PROFILE = 'extreme';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.profileLevel).toBe('standard');
       expect(flags.enableTelemetry).toBe(false);
     });
 
     it('overrides debugLevel with MANIFOLD_DEBUG and enables telemetry', () => {
       process.env.MANIFOLD_DEBUG = 'verbose';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.debugLevel).toBe('verbose');
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('MANIFOLD_DEBUG=none is a valid selection and still enables telemetry (mirrors --debug none)', () => {
       process.env.MANIFOLD_DEBUG = 'none';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.debugLevel).toBe('none');
       expect(flags.enableTelemetry).toBe(true);
     });
 
     it('ignores invalid MANIFOLD_DEBUG values and does not enable telemetry', () => {
       process.env.MANIFOLD_DEBUG = 'trace';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.debugLevel).toBe('none');
       expect(flags.enableTelemetry).toBe(false);
     });
@@ -557,7 +858,15 @@ describe('Flags uncovered paths', () => {
     it('explicit MANIFOLD_TELEMETRY=false wins over MANIFOLD_PROFILE activation', () => {
       process.env.MANIFOLD_TELEMETRY = 'false';
       process.env.MANIFOLD_PROFILE = 'detailed';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.profileLevel).toBe('detailed');
       expect(flags.enableTelemetry).toBe(false);
     });
@@ -565,7 +874,15 @@ describe('Flags uncovered paths', () => {
     it('explicit MANIFOLD_TELEMETRY=false wins over MANIFOLD_DEBUG activation', () => {
       process.env.MANIFOLD_TELEMETRY = 'false';
       process.env.MANIFOLD_DEBUG = 'verbose';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.debugLevel).toBe('verbose');
       expect(flags.enableTelemetry).toBe(false);
     });
@@ -585,16 +902,386 @@ describe('Flags uncovered paths', () => {
       process.env.MANIFOLD_PROFILE = 'minimal';
       process.env.MANIFOLD_DEBUG = 'error';
       process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
-      const flags = applyEnvOverrides({ enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 });
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
       expect(flags.enableTelemetry).toBe(true);
       expect(flags.profileLevel).toBe('minimal');
       expect(flags.debugLevel).toBe('error');
       expect(flags.outputFormat).toBe('file');
     });
+
+    // Documented env names (config.example.json, issue #459). Each mirrors
+    // its MANIFOLD_* counterpart, with MANIFOLD_* keeping precedence.
+    it('overrides enableTelemetry with TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('disables enableTelemetry with TELEMETRY_ENABLED=false', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('disables enableTelemetry with uppercase TELEMETRY_ENABLED=NO (case-insensitive, like MANIFOLD_TELEMETRY)', () => {
+      process.env.TELEMETRY_ENABLED = 'NO';
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('ignores invalid TELEMETRY_ENABLED values', () => {
+      process.env.TELEMETRY_ENABLED = 'maybe';
+      const flags = applyEnvOverrides({
+        enableTelemetry: true,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('marks enableTelemetry explicit when TELEMETRY_ENABLED activates telemetry', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(getExplicitFlagKeys().has('enableTelemetry')).toBe(true);
+    });
+
+    it('explicit MANIFOLD_TELEMETRY=false wins over TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('explicit TELEMETRY_ENABLED=false wins over MANIFOLD_PROFILE activation', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('detailed');
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('overrides profileLevel with PROFILE_LEVEL and enables telemetry', () => {
+      process.env.PROFILE_LEVEL = 'detailed';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('detailed');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('ignores invalid PROFILE_LEVEL values and does not enable telemetry', () => {
+      process.env.PROFILE_LEVEL = 'basic';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('standard');
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('explicit MANIFOLD_PROFILE wins over PROFILE_LEVEL when both are set', () => {
+      process.env.PROFILE_LEVEL = 'minimal';
+      process.env.MANIFOLD_PROFILE = 'detailed';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('detailed');
+    });
+
+    it('overrides debugLevel with DEBUG_LEVEL and enables telemetry', () => {
+      process.env.DEBUG_LEVEL = 'verbose';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.debugLevel).toBe('verbose');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('ignores invalid DEBUG_LEVEL values and does not enable telemetry', () => {
+      process.env.DEBUG_LEVEL = 'trace';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.debugLevel).toBe('none');
+      expect(flags.enableTelemetry).toBe(false);
+    });
+
+    it('explicit MANIFOLD_DEBUG wins over DEBUG_LEVEL when both are set', () => {
+      process.env.DEBUG_LEVEL = 'error';
+      process.env.MANIFOLD_DEBUG = 'verbose';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.debugLevel).toBe('verbose');
+    });
+
+    it('overrides outputFormat with OUTPUT_FORMAT', () => {
+      process.env.OUTPUT_FORMAT = 'both';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.outputFormat).toBe('both');
+    });
+
+    it('ignores invalid OUTPUT_FORMAT values', () => {
+      process.env.OUTPUT_FORMAT = 'json';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.outputFormat).toBe('console');
+    });
+
+    it('explicit MANIFOLD_TELEMETRY_OUTPUT wins over OUTPUT_FORMAT when both are set', () => {
+      process.env.OUTPUT_FORMAT = 'console';
+      process.env.MANIFOLD_TELEMETRY_OUTPUT = 'file';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.outputFormat).toBe('file');
+    });
+
+    it('overrides retentionDays with RETENTION_DAYS', () => {
+      process.env.RETENTION_DAYS = '30';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(30);
+    });
+
+    it('ignores invalid RETENTION_DAYS values', () => {
+      process.env.RETENTION_DAYS = '0';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(7);
+    });
+
+    // Strict whole-string integer contract, aligned with config-loader's
+    // RETENTION_DAYS handling (#459 review).
+    it('rejects partial-numeric RETENTION_DAYS values like 30abc', () => {
+      process.env.RETENTION_DAYS = '30abc';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(7);
+    });
+
+    it('still accepts whitespace-padded RETENTION_DAYS values', () => {
+      process.env.RETENTION_DAYS = ' 30 ';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.retentionDays).toBe(30);
+    });
+
+    // CRLF-carrying env-file values must resolve identically on both
+    // resolution paths (#459 review).
+    it('trims a CRLF-carrying PROFILE_LEVEL value', () => {
+      process.env.PROFILE_LEVEL = 'detailed\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.profileLevel).toBe('detailed');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('trims a CRLF-carrying DEBUG_LEVEL value', () => {
+      process.env.DEBUG_LEVEL = 'verbose\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.debugLevel).toBe('verbose');
+      expect(flags.enableTelemetry).toBe(true);
+    });
+
+    it('trims a CRLF-carrying OUTPUT_FORMAT value', () => {
+      process.env.OUTPUT_FORMAT = 'file\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.outputFormat).toBe('file');
+    });
+
+    it('trims a CRLF-carrying TELEMETRY_ENABLED value', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      const flags = applyEnvOverrides({
+        enableTelemetry: false,
+        profileLevel: 'standard',
+        debugLevel: 'none',
+        outputFormat: 'console',
+        dashboardPort: 3001,
+        reportInterval: 5000,
+        retentionDays: 7,
+      });
+      expect(flags.enableTelemetry).toBe(true);
+    });
   });
 
   describe('mergeConfigWithFlags', () => {
-    const defaultCliFlags: TelemetryFlags = { enableTelemetry: false, profileLevel: 'standard', debugLevel: 'none', outputFormat: 'console', dashboardPort: 3001, reportInterval: 5000, retentionDays: 7 };
+    const defaultCliFlags: TelemetryFlags = {
+      enableTelemetry: false,
+      profileLevel: 'standard',
+      debugLevel: 'none',
+      outputFormat: 'console',
+      dashboardPort: 3001,
+      reportInterval: 5000,
+      retentionDays: 7,
+    };
 
     it('applies config when CLI has defaults', () => {
       const result = mergeConfigWithFlags({ enabled: true, outputFormat: 'file', retentionDays: 30 }, defaultCliFlags);
@@ -638,7 +1325,7 @@ describe('Flags uncovered paths', () => {
     it('applies all config settings when CLI has all defaults', () => {
       const result = mergeConfigWithFlags(
         { enabled: true, outputFormat: 'both', retentionDays: 14, dashboardPort: 4000, reportInterval: 2000 },
-        defaultCliFlags
+        defaultCliFlags,
       );
       expect(result.enableTelemetry).toBe(true);
       expect(result.outputFormat).toBe('both');
@@ -777,6 +1464,129 @@ describe('Flags uncovered paths', () => {
     it('returns false when uppercase MANIFOLD_TELEMETRY=FALSE overrides a valid MANIFOLD_PROFILE', () => {
       process.env.MANIFOLD_TELEMETRY = 'FALSE';
       process.env.MANIFOLD_PROFILE = 'detailed';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    // Documented env names (config.example.json, issue #459).
+    it('returns true when only TELEMETRY_ENABLED=true is set', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false when only TELEMETRY_ENABLED=false is set', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false for uppercase TELEMETRY_ENABLED=NO (case-insensitive)', () => {
+      process.env.TELEMETRY_ENABLED = 'NO';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true when only PROFILE_LEVEL=standard is set', () => {
+      process.env.PROFILE_LEVEL = 'standard';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true when only DEBUG_LEVEL=error is set', () => {
+      process.env.DEBUG_LEVEL = 'error';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for invalid documented env values only', () => {
+      process.env.TELEMETRY_ENABLED = 'maybe';
+      process.env.PROFILE_LEVEL = 'basic';
+      process.env.DEBUG_LEVEL = 'trace';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when MANIFOLD_TELEMETRY=false overrides TELEMETRY_ENABLED=true', () => {
+      process.env.TELEMETRY_ENABLED = 'true';
+      process.env.MANIFOLD_TELEMETRY = 'false';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when TELEMETRY_ENABLED=false overrides PROFILE_LEVEL=detailed', () => {
+      process.env.TELEMETRY_ENABLED = 'false';
+      process.env.PROFILE_LEVEL = 'detailed';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns false when only OUTPUT_FORMAT=file is set (output format does not imply telemetry)', () => {
+      process.env.OUTPUT_FORMAT = 'file';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled flag', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --telemetry-enabled=false (matches the --telemetry= form handling)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=true inline form (aligned with parseFlags, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=true'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --telemetry-enabled=garbage inline form', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=garbage'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true when PROFILE_LEVEL carries a trailing CR (CRLF env-file value, #459 review)', () => {
+      process.env.PROFILE_LEVEL = 'standard\r';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true when TELEMETRY_ENABLED carries a trailing CR (CRLF env-file value, #459 review)', () => {
+      process.env.TELEMETRY_ENABLED = 'true\r';
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false when TELEMETRY_ENABLED=false carries a trailing CR', () => {
+      process.env.TELEMETRY_ENABLED = 'false\r';
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --debug-level flag', () => {
+      process.argv = ['node', 'script.js', '--debug-level', 'verbose'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    // Last-wins parity with parseFlags()/parseCliFlags() (#459 review): a
+    // later explicit disable overrides an earlier bare switch, and a later
+    // bare switch re-enables after an explicit disable.
+    it('returns false for --telemetry --telemetry-enabled=false (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=false --telemetry (last-wins parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--telemetry'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --profile minimal --telemetry-enabled=false (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--profile', 'minimal', '--telemetry-enabled=false'];
+      expect(isAnyTelemetryEnabled()).toBe(false);
+    });
+
+    it('returns true for --telemetry-enabled=false --profile minimal (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--profile', 'minimal'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns true for --telemetry-enabled=false --debug verbose (disable-then-level parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--telemetry-enabled=false', '--debug', 'verbose'];
+      expect(isAnyTelemetryEnabled()).toBe(true);
+    });
+
+    it('returns false for --debug verbose --telemetry-enabled=false (level-then-disable parity, #459 review)', () => {
+      process.argv = ['node', 'script.js', '--debug', 'verbose', '--telemetry-enabled=false'];
       expect(isAnyTelemetryEnabled()).toBe(false);
     });
   });
