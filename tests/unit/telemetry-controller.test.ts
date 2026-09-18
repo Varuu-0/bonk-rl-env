@@ -4,6 +4,7 @@ import {
   TelemetryController,
   isTelemetryEnabled,
   getTelemetryController,
+  reportIntervalMsToTicks,
 } from '../../src/telemetry/telemetry-controller';
 import { globalProfiler, TelemetryBuffer, setLatestWorkerTelemetry } from '../../src/telemetry/profiler';
 import { parseFlags, applyEnvOverrides, mergeConfigWithFlags, isAnyTelemetryEnabled } from '../../src/telemetry/flags';
@@ -235,15 +236,17 @@ describe('TelemetryController', () => {
   });
 
   describe('report interval', () => {
-    it('getReportInterval returns default 5000', () => {
+    it('getReportInterval resolves the 5000 ms default to 150 ticks at 30 TPS', () => {
       const controller = TelemetryController.getInstance();
-      expect(controller.getReportInterval()).toBe(5000);
+      expect(controller.getReportInterval()).toBe(150);
     });
 
-    it('getReportInterval returns custom interval', () => {
+    it('getReportInterval interprets --report-interval as milliseconds (issue #425)', () => {
       process.argv = ['node', 'script.js', '--report-interval', '1000'];
       const controller = TelemetryController.getInstance();
-      expect(controller.getReportInterval()).toBe(1000);
+      // 1000 ms resolves to a 30-tick window at the default 30 TPS,
+      // not a 30000-tick window.
+      expect(controller.getReportInterval()).toBe(30);
     });
   });
 
@@ -400,8 +403,8 @@ describe('TelemetryController', () => {
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
       const logSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
-      // A single tick is far short of the 100-tick report window, so without
-      // a forced final report the console output would be nothing.
+      // A single tick is short of the 3-tick report window (100 ms at 30 TPS),
+      // so without a forced final report the console output would be nothing.
       globalProfiler.tick();
       controller.shutdown();
       const heatmapCalls = logSpy.mock.calls.filter((c) => String(c[0]).includes('Telemetry Heatmap'));
@@ -443,12 +446,13 @@ describe('TelemetryController', () => {
       process.argv = ['node', 'script.js', '--telemetry'];
       const controller = TelemetryController.getInstance();
       const server = http.createServer(() => {});
-      const closeSpy = vi
-        .spyOn(server, 'close')
-        .mockImplementation((function (this: http.Server, callback?: (err?: Error) => void) {
-          if (typeof callback === 'function') callback();
-          return this as unknown as http.Server;
-        }) as unknown as typeof server.close);
+      const closeSpy = vi.spyOn(server, 'close').mockImplementation(function (
+        this: http.Server,
+        callback?: (err?: Error) => void,
+      ) {
+        if (typeof callback === 'function') callback();
+        return this as unknown as http.Server;
+      } as unknown as typeof server.close);
 
       // Simulate a shutdown that fires before the async 'listening' event:
       // dashboardListened is still false, yet the server must be closed so
@@ -467,7 +471,9 @@ describe('TelemetryController', () => {
   describe('worker telemetry in file reports', () => {
     const workerBuf = (vals: bigint[]): BigUint64Array => {
       const buf = new BigUint64Array(5);
-      vals.forEach((v, i) => { buf[i] = v; });
+      vals.forEach((v, i) => {
+        buf[i] = v;
+      });
       return buf;
     };
 
@@ -543,7 +549,8 @@ describe('TelemetryController', () => {
     });
 
     it('signals a report is due at the configured interval and reportNow emits', () => {
-      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '3'];
+      // 100 ms resolves to a 3-tick window at the default 30 TPS (issue #425).
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '100'];
       const controller = TelemetryController.getInstance();
       const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
 
@@ -599,7 +606,9 @@ describe('TelemetryController', () => {
       process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1'];
       TelemetryController.getInstance().shutdown();
       const controller = TelemetryController.getInstance();
-      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => { throw new Error('report failed'); });
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {
+        throw new Error('report failed');
+      });
       const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       expect(controller.reportNow()).toBe(false);
@@ -685,6 +694,100 @@ describe('TelemetryController', () => {
       controller.initialize({ enabled: false });
       // Should still be enabled from CLI
       expect(controller.getFlags().enableTelemetry).toBe(true);
+    });
+  });
+
+  describe('report interval conversion (issue #425)', () => {
+    it('reportIntervalMsToTicks converts 1000 ms to 30 ticks at 30 TPS', () => {
+      expect(reportIntervalMsToTicks(1000, 30)).toBe(30);
+    });
+
+    it('reportIntervalMsToTicks converts 10000 ms to 300 ticks at 30 TPS', () => {
+      expect(reportIntervalMsToTicks(10000, 30)).toBe(300);
+    });
+
+    it('reportIntervalMsToTicks uses the configured tick rate, not a hardcoded 30', () => {
+      expect(reportIntervalMsToTicks(1000, 60)).toBe(60);
+      expect(reportIntervalMsToTicks(1000, 15)).toBe(15);
+    });
+
+    it('reportIntervalMsToTicks rounds to the nearest tick and clamps sub-tick intervals to one tick', () => {
+      expect(reportIntervalMsToTicks(250, 30)).toBe(8); // 7.5 ticks -> 8
+      expect(reportIntervalMsToTicks(100, 30)).toBe(3);
+      expect(reportIntervalMsToTicks(1, 30)).toBe(1);
+    });
+
+    it('reportIntervalMsToTicks falls back to the built-in 5000 ms default for invalid intervals', () => {
+      // 5000 ms at 30 TPS resolves to 150 ticks — never a 1-tick window
+      // (~30 reports/s) or NaN (which would never report at all).
+      for (const invalid of [0, -1000, NaN, Infinity, -Infinity]) {
+        expect(reportIntervalMsToTicks(invalid, 30)).toBe(150);
+      }
+    });
+
+    it('reportIntervalMsToTicks falls back to the default tick rate for invalid rates', () => {
+      expect(reportIntervalMsToTicks(1000, 0)).toBe(30);
+      expect(reportIntervalMsToTicks(1000, -30)).toBe(30);
+      expect(reportIntervalMsToTicks(1000, NaN)).toBe(30);
+    });
+
+    it('initialize never resolves an invalid config reportIntervalMs to a 1-tick window or NaN', () => {
+      process.argv = ['node', 'script.js', '--telemetry'];
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+      for (const invalid of [0, -1000, NaN]) {
+        TelemetryController.getInstance().shutdown();
+        const controller = TelemetryController.getInstance();
+        controller.initialize({ enabled: true, reportIntervalMs: invalid }, 30);
+        expect(controller.getReportInterval()).toBe(150);
+      }
+      reportSpy.mockRestore();
+    });
+
+    it('an explicit --report-interval wins over the config-file reportIntervalMs and resolves to ticks', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '10000'];
+      const controller = TelemetryController.getInstance();
+      controller.initialize({ enabled: true, reportIntervalMs: 5000 }, 30);
+      // 10000 ms at 30 TPS = 300 ticks (the CLI value wins over the 5000 ms
+      // config). Before #425 this resolved to a 10000-tick window.
+      expect(controller.getReportInterval()).toBe(300);
+      let firstDue = -1;
+      for (let t = 1; t <= 300; t++) {
+        if (controller.tick()) {
+          firstDue = t;
+          break;
+        }
+      }
+      expect(firstDue).toBe(300);
+    });
+
+    it('fires the first report at tick 30 for --report-interval 1000 with tickRate 30', () => {
+      process.argv = ['node', 'script.js', '--telemetry', '--report-interval', '1000'];
+      const controller = TelemetryController.getInstance();
+      const reportSpy = vi.spyOn(globalProfiler, 'report').mockImplementation(() => {});
+      controller.initialize(undefined, 30);
+      expect(controller.getReportInterval()).toBe(30);
+      let firstDue = -1;
+      for (let t = 1; t <= 31; t++) {
+        if (controller.tick()) {
+          firstDue = t;
+          break;
+        }
+      }
+      expect(firstDue).toBe(30);
+      // reportNow() consumes the due window: lastReportTick advances to the
+      // current tick, so the next report is due one full window later.
+      controller.reportNow();
+      expect(reportSpy).toHaveBeenCalledTimes(1);
+      // Subsequent reports stay one window apart.
+      let nextDue = -1;
+      for (let t = 1; t <= 30; t++) {
+        if (controller.tick()) {
+          nextDue = t;
+          break;
+        }
+      }
+      expect(nextDue).toBe(30);
+      reportSpy.mockRestore();
     });
   });
 });

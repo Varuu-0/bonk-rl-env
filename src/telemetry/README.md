@@ -19,7 +19,7 @@ Flag-based telemetry activation, high-precision performance profiling, and runti
 | `--debug` | `-d` | value | `none` | Debug level: `none`, `error`, `verbose` |
 | `--output` | `-o` | value | `console` | Output format: `console`, `file`, `both` |
 | `--dashboard-port` | — | number | `3001` | Telemetry dashboard port |
-| `--report-interval` | — | number | `5000` | Ticks between telemetry reports |
+| `--report-interval` | — | number | `5000` | Milliseconds between telemetry reports (converted to ticks at the configured tick rate) |
 | `--retention` | — | number | `7` | Days to retain telemetry data |
 
 ## Environment Variable Overrides

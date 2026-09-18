@@ -78,7 +78,7 @@ Records a metric value.
 | `profile` | `string` | `"standard"` | Profile level |
 | `output` | `string` | `"console"` | Output format |
 | `dashboardPort` | `number` | `3001` | HTTP dashboard port |
-| `reportInterval` | `number` | `5000` | Report interval (ms) |
+| `reportIntervalMs` | `number` | `5000` | Report interval (ms) |
 
 ---
 
