@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bonk Map Exporter
 // @namespace    https://bonk.io/
-// @version      3.0.0
+// @version      3.1.0
 // @description  Extracts the current Bonk.io map as NativeMap JSON (engine-loadable) or legacy MapDef, preserving the full body→fixture→shape hierarchy
 // @author       you
 // @match        https://bonk.io/gameframe-release.html
@@ -1054,6 +1054,33 @@
     installScriptInterceptor();
   }
 
+  // ── Game window resolution ─────────────────────────────────────────────────
+  // bonk.io embeds the game in a same-origin iframe (#maingameframe) whose
+  // document is gameframe-release.html. The capture hooks publish state on the
+  // gameframe's window. When this script runs inside that document we read
+  // `window` directly; when it runs in the host page we read the iframe's
+  // contentWindow, mirroring bonk-live-tool's getGameWindow().
+  const IS_GAMEFRAME = typeof location !== 'undefined' && location.pathname.includes('gameframe-release.html');
+
+  let cachedGameFrame = null;
+  let cachedGameWindow = null;
+
+  function getGameWindow() {
+    if (IS_GAMEFRAME || typeof document === 'undefined') return window;
+    const frame = document.getElementById('maingameframe');
+    const contentWindow = frame && frame.contentWindow;
+    if (!contentWindow) {
+      cachedGameFrame = null;
+      cachedGameWindow = null;
+      return window;
+    }
+    if (frame !== cachedGameFrame || contentWindow !== cachedGameWindow) {
+      cachedGameFrame = frame;
+      cachedGameWindow = contentWindow;
+    }
+    return cachedGameWindow;
+  }
+
   // ── Export button UI ───────────────────────────────────────────────────────
   function injectButton() {
     const existing = document.getElementById('bonk-export-btn');
@@ -1097,8 +1124,9 @@
 
     btn.onclick = () => {
       // Try game settings first (has full map def with spawns), then per-tick state
-      const gs = window.__bonkExportGameSettings;
-      const tickState = window.__bonkExportState;
+      const gw = getGameWindow();
+      const gs = gw.__bonkExportGameSettings;
+      const tickState = gw.__bonkExportState;
 
       let mapSource = null;
       let capZoneTimeInTicks = false;
@@ -1149,9 +1177,11 @@
 
     setInterval(() => {
       // Prefer the full map definition, but also surface tick-only fallback
-      // captures so the button reflects every exportable source.
-      const gs = window.__bonkExportGameSettings;
-      const tickState = window.__bonkExportState;
+      // captures so the button reflects every exportable source. Reads come
+      // from the gameframe window (iframe contentWindow in the host page).
+      const gw = getGameWindow();
+      const gs = gw.__bonkExportGameSettings;
+      const tickState = gw.__bonkExportState;
       const mapMeta = gs?.map?.m || tickState?.mm || null;
       const hasMapSource = !!gs?.map?.physics?.bodies || tickState?.physics?.bodies;
       const mapId = mapMeta?.dbid ?? mapMeta?.n ?? (hasMapSource ? 'live-map' : null);
@@ -1175,14 +1205,24 @@
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
-  function init() {
-    installGamePatching();
+  // The interceptor MUST be installed synchronously at document-start: the
+  // gameframe HTML ends with <script data-main="js/alpha2s" src="js/require.js">,
+  // and require.js appends alpha2s.js to <head> during parsing — BEFORE
+  // DOMContentLoaded fires. Waiting for DOMContentLoaded (the v3.0.0 bug) always
+  // installed the wrap too late, so the game script was never intercepted and
+  // the button stayed "No map loaded" forever.
+  function injectButtonAndPoll() {
     const btn = injectButton();
     startPolling(btn);
     console.log(
-      '%c[BonkExport] v3.0.0 active — self-contained (embedded script interceptor)',
+      '%c[BonkExport] v3.1.0 active — self-contained (embedded script interceptor)',
       'color:#4caf50;font-weight:bold',
     );
+  }
+
+  function init() {
+    if (IS_GAMEFRAME) installGamePatching();
+    injectButtonAndPoll();
   }
 
   // The pure extraction path is exercised directly by Node tests (the UI
@@ -1191,10 +1231,15 @@
     module.exports = { extractMap, toNativeMap };
   }
   if (typeof document !== 'undefined') {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', init);
-    } else {
+    // document.body may not exist yet at document-start. The button needs it,
+    // but the interceptor (gameframe only) must not wait: patch immediately.
+    if (document.body) {
       init();
+    } else if (IS_GAMEFRAME) {
+      installGamePatching(); // race-safe: patch before alpha2s.js is appended
+      document.addEventListener('DOMContentLoaded', injectButtonAndPoll);
+    } else {
+      document.addEventListener('DOMContentLoaded', injectButtonAndPoll);
     }
   }
 })();

@@ -90,7 +90,11 @@ console.log('  PASS chain joint length retained');
 assert(/const existing = document\.getElementById\('bonk-export-btn'\);/.test(flat), 'existing button is returned');
 assert(/document\.body\.appendChild\(a\);/.test(flat), 'download anchor attaches to the document');
 assert(/setTimeout\(\(\) => URL\.revokeObjectURL\(url\), 1000\);/.test(flat), 'object URL revocation is deferred');
-assert(/const tickState = window\.__bonkExportState;/.test(flat), 'poller consults tick fallback state');
+assert(/const tickState = gw\.__bonkExportState;/.test(flat), 'poller consults tick fallback state');
+assert(/const gs = gw\.__bonkExportGameSettings;/.test(flat), 'button reads game settings from the game window');
+assert(/function getGameWindow\(\)/.test(src), 'game window resolution exists (iframe bridge)');
+assert(/IS_GAMEFRAME =/.test(src), 'gameframe context detection exists');
+assert(/installGamePatching\(\); \/\/ race-safe/.test(src), 'interceptor installs at document-start before alpha2s.js');
 console.log('  PASS button lifecycle and tick fallback polling');
 
 // KNOWN sets cleaned
