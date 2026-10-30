@@ -3,9 +3,18 @@
  */
 
 import { MAX_OPPONENTS, numOpponentsError } from '../core/opponent-capacity';
+import {
+  NATIVE_CAP_ZONE_FIELDS,
+  SHARED_NATIVE_CAP_ZONE_FLOATS,
+  assertNativeCapZones,
+  sharedInfoFloatsPerEnv,
+} from './native-info-codec';
 
+export const SHARED_INFO_FLOATS_PER_ENV = 7;
 export class SharedMemoryManager {
   private observationFloats: number;
+  private infoFloats: number;
+  private nativeCapZoneCapacity: number;
   private buffer: SharedArrayBuffer;
   private views: {
     actions: Uint8Array;
@@ -35,7 +44,13 @@ export class SharedMemoryManager {
   private currentActionSlot: number = 0;
   private ownsBuffer: boolean = false;
 
-  constructor(numEnvs: number, ringSize: number = 16, existingBuffer?: SharedArrayBuffer, numOpponents: number = 1) {
+  constructor(
+    numEnvs: number,
+    ringSize: number = 16,
+    existingBuffer?: SharedArrayBuffer,
+    numOpponents: number = 1,
+    nativeCapZoneCapacity: number = 0,
+  ) {
     this.numEnvs = numEnvs;
     if (ringSize < 2 || (ringSize & (ringSize - 1)) !== 0) {
       throw new Error(`SharedMemoryManager: ringSize must be a power of 2 (got ${ringSize})`);
@@ -49,6 +64,8 @@ export class SharedMemoryManager {
     // layout is byte-identical to the old fixed 16-float record; extra
     // opponents append 6-float blocks after the tick (offsets 16+).
     this.observationFloats = SharedMemoryManager.floatsPerEnv(numOpponents);
+    this.nativeCapZoneCapacity = nativeCapZoneCapacity;
+    this.infoFloats = sharedInfoFloatsPerEnv(nativeCapZoneCapacity);
 
     const align8 = (n: number) => (n + 7) & ~7;
     const actionBytes = align8(numEnvs * ringSize);
@@ -62,10 +79,12 @@ export class SharedMemoryManager {
     const tickBytes = align8(numEnvs * 4);
     const seedBytes = align8(numEnvs * 4);
     // Per-env dynamic step-info floats: aiAlive, opponentsAlive,
-    // scoreBlue, scoreRed. The static info fields (frameSkip, capZones,
-    // aiTeam) are constant for an environment's lifetime and are
-    // transported once at init instead of every step.
-    const infoBytes = align8(numEnvs * 4 * 4);
+    // scoreBlue, scoreRed, native flag, nativeRoundTick, nativePhase
+    // (0=legacy, 1=countdown, 2=active, 3=round-result, 4=match-result).
+    // Native mode is constant for an environment's lifetime and transported
+    // in static init info. Each authored capture zone appends seven floats in
+    // {ty,p,l,i,o,ot,f} order; zero capacity retains the seven-float layout.
+    const infoBytes = align8(numEnvs * this.infoFloats * 4);
     const controlBytes = 64; // Reserve plenty
 
     const totalBytes =
@@ -83,6 +102,11 @@ export class SharedMemoryManager {
       controlBytes;
 
     if (existingBuffer) {
+      if (existingBuffer.byteLength !== totalBytes) {
+        throw new Error(
+          `SharedMemoryManager: incompatible buffer size ${existingBuffer.byteLength}; expected ${totalBytes} for this info/observation layout`,
+        );
+      }
       this.buffer = existingBuffer;
       this.ownsBuffer = false;
     } else {
@@ -132,7 +156,7 @@ export class SharedMemoryManager {
     this.seeds = new Uint32Array(this.buffer, offset, numEnvs);
     offset = align8(offset + seedBytes);
 
-    this.views.info = new Float32Array(this.buffer, offset, numEnvs * 4);
+    this.views.info = new Float32Array(this.buffer, offset, numEnvs * this.infoFloats);
     offset = align8(offset + infoBytes);
 
     this.control = {
@@ -188,9 +212,23 @@ export class SharedMemoryManager {
     return this.observationFloats;
   }
 
-  static calculateBufferSize(numEnvs: number, ringSize: number = 16, numOpponents: number = 1): number {
+  getInfoFloats(): number {
+    return this.infoFloats;
+  }
+
+  getNativeCapZoneCapacity(): number {
+    return this.nativeCapZoneCapacity;
+  }
+
+  static calculateBufferSize(
+    numEnvs: number,
+    ringSize: number = 16,
+    numOpponents: number = 1,
+    nativeCapZoneCapacity: number = 0,
+  ): number {
     const align8 = (n: number) => (n + 7) & ~7;
     const floats = SharedMemoryManager.floatsPerEnv(numOpponents);
+    const infoFloats = sharedInfoFloatsPerEnv(nativeCapZoneCapacity);
     return (
       align8(numEnvs * ringSize) +
       align8(numEnvs * floats * 4) +
@@ -202,7 +240,7 @@ export class SharedMemoryManager {
       align8(numEnvs * 1) +
       align8(numEnvs * 4) +
       align8(numEnvs * 4) +
-      align8(numEnvs * 4 * 4) +
+      align8(numEnvs * infoFloats * 4) +
       64
     );
   }
@@ -243,6 +281,15 @@ export class SharedMemoryManager {
 
   readSeeds(): Uint32Array {
     return this.seeds;
+  }
+
+  /**
+   * Step metadata reuses the per-lane seed words after reset has consumed
+   * them. Every step writes every lane before publishing results; the next
+   * reset overwrites the whole region through writeSeeds().
+   */
+  writeAutoResetAfter(envIndex: number, autoResetAfter: boolean) {
+    this.seeds[envIndex] = autoResetAfter ? 1 : 0;
   }
 
   sendCommand(cmd: number) {
@@ -298,6 +345,7 @@ export class SharedMemoryManager {
       terminated: this.views.terminated,
       ticks: this.views.ticks,
       info: this.views.info,
+      autoResetAfter: this.seeds,
     };
   }
 
@@ -330,11 +378,26 @@ export class SharedMemoryManager {
   }
 
   /**
-   * Writes the per-env dynamic info floats (aiAlive, opponentsAlive,
-   * scoreBlue, scoreRed) into the shared info region.
+   * Writes the seven base dynamic fields. Capture records use the same
+   * computed per-env stride but are written separately after validation.
    */
   writeInfo(envIndex: number, values: number[] | Float32Array) {
-    this.views.info.set(values, envIndex * 4);
+    if (values.length !== SHARED_INFO_FLOATS_PER_ENV) {
+      throw new Error(`SharedMemoryManager: expected ${SHARED_INFO_FLOATS_PER_ENV} info floats, got ${values.length}`);
+    }
+    this.views.info.set(values, envIndex * this.infoFloats);
+  }
+
+  writeNativeCapZones(envIndex: number, value: unknown) {
+    const zones = assertNativeCapZones(value, this.nativeCapZoneCapacity);
+    const base = envIndex * this.infoFloats + SHARED_INFO_FLOATS_PER_ENV;
+    for (let zoneIndex = 0; zoneIndex < zones.length; zoneIndex++) {
+      const zone = zones[zoneIndex];
+      const offset = base + zoneIndex * SHARED_NATIVE_CAP_ZONE_FLOATS;
+      for (let field = 0; field < NATIVE_CAP_ZONE_FIELDS.length; field++) {
+        this.views.info[offset + field] = zone[NATIVE_CAP_ZONE_FIELDS[field]];
+      }
+    }
   }
 
   incrementStepCounter() {

@@ -2,7 +2,9 @@ import { Worker } from 'worker_threads';
 import * as path from 'path';
 import * as os from 'os';
 import { globalProfiler } from '../telemetry/profiler';
-import { SharedMemoryManager } from '../ipc/shared-memory';
+import { SharedMemoryManager, SHARED_INFO_FLOATS_PER_ENV } from '../ipc/shared-memory';
+import { NATIVE_CAP_ZONE_FIELDS, SHARED_NATIVE_CAP_ZONE_FLOATS, decodeNativePhase } from '../ipc/native-info-codec';
+import { getNativeCapZoneCapacityForPool } from './environment';
 import { getConfig } from '../config/config-loader';
 import type { PlayerInput } from './physics-engine';
 import { ARENA_HALF_WIDTH, ARENA_HALF_HEIGHT, SCALE } from './physics-engine';
@@ -146,6 +148,7 @@ export function normalizeUseSharedMemory(value: unknown): boolean | undefined {
 export class WorkerPool {
   private workers: Worker[] = [];
   private workerEnvs: number[] = [];
+  private workerResidency: Array<{ threadId: number; numEnvs: number; startId: number }> = [];
   private callbacks: Map<
     number,
     {
@@ -175,6 +178,9 @@ export class WorkerPool {
   // 2 arena + 1 tick, with additional opponents appended after the tick.
   private _obsNumOpponents: number = 1;
   private _obsFloatsPerEnv: number = 16;
+  private _infoFloatsPerEnv: number = SHARED_INFO_FLOATS_PER_ENV;
+  private _nativeCapZoneCapacity: number = 0;
+  private _sharedNativeCapZones: any[][] = [];
 
   // Pre-allocated finished buffer for step/reset
   private _finished: Uint8Array = new Uint8Array(0);
@@ -365,6 +371,10 @@ export class WorkerPool {
     if (config?.seed !== undefined && config?.seed !== null) {
       assertSupportedSeed(config.seed, 'constructor');
     }
+    // Resolve authored capture capacity through the environment's shared map
+    // loader before allocating any main-side SAB. No transport-side map
+    // normalization or simulation is introduced.
+    const nativeCapZoneCapacity = getNativeCapZoneCapacityForPool(config);
     await this.closeInternal(); // Clean up existing if re-initialized
     if (this.closeEpoch !== startCloseEpoch) {
       // An external close() resolved while this init was pending (suspended
@@ -408,6 +418,11 @@ export class WorkerPool {
     // for every spawned opponent instead of the default 1 (#262).
     this._obsNumOpponents = numOpponents;
     this._obsFloatsPerEnv = 16 + 6 * Math.max(0, numOpponents - 1);
+    this._nativeCapZoneCapacity = nativeCapZoneCapacity;
+    this._infoFloatsPerEnv = SHARED_INFO_FLOATS_PER_ENV + SHARED_NATIVE_CAP_ZONE_FLOATS * nativeCapZoneCapacity;
+    this._sharedNativeCapZones = Array.from({ length: totalEnvs }, () =>
+      Array.from({ length: nativeCapZoneCapacity }, () => ({ ty: 0, p: 0, l: 0, i: 0, o: 0, ot: 0, f: 0 })),
+    );
 
     // Ensure we don't start more workers than environment instances
     const activeWorkers = Math.min(this.numWorkers, totalEnvs);
@@ -462,7 +477,7 @@ export class WorkerPool {
 
           // Initialize shared memory if enabled
           if (this.useSharedMemory) {
-            const shm = new SharedMemoryManager(numEnvs, this.ringSize, undefined, numOpponents);
+            const shm = new SharedMemoryManager(numEnvs, this.ringSize, undefined, numOpponents, nativeCapZoneCapacity);
             this.sharedMemManagers.push(shm);
 
             // Send init and wait for it
@@ -475,6 +490,7 @@ export class WorkerPool {
               sharedBuffer: shm.getBuffer(),
               ringSize: this.ringSize,
               syncBuffer: this._syncBuffer!,
+              nativeCapZoneCapacity,
             }).then((res) => {
               // After successful init, trigger the wait-for-action loop
               worker.postMessage({ type: 'wait-for-action', config });
@@ -492,6 +508,16 @@ export class WorkerPool {
 
       // Wait for all workers to initialize
       const results = await Promise.all(promises);
+
+      // Use the worker acknowledgments, not the parent's allocation plan, as
+      // evidence of actual residency. Worker mocks predating this diagnostic
+      // remain valid for unrelated protocol tests but cannot certify a native
+      // resident-scale benchmark.
+      this.workerResidency = results.map((result, index) => ({
+        threadId: result?.residency?.threadId,
+        numEnvs: result?.residency?.numEnvs,
+        startId: result?.residency?.startId,
+      }));
 
       if (this.closeEpoch !== startCloseEpoch) {
         // An external close() interrupted the worker-reply wait: its cleanup
@@ -512,7 +538,14 @@ export class WorkerPool {
           // ({ mode, staticInfos } in shared mode).
           const staticInfos = results[i]?.staticInfos ?? [];
           for (let j = 0; j < this.workerEnvs[i]; j++) {
-            this._sharedStaticInfos[globalIdx] = staticInfos[j] ?? {};
+            const staticInfo = staticInfos[j] ?? {};
+            const { nativeCapZoneCapacity: _capacity, ...publicStaticInfo } = staticInfo;
+            this._sharedStaticInfos[globalIdx] = publicStaticInfo;
+            if (staticInfo.native === true && staticInfo.nativeCapZoneCapacity !== this._nativeCapZoneCapacity) {
+              throw new Error(
+                `WorkerPool: native capture capacity mismatch for environment ${globalIdx}: expected ${this._nativeCapZoneCapacity}, got ${staticInfo.nativeCapZoneCapacity}`,
+              );
+            }
             globalIdx++;
           }
         }
@@ -915,6 +948,7 @@ export class WorkerPool {
       const terminalObs = rawResults.terminalObservations;
       const hasTerminalObs = rawResults.hasTerminalObs;
       const infoArr = rawResults.info;
+      const autoResetAfter = rawResults.autoResetAfter;
 
       // Extract results for each environment in this worker
       for (let j = 0; j < wEnvs; j++) {
@@ -938,12 +972,36 @@ export class WorkerPool {
         // graph stays self-contained. The result matches the
         // message-passing info dictionary exactly.
         const staticInfo = this._sharedStaticInfos[resultIdx] ?? {};
-        Object.assign(resultObj.info, staticInfo, {
-          aiAlive: infoArr[j * 4 + 0] === 1,
-          opponentsAlive: infoArr[j * 4 + 1],
-          scoreBlue: infoArr[j * 4 + 2],
-          scoreRed: infoArr[j * 4 + 3],
+        const infoOffset = j * this._infoFloatsPerEnv;
+        const native = infoArr[infoOffset + 4] === 1;
+        const nativeInfo = native
+          ? {
+              native: true,
+              nativeMode: staticInfo.nativeMode ?? 'b',
+              nativePhase: decodeNativePhase(infoArr[infoOffset + 6]),
+              nativeRoundTick: infoArr[infoOffset + 5],
+              nativeCapZones: this.extractNativeCapZones(infoArr, infoOffset, resultIdx),
+            }
+          : {
+              native: undefined,
+              nativeMode: undefined,
+              nativePhase: undefined,
+              nativeRoundTick: undefined,
+              nativeCapZones: undefined,
+            };
+        Object.assign(resultObj.info, staticInfo, nativeInfo, {
+          aiAlive: infoArr[infoOffset + 0] === 1,
+          opponentsAlive: infoArr[infoOffset + 1],
+          scoreBlue: infoArr[infoOffset + 2],
+          scoreRed: infoArr[infoOffset + 3],
         });
+        if (!native) {
+          delete resultObj.info.native;
+          delete resultObj.info.nativeMode;
+          delete resultObj.info.nativePhase;
+          delete resultObj.info.nativeRoundTick;
+          delete resultObj.info.nativeCapZones;
+        }
         resultObj.observation = this.extractObservation(obs, j, resultIdx);
         resultObj.reward = rewards[j];
         resultObj.done = done;
@@ -951,6 +1009,10 @@ export class WorkerPool {
         resultObj.terminated = term;
         resultObj.info.tick = ticks[j];
         resultObj.info.terminated = term;
+        // Older test doubles may omit the new view; their legacy fixture
+        // results have no actual auto-reset to report. Real shared-memory
+        // steps always publish the worker's authoritative per-lane flag.
+        resultObj.info.autoResetAfter = autoResetAfter ? autoResetAfter[j] === 1 : false;
         if (hasTerminalObs[j] === 1) {
           resultObj.info.terminal_observation = this.extractObservation(
             terminalObs,
@@ -982,6 +1044,21 @@ export class WorkerPool {
       ownedResults[i] = this.snapshotResult(this._convertedResults[i]);
     }
     return ownedResults;
+  }
+
+  private extractNativeCapZones(info: Float32Array, infoOffset: number, resultIdx: number): any[] {
+    const zones = this._sharedNativeCapZones[resultIdx];
+    if (!zones || zones.length !== this._nativeCapZoneCapacity) {
+      throw new Error(`WorkerPool: native capture storage is not initialized for environment ${resultIdx}`);
+    }
+    for (let zoneIndex = 0; zoneIndex < zones.length; zoneIndex++) {
+      const zone = zones[zoneIndex];
+      const base = infoOffset + SHARED_INFO_FLOATS_PER_ENV + zoneIndex * NATIVE_CAP_ZONE_FIELDS.length;
+      for (let field = 0; field < NATIVE_CAP_ZONE_FIELDS.length; field++) {
+        zone[NATIVE_CAP_ZONE_FIELDS[field]] = info[base + field];
+      }
+    }
+    return zones;
   }
 
   /**
@@ -1558,6 +1635,7 @@ export class WorkerPool {
     const sharedMemManagers = this.sharedMemManagers;
     this.workers = [];
     this.workerEnvs = [];
+    this.workerResidency = [];
     this.sharedMemManagers = [];
     this.actionBufferPool = [];
     this._obsPool = [];
@@ -1608,5 +1686,10 @@ export class WorkerPool {
    */
   isUsingSharedMemory(): boolean {
     return this.useSharedMemory;
+  }
+
+  /** Initialization acknowledgments from real workers; absent in old mocks. */
+  getWorkerResidency(): ReadonlyArray<{ threadId: number; numEnvs: number; startId: number }> {
+    return this.workerResidency.map((entry) => ({ ...entry }));
   }
 }
