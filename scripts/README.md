@@ -21,6 +21,7 @@ Shell scripts, PowerShell scripts, and CLI tools for managing Bonk.io RL Environ
 | `check-webscript-ids.js`      | Cross-platform       | Validates Webscript DOM selectors against retained fixtures                                          |
 | `verify-heavy-flip-probe.js`  | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)             |
 | `extract-bonk-map.ts`         | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON        |
+| `scrape-bonk-maps.ts`         | Cross-platform       | Scrape thousands of Bonk.io community maps into engine-loadable NativeMap JSON (resumable)           |
 | `verify-mapexporter-fixes.js` | Cross-platform       | Source-level regression harness for `Webscripts/mapexporter.js` (contract keys, hooks, output shape) |
 | `verify-mapexporter-e2e.js`   | Cross-platform       | Offline E2E harness for the mapexporter userscript (vm sandbox, state hook, export button, download) |
 | `dsp-cli.py`                  | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                           |
@@ -109,6 +110,33 @@ npx tsx scripts/extract-bonk-map.ts --in maps/bonk_Simple_1v1_123.json --out map
 
 The regression suite `tests/unit/extract-bonk-map.test.ts` round-trips all 288 unique built-in map
 envelopes from the committed corpus through the extractor and the engine's native map session.
+
+## Map Scraper
+
+`scrape-bonk-maps.ts` bulk-collects community maps from the same public endpoints the game client
+calls (search, hotmaps picks, fresh), decodes each `leveldata` payload with the strict native map
+codec, stamps server metadata (name/author/dbid/date/votes), and writes validated NativeMap JSON.
+Output goes to `.local-artifacts/scraped-maps` (gitignored) with a resumable manifest.
+
+```bash
+# Default: picks.txt (~989 curated maps) + 10 common-char search queries, 1000-map limit
+npx tsx scripts/scrape-bonk-maps.ts
+
+# Larger runs: more queries, higher limit
+npx tsx scripts/scrape-bonk-maps.ts --limit 5000 --queries a,e,i,o,u,s,t,n,r,l,1,2,3
+
+# Just the curated picks in one request
+npx tsx scripts/scrape-bonk-maps.ts --queries a --no-picks --limit 989
+
+# Include the fresh window and print JSON summary
+npx tsx scripts/scrape-bonk-maps.ts --fresh --json
+```
+
+The endpoints rate-limit bursts (temporary `ratelimited` responses). The scraper serializes
+requests with a `--delay` (default 1200 ms), retries with exponential backoff, and resumes from
+the manifest on re-run. Maps that fail strict codec validation are counted and reported, never
+written. Engine-load failures (gear joints, spawn-less maps, degenerate polygons) are the same
+pre-existing coverage limits as the committed corpus, not scraper errors.
 
 ## DSP CLI
 
