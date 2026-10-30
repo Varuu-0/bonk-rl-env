@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Bonk Map Exporter
 // @namespace    https://bonk.io/
-// @version      3.1.0
+// @version      3.2.0
 // @description  Extracts the current Bonk.io map as NativeMap JSON (engine-loadable) or legacy MapDef, preserving the full body→fixture→shape hierarchy
 // @author       you
 // @match        https://bonk.io/gameframe-release.html
@@ -960,10 +960,12 @@
     // Pattern: z[z0M[2][131]]={discs:... (same regex as bonkhost.js)
     // arguments[0] = game state (physics, discs, capZones, mm, etc.)
     // arguments[4] = game settings (contains .map with full map definition)
-    const stateRegexMatch = code.match(/[A-Za-z]\[[A-Za-z0-9$_]{3}(\[[0-9]{1,3}\]){2}\]={discs/);
+    // Single scan: exec() locates the match once and the string is rebuilt with
+    // slice() around it. A second match()+replace() pass would re-scan the
+    // multi-megabyte source and interpret `$` patterns in the matched text.
+    const stateMatch = /[A-Za-z]\[[A-Za-z0-9$_]{3}(\[[0-9]{1,3}\]){2}\]={discs/.exec(code);
 
-    if (stateRegexMatch) {
-      const stateRegex = stateRegexMatch[0];
+    if (stateMatch) {
       const captureCode = [
         '{',
         'try{',
@@ -973,11 +975,16 @@
         'if(arguments[4]){',
         'window.__bonkExportGameSettings=arguments[4];',
         '}',
+        'if(window.__bonkExportNotify){try{window.__bonkExportNotify();}catch(e){}}',
         '}catch(e){}',
         '}',
       ].join('');
 
-      code = code.replace(stateRegex, captureCode + stateRegex);
+      code =
+        code.slice(0, stateMatch.index) +
+        captureCode +
+        stateMatch[0] +
+        code.slice(stateMatch.index + stateMatch[0].length);
       hooks++;
       console.log('%c[BonkExport] State capture hook injected', 'color:#4caf50;font-weight:bold');
     } else {
@@ -1172,10 +1179,14 @@
   }
 
   // ── Poll for map changes and update button ─────────────────────────────────
+  // Two layers: the state hook calls __bonkExportNotify the same tick a map
+  // arrives (instant), and this poller re-syncs as a fallback (e.g. if the
+  // notify registration raced the game script). Reads are cheap property
+  // accesses on the gameframe window.
   function startPolling(btn) {
     let lastMapId = null;
 
-    setInterval(() => {
+    const sync = () => {
       // Prefer the full map definition, but also surface tick-only fallback
       // captures so the button reflects every exportable source. Reads come
       // from the gameframe window (iframe contentWindow in the host page).
@@ -1201,7 +1212,18 @@
           1000,
         );
       }
-    }, 1500);
+    };
+
+    // Same-tick notify: the injected state hook calls this the moment a map
+    // arrives, so the button updates instantly instead of waiting for the
+    // poller. try/catch keeps a game-side change from breaking the game.
+    try {
+      window.__bonkExportNotify = sync;
+    } catch (e) {
+      /* window may be frozen in exotic sandboxes; poller still covers us */
+    }
+
+    setInterval(sync, 250);
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
@@ -1215,7 +1237,7 @@
     const btn = injectButton();
     startPolling(btn);
     console.log(
-      '%c[BonkExport] v3.1.0 active — self-contained (embedded script interceptor)',
+      '%c[BonkExport] v3.2.0 active — self-contained (embedded script interceptor)',
       'color:#4caf50;font-weight:bold',
     );
   }
