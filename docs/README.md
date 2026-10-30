@@ -4,35 +4,36 @@ Documentation for the Bonk RL Environment — a high-performance headless Bonk.i
 
 ## Key Documents
 
-| Document | Description |
-|:---------|:------------|
-| [index.md](index.md) | Quick links, getting started, test suite, module reference, action/observation space |
-| [configuration.md](configuration.md) | Setup, environment config (TypeScript & Python), env variables, restrictions |
-| [telemetry.md](telemetry.md) | CLI flags, profile levels, debug output, dashboard, performance characteristics |
+| Document                                   | Description                                                                                    |
+| :----------------------------------------- | :--------------------------------------------------------------------------------------------- |
+| [index.md](index.md)                       | Quick links, getting started, test suite, module reference, action/observation space           |
+| [configuration.md](configuration.md)       | Setup, environment config (TypeScript & Python), env variables, restrictions                   |
+| [telemetry.md](telemetry.md)               | CLI flags, profile levels, debug output, dashboard, performance characteristics                |
 | [reward-functions.md](reward-functions.md) | Custom reward function classes (Navigation, Composite, Curiosity), Gymnasium/RLlib integration |
-| [PERFORMANCE.md](PERFORMANCE.md) | Benchmark results, scaling analysis, bottleneck breakdown, optimization history |
+| [PERFORMANCE.md](PERFORMANCE.md)           | Benchmark results, scaling analysis, bottleneck breakdown, optimization history                |
 
 Additional documents:
 
-| Document | Description |
-|:---------|:------------|
-| [roadmap.md](roadmap.md) | Project roadmap and planned features |
-| [workflow.md](workflow.md) | Development workflow and conventions |
-| [deprecated.md](deprecated.md) | Legacy features and migration notes |
-| [priority-recommendation.md](priority-recommendation.md) | Recommended development priorities |
-| [DEOBFUSCATION.md](DEOBFUSCATION.md) | Verified source findings and authoritative artifact inventory |
-| [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md) | Simulator discrepancies and implementation status derived from verified findings |
-| [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md) | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work |
-| [OPEN_ISSUE_REMEDIATION.md](OPEN_ISSUE_REMEDIATION.md) | Evidence-based disposition and PR progress for the full open-issue audit |
-| [FIXES-2026-08.md](FIXES-2026-08.md) | August 2026 fidelity batches: merged joint/model, lifecycle, validation, render, IPC, and Python vec-env fixes |
-| [RENDERER.md](RENDERER.md) | Simulation renderer rebuild (M1–M5): native-coordinate layers, zero-overhead detached transport, usage |
+| Document                                                         | Description                                                                                                                        |
+| :--------------------------------------------------------------- | :--------------------------------------------------------------------------------------------------------------------------------- |
+| [roadmap.md](roadmap.md)                                         | Project roadmap and planned features                                                                                               |
+| [workflow.md](workflow.md)                                       | Development workflow and conventions                                                                                               |
+| [deprecated.md](deprecated.md)                                   | Legacy features and migration notes                                                                                                |
+| [priority-recommendation.md](priority-recommendation.md)         | Recommended development priorities                                                                                                 |
+| [DEOBFUSCATION.md](DEOBFUSCATION.md)                             | Verified source findings and authoritative artifact inventory                                                                      |
+| [DEOBFUSCATION_FIX_TRACKER.md](DEOBFUSCATION_FIX_TRACKER.md)     | Simulator discrepancies and implementation status derived from verified findings                                                   |
+| [DEOBFUSCATION_ROADMAP.md](DEOBFUSCATION_ROADMAP.md)             | Proof-first staged backlog for remaining `alpha2s.js` deobfuscation work                                                           |
+| [OPEN_ISSUE_REMEDIATION.md](OPEN_ISSUE_REMEDIATION.md)           | Evidence-based disposition and PR progress for the full open-issue audit                                                           |
+| [FIXES-2026-08.md](FIXES-2026-08.md)                             | August 2026 fidelity batches: merged joint/model, lifecycle, validation, render, IPC, and Python vec-env fixes                     |
+| [RENDERER.md](RENDERER.md)                                       | Simulation renderer rebuild (M1–M5): native-coordinate layers, zero-overhead detached transport, usage                             |
+| [NETWORK_INPUT_AMPLIFICATION.md](NETWORK_INPUT_AMPLIFICATION.md) | Shift-spam / input amplification ceiling: protocol facts, bandwidth math, and the `heavy-flip-probe` userscript used to measure it |
 
 ## Subdirectories
 
-| Directory | Description |
-|:----------|:------------|
+| Directory                  | Description                                                                    |
+| :------------------------- | :----------------------------------------------------------------------------- |
 | [typescript/](typescript/) | TypeScript engine module docs — core physics, IPC, rendering, telemetry, tests |
-| [python/](python/) | Python client module docs — Gymnasium env, utilities, benchmarks, tests |
+| [python/](python/)         | Python client module docs — Gymnasium env, utilities, benchmarks, tests        |
 
 ## Documentation Conventions
 

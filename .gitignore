@@ -1,6 +1,4 @@
-###############################
-# Core project artefacts only #
-###############################
+# Dependencies, generated artifacts, and local-only files.
 
 # Node.js dependencies and build output
 node_modules/
@@ -8,7 +6,6 @@ dist/
 *.tsbuildinfo
 
 # Python bytecode / caches
-python/__pycache__/
 __pycache__/
 *.pyc
 *.pyo
@@ -23,10 +20,18 @@ __pycache__/
 .dmypy.json
 dmypy.json
 .pyre/
+.hypothesis/
+.nox/
+
+# Python packaging output
+/python/build/
+/python/dist/
 
 # Python virtual environments
 venv/
 .venv/
+venv.bak/
+.venv.bak/
 
 # Jupyter Notebook
 .ipynb_checkpoints/
@@ -43,6 +48,9 @@ htmlcov/
 .pytest_cache/
 .tox/
 coverage/
+test-results/
+playwright-report/
+blob-report/
 
 # Models, logs, and training outputs
 models/
@@ -58,7 +66,11 @@ checkpoints/
 
 # Environment / secrets
 .env
-.env.local
+.env.*
+!.env.example
+!.env.*.example
+!.env.sample
+!.env.template
 *.pem
 *.key
 credentials.json
@@ -68,7 +80,6 @@ credentials.json
 .vscode/
 .cursors/
 .antigravity/
-.agent/
 .vs/
 *.suo
 *.user
@@ -81,6 +92,8 @@ credentials.json
 # OS and system files
 Thumbs.db
 ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
 .Spotlight-V100
 .Trashes
 nul
@@ -91,6 +104,8 @@ banlist.json
 
 # AI agent tooling (not for production)
 .kilocode/
+.kilo/
+.agents/
 .claude/
 .cursor/
 .agent/
@@ -122,8 +137,17 @@ bun.lock
 benchmarks/results/
 benchmarks/_archived/
 *.csv
-.kilo/Rules.md
+
+# Local archive for screenshots, browser captures, and runtime output
+/.local-artifacts/
+
+# Legacy screenshot locations (prevent accidental commits if regenerated)
+/bonk-relay-mobile.png
+/gbbm-control-deck-preview.png
+/gbbm-control-deck-v2.png
 
 # Playwright MCP tool artifacts
 .playwright-mcp/
+
+# Local deobfuscation workspace
 .deobf/

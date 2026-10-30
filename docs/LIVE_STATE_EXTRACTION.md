@@ -403,6 +403,12 @@ capture path is source-verified and offline-validated; a follow-up probe with
 
 ### 12.1 Artifacts produced
 
+> [!NOTE]
+> `Webscripts/rl-live-bridge.js` and `scripts/validate-live-extraction.js` are local-only
+> workflow artifacts that are intentionally not committed. The committed record of this
+> research is this document; the offline harness scope contract is asserted in
+> `tests/unit/local-ci.test.ts`.
+
 | File | Purpose |
 |------|---------|
 | `Webscripts/rl-live-bridge.js` | Live adapter: installs injector + `window.__bonkRL` (readObservation/readRaw/act). |
