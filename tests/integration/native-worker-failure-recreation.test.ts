@@ -11,6 +11,39 @@ import { describe, expect, it } from 'vitest';
 const HARNESS = path.join('validation', 'native', 'reliability-worker-recreation.ts');
 const PRELOAD = path.resolve(process.cwd(), 'validation', 'native', 'reliability-worker-crash-preload.cjs');
 
+/**
+ * Serializes JSON the way Prettier formats .json files: 2-space indent with
+ * arrays of primitives kept inline when they fit the print width. Mirrors the
+ * receipt formatting contract used by the local CI prettier gate.
+ */
+function prettierJson(value: unknown): string {
+  const render = (node: unknown, indent: number): string => {
+    const pad = ' '.repeat(indent);
+    if (Array.isArray(node)) {
+      if (node.length === 0) return '[]';
+      // Prettier keeps arrays of primitives inline when they fit the print
+      // width, but always expands arrays containing arrays or objects.
+      const allPrimitive = node.every((item) => item === null || typeof item !== 'object');
+      if (allPrimitive) {
+        const inline = `[${node.map((item) => JSON.stringify(item)).join(', ')}]`;
+        if (inline.length + indent <= 80) return inline;
+      }
+      const items = node.map((item) => render(item, indent + 2));
+      return `[\n${items.map((s) => `${pad}  ${s}`).join(',\n')}\n${pad}]`;
+    }
+    if (node !== null && typeof node === 'object') {
+      const entries = Object.entries(node as Record<string, unknown>);
+      if (entries.length === 0) return '{}';
+      const body = entries
+        .map(([key, val]) => `${pad}  ${JSON.stringify(key)}: ${render(val, indent + 2)}`)
+        .join(',\n');
+      return `{\n${body}\n${pad}}`;
+    }
+    return JSON.stringify(node);
+  };
+  return render(value, 0);
+}
+
 describe('native real-worker failure and explicit recreation', () => {
   it('rejects mid-step native crashes and recreates deterministic direct/message/shared residency', async () => {
     const child = spawn(process.execPath, [require.resolve('tsx/cli'), HARNESS], {
@@ -56,9 +89,11 @@ describe('native real-worker failure and explicit recreation', () => {
       }
       // This is a new, generated receipt, not a production/tracker update.
       // A failed run leaves the prior receipt untouched; no failure is greenwashed.
+      // Formatting matches Prettier's JSON style (2-space indent, short arrays
+      // collapsed inline) so regenerated receipts never fail the format gate.
       writeFileSync(
         path.join(process.cwd(), 'validation', 'native', 'reliability-worker-recreation.receipt.json'),
-        `${JSON.stringify({ ...evidence, runner: 'vitest', passed: true }, null, 2)}\n`,
+        `${prettierJson({ ...evidence, runner: 'vitest', passed: true })}\n`,
       );
     } finally {
       if (timer) clearTimeout(timer);
