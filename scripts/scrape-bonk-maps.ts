@@ -268,10 +268,13 @@ function browserHeaders(userAgent: string): Record<string, string> {
 
 /** Mutable transport state shared across all requests in a run. Tracks the
  * current UA index (rotated on ban) and any active ban expiry so we wait out
- * the window instead of hammering a banned endpoint. */
+ * the window instead of hammering a banned endpoint. `onBan` (if set) fires
+ * the moment a ban is detected so callers can persist `bannedUntil` even when
+ * the current query never completes. */
 export interface TransportState {
   userAgentIndex: number;
   bannedUntil: number;
+  onBan?: (bannedUntil: number) => void;
 }
 
 export function newTransportState(): TransportState {
@@ -305,6 +308,7 @@ async function request(
     // Banned: rotate the fingerprint and wait out a full cooldown window.
     state.userAgentIndex++;
     state.bannedUntil = Date.now() + options.cooldownMs;
+    state.onBan?.(state.bannedUntil);
     if (!options.json) {
       process.stderr.write(
         `ratelimited; rotated UA (attempt ${attempt + 1}/${options.maxRetries + 1}), cooling down ${options.cooldownMs}ms\n`,
@@ -611,6 +615,11 @@ export async function runScrape(options: CliOptions): Promise<ScrapeSummary> {
     manifest.bannedUntil = transport.bannedUntil;
     manifest.scrapedIds = [...seen];
     saveManifest(outDir, manifest);
+  };
+  // Persist a ban the moment it is detected, so a resumed run waits it out
+  // even if the current query never completes (e.g. banned on its first page).
+  transport.onBan = (): void => {
+    persist();
   };
 
   // Picks first: one request covers ~989 curated maps.

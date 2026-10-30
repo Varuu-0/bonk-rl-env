@@ -330,6 +330,31 @@ describe('scrape-bonk-maps: browser-fingerprint transport', () => {
     }
   });
 
+  it('persists a ban immediately even when the query never completes', async () => {
+    vi.useFakeTimers();
+    const dir = tempDir();
+    // Every request is rate-limited, so the picks fetch never succeeds and
+    // runScrape eventually exhausts retries and rejects. The ban must still
+    // have been persisted via onBan the moment it was first detected.
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => jsonResponse({ r: 'fail', e: 'ratelimited' })),
+    );
+    try {
+      const options = { ...TEST_OPTIONS, out: dir, queries: [], picks: true, cooldownMs: 1000, maxRetries: 1 };
+      const promise = runScrape(options);
+      // Attach the rejection expectation before advancing timers to avoid an
+      // unhandled rejection when retries are exhausted.
+      const assertion = expect(promise).rejects.toThrow(/rate-limited/);
+      await vi.advanceTimersByTimeAsync(5000);
+      await assertion;
+      const manifest = loadManifest(dir, true);
+      expect(manifest.bannedUntil).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('respects a ban carried over from a previous run before requesting', async () => {
     vi.useFakeTimers();
     const dir = tempDir();
