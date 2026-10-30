@@ -21,7 +21,10 @@ import * as path from 'node:path';
 const ROOT = path.resolve(__dirname, '..');
 
 const FORMAT_EXTENSIONS = /\.(ts|tsx|js|jsx|json)$/;
-const FORMAT_EXCLUDES = new Set(['package-lock.json']);
+// Vendored Box2D is provenance-pinned (see src/vendor/PROVENANCE.md) and must
+// not be reformatted; userscripts are browser artifacts outside prettier scope.
+const FORMAT_EXCLUDES = new Set(['package-lock.json', 'src/vendor/box2d.ts']);
+const FORMAT_EXCLUDE_PATTERNS = [/\.user\.js$/];
 
 function git(args: string[]): string {
   const result = spawnSync('git', args, {
@@ -76,7 +79,8 @@ function scopeFiles(staged: boolean, all: boolean): string[] {
   return [...names]
     .filter((file) => tracked.has(file))
     .filter((file) => FORMAT_EXTENSIONS.test(file))
-    .filter((file) => !FORMAT_EXCLUDES.has(file));
+    .filter((file) => !FORMAT_EXCLUDES.has(file))
+    .filter((file) => !FORMAT_EXCLUDE_PATTERNS.some((pattern) => pattern.test(file)));
 }
 
 function main(): void {

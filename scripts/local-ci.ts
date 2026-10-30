@@ -406,7 +406,10 @@ function tail(output: string, lines: number): string {
 // ─── Changed-file helpers (prettier scope) ──────────────────────────────────
 
 const FORMAT_EXTENSIONS = /\.(ts|tsx|js|jsx|json)$/;
-const FORMAT_EXCLUDES = ['package-lock.json'];
+// Vendored Box2D is provenance-pinned (see src/vendor/PROVENANCE.md) and must
+// not be reformatted; userscripts are browser artifacts outside prettier scope.
+const FORMAT_EXCLUDES = ['package-lock.json', 'src/vendor/box2d.ts'];
+const FORMAT_EXCLUDE_PATTERNS = [/\.user\.js$/];
 
 function git(args: string[]): string {
   const result = spawnSync('git', args, {
@@ -460,7 +463,8 @@ export function changedFiles(stagedOnly: boolean): string[] {
   return [...names]
     .filter((file) => tracked.has(file))
     .filter((file) => FORMAT_EXTENSIONS.test(file))
-    .filter((file) => !FORMAT_EXCLUDES.some((excluded) => file === excluded));
+    .filter((file) => !FORMAT_EXCLUDES.some((excluded) => file === excluded))
+    .filter((file) => !FORMAT_EXCLUDE_PATTERNS.some((pattern) => pattern.test(file)));
 }
 
 // ─── Check implementations ──────────────────────────────────────────────────
@@ -1202,6 +1206,18 @@ function printSummary(results: CheckResult[], domainFiles: DomainFiles[], wallMs
   console.log();
 }
 
+async function printList(opts: Options): Promise<void> {
+  console.log('Checks and their tiers:');
+  const tiers: Tier[] = ['quick', 'standard', 'full', 'bench'];
+  for (const tier of tiers) {
+    const checks = await buildChecks({ ...opts, tier, noPython: false });
+    for (const check of checks) {
+      const suffix = tier === 'bench' ? ' (--layer7 for Python IPC)' : '';
+      console.log(`  [${tier}]`.padEnd(14) + check.label + suffix);
+    }
+  }
+}
+
 async function main(): Promise<void> {
   installSignalHandlers();
   const argv = process.argv.slice(2);
@@ -1213,17 +1229,7 @@ async function main(): Promise<void> {
   }
 
   if (opts.list) {
-    console.log('Checks and their tiers:');
-    console.log('  [quick]     prettier (staged files)');
-    console.log('  [quick]     webscript DOM ID validation');
-    console.log('  [quick]     ruff check python/');
-    console.log('  [quick]     tsc --noEmit');
-    console.log('  [quick]     unit test suites (tests/unit/)');
-    console.log('  [standard]  prettier (changed vs origin/main)');
-    console.log('  [standard]  all Vitest suites (unit+integration+perf+security+property)');
-    console.log('  [standard]  pytest python/tests');
-    console.log('  [full]      E2E live ZeroMQ server/client suites');
-    console.log('  [bench]     Layer 1–6 benchmarks + SLA (--layer7 for Python IPC)');
+    await printList(opts);
     process.exit(0);
   }
 
