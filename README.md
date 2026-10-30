@@ -1,16 +1,38 @@
 # Bonk.io Reinforcement Learning Environment
 
-A high-performance, headless simulation engine for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. This repository transforms the original multiplayer architecture into a synchronous, high-throughput environment capable of processing simulation steps at over 22,000 ticks per second natively, or 43,000+ env-steps per second through the shared memory worker pool at 16 parallel environments.
+A **native-parity, high-throughput, headless simulation engine** for *Bonk.io*, designed specifically for reinforcement learning and automated agent training. The engine reproduces the pinned original Bonk.io build's gameplay — all 7 modes, the full native map contract, and Box2D physics — validated by differential receipts against the original client at `maximumAbsoluteError 0`, while sustaining ~7,900 pooled agent steps/s across 2,048 resident environments.
 
 ## Overview
 
 This project decouples the core *Bonk.io* physics logic from the original multiplayer networking stack. By removing browser-based rendering and WebSocket bottlenecks, we have created a seedable, headless simulation loop. This allows machine learning agents to train in minutes rather than days, making it an ideal environment for testing PPO, DQN, or other reinforcement learning algorithms.
 
+## Native Fidelity
+
+The engine routes simulation through a **native engine core** — a project-authored port of the original client's physics and gameplay semantics — rather than an approximation:
+
+- **Vendored modified Box2D** (`src/vendor/box2d.ts`) matching the original's modified Box2D build, with a SHA-256 provenance chain in [src/vendor/PROVENANCE.md](src/vendor/PROVENANCE.md). No original proprietary client code is imported at runtime.
+- **All 7 native modes**: Classic (`b`), Simple (`bs`), Arrows (`ar`), Death Arrows (`ard`), Grapple (`v`), VTOL (`sp`), and Football (`f`), selected via the `nativeMode` config.
+- **Full native map contract**: the original map format's versions, legacy migrations, bodies/fixtures/shapes, joints (incl. pin/rope `lpj`/`lsj`), force zones, capture zones, spawn/team settings, and physics quality. 289/289 built-in maps from the original corpus decode without silent omission.
+- **Differential validation**: canonical receipts in [validation/native/](validation/native/) compare engine output against the original client on shared scenarios — every comparison matches at `maximumAbsoluteError 0`, with negative controls that detect deliberately broken builds. A freshness gate (`tests/unit/native-receipt-freshness.test.ts`) pins source hashes to receipts so evidence cannot silently drift from code.
+
+| Canonical receipt | Scenarios | Comparisons | maxError |
+|:---|---:|---:|---:|
+| `native-mode-all-final-v6.json` (all 7 modes) | 73/73 | 291,657 | 0 |
+| `native-mode-football-final-v7.json` | 13/13 | 32,373 | 0 |
+| `native-mode-environment-final-v8.json` | 8/8 | 79,880 | 0 |
+| `native-environment-final-v6.json` | 4/4 | 19,587 | 0 |
+| `native-mode-dynamic-map-v4.json` | 4/4 | 33,944 | 0 |
+| `native-lpj-lsj-v3.json` (pin/rope joints) | 16/16 | 227,290 | 0 |
+
+> [!NOTE]
+> Differential comparators run against pinned local artifacts (`.deobf/`, `.local-artifacts/`, gitignored). On a fresh clone, the 3 artifact-dependent tests fail BLOCKED by design — never silently skipped — until artifacts are supplied per `src/vendor/PROVENANCE.md`.
+
 ## Architecture
 
-- **Worker Pool**: Operates as a Massively Parallel Vectorized Environment, dynamically scaling to use all available CPU cores via Node.js `worker_threads`.
+- **Native Engine Core**: `src/core/native-*.ts` modules (map codec, map state/world, classic/football worlds, session, mode session, spawns) implement original gameplay semantics on the vendored Box2D; `environment.ts` routes simulation through them.
+- **Worker Pool**: Operates as a Massively Parallel Vectorized Environment, dynamically scaling to use all available CPU cores via Node.js `worker_threads`, with both message-passing and SharedArrayBuffer transports producing identical results.
 - **Synchronous Loop**: Replaces real-time clocks with a synchronous `tick()` system and a deterministic PRNG. Explicit seeds reproduce rollouts on the same runtime and architecture; absent seeds intentionally randomize, and bit-exact cross-platform floating-point parity is not guaranteed.
-- **Batch IPC Bridge**: Utilizes **ZeroMQ (ZMQ) ROUTER/DEALER** patterns for high-speed, batch communication between the TypeScript worker pool and the Python ML pipeline.
+- **Batch IPC Bridge**: Utilizes **ZeroMQ (ZMQ) ROUTER/DEALER** patterns for high-speed, batch communication between the TypeScript worker pool and the Python ML pipeline, with a binary native-info codec for compact state transport.
 - **Vectorized Gymnasium API**: Implements the `stable_baselines3.common.vec_env.VecEnv` interface natively, allowing the Python agent to dispatch actions and aggregate observations across 64+ parallel environments simultaneously.
 
 ## Key Physics Constants (Verified)
@@ -27,14 +49,32 @@ This project decouples the core *Bonk.io* physics logic from the original multip
 | OOB radius | 850 map units (`850 / SCALE` world) | Native circular death boundary; native's `850/ppm` is in px/ppm world units so ppm cancels |
 | MAX_TICKS | 900 | Max episode (30s at 30 TPS) |
 
+## Game Modes (`nativeMode`)
+
+All seven original game modes are supported and differentially validated. Select via the `nativeMode` config option (default `b`):
+
+| Mode | Code | Physics summary |
+|:-----|:-----|:-----------------|
+| Classic | `b` | Standard movement, jumping, heavy, energy drain/recharge |
+| Simple | `bs` | Frozen energy, no heavy density, standard movement/contacts |
+| Arrows | `ar` | Aim, charge, projectile flight, 750 initial energy |
+| Death Arrows | `ard` | Lethal arrows both ways, 500 initial energy |
+| Grapple | `v` | Rope attach/drain/recharge, impulse break, slack/taut joints |
+| VTOL | `sp` | Directional forces, rotation, wing fixtures, disc collisions |
+| Football | `f` | Standalone FootballPhysics: kickoff countdown, kicks, goals, `roundsToWin` |
+
+Mode-specific map contracts are enforced loudly: `ar`/`ard`/`v` reject dynamic maps at construction with an explicit reason; `f` requires no map (mapData/mapPath/defaultMapPath are rejected); `bs`/`sp` accept dynamic arenas.
+
 ## Features
 
+- **Native-Parity Gameplay**: All 7 modes and the full native map contract, differentially validated at `maxError 0`
 - **Seeded Reproducibility**: Explicit seeds reproduce simulation results on the same runtime and architecture
 - **Multi-threaded Parallelism**: Horizontal scaling across all available CPU cores
 - **Gymnasium Compatible**: Native integration with stable-baselines3 and other Python RL frameworks
 - **ZeroMQ Communication**: Low-latency message passing between Node.js and Python
 - **Native Tick Rate**: Fixed 30 ticks per second, matching the verified Bonk.io simulation rate
 - **Memory Efficient**: Typed arrays for observations, worker thread memory isolation
+- **Production Reliability**: Real worker-crash injection tests, deterministic recreation, and long-horizon stability benchmarks
 
 ## SharedArrayBuffer Worker Pool (Optional Feature)
 
@@ -361,28 +401,41 @@ npm run test:grapple      # tests/integration/grapple-mechanics.test.ts
 npm run test:bounds       # tests/integration/dynamic-arena-bounds.test.ts
 npm run test:integration  # all tests/integration/ suites
 
+# Native engine suites (differential gates, mode mechanics, transport parity)
+npx vitest run tests/unit/native-receipt-freshness.test.ts  # receipt freshness gate
+npx vitest run tests/unit/native-mode-arrow.test.ts         # Arrow/Death Arrow differential
+npx vitest run tests/unit/native-mode-vtol.test.ts          # VTOL differential
+npx vitest run tests/integration/native-batch-determinism.test.ts
+npx vitest run tests/integration/native-cap-zone-transport.test.ts
+
 # Type check
 npm run typecheck
 ```
 
 ### Test Suite Overview
 
-| # | Test File | Description | Test Cases |
-|:--|:----------|:------------|:-----------|
-| 1 | `physics-engine.test.ts` | Box2D physics simulation | 25 |
-| 2 | `prng.test.ts` | Deterministic RNG | 11 |
-| 3 | `bonk-env.test.ts` | Gymnasium API | 24 |
-| 4 | `frame-skip.test.ts` | Action repetition | 22 |
-| 5 | `shared-memory.ts` | Zero-copy IPC | 7 |
-| 6 | `env-manager.test.ts` | Pool management | 24 |
-| 7 | `map-body-types.test.ts` | Map body types & properties | 34 |
-| 8 | `collision-filtering.test.ts` | Collision group filtering | 33 |
-| 9 | `nophysics-friction.test.ts` | Sensor bodies & friction | 31 |
-| 10 | `grapple-mechanics.test.ts` | Grapple & slingshot | 34 |
-| 11 | `dynamic-arena-bounds.test.ts` | Dynamic arena bounds | 19 |
-| 12 | `map-integration.test.ts` | Real map file loading (WDB map) | 72 |
+The suite has grown to **160 test files, ~2,600 tests** across unit, integration, perf, security, and property suites. Representative coverage:
 
-**Total: 284 test cases across 12 test suites (99.3% passing)**
+| Area | Test File | Description |
+|:-----|:----------|:------------|
+| Physics | `tests/unit/physics-engine.test.ts` | Box2D physics simulation |
+| Determinism | `tests/unit/prng.test.ts` | Deterministic RNG |
+| Gymnasium API | `tests/integration/bonk-env.test.ts` | Environment lifecycle & API |
+| Action repetition | `tests/integration/frame-skip.test.ts` | Frame-skip batching |
+| Zero-copy IPC | `tests/integration/shared-memory.test.ts` | SharedArrayBuffer transport |
+| Pool management | `tests/integration/env-manager.test.ts` | Multi-environment pooling |
+| Map body types | `tests/integration/map-body-types.test.ts` | Map body types & properties |
+| Collision filtering | `tests/integration/collision-filtering.test.ts` | Collision group filtering |
+| Sensors & friction | `tests/integration/nophysics-friction.test.ts` | Sensor bodies & friction |
+| Grapple | `tests/integration/grapple-mechanics.test.ts` | Grapple & slingshot |
+| Arena bounds | `tests/integration/dynamic-arena-bounds.test.ts` | Dynamic arena bounds |
+| Real maps | `tests/integration/map-integration.test.ts` | Real map file loading (WDB map) |
+| **Native: receipts** | `tests/unit/native-receipt-freshness.test.ts` | Pins source hashes to canonical receipts |
+| **Native: modes** | `tests/unit/native-mode-{arrow,vtol,session}.test.ts` | Arrow/VTOL/mode differentials vs original |
+| **Native: world** | `tests/unit/native-{world,classic-world,map-state,map-codec}.test.ts` | Native world & map contract |
+| **Native: transport** | `tests/integration/native-{batch-determinism,mode-transport-parity,cap-zone-transport}.test.ts` | Direct/pooled parity, both transports |
+| **Native: reliability** | `tests/integration/native-worker-failure-recreation.test.ts` | Real worker-crash injection + recreation |
+| **Native: football** | `tests/integration/native-football-environment.test.ts` | Football mode environment |
 
 ## Local CI/CD Pipeline
 
@@ -445,9 +498,28 @@ npm run bench:layer3    # Environment: step throughput (no IPC)
 npm run bench:layer4    # Worker Pool: SharedArrayBuffer IPC scaling
 npm run bench:layer5    # Memory: heap stability and reset leaks
 npm run bench:layer6    # Stability: long-running throughput variance
+
+# Native engine benchmarks (mode sessions, sustained residency)
+npx tsx benchmarks/native-throughput.ts --sustained --envs '1,16,64,256,1024,2048' --workers 8 --transports shared --frame-skips 1 --repeats 3 --duration-seconds 60
+npx tsx benchmarks/native-stability.ts --sustained --envs 64 --workers 8 --transports 'direct,message,shared' --frame-skips '1,3' --repeats 3 --duration-seconds 120
 ```
 
-### Native TypeScript Throughput
+### Native Sustained Throughput (October 2026)
+
+Measured with `benchmarks/native-throughput.ts --sustained` on 8 workers, SharedArrayBuffer transport, frame-skip 1, 60 s per point, 3 repeats, with periodic auto-resets:
+
+| Resident envs | Pooled agent steps/s | Notes |
+|--------------:|---------------------:|:------|
+| 1 | 2,179 | Single-env ceiling |
+| 16 | 8,582 | |
+| 64 | 9,926 | |
+| 256 | 9,404 | |
+| 1,024 | 9,129 | |
+| 2,048 | 8,108 | Peak RSS 5.5–7.5 GB, ~1.4 MB per resident env |
+
+Aggregate: **8,522,862 native session ticks over 1,080.4 measured seconds = 7,888.5 pooled agent steps/s**, 18/18 checks passed, 43,499 auto-resets (40.26 episodes/s pooled), per-resident memory delta 1,423–1,445 KB. Stability benchmark (`native-stability.ts`, 120 s × 3 transports × 2 frame-skips): 18/18 PASS over 2,160 measured seconds with zero determinism drift.
+
+### Legacy TypeScript Throughput (April 2026)
 
 | Metric | Value |
 |--------|-------|
@@ -487,9 +559,11 @@ npm run bench:layer6    # Stability: long-running throughput variance
 
 1. Fork the repository
 2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
+3. Commit your changes — the Tier-1 pre-commit hook runs prettier, ruff, `tsc --noEmit`, and unit tests automatically
+4. Push to the branch — the Tier-2 pre-push hook runs the full suite
 5. Open a Pull Request
+
+See [docs/README.md](docs/README.md) for the full documentation index, including [DEOBFUSCATION.md](docs/DEOBFUSCATION.md) (verified source findings), [DIFFERENTIAL_VALIDATION.md](docs/DIFFERENTIAL_VALIDATION.md), and [PERFORMANCE.md](docs/PERFORMANCE.md).
 
 ## License
 
