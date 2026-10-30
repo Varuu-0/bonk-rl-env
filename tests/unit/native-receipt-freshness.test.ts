@@ -21,7 +21,7 @@ const PINNED_RECEIPTS: ReadonlyArray<{ receipt: string; pins: Record<string, str
     pins: { localFootballPhysicsSha256: 'src/core/football-physics.ts' },
   },
   {
-    receipt: 'native-mode-environment-final-v7.json',
+    receipt: 'native-mode-environment-final-v8.json',
     pins: {
       environmentSha256: 'src/core/environment.ts',
       nativeMapSessionSha256: 'src/core/native-map-session.ts',
@@ -29,11 +29,11 @@ const PINNED_RECEIPTS: ReadonlyArray<{ receipt: string; pins: Record<string, str
     },
   },
   {
-    receipt: 'native-environment-final-v5.json',
+    receipt: 'native-environment-final-v6.json',
     pins: { environmentSha256: 'src/core/environment.ts' },
   },
   {
-    receipt: 'native-mode-dynamic-map-v3.json',
+    receipt: 'native-mode-dynamic-map-v4.json',
     pins: {
       environmentSha256: 'src/core/environment.ts',
       nativeMapSessionSha256: 'src/core/native-map-session.ts',
@@ -58,9 +58,9 @@ describe('native differential receipt freshness gate', () => {
     expect(PINNED_RECEIPTS.map((entry) => entry.receipt)).toEqual([
       'native-mode-all-final-v6.json',
       'native-mode-football-final-v7.json',
-      'native-mode-environment-final-v7.json',
-      'native-environment-final-v5.json',
-      'native-mode-dynamic-map-v3.json',
+      'native-mode-environment-final-v8.json',
+      'native-environment-final-v6.json',
+      'native-mode-dynamic-map-v4.json',
       'native-lpj-lsj-v3.json',
     ]);
   });

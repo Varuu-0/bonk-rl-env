@@ -6,11 +6,11 @@
   "crashAction": 47,
   "injectedExitCode": 86,
   "crashSettleBudgetMs": 4000,
-  "durationMs": 4575.4247,
+  "durationMs": 4331.5807,
   "cases": [
     {
       "shared": false,
-      "crashes": [21.562, 7.5787],
+      "crashes": [9.5061, 9.3448],
       "recreated": [
         [4, 5],
         [6, 7]
@@ -21,7 +21,7 @@
     },
     {
       "shared": true,
-      "crashes": [15.8746, 29.6987],
+      "crashes": [33.3196, 18.6545],
       "recreated": [
         [10, 11],
         [12, 13]

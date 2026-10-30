@@ -163,7 +163,7 @@ const fakes = vi.hoisted(() => {
         truncated: new Uint8Array(this.numEnvs),
         terminated: new Uint8Array(this.numEnvs),
         ticks: new Uint32Array(this.numEnvs),
-        info: new Float32Array(this.numEnvs * 4),
+        info: new Float32Array(this.numEnvs * 7),
       };
     }
 
@@ -189,6 +189,7 @@ const fakes = vi.hoisted(() => {
 vi.mock('worker_threads', () => ({ Worker: fakes.FakeWorker }));
 vi.mock('../../src/ipc/shared-memory', () => ({
   SharedMemoryManager: fakes.FakeSharedMemoryManager,
+  SHARED_INFO_FLOATS_PER_ENV: 7,
 }));
 vi.mock('../../src/config/config-loader', () => ({
   getConfig: () => ({

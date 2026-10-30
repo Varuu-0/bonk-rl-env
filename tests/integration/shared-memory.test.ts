@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { SharedMemoryManager } from '../../src/ipc/shared-memory';
+import { SharedMemoryManager, SHARED_INFO_FLOATS_PER_ENV } from '../../src/ipc/shared-memory';
 
 describe('SharedMemoryManager', () => {
   describe('support check', () => {
@@ -59,12 +59,14 @@ describe('SharedMemoryManager', () => {
         store(array: Int32Array, index: number, value: number): number;
       };
       const originalStore = atomics.store;
-      const storeSpy = vi.spyOn(atomics, 'store').mockImplementation((array: Int32Array, index: number, value: number) => {
-        if (array === actionSlotIndex) {
-          publishedPayloads.push(Array.from(shm!.readActions(value)));
-        }
-        return originalStore(array, index, value);
-      });
+      const storeSpy = vi
+        .spyOn(atomics, 'store')
+        .mockImplementation((array: Int32Array, index: number, value: number) => {
+          if (array === actionSlotIndex) {
+            publishedPayloads.push(Array.from(shm!.readActions(value)));
+          }
+          return originalStore(array, index, value);
+        });
 
       shm![method](actions);
       storeSpy.mockRestore();
@@ -100,6 +102,37 @@ describe('SharedMemoryManager', () => {
     it('worker consumed actions clears flag', () => {
       shm!.signalWorkerConsumed();
       expect(shm!.hasNewActions()).toBe(false);
+    });
+  });
+
+  describe('dynamic info layout', () => {
+    it('preserves per-env native metadata and validates the shared stride', () => {
+      const shm = new SharedMemoryManager(2, 16);
+      try {
+        expect(shm.getBuffer().byteLength).toBe(SharedMemoryManager.calculateBufferSize(2, 16));
+        const single = new SharedMemoryManager(1, 16);
+        try {
+          expect(single.getBuffer().byteLength).toBe(296);
+        } finally {
+          single.dispose();
+        }
+        shm.writeAutoResetAfter(0, true);
+        shm.writeAutoResetAfter(1, false);
+        expect(Array.from(shm.readResults().autoResetAfter)).toEqual([1, 0]);
+        shm.writeSeeds([42, 43]);
+        expect(Array.from(shm.readSeeds())).toEqual([42, 43]);
+        expect(Array.from(shm.readResults().autoResetAfter)).toEqual([42, 43]);
+        shm.writeAutoResetAfter(0, false);
+        shm.writeAutoResetAfter(1, true);
+        expect(Array.from(shm.readResults().autoResetAfter)).toEqual([0, 1]);
+        shm.writeInfo(0, [1, 1, 2, 3, 1, 67, 2]);
+        shm.writeInfo(1, [0, 2, 4, 5, 1, 90, 1]);
+        expect(Array.from(shm.readResults().info)).toEqual([1, 1, 2, 3, 1, 67, 2, 0, 2, 4, 5, 1, 90, 1]);
+        expect(() => shm.writeInfo(0, new Float32Array(4))).toThrow(`${SHARED_INFO_FLOATS_PER_ENV} info floats`);
+        expect(() => new SharedMemoryManager(2, 16, new SharedArrayBuffer(296))).toThrow('incompatible buffer size');
+      } finally {
+        shm.dispose();
+      }
     });
   });
 
