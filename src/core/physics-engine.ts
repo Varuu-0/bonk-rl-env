@@ -37,6 +37,11 @@ const {
 } = box2d;
 
 import { MAX_OPPONENTS } from './opponent-capacity';
+import { TPS, DT } from '../shared/units';
+import type { PlayerInput } from './player-input';
+
+export { TPS, DT };
+export type { PlayerInput };
 
 /**
  * Signature of the library-internal TypeError thrown when the bundled Box2D
@@ -51,10 +56,6 @@ function isPairTableExhaustionError(err: unknown): boolean {
 }
 
 // ─── Constants ───────────────────────────────────────────────────────
-/** bonk.io runs at 30 ticks per second */
-export const TPS = 30;
-export const DT = 1 / TPS;
-
 /**
  * Reserved body name for the synthetic static ground body (§33.8: `ba`/`bb`
  * of `-1` mean the static ground body on either side of a joint). The adapter
@@ -204,15 +205,6 @@ export interface DeathEvent {
   playerId: number;
   deathType: number;
   state: PlayerState;
-}
-
-export interface PlayerInput {
-  left: boolean;
-  right: boolean;
-  up: boolean;
-  down: boolean;
-  heavy: boolean;
-  grapple: boolean;
 }
 
 export interface MapBodyDef {
