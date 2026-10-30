@@ -1,0 +1,337 @@
+{
+  "schema": "bonk-rl-env.native-public-dynamic-environment-differential",
+  "version": 1,
+  "pass": false,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "localRepairOrReseeds": 0,
+  "scope": "Actual dense public BonkEnvironment reset/step/getObservationFast and native info versus pinned original dynamic Classic createNewState/step. Moving maps, contacts, timed capture, instant goal, sparse removed-disc death presentation, immediate respawn, native rollover, and frameSkip1/3 are checked on every call. Elimination/truncation terminal holds are a separate public policy: the frozen terminal presentation is checked, not subsequent native simulation. Direct worker/batch transports and reward values are outside this comparator.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localFiles": {
+      "src/core/environment.ts": "1b37c0bf6ec06c39f78683d0742d1d1e18e198fc59d6d864d2ac7ac2086d531f",
+      "src/core/native-map-session.ts": "dd8f1b921e82f05377ffb892436f8026dd7915f980458806432e90fa9664a7b4",
+      "src/core/native-map-codec.ts": "0d226ba3a7491b8127ef27dfd58cacaa1a000041aadf0fc363664ee943736d30",
+      "src/core/native-map-state.ts": "0b201800d79157eb1c7a8c6b5d5b2ef60355c4174562c2dfea242e83411bf90d",
+      "src/core/native-session.ts": "3d4214739b976033e51f493f6ed6605b01076f0ee4317b96071c8b2699bbf363",
+      "src/core/native-spawns.ts": "82a475f88f3c2cb91838e959b381207b58f11382825076b49e28fd06104605b4",
+      "src/core/native-classic-world.ts": "7435f0f7bcf2a8d7a804f1ab765b01a00bf98eba3d1a8f32583094c516702f05",
+      "src/core/native-world.ts": "a6bb7004eea8d8ce1efd8af0d6ee76056aedf61d1cf791ab1921cdc43ca50290",
+      "src/core/safe-trig.ts": "7d2c4c79c2a36dd83c95ea63704bb9d1d9e8978c1586f866d71aa6368f31b7cc",
+      "validation/native/compare-dynamic-classic-native.cjs": "e5b37bef2ab5d497290176f792982a2221ffe0a54e57d23ed4fde80fad80ca60"
+    }
+  },
+  "ticksPerScenario": 15,
+  "scenarios": [
+    {
+      "name": "instant-goal-q1-fs1",
+      "scenario": "instant-goal",
+      "quality": 1,
+      "frameSkip": 1,
+      "ids": [0, 1],
+      "seed": 1,
+      "countdownTicks": 5,
+      "maxTicks": 240,
+      "ticks": 0,
+      "calls": 0,
+      "frames": 1,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 40,
+      "numericComparisons": 33,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "maxErrorByField": {
+        "observation.tick": 0,
+        "observation.arenaHalfWidth": 0,
+        "observation.arenaHalfHeight": 0,
+        "observation.opponents": 0,
+        "discs[0].x": 0,
+        "discs[0].y": 0,
+        "discs[0].xv": 0,
+        "discs[0].yv": 0,
+        "discs[0].a": 0,
+        "discs[0].av": 0,
+        "discs[1].x": 0,
+        "discs[1].y": 0,
+        "discs[1].xv": 0,
+        "discs[1].yv": 0,
+        "fastObservation.length": 0,
+        "fastObservation[0]": 0,
+        "fastObservation[1]": 0,
+        "fastObservation[2]": 0,
+        "fastObservation[3]": 0,
+        "fastObservation[4]": 0,
+        "fastObservation[5]": 0,
+        "fastObservation[6]": 0,
+        "fastObservation[7]": 0,
+        "fastObservation[8]": 0,
+        "fastObservation[9]": 0,
+        "fastObservation[10]": 0,
+        "fastObservation[11]": 0,
+        "fastObservation[12]": 0,
+        "fastObservation[13]": 0,
+        "fastObservation[14]": 0,
+        "fastObservation[15]": 0
+      },
+      "firstMismatch": {
+        "tick": 0,
+        "call": 0,
+        "field": "discs[1].a",
+        "native": 0,
+        "error": "non-finite"
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "call": 0,
+          "field": "discs[1].a",
+          "native": 0,
+          "error": "non-finite"
+        },
+        {
+          "tick": 0,
+          "call": 0,
+          "field": "discs[1].av",
+          "native": 0,
+          "error": "non-finite"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no native ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated native ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "instant goal/result coverage absent"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "elimination terminal hold not covered"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "coverageFailures": [
+        "no native ticks",
+        "no simulated native ticks",
+        "instant goal/result coverage absent",
+        "elimination terminal hold not covered"
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverSimulationTicks": 0,
+        "postRolloverCountdowns": [],
+        "movingMapTicks": 0,
+        "discMapContacts": 0,
+        "discDiscContacts": 0,
+        "captureProgressTicks": 0,
+        "instantGoalTicks": 0,
+        "respawnTicks": 0,
+        "removedDiscTicks": 0,
+        "deathPresentations": 0,
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "fastObservationCalls": 1,
+        "nativeInfoCalls": 0,
+        "terminalTicks": 0,
+        "terminalHoldCalls": 0,
+        "frameSkipActionWindows": 0,
+        "resetChecks": 1
+      },
+      "terminalPolicy": null,
+      "originalProvenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "instant-goal-q2-fs1",
+      "scenario": "instant-goal",
+      "quality": 2,
+      "frameSkip": 1,
+      "ids": [0, 1],
+      "seed": 1,
+      "countdownTicks": 5,
+      "maxTicks": 240,
+      "ticks": 0,
+      "calls": 0,
+      "frames": 1,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 40,
+      "numericComparisons": 33,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "maxErrorByField": {
+        "observation.tick": 0,
+        "observation.arenaHalfWidth": 0,
+        "observation.arenaHalfHeight": 0,
+        "observation.opponents": 0,
+        "discs[0].x": 0,
+        "discs[0].y": 0,
+        "discs[0].xv": 0,
+        "discs[0].yv": 0,
+        "discs[0].a": 0,
+        "discs[0].av": 0,
+        "discs[1].x": 0,
+        "discs[1].y": 0,
+        "discs[1].xv": 0,
+        "discs[1].yv": 0,
+        "fastObservation.length": 0,
+        "fastObservation[0]": 0,
+        "fastObservation[1]": 0,
+        "fastObservation[2]": 0,
+        "fastObservation[3]": 0,
+        "fastObservation[4]": 0,
+        "fastObservation[5]": 0,
+        "fastObservation[6]": 0,
+        "fastObservation[7]": 0,
+        "fastObservation[8]": 0,
+        "fastObservation[9]": 0,
+        "fastObservation[10]": 0,
+        "fastObservation[11]": 0,
+        "fastObservation[12]": 0,
+        "fastObservation[13]": 0,
+        "fastObservation[14]": 0,
+        "fastObservation[15]": 0
+      },
+      "firstMismatch": {
+        "tick": 0,
+        "call": 0,
+        "field": "discs[1].a",
+        "native": 0,
+        "error": "non-finite"
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "call": 0,
+          "field": "discs[1].a",
+          "native": 0,
+          "error": "non-finite"
+        },
+        {
+          "tick": 0,
+          "call": 0,
+          "field": "discs[1].av",
+          "native": 0,
+          "error": "non-finite"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no native ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated native ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "instant goal/result coverage absent"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "elimination terminal hold not covered"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "coverageFailures": [
+        "no native ticks",
+        "no simulated native ticks",
+        "instant goal/result coverage absent",
+        "elimination terminal hold not covered"
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverSimulationTicks": 0,
+        "postRolloverCountdowns": [],
+        "movingMapTicks": 0,
+        "discMapContacts": 0,
+        "discDiscContacts": 0,
+        "captureProgressTicks": 0,
+        "instantGoalTicks": 0,
+        "respawnTicks": 0,
+        "removedDiscTicks": 0,
+        "deathPresentations": 0,
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "fastObservationCalls": 1,
+        "nativeInfoCalls": 0,
+        "terminalTicks": 0,
+        "terminalHoldCalls": 0,
+        "frameSkipActionWindows": 0,
+        "resetChecks": 1
+      },
+      "terminalPolicy": null,
+      "originalProvenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": null,
+  "totals": {
+    "scenarios": 2,
+    "ticks": 0,
+    "publicCalls": 0,
+    "frames": 2,
+    "comparisons": 80,
+    "numericComparisons": 66,
+    "discreteComparisons": 14,
+    "maximumAbsoluteError": 0
+  }
+}

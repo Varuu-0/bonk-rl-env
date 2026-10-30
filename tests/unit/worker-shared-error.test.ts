@@ -36,21 +36,30 @@ const fakes = vi.hoisted(() => {
     }
 
     constructor(_numEnvs: number, _ringSize: number, _buffer: SharedArrayBuffer) {}
-    waitForActions(): string { return 'not-equal'; }
-    readCommand(): number { return 0; }
-    readActionSlot(): number { return 0; }
-    getActionsView(): Uint8Array { return new Uint8Array(1); }
+    waitForActions(): string {
+      return 'not-equal';
+    }
+    readCommand(): number {
+      return 0;
+    }
+    readActionSlot(): number {
+      return 0;
+    }
+    getActionsView(): Uint8Array {
+      return new Uint8Array(1);
+    }
   }
 
   return { parentPort, ThrowingEnvironment, FakeSharedMemoryManager };
 });
 
-vi.mock('worker_threads', () => ({ parentPort: fakes.parentPort }));
+vi.mock('worker_threads', () => ({ parentPort: fakes.parentPort, threadId: 23 }));
 vi.mock('../../src/core/environment', () => ({
   BonkEnvironment: fakes.ThrowingEnvironment,
 }));
 vi.mock('../../src/ipc/shared-memory', () => ({
   SharedMemoryManager: fakes.FakeSharedMemoryManager,
+  SHARED_INFO_FLOATS_PER_ENV: 7,
 }));
 
 import '../../src/core/worker';

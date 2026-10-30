@@ -1,0 +1,127 @@
+{
+  "v": 15,
+  "s": {
+    "re": false,
+    "nc": false,
+    "fl": false,
+    "pq": 1,
+    "gd": 25
+  },
+  "physics": {
+    "ppm": 12,
+    "shapes": [
+      {
+        "type": "bx",
+        "w": 480,
+        "h": 24,
+        "c": [0, 0],
+        "a": 0,
+        "sk": false
+      }
+    ],
+    "fixtures": [
+      {
+        "sh": 0,
+        "n": "Training Platform",
+        "fr": 0.5,
+        "fp": null,
+        "re": 0.8,
+        "de": 0.3,
+        "f": 6060636,
+        "d": false,
+        "np": false,
+        "ng": false,
+        "ig": false
+      }
+    ],
+    "bodies": [
+      {
+        "s": {
+          "type": "s",
+          "n": "Training Platform",
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8,
+          "de": 0.3,
+          "ld": 0,
+          "ad": 0,
+          "fr": false,
+          "bu": false,
+          "f_c": 1,
+          "f_p": true,
+          "f_1": true,
+          "f_2": true,
+          "f_3": true,
+          "f_4": true
+        },
+        "p": [0, 0],
+        "a": 0,
+        "lv": [0, 0],
+        "av": 0,
+        "cf": {
+          "x": 0,
+          "y": 0,
+          "ct": 0,
+          "w": true
+        },
+        "fz": {
+          "on": false,
+          "x": 0,
+          "y": 0,
+          "d": true,
+          "p": true,
+          "a": true,
+          "t": 0,
+          "cf": 0
+        },
+        "fx": [0]
+      }
+    ],
+    "joints": [],
+    "bro": [0]
+  },
+  "spawns": [
+    {
+      "x": -150,
+      "y": -30,
+      "xv": 0,
+      "yv": 0,
+      "priority": 5,
+      "r": true,
+      "f": true,
+      "b": true,
+      "gr": false,
+      "ye": false,
+      "n": "Left Spawn"
+    },
+    {
+      "x": 150,
+      "y": -30,
+      "xv": 0,
+      "yv": 0,
+      "priority": 5,
+      "r": true,
+      "f": true,
+      "b": true,
+      "gr": false,
+      "ye": false,
+      "n": "Right Spawn"
+    }
+  ],
+  "capZones": [],
+  "m": {
+    "a": "Bonk RL project",
+    "n": "Training Platform",
+    "dbv": 2,
+    "dbid": -1,
+    "authid": -1,
+    "date": "",
+    "rxid": 0,
+    "rxn": "",
+    "rxa": "",
+    "rxdb": 1,
+    "cr": ["Bonk RL project"],
+    "pub": false,
+    "mo": ""
+  }
+}

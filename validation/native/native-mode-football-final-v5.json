@@ -1,0 +1,1223 @@
+{
+  "schema": "bonk-rl-env.native-football-differential",
+  "version": 1,
+  "pass": true,
+  "status": "PASS",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Pinned original alpha2s FootballPhysics createNewState/step versus only src/core/football-physics.ts on the hardcoded football pitch with controlled native state seeds. Covers declared Football scenarios; not public PhysicsEngine/environment integration, match/round lifecycle beyond the native fte reset, complete modes, online play, or cross-platform bit parity.",
+  "provenance": {
+    "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "functions": [
+      {
+        "name": "createNewState",
+        "start": 1995916,
+        "end": 1997724,
+        "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+      },
+      {
+        "name": "step",
+        "start": 2007380,
+        "end": 2011893,
+        "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+      },
+      {
+        "name": "Ball",
+        "start": 2011894,
+        "end": 2013207,
+        "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+      },
+      {
+        "name": "FootballPlayer",
+        "start": 2013207,
+        "end": 2017290,
+        "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+      },
+      {
+        "name": "FootballWall",
+        "start": 2017290,
+        "end": 2021975,
+        "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+      }
+    ],
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localFootballPhysicsSha256": "1e7c50697f830964221c32adc0ee245cbfeefcc8fb56c1d1441f6d23b66b64eb"
+  },
+  "scenarioNames": [],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "football-kickoff-countdown",
+      "kind": "football-kickoff-countdown",
+      "seed": 1,
+      "boundary": "fresh-createNewState-countdown",
+      "requestedTicks": 125,
+      "tickCap": 125,
+      "ticks": 125,
+      "frames": 126,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 3402,
+      "numericComparisons": 1512,
+      "discreteComparisons": 1890,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 5,
+        "countdownTicks": 120,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-movement-force",
+      "kind": "football-movement-force",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 60,
+      "tickCap": 60,
+      "ticks": 60,
+      "frames": 61,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 1683,
+      "numericComparisons": 744,
+      "discreteComparisons": 939,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 60,
+        "countdownTicks": 0,
+        "motionTicks": 60,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 2,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-kick-impulse",
+      "kind": "football-kick-impulse",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 30,
+      "tickCap": 30,
+      "ticks": 30,
+      "frames": 31,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 870,
+      "numericComparisons": 383,
+      "discreteComparisons": 487,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 30,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 1,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 1,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-kick-rearm",
+      "kind": "football-kick-rearm",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 12,
+      "tickCap": 12,
+      "ticks": 12,
+      "frames": 13,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 384,
+      "numericComparisons": 167,
+      "discreteComparisons": 217,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 12,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 1,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 1,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-action-slowdown",
+      "kind": "football-action-slowdown",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 60,
+      "tickCap": 60,
+      "ticks": 60,
+      "frames": 61,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 1680,
+      "numericComparisons": 743,
+      "discreteComparisons": 937,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 60,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 60,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 1,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-action2-zero-force",
+      "kind": "football-action2-zero-force",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 60,
+      "tickCap": 60,
+      "ticks": 60,
+      "frames": 61,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 1647,
+      "numericComparisons": 732,
+      "discreteComparisons": 915,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 60,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 60,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-ball-wall-bounce",
+      "kind": "football-ball-wall-bounce",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 90,
+      "tickCap": 90,
+      "ticks": 90,
+      "frames": 91,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 2475,
+      "numericComparisons": 1098,
+      "discreteComparisons": 1377,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 1,
+        "footBounceSounds": 1,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-player-goalpost-collision",
+      "kind": "football-player-goalpost-collision",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 90,
+      "tickCap": 90,
+      "ticks": 90,
+      "frames": 91,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 2457,
+      "numericComparisons": 1092,
+      "discreteComparisons": 1365,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 1,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-goal-left",
+      "kind": "football-goal-left",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 120,
+      "tickCap": 120,
+      "ticks": 120,
+      "frames": 121,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 3291,
+      "numericComparisons": 1458,
+      "discreteComparisons": 1833,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 91,
+        "countdownTicks": 29,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 1,
+        "goalLeftTicks": 1,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 1,
+        "resetTicks": 1,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-goal-right",
+      "kind": "football-goal-right",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 120,
+      "tickCap": 120,
+      "ticks": 120,
+      "frames": 121,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 3291,
+      "numericComparisons": 1458,
+      "discreteComparisons": 1833,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 91,
+        "countdownTicks": 29,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 1,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 1,
+        "goalFreezeTicks": 1,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-goal-freeze-reset",
+      "kind": "football-goal-freeze-reset",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 260,
+      "tickCap": 260,
+      "ticks": 260,
+      "frames": 261,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 7071,
+      "numericComparisons": 3138,
+      "discreteComparisons": 3933,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 139,
+        "countdownTicks": 121,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 1,
+        "goalLeftTicks": 1,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 1,
+        "resetTicks": 1,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-clamp-to-pitch",
+      "kind": "football-clamp-to-pitch",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 60,
+      "tickCap": 60,
+      "ticks": 60,
+      "frames": 61,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 1647,
+      "numericComparisons": 732,
+      "discreteComparisons": 915,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 60,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 0,
+        "footBounceSounds": 0,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 60,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    },
+    {
+      "name": "football-footbounce-sound",
+      "kind": "football-footbounce-sound",
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 90,
+      "tickCap": 90,
+      "ticks": 90,
+      "frames": 91,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 2475,
+      "numericComparisons": 1098,
+      "discreteComparisons": 1377,
+      "maxError": 0,
+      "maxErrorByField": {
+        "ball.x": 0,
+        "ball.y": 0,
+        "ball.xv": 0,
+        "ball.yv": 0,
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "sts.v": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownTicks": 0,
+        "motionTicks": 0,
+        "kickTicks": 0,
+        "kickRearmTicks": 0,
+        "actionSlowdownTicks": 0,
+        "action2ZeroTicks": 0,
+        "ballBounceTicks": 1,
+        "footBounceSounds": 1,
+        "footKickSounds": 0,
+        "footGoalSounds": 0,
+        "goalLeftTicks": 0,
+        "goalRightTicks": 0,
+        "goalFreezeTicks": 0,
+        "resetTicks": 0,
+        "clampTicks": 0,
+        "postCollisionTicks": 0,
+        "postBounceTicks": 0
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1995916,
+            "end": 1997724,
+            "hash": "7931fc0d212419a6e1e179ff9f069bdc784c0f56da763214fa5613e00e2aa6b5"
+          },
+          {
+            "name": "step",
+            "start": 2007380,
+            "end": 2011893,
+            "hash": "9c047e7c54bb697081a325bd04d9566e042175afcb92135ebebe5309b54f31c4"
+          },
+          {
+            "name": "Ball",
+            "start": 2011894,
+            "end": 2013207,
+            "hash": "90ed8fc2e90a9c14392fb472480053e241ad36ff67062f015e3da36e91bbbac9"
+          },
+          {
+            "name": "FootballPlayer",
+            "start": 2013207,
+            "end": 2017290,
+            "hash": "682924b3c9905df70072d96d2e6e9b058f51162a0642c3a836fbd13ea91d551d"
+          },
+          {
+            "name": "FootballWall",
+            "start": 2017290,
+            "end": 2021975,
+            "hash": "cf1b021b2245b294334944d3dbee0df7475975fb00301fc216f8638fd2ad8cda"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "injected-local-ball-xv-error",
+    "injectedError": 0.000001,
+    "detected": true,
+    "firstMismatch": {
+      "tick": 1,
+      "entity": "ball",
+      "id": null,
+      "field": "xv",
+      "actual": 0.000002,
+      "native": 0,
+      "error": 0.000002
+    },
+    "pass": true
+  },
+  "totals": {
+    "scenarios": 13,
+    "passed": 13,
+    "failed": 0,
+    "ticks": 1177,
+    "comparisons": 32373,
+    "numericComparisons": 14355,
+    "discreteComparisons": 18018,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 0,
+    "localRepairOrReseeds": 0
+  }
+}

@@ -1,7 +1,8 @@
-import { parentPort } from 'worker_threads';
+import { parentPort, threadId } from 'worker_threads';
 import { BonkEnvironment, Action, Observation, StepResult } from './environment';
 import { assertSupportedSeed, deriveConstructionSeed } from './seed-range';
-import { SharedMemoryManager } from '../ipc/shared-memory';
+import { SharedMemoryManager, SHARED_INFO_FLOATS_PER_ENV } from '../ipc/shared-memory';
+import { NATIVE_CAP_ZONE_FIELDS, assertNativeCapZones, encodeNativePhase } from '../ipc/native-info-codec';
 
 // Type for SharedArrayBuffer (available in Node.js >= 9.1.0)
 declare const SharedArrayBuffer: any;
@@ -42,8 +43,21 @@ function signalSyncCompleted(status: number = WORKER_COMPLETE) {
 let _obsBuffer = new Float32Array(16);
 let _obsNumOpponents = 1;
 // Pre-allocated per-env dynamic info floats (aiAlive, opponentsAlive,
-// scoreBlue, scoreRed) written into the SAB info region.
-const _infoBuffer = new Float32Array(4);
+// scoreBlue, scoreRed, native flag, nativeRoundTick, nativePhase enum).
+const _infoBuffer = new Float32Array(SHARED_INFO_FLOATS_PER_ENV);
+
+function writeDynamicInfo(index: number, info: StepResult['info']): void {
+  const native = info.native === true;
+  _infoBuffer[0] = info.aiAlive ? 1 : 0;
+  _infoBuffer[1] = info.opponentsAlive;
+  _infoBuffer[2] = info.scoreBlue;
+  _infoBuffer[3] = info.scoreRed;
+  _infoBuffer[4] = native ? 1 : 0;
+  _infoBuffer[5] = native ? info.nativeRoundTick : 0;
+  _infoBuffer[6] = native ? encodeNativePhase(info.nativePhase) : 0;
+  sharedMem!.writeInfo(index, _infoBuffer);
+  if (native) sharedMem!.writeNativeCapZones(index, info.nativeCapZones);
+}
 
 function observationToArray(obs: Observation): Float32Array {
   _obsBuffer[0] = obs.playerX;
@@ -125,6 +139,15 @@ function quantizeObservation(obs: Observation): Observation {
   };
 }
 
+function quantizeDynamicInfo(info: StepResult['info']): void {
+  if (info.native !== true) return;
+  const value = info.nativeCapZones;
+  const zones = assertNativeCapZones(value, Array.isArray(value) ? value.length : 0);
+  for (const zone of zones) {
+    for (const field of NATIVE_CAP_ZONE_FIELDS) zone[field] = Math.fround(zone[field]);
+  }
+}
+
 /**
  * Applies the per-env auto-reset rule for a step result. The environment
  * itself is reset only once its frame-skip terminal hold window has been
@@ -140,11 +163,13 @@ function quantizeObservation(obs: Observation): Observation {
  * must surface instead of being masked for pool consumers.
  */
 function applyStepAutoReset(env: BonkEnvironment, res: StepResult): StepResult {
+  res.info.autoResetAfter = false;
   if (!res.done) return res;
   if (!env.isTerminalHoldActive()) {
     const terminalObservation = res.observation;
     env.reset();
     res.observation = terminalObservation;
+    res.info.autoResetAfter = true;
   }
   return res;
 }
@@ -194,6 +219,11 @@ parentPort.on('message', (msg) => {
         envs.push(new BonkEnvironment({ ...config, seed: deriveConstructionSeed(config.seed ?? 0, globalOffset + i) }));
       }
       numEnvs = numEnvsParam;
+      // Initialization-only proof that this worker actually constructed the
+      // requested resident range. Benchmarks must not infer residency from
+      // the parent's allocation plan alone. This adds no per-step messages.
+      const residency = { threadId, numEnvs: envs.length, startId: globalOffset };
+      if (residency.numEnvs !== numEnvsParam) throw new Error('Worker resident construction count mismatch');
 
       // If sharedBuffer is provided and is a valid SharedArrayBuffer, initialize SharedMemoryManager
       // Note: When passed via postMessage, SharedArrayBuffer becomes an empty object.
@@ -210,6 +240,7 @@ parentPort.on('message', (msg) => {
           ringSize,
           msg.sharedBuffer as SharedArrayBuffer,
           _obsNumOpponents,
+          msg.nativeCapZoneCapacity ?? 0,
         );
         if (msg.syncBuffer) {
           syncCompleted = new Int32Array(msg.syncBuffer);
@@ -220,6 +251,7 @@ parentPort.on('message', (msg) => {
           status: 'ok',
           data: {
             mode: 'shared', // Include mode in data for compatibility
+            residency,
             // Static info fields (frameSkip, capZones, aiTeam) are
             // constant per environment; transport them once here
             // instead of per step.
@@ -231,7 +263,7 @@ parentPort.on('message', (msg) => {
         parentPort!.postMessage({
           id: msg.id,
           status: 'ok',
-          data: { mode: 'message' }, // Include mode in data for compatibility
+          data: { mode: 'message', residency }, // Include mode in data for compatibility
         });
       }
     } else if (msg.type === 'reset') {
@@ -278,6 +310,7 @@ parentPort.on('message', (msg) => {
           res.info.terminal_observation = quantizeObservation(res.info.terminal_observation);
         }
         res.reward = Math.fround(res.reward);
+        quantizeDynamicInfo(res.info);
       }
 
       parentPort!.postMessage({
@@ -333,13 +366,10 @@ parentPort.on('message', (msg) => {
           sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
           sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
           sharedMem!.writeTick(i, res.info.tick || stepCounter);
+          sharedMem!.writeAutoResetAfter(i, res.info.autoResetAfter === true);
           // Dynamic info fields travel as SAB floats; the static
           // fields were shipped once at init.
-          _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
-          _infoBuffer[1] = res.info.opponentsAlive;
-          _infoBuffer[2] = res.info.scoreBlue;
-          _infoBuffer[3] = res.info.scoreRed;
-          sharedMem!.writeInfo(i, _infoBuffer);
+          writeDynamicInfo(i, res.info);
         });
 
         // Signal that worker has consumed the actions
@@ -427,15 +457,12 @@ parentPort.on('message', (msg) => {
                 sharedMem!.writeTruncated(i, res.truncated ? 1 : 0);
                 sharedMem!.writeTerminated(i, res.info.terminated ? 1 : 0);
                 sharedMem!.writeTick(i, res.info.tick || stepCounter);
+                sharedMem!.writeAutoResetAfter(i, res.info.autoResetAfter === true);
                 // Dynamic info fields travel as SAB floats; the
                 // static fields were shipped once at init. This
                 // keeps the shared-memory step zero-message (no
                 // per-step postMessage).
-                _infoBuffer[0] = res.info.aiAlive ? 1 : 0;
-                _infoBuffer[1] = res.info.opponentsAlive;
-                _infoBuffer[2] = res.info.scoreBlue;
-                _infoBuffer[3] = res.info.scoreRed;
-                sharedMem!.writeInfo(i, _infoBuffer);
+                writeDynamicInfo(i, res.info);
               });
 
               sharedMem.signalWorkerConsumed();

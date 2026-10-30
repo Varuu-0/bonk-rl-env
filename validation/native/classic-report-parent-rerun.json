@@ -1,0 +1,459 @@
+{
+  "schema": "bonk-rl-env.native-classic-differential",
+  "version": 1,
+  "pass": true,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "scope": "Pinned original alpha2s Physics.step versus RL-local Classic core on the static Classic training arena. Lifecycle respawn/round selection, all maps/modes, online server state, and cross-platform bit parity are outside scope.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08"
+  },
+  "ticksPerScenario": 360,
+  "scenarios": [
+    {
+      "name": "neutral",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 10,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "move",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 8925,
+      "numericComparisons": 4417,
+      "discreteComparisons": 4508,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 12,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "jump",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 83,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "heavy",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 8925,
+      "numericComparisons": 4417,
+      "discreteComparisons": 4508,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 110,
+        "minEnergy": 0,
+        "jumpTicks": 9,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "input-precedence",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 7846,
+      "numericComparisons": 3836,
+      "discreteComparisons": 4010,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 36,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "fly",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 5,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "collision",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 7742,
+      "numericComparisons": 3780,
+      "discreteComparisons": 3962,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 10,
+        "contactTicks": 232,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "neutral",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 10,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "move",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 8925,
+      "numericComparisons": 4417,
+      "discreteComparisons": 4508,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 12,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "jump",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 83,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "heavy",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 8925,
+      "numericComparisons": 4417,
+      "discreteComparisons": 4508,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 110,
+        "minEnergy": 0,
+        "jumpTicks": 9,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "input-precedence",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 7846,
+      "numericComparisons": 3836,
+      "discreteComparisons": 4010,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 36,
+        "contactTicks": 0,
+        "roundReseeds": 1
+      }
+    },
+    {
+      "name": "fly",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 10108,
+      "numericComparisons": 5054,
+      "discreteComparisons": 5054,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 299,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 5,
+        "contactTicks": 0,
+        "roundReseeds": 0
+      }
+    },
+    {
+      "name": "collision",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 360,
+      "pass": true,
+      "comparisons": 7742,
+      "numericComparisons": 3780,
+      "discreteComparisons": 3962,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 208,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "jumpTicks": 10,
+        "contactTicks": 232,
+        "roundReseeds": 1
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "negative-control-injected-xv-error",
+    "quality": 1,
+    "seed": 1,
+    "ticks": 1,
+    "pass": true,
+    "comparisons": 56,
+    "numericComparisons": 28,
+    "discreteComparisons": 28,
+    "maxError": 0.000001,
+    "firstMismatch": {
+      "tick": 1,
+      "disc": 0,
+      "field": "xv",
+      "actual": 0.000001,
+      "native": 0,
+      "error": 0.000001
+    },
+    "coverage": {
+      "simulatedTicks": 0,
+      "heavyTicks": 0,
+      "minEnergy": 1000,
+      "jumpTicks": 0,
+      "contactTicks": 0,
+      "roundReseeds": 0
+    },
+    "injectedError": 0.000001,
+    "detected": true
+  },
+  "totals": {
+    "scenarios": 14,
+    "ticks": 5040,
+    "comparisons": 127524,
+    "numericComparisons": 63224,
+    "discreteComparisons": 64300,
+    "maximumAbsoluteError": 0
+  }
+}

@@ -1,0 +1,1054 @@
+{
+  "schema": "bonk-rl-env.native-mode-session-differential",
+  "version": 1,
+  "pass": false,
+  "status": "FAIL",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "freshCreateNewStateEveryScenario": true,
+  "scope": "Pinned original alpha2s createNewState/Physics.step versus src/core/native-mode-session.ts delegating static match lifecycle to createNativeSession. Covers declared fresh-session Classic, Arrow expiry, Death Arrow lethal/result/rollover and VTOL contact scenarios; not public PhysicsEngine/environment integration, dynamic maps, complete modes, online play, respawn matches or cross-platform bit parity.",
+  "provenance": {
+    "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "functions": [
+      {
+        "name": "createNewState",
+        "start": 1771638,
+        "end": 1790433,
+        "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+      },
+      {
+        "name": "step",
+        "start": 1790462,
+        "end": 1862467,
+        "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+      }
+    ],
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localFiles": {
+      "src/core/native-mode-session.ts": "7f94fb22eacb1c71bb469ba90a92541155d2279a64eeef351c85a85ae5934ee7",
+      "src/core/native-session.ts": "3d4214739b976033e51f493f6ed6605b01076f0ee4317b96071c8b2699bbf363",
+      "src/core/classic-physics.ts": "7069d4aab2927f47a43af41e6904ee5b950bbb2417f2b2cda694afcdfdeb3743",
+      "src/core/native-spawns.ts": "82a475f88f3c2cb91838e959b381207b58f11382825076b49e28fd06104605b4",
+      "src/core/safe-trig.ts": "7d2c4c79c2a36dd83c95ea63704bb9d1d9e8978c1586f866d71aa6368f31b7cc"
+    }
+  },
+  "scenarioNames": [],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "classic-lifecycle-b-q1",
+      "kind": "classic-lifecycle",
+      "mode": "b",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 174,
+      "tickCap": 174,
+      "ticks": 174,
+      "frames": 175,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 10150,
+      "numericComparisons": 3850,
+      "discreteComparisons": 6300,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 174,
+        "field": "coverage",
+        "expected": "one native out-of-world Classic death"
+      },
+      "mismatches": [
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "90 native result steps plus rollover result boundary"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "native round rollover and recreated round"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "native Classic winner/result"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 114,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        },
+        {
+          "field": "coverage",
+          "expected": "90 native result steps plus rollover result boundary"
+        },
+        {
+          "field": "coverage",
+          "expected": "native round rollover and recreated round"
+        },
+        {
+          "field": "coverage",
+          "expected": "native Classic winner/result"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "classic-lifecycle-b-q2",
+      "kind": "classic-lifecycle",
+      "mode": "b",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 174,
+      "tickCap": 174,
+      "ticks": 174,
+      "frames": 175,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 10150,
+      "numericComparisons": 3850,
+      "discreteComparisons": 6300,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 174,
+        "field": "coverage",
+        "expected": "one native out-of-world Classic death"
+      },
+      "mismatches": [
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "90 native result steps plus rollover result boundary"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "native round rollover and recreated round"
+        },
+        {
+          "tick": 174,
+          "field": "coverage",
+          "expected": "native Classic winner/result"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 114,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        },
+        {
+          "field": "coverage",
+          "expected": "90 native result steps plus rollover result boundary"
+        },
+        {
+          "field": "coverage",
+          "expected": "native round rollover and recreated round"
+        },
+        {
+          "field": "coverage",
+          "expected": "native Classic winner/result"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "arrow-charge-expiry-ar-q1",
+      "kind": "arrow-charge-expiry",
+      "mode": "ar",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 425,
+      "tickCap": 425,
+      "ticks": 425,
+      "frames": 426,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 26369,
+      "numericComparisons": 10278,
+      "discreteComparisons": 16091,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "projectile.x": 0,
+        "projectile.y": 0,
+        "projectile.xv": 0,
+        "projectile.yv": 0,
+        "projectile.a": 0,
+        "projectile.av": 0
+      },
+      "firstMismatch": {
+        "tick": 425,
+        "field": "coverage",
+        "expected": "native release and post-fire energy"
+      },
+      "mismatches": [
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 365,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 1,
+        "projectileFteZeroTicks": 1,
+        "projectileExpiryTicks": 1,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 100,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "arrow-charge-expiry-ar-q2",
+      "kind": "arrow-charge-expiry",
+      "mode": "ar",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 425,
+      "tickCap": 425,
+      "ticks": 425,
+      "frames": 426,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 26369,
+      "numericComparisons": 10278,
+      "discreteComparisons": 16091,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "projectile.x": 0,
+        "projectile.y": 0,
+        "projectile.xv": 0,
+        "projectile.yv": 0,
+        "projectile.a": 0,
+        "projectile.av": 0
+      },
+      "firstMismatch": {
+        "tick": 425,
+        "field": "coverage",
+        "expected": "native release and post-fire energy"
+      },
+      "mismatches": [
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 365,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 1,
+        "projectileFteZeroTicks": 1,
+        "projectileExpiryTicks": 1,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 100,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "death-arrow-result-rollover-ard-q1",
+      "kind": "death-arrow-result-rollover",
+      "mode": "ard",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 230,
+      "tickCap": 230,
+      "ticks": 230,
+      "frames": 231,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 13398,
+      "numericComparisons": 5082,
+      "discreteComparisons": 8316,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 230,
+        "field": "coverage",
+        "expected": "Death Arrow lethal attribution to target disc"
+      },
+      "mismatches": [
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow round-result phase"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 170,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow round-result phase"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "death-arrow-result-rollover-ard-q2",
+      "kind": "death-arrow-result-rollover",
+      "mode": "ard",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 230,
+      "tickCap": 230,
+      "ticks": 230,
+      "frames": 231,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 13398,
+      "numericComparisons": 5082,
+      "discreteComparisons": 8316,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 230,
+        "field": "coverage",
+        "expected": "Death Arrow lethal attribution to target disc"
+      },
+      "mismatches": [
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        },
+        {
+          "tick": 230,
+          "field": "coverage",
+          "expected": "Death Arrow round-result phase"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 170,
+        "countdownTicks": 60,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow round-result phase"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vtol-contact-v-q1",
+      "kind": "vtol-contact",
+      "mode": "v",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 48,
+      "tickCap": 48,
+      "ticks": 48,
+      "frames": 49,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 2842,
+      "numericComparisons": 1078,
+      "discreteComparisons": 1764,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 48,
+        "field": "coverage",
+        "expected": "countdown and active native phases"
+      },
+      "mismatches": [
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "countdown and active native phases"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL directional contact state"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL wing/world contact produces rotation"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native lethal VTOL wing/world contact"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownTicks": 48,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "countdown and active native phases"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL directional contact state"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL wing/world contact produces rotation"
+        },
+        {
+          "field": "coverage",
+          "expected": "native lethal VTOL wing/world contact"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vtol-contact-v-q2",
+      "kind": "vtol-contact",
+      "mode": "v",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 48,
+      "tickCap": 48,
+      "ticks": 48,
+      "frames": 49,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 2842,
+      "numericComparisons": 1078,
+      "discreteComparisons": 1764,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0
+      },
+      "firstMismatch": {
+        "tick": 48,
+        "field": "coverage",
+        "expected": "countdown and active native phases"
+      },
+      "mismatches": [
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "countdown and active native phases"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL directional contact state"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL wing/world contact produces rotation"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native lethal VTOL wing/world contact"
+        },
+        {
+          "tick": 48,
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownTicks": 48,
+        "resultTicks": 0,
+        "rollovers": 0,
+        "postRolloverTicks": 0,
+        "roundResults": [],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "countdown and active native phases"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL directional contact state"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL wing/world contact produces rotation"
+        },
+        {
+          "field": "coverage",
+          "expected": "native lethal VTOL wing/world contact"
+        },
+        {
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "injected-local-disc-xv-error",
+    "injectedError": 0.000001,
+    "detected": true,
+    "firstMismatch": {
+      "tick": 1,
+      "entity": "disc",
+      "id": 0,
+      "field": "xv",
+      "actual": 0.000001,
+      "native": 0,
+      "error": 0.000001
+    },
+    "pass": true
+  },
+  "totals": {
+    "scenarios": 8,
+    "passed": 0,
+    "failed": 8,
+    "ticks": 1754,
+    "frames": 1762,
+    "comparisons": 105518,
+    "numericComparisons": 40576,
+    "discreteComparisons": 64942,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 32,
+    "localRepairOrReseeds": 0,
+    "rollovers": 0
+  }
+}

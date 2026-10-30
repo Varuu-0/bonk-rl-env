@@ -9,6 +9,7 @@ const { mockParentPort } = vi.hoisted(() => ({
 
 vi.mock('worker_threads', () => ({
   parentPort: mockParentPort,
+  threadId: 17,
 }));
 
 import '../../src/core/worker';
@@ -35,7 +36,7 @@ describe('Worker thread', () => {
         expect.objectContaining({
           id: 'test-1',
           status: 'ok',
-          data: { mode: 'message' },
+          data: { mode: 'message', residency: { threadId: 17, numEnvs: 1, startId: 0 } },
         }),
       );
     }, 10000);

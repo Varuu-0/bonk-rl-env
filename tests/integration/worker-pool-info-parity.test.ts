@@ -14,6 +14,7 @@ import { WorkerPool } from '../../src/core/worker-pool';
 const DOCUMENTED_INFO_KEYS = [
   'aiAlive',
   'aiTeam',
+  'autoResetAfter',
   'capZones',
   'frameSkip',
   'opponentsAlive',
@@ -99,9 +100,7 @@ describe('SAB step info parity with message-passing mode (issue #205)', () => {
 
     expect(shared.done).toBe(true);
     expect(message.done).toBe(true);
-    expect(Object.keys(shared.info).sort()).toEqual(
-      [...DOCUMENTED_INFO_KEYS, 'terminal_observation'].sort(),
-    );
+    expect(Object.keys(shared.info).sort()).toEqual([...DOCUMENTED_INFO_KEYS, 'terminal_observation'].sort());
     expect(Object.keys(shared.info).sort()).toEqual(Object.keys(message.info).sort());
     expect(shared.info.terminal_observation).toBeDefined();
     expect(message.info.terminal_observation).toBeDefined();

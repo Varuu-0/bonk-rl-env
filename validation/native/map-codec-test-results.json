@@ -1,0 +1,600 @@
+{
+  "numTotalTestSuites": 7,
+  "numPassedTestSuites": 7,
+  "numFailedTestSuites": 0,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 56,
+  "numPassedTests": 56,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1793020902484,
+  "success": true,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 1 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 1 with exact migration gates and complete input consumption",
+          "duration": 3.9003999999999905,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 2 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 2 with exact migration gates and complete input consumption",
+          "duration": 0.8639999999999759,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 3 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 3 with exact migration gates and complete input consumption",
+          "duration": 0.5269000000000119,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 4 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 4 with exact migration gates and complete input consumption",
+          "duration": 0.6537999999999897,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 5 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 5 with exact migration gates and complete input consumption",
+          "duration": 0.670599999999979,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 6 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 6 with exact migration gates and complete input consumption",
+          "duration": 0.498299999999972,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 7 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 7 with exact migration gates and complete input consumption",
+          "duration": 0.5332000000000221,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 8 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 8 with exact migration gates and complete input consumption",
+          "duration": 0.5533000000000357,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 9 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 9 with exact migration gates and complete input consumption",
+          "duration": 2.138900000000035,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 10 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 10 with exact migration gates and complete input consumption",
+          "duration": 0.6995999999999754,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 11 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 11 with exact migration gates and complete input consumption",
+          "duration": 0.4952999999999861,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 12 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 12 with exact migration gates and complete input consumption",
+          "duration": 0.3505999999999858,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 13 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 13 with exact migration gates and complete input consumption",
+          "duration": 0.4992000000000303,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 14 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 14 with exact migration gates and complete input consumption",
+          "duration": 0.35920000000004393,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes version 15 with exact migration gates and complete input consumption",
+          "status": "passed",
+          "title": "decodes version 15 with exact migration gates and complete input consumption",
+          "duration": 0.3503000000000043,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v1 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v1 feature defaults",
+          "duration": 2.0921000000000163,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v10 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v10 feature defaults",
+          "duration": 0.777499999999975,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v11 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v11 feature defaults",
+          "duration": 0.6605999999999881,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v12 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v12 feature defaults",
+          "duration": 0.7604000000000042,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v13 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v13 feature defaults",
+          "duration": 0.6556999999999675,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v14 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v14 feature defaults",
+          "duration": 0.7642000000000166,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder decodes every entity layout with v15 feature defaults",
+          "status": "passed",
+          "title": "decodes every entity layout with v15 feature defaults",
+          "duration": 0.8716000000000008,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder uses Uint8Array bounds rather than ignoring unrelated bytes in its backing buffer",
+          "status": "passed",
+          "title": "uses Uint8Array bounds rather than ignoring unrelated bytes in its backing buffer",
+          "duration": 0.916499999999985,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder retains valid legacy non-finite values but rejects non-finite physics numbers",
+          "status": "passed",
+          "title": "retains valid legacy non-finite values but rejects non-finite physics numbers",
+          "duration": 1.844099999999969,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder distinguishes unsupported versions, shape features, and joint features",
+          "status": "passed",
+          "title": "distinguishes unsupported versions, shape features, and joint features",
+          "duration": 0.6536000000000399,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder rejects truncation at every byte boundary with a typed reason",
+          "status": "passed",
+          "title": "rejects truncation at every byte boundary with a typed reason",
+          "duration": 66.53999999999996,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder rejects trailing bytes unless a framing caller explicitly permits them",
+          "status": "passed",
+          "title": "rejects trailing bytes unless a framing caller explicitly permits them",
+          "duration": 0.397199999999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder rejects corrupt booleans, fp discriminators, UTF-8, lengths, floats, and oversized inputs",
+          "status": "passed",
+          "title": "rejects corrupt booleans, fp discriminators, UTF-8, lengths, floats, and oversized inputs",
+          "duration": 0.8254000000000019,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder enforces configured collection limits independently of the signed wire maximum",
+          "status": "passed",
+          "title": "enforces configured collection limits independently of the signed wire maximum",
+          "duration": 0.16480000000001382,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native database map binary decoder"],
+          "fullName": "native database map binary decoder returns detached version-migrated native JSON, not shared input or approximate physics",
+          "status": "passed",
+          "title": "returns detached version-migrated native JSON, not shared input or approximate physics",
+          "duration": 0.9899000000000342,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v1 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v1 JSON without normalization",
+          "duration": 1.974899999999991,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v10 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v10 JSON without normalization",
+          "duration": 0.9437999999999533,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v11 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v11 JSON without normalization",
+          "duration": 1.2379999999999995,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v12 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v12 JSON without normalization",
+          "duration": 0.9356000000000222,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v13 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v13 JSON without normalization",
+          "duration": 0.9399000000000228,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v14 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v14 JSON without normalization",
+          "duration": 0.7386000000000195,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation round-trips decoded v15 JSON without normalization",
+          "status": "passed",
+          "title": "round-trips decoded v15 JSON without normalization",
+          "duration": 0.7162000000000148,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation recognizes but strictly rejects the exporter physicsBodies side channel",
+          "status": "passed",
+          "title": "recognizes but strictly rejects the exporter physicsBodies side channel",
+          "duration": 0.3754000000000133,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation preserves holes, explicit nulls, ordering and signed duplicate references",
+          "status": "passed",
+          "title": "preserves holes, explicit nulls, ordering and signed duplicate references",
+          "duration": 0.6988000000000056,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation rejects unknown fields instead of silently dropping unsupported native mechanics",
+          "status": "passed",
+          "title": "rejects unknown fields instead of silently dropping unsupported native mechanics",
+          "duration": 0.39119999999996935,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation rejects malformed raw JSON values and future versions with typed paths",
+          "status": "passed",
+          "title": "rejects malformed raw JSON values and future versions with typed paths",
+          "duration": 0.4847000000000321,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["strict native JSON recognition and validation"],
+          "fullName": "strict native JSON recognition and validation accepts native optional circle angle and polygon shrink state without normalization",
+          "status": "passed",
+          "title": "accepts native optional circle angle and polygon shrink state without normalization",
+          "duration": 0.807200000000023,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON-only source fields"],
+          "fullName": "native JSON-only source fields validates prismatic joints without claiming a database-binary representation",
+          "status": "passed",
+          "title": "validates prismatic joints without claiming a database-binary representation",
+          "duration": 0.29340000000001965,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON-only source fields"],
+          "fullName": "native JSON-only source fields validates chain shapes and fixture fs/zp while binary still rejects unknown tags",
+          "status": "passed",
+          "title": "validates chain shapes and fixture fs/zp while binary still rejects unknown tags",
+          "duration": 0.4230000000000018,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON-only source fields"],
+          "fullName": "native JSON-only source fields permits optional generic JSON ig and v10+ votes, but preserves their presence when supplied",
+          "status": "passed",
+          "title": "permits optional generic JSON ig and v10+ votes, but preserves their presence when supplied",
+          "duration": 0.34660000000002356,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON-only source fields"],
+          "fullName": "native JSON-only source fields rejects explicit undefined instead of silently converting it to missing JSON",
+          "status": "passed",
+          "title": "rejects explicit undefined instead of silently converting it to missing JSON",
+          "duration": 0.22620000000000573,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native outer transports and legacy migration"],
+          "fullName": "native outer transports and legacy migration decodes fixed reference URI-LZ and Base64 database payloads and applies envelope metadata",
+          "status": "passed",
+          "title": "decodes fixed reference URI-LZ and Base64 database payloads and applies envelope metadata",
+          "duration": 1.7253000000000043,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native outer transports and legacy migration"],
+          "fullName": "native outer transports and legacy migration decodes zlib/BonkView with signed int29, dynamic cap-zone keys and original v1 merge",
+          "status": "passed",
+          "title": "decodes zlib/BonkView with signed int29, dynamic cap-zone keys and original v1 merge",
+          "duration": 4.9173999999999864,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native outer transports and legacy migration"],
+          "fullName": "native outer transports and legacy migration rejects malformed database transport alphabets, padding, truncation and trailing data",
+          "status": "passed",
+          "title": "rejects malformed database transport alphabets, padding, truncation and trailing data",
+          "duration": 1.1129000000000246,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native outer transports and legacy migration"],
+          "fullName": "native outer transports and legacy migration keeps URI, inflation, legacy graph and limit failures distinct and typed",
+          "status": "passed",
+          "title": "keeps URI, inflation, legacy graph and limit failures distinct and typed",
+          "duration": 18.899299999999982,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native PSON primitive reader and merge"],
+          "fullName": "native PSON primitive reader and merge decodes primitives, little-endian numbers, dictionary order and exact static strings",
+          "status": "passed",
+          "title": "decodes primitives, little-endian numbers, dictionary order and exact static strings",
+          "duration": 1.085300000000018,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native PSON primitive reader and merge"],
+          "fullName": "native PSON primitive reader and merge resets source v through original merge and validates newer optional fields by native-json policy",
+          "status": "passed",
+          "title": "resets source v through original merge and validates newer optional fields by native-json policy",
+          "duration": 0.9821000000000026,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native PSON primitive reader and merge"],
+          "fullName": "native PSON primitive reader and merge decodes the PSON URI-LZ transport with a fixed reference wrapper",
+          "status": "passed",
+          "title": "decodes the PSON URI-LZ transport with a fixed reference wrapper",
+          "duration": 0.7340000000000373,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native PSON primitive reader and merge"],
+          "fullName": "native PSON primitive reader and merge rejects noncanonical integers, overflow, duplicate keys and unsupported PSON features",
+          "status": "passed",
+          "title": "rejects noncanonical integers, overflow, duplicate keys and unsupported PSON features",
+          "duration": 0.789799999999957,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON joint and feature preservation"],
+          "fullName": "native JSON joint and feature preservation retains joint labels and common distance fields without inventing missing fields",
+          "status": "passed",
+          "title": "retains joint labels and common distance fields without inventing missing fields",
+          "duration": 0.48790000000002465,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["native JSON joint and feature preservation"],
+          "fullName": "native JSON joint and feature preservation applies votes, ig and force-zone version gates only in database-version policy",
+          "status": "passed",
+          "title": "applies votes, ig and force-zone version gates only in database-version policy",
+          "duration": 2.47969999999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1793020902845,
+      "endTime": 1793020902983.4797,
+      "status": "passed",
+      "message": "",
+      "name": "E:/Projects/bonk-rl-env/tests/unit/native-map-codec.test.ts"
+    }
+  ]
+}

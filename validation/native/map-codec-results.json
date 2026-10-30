@@ -1,0 +1,740 @@
+{
+  "schema": 1,
+  "corpus": {
+    "records": 289,
+    "passed": 289,
+    "failed": 0,
+    "uniqueTableAndRecord": 288
+  },
+  "databaseVersions": {
+    "4": 2,
+    "5": 1,
+    "7": 3,
+    "8": 2,
+    "9": 3,
+    "10": 14,
+    "12": 14,
+    "13": 76,
+    "14": 60
+  },
+  "fieldPresence": {
+    ".capZones": 289,
+    ".capZones[].i": 55,
+    ".capZones[].l": 55,
+    ".capZones[].n": 55,
+    ".capZones[].ty": 55,
+    ".m": 289,
+    ".m.a": 289,
+    ".m.authid": 289,
+    ".m.cr": 289,
+    ".m.date": 289,
+    ".m.dbid": 289,
+    ".m.dbv": 289,
+    ".m.mo": 289,
+    ".m.n": 289,
+    ".m.pub": 289,
+    ".m.rxa": 289,
+    ".m.rxdb": 289,
+    ".m.rxid": 289,
+    ".m.rxn": 289,
+    ".m.vd": 164,
+    ".m.vu": 164,
+    ".physics": 289,
+    ".physics.bodies": 289,
+    ".physics.bodies[].a": 2506,
+    ".physics.bodies[].av": 2506,
+    ".physics.bodies[].cf": 2506,
+    ".physics.bodies[].cf.ct": 2506,
+    ".physics.bodies[].cf.w": 2506,
+    ".physics.bodies[].cf.x": 2506,
+    ".physics.bodies[].cf.y": 2506,
+    ".physics.bodies[].fx": 2506,
+    ".physics.bodies[].fz": 2506,
+    ".physics.bodies[].fz.a": 2506,
+    ".physics.bodies[].fz.cf": 2506,
+    ".physics.bodies[].fz.d": 2506,
+    ".physics.bodies[].fz.on": 2506,
+    ".physics.bodies[].fz.p": 2506,
+    ".physics.bodies[].fz.t": 2506,
+    ".physics.bodies[].fz.x": 2506,
+    ".physics.bodies[].fz.y": 2506,
+    ".physics.bodies[].lv": 2506,
+    ".physics.bodies[].p": 2506,
+    ".physics.bodies[].s": 2506,
+    ".physics.bodies[].s.ad": 2506,
+    ".physics.bodies[].s.bu": 2506,
+    ".physics.bodies[].s.de": 2506,
+    ".physics.bodies[].s.f_1": 2506,
+    ".physics.bodies[].s.f_2": 2506,
+    ".physics.bodies[].s.f_3": 2506,
+    ".physics.bodies[].s.f_4": 2506,
+    ".physics.bodies[].s.f_c": 2506,
+    ".physics.bodies[].s.f_p": 2506,
+    ".physics.bodies[].s.fr": 2506,
+    ".physics.bodies[].s.fric": 2506,
+    ".physics.bodies[].s.fricp": 2506,
+    ".physics.bodies[].s.ld": 2506,
+    ".physics.bodies[].s.n": 2506,
+    ".physics.bodies[].s.re": 2506,
+    ".physics.bodies[].s.type": 2506,
+    ".physics.bro": 289,
+    ".physics.fixtures": 289,
+    ".physics.fixtures[].d": 13656,
+    ".physics.fixtures[].de": 13656,
+    ".physics.fixtures[].f": 13656,
+    ".physics.fixtures[].fp": 13656,
+    ".physics.fixtures[].fr": 13656,
+    ".physics.fixtures[].ig": 6548,
+    ".physics.fixtures[].n": 13656,
+    ".physics.fixtures[].ng": 13656,
+    ".physics.fixtures[].np": 13656,
+    ".physics.fixtures[].re": 13656,
+    ".physics.fixtures[].sh": 13656,
+    ".physics.joints": 289,
+    ".physics.joints[].aa": 678,
+    ".physics.joints[].ab": 321,
+    ".physics.joints[].ba": 968,
+    ".physics.joints[].bb": 968,
+    ".physics.joints[].d": 968,
+    ".physics.joints[].d.bf": 968,
+    ".physics.joints[].d.cc": 968,
+    ".physics.joints[].d.dl": 968,
+    ".physics.joints[].d.dr": 321,
+    ".physics.joints[].d.el": 357,
+    ".physics.joints[].d.em": 357,
+    ".physics.joints[].d.fh": 321,
+    ".physics.joints[].d.la": 357,
+    ".physics.joints[].d.mmt": 357,
+    ".physics.joints[].d.ms": 357,
+    ".physics.joints[].d.ua": 357,
+    ".physics.joints[].pa": 270,
+    ".physics.joints[].pax": 270,
+    ".physics.joints[].pay": 270,
+    ".physics.joints[].pf": 270,
+    ".physics.joints[].pl": 270,
+    ".physics.joints[].plen": 270,
+    ".physics.joints[].pms": 270,
+    ".physics.joints[].pu": 270,
+    ".physics.joints[].sax": 20,
+    ".physics.joints[].say": 20,
+    ".physics.joints[].sf": 20,
+    ".physics.joints[].slen": 20,
+    ".physics.joints[].type": 968,
+    ".physics.ppm": 289,
+    ".physics.shapes": 289,
+    ".physics.shapes[].a": 9888,
+    ".physics.shapes[].c": 13656,
+    ".physics.shapes[].h": 7382,
+    ".physics.shapes[].r": 3768,
+    ".physics.shapes[].s": 2506,
+    ".physics.shapes[].sk": 11150,
+    ".physics.shapes[].type": 13656,
+    ".physics.shapes[].v": 2506,
+    ".physics.shapes[].w": 7382,
+    ".s": 289,
+    ".s.fl": 289,
+    ".s.gd": 289,
+    ".s.nc": 289,
+    ".s.pq": 289,
+    ".s.re": 289,
+    ".spawns": 289,
+    ".spawns[].b": 2004,
+    ".spawns[].f": 2004,
+    ".spawns[].gr": 2004,
+    ".spawns[].n": 2004,
+    ".spawns[].priority": 2004,
+    ".spawns[].r": 2004,
+    ".spawns[].x": 2004,
+    ".spawns[].xv": 2004,
+    ".spawns[].y": 2004,
+    ".spawns[].ye": 2004,
+    ".spawns[].yv": 2004,
+    ".v": 289
+  },
+  "jointTypes": {
+    "lpj": 270,
+    "rv": 357,
+    "lsj": 20,
+    "d": 321
+  },
+  "shapeTypes": {
+    "bx": 7382,
+    "ci": 3768,
+    "po": 2506
+  },
+  "originalFeatures": {
+    "mapsWithVotes": 164,
+    "mapsWithInnerGrapple": 31,
+    "activeForceZoneMaps": 6,
+    "activeForceZoneBodies": 25
+  },
+  "arenaReceipts": [
+    {
+      "index": 111,
+      "table": "arrowMapStrings",
+      "tableIndex": 14,
+      "name": "Partition Demolition",
+      "dbv": 2,
+      "binaryVersion": 12,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [],
+      "arena": {
+        "accepted": true,
+        "ppm": 12,
+        "spawnCount": 8,
+        "normalizedPhysics": true
+      }
+    },
+    {
+      "index": 115,
+      "table": "arrowMapStrings",
+      "tableIndex": 18,
+      "name": "Arrow Columns II",
+      "dbv": 2,
+      "binaryVersion": 12,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [],
+      "arena": {
+        "accepted": true,
+        "ppm": 8,
+        "spawnCount": 7,
+        "normalizedPhysics": true
+      }
+    },
+    {
+      "index": 117,
+      "table": "arrowMapStrings",
+      "tableIndex": 20,
+      "name": "DARUDE - SANDSTONE",
+      "dbv": 2,
+      "binaryVersion": 13,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [],
+      "arena": {
+        "accepted": true,
+        "ppm": 15,
+        "spawnCount": 6,
+        "normalizedPhysics": true
+      }
+    },
+    {
+      "index": 169,
+      "table": "grappleMapStrings",
+      "tableIndex": 39,
+      "name": "Wobble Cross",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": true,
+      "forceZones": [],
+      "arena": {
+        "accepted": true,
+        "ppm": 12,
+        "spawnCount": 7,
+        "normalizedPhysics": true
+      }
+    },
+    {
+      "index": 214,
+      "table": "grappleMapStrings",
+      "tableIndex": 84,
+      "name": "Tub Jump",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": true,
+      "forceZones": [
+        {
+          "bodyIndex": 0,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": -170,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[0].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[0].fz.on: active force zones require contact-time force injection"
+      }
+    },
+    {
+      "index": 218,
+      "table": "grappleMapStrings",
+      "tableIndex": 88,
+      "name": "Cloverloaded",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [
+        {
+          "bodyIndex": 5,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": -80,
+            "d": false,
+            "p": true,
+            "a": false,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[5].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[5].fz.on: active force zones require contact-time force injection"
+      }
+    },
+    {
+      "index": 256,
+      "table": "grappleMapStrings",
+      "tableIndex": 126,
+      "name": "Uncanny",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [
+        {
+          "bodyIndex": 0,
+          "fz": {
+            "on": true,
+            "x": 50,
+            "y": 0,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 1,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": -120,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 2,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": 70,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 3,
+          "fz": {
+            "on": true,
+            "x": -50,
+            "y": 0,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 5,
+          "fz": {
+            "on": true,
+            "x": 50,
+            "y": -50,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 6,
+          "fz": {
+            "on": true,
+            "x": -50,
+            "y": -50,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 7,
+          "fz": {
+            "on": true,
+            "x": 50,
+            "y": 50,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 8,
+          "fz": {
+            "on": true,
+            "x": -50,
+            "y": 50,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[0].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[0].fz.on: active force zones require contact-time force injection"
+      }
+    },
+    {
+      "index": 258,
+      "table": "grappleMapStrings",
+      "tableIndex": 128,
+      "name": "Thalassophobia",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [
+        {
+          "bodyIndex": 0,
+          "fz": {
+            "on": true,
+            "x": 70,
+            "y": -60,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 1,
+          "fz": {
+            "on": true,
+            "x": -70,
+            "y": -60,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 2,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": 80,
+            "d": true,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[0].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[0].fz.on: active force zones require contact-time force injection"
+      }
+    },
+    {
+      "index": 266,
+      "table": "grappleMapStrings",
+      "tableIndex": 136,
+      "name": "Soft Conveyor 2",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [
+        {
+          "bodyIndex": 0,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": -300,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 2,
+          "fz": {
+            "on": true,
+            "x": 35,
+            "y": 0,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 3,
+          "fz": {
+            "on": true,
+            "x": -35,
+            "y": 0,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 4,
+          "fz": {
+            "on": true,
+            "x": 5,
+            "y": -80,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 5,
+          "fz": {
+            "on": true,
+            "x": -300,
+            "y": -20,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 6,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": 300,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 7,
+          "fz": {
+            "on": true,
+            "x": 300,
+            "y": -20,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 8,
+          "fz": {
+            "on": true,
+            "x": -5,
+            "y": 80,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 9,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": 300,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 10,
+          "fz": {
+            "on": true,
+            "x": 0,
+            "y": -300,
+            "d": false,
+            "p": true,
+            "a": true,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[0].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[0].fz.on: active force zones require contact-time force injection"
+      }
+    },
+    {
+      "index": 271,
+      "table": "grappleMapStrings",
+      "tableIndex": 141,
+      "name": "Infinity",
+      "dbv": 2,
+      "binaryVersion": 14,
+      "hasVotes": true,
+      "hasInnerGrapple": false,
+      "forceZones": [
+        {
+          "bodyIndex": 22,
+          "fz": {
+            "on": true,
+            "x": 11500,
+            "y": 0,
+            "d": false,
+            "p": true,
+            "a": false,
+            "t": 0,
+            "cf": 0
+          }
+        },
+        {
+          "bodyIndex": 23,
+          "fz": {
+            "on": true,
+            "x": -11500,
+            "y": 0,
+            "d": false,
+            "p": true,
+            "a": false,
+            "t": 0,
+            "cf": 0
+          }
+        }
+      ],
+      "arena": {
+        "accepted": false,
+        "error": "NativeMapSessionError",
+        "code": "UNSUPPORTED_NATIVE_MECHANIC",
+        "path": "physics.bodies[22].fz.on",
+        "message": "Unsupported native static Classic map at physics.bodies[22].fz.on: active force zones require contact-time force injection"
+      }
+    }
+  ],
+  "pson": {
+    "samples": [
+      {
+        "map": "A E S T H E T I C   WAVES",
+        "bytes": 14593
+      },
+      {
+        "map": "Altum",
+        "bytes": 2657
+      },
+      {
+        "map": "Antarctica",
+        "bytes": 19734
+      },
+      {
+        "map": "Apocalypse",
+        "bytes": 9469
+      },
+      {
+        "map": "The Architect",
+        "bytes": 15979
+      },
+      {
+        "map": "At the mine",
+        "bytes": 12591
+      },
+      {
+        "map": "Bad Platform",
+        "bytes": 3473
+      },
+      {
+        "map": "Balance",
+        "bytes": 4510
+      },
+      {
+        "map": "The Ball-cher Knife",
+        "bytes": 3493
+      },
+      {
+        "map": "Balloon Fight",
+        "bytes": 4835
+      },
+      {
+        "map": "Balls 2 The Wall",
+        "bytes": 2100
+      },
+      {
+        "map": "battle for the swing",
+        "bytes": 1669
+      }
+    ],
+    "originalWireCapture": false,
+    "evidence": "Reference PSON 2.0.0 encoding of original-derived maps, compared against original merge execution. Not a live or original-produced PSON wire capture."
+  },
+  "sourceHashes": {
+    "raw": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "readable": "2097916f16311692a5a457690e3bd8377ac0d07e7d58ad95490c73ff74baadd3",
+    "slotAccurate": "9da97285e3c5ea36a88ef99e9927d4a513be913ebc376aae9696282f86c37f89"
+  },
+  "failures": []
+}

@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -236,5 +237,24 @@ describe('local-ci: changedFiles prettier scope', () => {
     const files = changedFiles(false);
     expect(files).not.toContain('scripts/validate-live-extraction.js');
     expect(files).not.toContain('Webscripts/bonk-live-tool.user.js');
+  });
+});
+
+describe('local-ci: check listing', () => {
+  it('lists checks without invoking any suites', () => {
+    const root = path.resolve(__dirname, '../..');
+    const result = spawnSync('npx', ['tsx', 'scripts/local-ci.ts', '--list'], {
+      cwd: root,
+      shell: true,
+      encoding: 'utf8',
+      windowsHide: true,
+      timeout: 60_000,
+    });
+
+    expect(result.status, result.stderr || result.stdout).toBe(0);
+    expect(result.stdout).toContain('[quick]');
+    expect(result.stdout).toContain('[standard]');
+    expect(result.stdout).toContain('[full]');
+    expect(result.stdout).toContain('[bench]');
   });
 });

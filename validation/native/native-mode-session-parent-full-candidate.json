@@ -1,0 +1,1206 @@
+{
+  "schema": "bonk-rl-env.native-mode-session-differential",
+  "version": 1,
+  "pass": false,
+  "status": "FAIL",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "freshCreateNewStateEveryScenario": true,
+  "scope": "Pinned original alpha2s createNewState/Physics.step versus src/core/native-mode-session.ts delegating static match lifecycle to createNativeSession. Covers declared fresh-session Classic, Arrow expiry, Death Arrow lethal/result/rollover and VTOL contact scenarios; not public PhysicsEngine/environment integration, dynamic maps, complete modes, online play, respawn matches or cross-platform bit parity.",
+  "provenance": {
+    "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "functions": [
+      {
+        "name": "createNewState",
+        "start": 1771638,
+        "end": 1790433,
+        "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+      },
+      {
+        "name": "step",
+        "start": 1790462,
+        "end": 1862467,
+        "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+      }
+    ],
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localFiles": {
+      "src/core/native-mode-session.ts": "1e62e69d678e0111b9b59f958309f4f8a098f57c9bcab43e333e6c3b2abd93dc",
+      "src/core/native-session.ts": "3d4214739b976033e51f493f6ed6605b01076f0ee4317b96071c8b2699bbf363",
+      "src/core/classic-physics.ts": "1a2b407785b5892e35643d48e93d367cc3452f945b1b98f5517e03243a5c41fc",
+      "src/core/native-spawns.ts": "82a475f88f3c2cb91838e959b381207b58f11382825076b49e28fd06104605b4",
+      "src/core/safe-trig.ts": "7d2c4c79c2a36dd83c95ea63704bb9d1d9e8978c1586f866d71aa6368f31b7cc"
+    }
+  },
+  "scenarioNames": [],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "classic-lifecycle-b-q1",
+      "kind": "classic-lifecycle",
+      "mode": "b",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 92,
+      "tickCap": 92,
+      "ticks": 92,
+      "frames": 93,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 4942,
+      "numericComparisons": 1409,
+      "discreteComparisons": 3533,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 31,
+        "countdownTicks": 61,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 1,
+        "roundResults": [
+          {
+            "winner": 1,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 1,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 1
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 29.416666666666668,
+          "y": 50.833333333333336,
+          "energy": 1000
+        },
+        {
+          "x": 25.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 1000
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "classic-lifecycle-b-q2",
+      "kind": "classic-lifecycle",
+      "mode": "b",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 92,
+      "tickCap": 92,
+      "ticks": 92,
+      "frames": 93,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 4942,
+      "numericComparisons": 1409,
+      "discreteComparisons": 3533,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 31,
+        "countdownTicks": 61,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 1,
+        "roundResults": [
+          {
+            "winner": 1,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 1,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 1
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 29.416666666666668,
+          "y": 50.833333333333336,
+          "energy": 1000
+        },
+        {
+          "x": 25.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 1000
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "arrow-charge-expiry-ar-q1",
+      "kind": "arrow-charge-expiry",
+      "mode": "ar",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 425,
+      "tickCap": 425,
+      "ticks": 425,
+      "frames": 426,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 21925,
+      "numericComparisons": 6880,
+      "discreteComparisons": 15045,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": {
+        "tick": 425,
+        "field": "coverage",
+        "expected": "fresh native session Arrow reaches full draw"
+      },
+      "mismatches": [
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "fresh native session Arrow reaches full draw"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile fte=0 then expiry"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "Arrow projectile trajectory remains in-round"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 274,
+        "countdownTicks": 151,
+        "resultTicks": 178,
+        "rollovers": 1,
+        "postRolloverTicks": 226,
+        "roundResults": [
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          },
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 16,
+        "deaths": [
+          {
+            "tick": 109,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 109,
+            "id": 1,
+            "cause": 4
+          },
+          {
+            "tick": 339,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 339,
+            "id": 1,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 4
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "fresh native session Arrow reaches full draw"
+        },
+        {
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile fte=0 then expiry"
+        },
+        {
+          "field": "coverage",
+          "expected": "Arrow projectile trajectory remains in-round"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 29.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 750
+        },
+        {
+          "x": 25.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 750
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "arrow-charge-expiry-ar-q2",
+      "kind": "arrow-charge-expiry",
+      "mode": "ar",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 425,
+      "tickCap": 425,
+      "ticks": 425,
+      "frames": 426,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 21925,
+      "numericComparisons": 6880,
+      "discreteComparisons": 15045,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": {
+        "tick": 425,
+        "field": "coverage",
+        "expected": "fresh native session Arrow reaches full draw"
+      },
+      "mismatches": [
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "fresh native session Arrow reaches full draw"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "native projectile fte=0 then expiry"
+        },
+        {
+          "tick": 425,
+          "field": "coverage",
+          "expected": "Arrow projectile trajectory remains in-round"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 274,
+        "countdownTicks": 151,
+        "resultTicks": 178,
+        "rollovers": 1,
+        "postRolloverTicks": 226,
+        "roundResults": [
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          },
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 16,
+        "deaths": [
+          {
+            "tick": 109,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 109,
+            "id": 1,
+            "cause": 4
+          },
+          {
+            "tick": 339,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 339,
+            "id": 1,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 4
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "fresh native session Arrow reaches full draw"
+        },
+        {
+          "field": "coverage",
+          "expected": "native release and post-fire energy"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile lethal-owner attribution"
+        },
+        {
+          "field": "coverage",
+          "expected": "native projectile fte=0 then expiry"
+        },
+        {
+          "field": "coverage",
+          "expected": "Arrow projectile trajectory remains in-round"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 29.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 750
+        },
+        {
+          "x": 25.416666666666668,
+          "y": 15.833333333333334,
+          "energy": 750
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "death-arrow-result-rollover-ard-q1",
+      "kind": "death-arrow-result-rollover",
+      "mode": "ard",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 420,
+      "tickCap": 420,
+      "ticks": 420,
+      "frames": 421,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 25235,
+      "numericComparisons": 9219,
+      "discreteComparisons": 16016,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "projectile.x": 0,
+        "projectile.y": 0,
+        "projectile.xv": 0,
+        "projectile.yv": 0,
+        "projectile.a": 0,
+        "projectile.av": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 269,
+        "countdownTicks": 151,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 91,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 1,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [231],
+        "firedOwners": [0],
+        "postFireEnergies": [500],
+        "maxDraw": 100,
+        "deaths": [
+          {
+            "tick": 239,
+            "id": 1,
+            "cause": 1
+          }
+        ],
+        "deathCauses": {
+          "1": 1,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 1,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 20.416666666666668,
+          "y": 15,
+          "energy": 500
+        },
+        {
+          "x": 38.333333333333336,
+          "y": 15,
+          "energy": 500
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "death-arrow-result-rollover-ard-q2",
+      "kind": "death-arrow-result-rollover",
+      "mode": "ard",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 420,
+      "tickCap": 420,
+      "ticks": 420,
+      "frames": 421,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 25235,
+      "numericComparisons": 9219,
+      "discreteComparisons": 16016,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "projectile.x": 0,
+        "projectile.y": 0,
+        "projectile.xv": 0,
+        "projectile.yv": 0,
+        "projectile.a": 0,
+        "projectile.av": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 269,
+        "countdownTicks": 151,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 91,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 1,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [231],
+        "firedOwners": [0],
+        "postFireEnergies": [500],
+        "maxDraw": 100,
+        "deaths": [
+          {
+            "tick": 239,
+            "id": 1,
+            "cause": 1
+          }
+        ],
+        "deathCauses": {
+          "1": 1,
+          "3": 0,
+          "4": 0
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 1,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 0,
+        "nativeWingDiscContacts": 0,
+        "nativeWingWingContacts": 0,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": []
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 20.416666666666668,
+          "y": 15,
+          "energy": 500
+        },
+        {
+          "x": 38.333333333333336,
+          "y": 15,
+          "energy": 500
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vtol-contact-v-q1",
+      "kind": "vtol-contact",
+      "mode": "v",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 185,
+      "tickCap": 185,
+      "ticks": 185,
+      "frames": 186,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 10067,
+      "numericComparisons": 3294,
+      "discreteComparisons": 6773,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 92,
+        "countdownTicks": 93,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 33,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 62,
+            "id": 1,
+            "cause": 1
+          },
+          {
+            "tick": 130,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 1,
+          "3": 0,
+          "4": 1
+        },
+        "vtStates": [0, 1, 2, 3],
+        "nonzeroAngularTicks": 68,
+        "lastHitTicks": 68,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 1,
+        "nativeWingDiscContacts": 2,
+        "nativeWingWingContacts": 1,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": [
+          {
+            "fixtureA": "vtolwing",
+            "bodyA": "disc",
+            "bodyB": "phys",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "vtolwing",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "discbody",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "discbody",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          }
+        ]
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 17.099999999999998,
+          "y": 15,
+          "energy": 1000
+        },
+        {
+          "x": 15,
+          "y": 15,
+          "energy": 1000
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vtol-contact-v-q2",
+      "kind": "vtol-contact",
+      "mode": "v",
+      "quality": 2,
+      "seed": 1,
+      "requestedTicks": 185,
+      "tickCap": 185,
+      "ticks": 185,
+      "frames": 186,
+      "pass": true,
+      "status": "PASS",
+      "comparisons": 10067,
+      "numericComparisons": 3294,
+      "discreteComparisons": 6773,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 92,
+        "countdownTicks": 93,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 33,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 62,
+            "id": 1,
+            "cause": 1
+          },
+          {
+            "tick": 130,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 1,
+          "3": 0,
+          "4": 1
+        },
+        "vtStates": [0, 1, 2, 3],
+        "nonzeroAngularTicks": 68,
+        "lastHitTicks": 68,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0,
+        "firstChargeSourceState": null,
+        "nativeWingWorldContacts": 1,
+        "nativeWingDiscContacts": 2,
+        "nativeWingWingContacts": 1,
+        "nativeDiscBodyWorldContacts": 0,
+        "nativeDiscBodyDiscContacts": 0,
+        "nativeContactSamples": [
+          {
+            "fixtureA": "vtolwing",
+            "bodyA": "disc",
+            "bodyB": "phys",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "vtolwing",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "discbody",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          },
+          {
+            "fixtureA": "vtolwing",
+            "fixtureB": "discbody",
+            "bodyA": "disc",
+            "bodyB": "disc",
+            "touching": true
+          }
+        ]
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "initialNativeDiscs": [
+        {
+          "x": 17.099999999999998,
+          "y": 15,
+          "energy": 1000
+        },
+        {
+          "x": 15,
+          "y": 15,
+          "energy": 1000
+        }
+      ],
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "injected-local-disc-xv-error",
+    "injectedError": 0.000001,
+    "detected": true,
+    "firstMismatch": {
+      "tick": 1,
+      "entity": "disc",
+      "id": 0,
+      "field": "xv",
+      "actual": 0.000001,
+      "native": 0,
+      "error": 0.000001
+    },
+    "pass": true
+  },
+  "totals": {
+    "scenarios": 8,
+    "passed": 6,
+    "failed": 2,
+    "ticks": 2244,
+    "frames": 2252,
+    "comparisons": 124338,
+    "numericComparisons": 41604,
+    "discreteComparisons": 82734,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 10,
+    "localRepairOrReseeds": 0,
+    "rollovers": 8
+  }
+}

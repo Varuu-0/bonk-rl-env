@@ -17,6 +17,13 @@ import * as path from 'path';
 
 import { PhysicsEngine, PlayerInput, PlayerState, DeathEvent, MapDef, MapBodyDef, TPS } from './physics-engine';
 import { normalizeMap } from './map-adapter';
+import { isNativeMapJson, validateNativeMapJson, type NativeMap } from './native-map-codec';
+import { createNativeMapModeSession, createNativeMapSession, nativeMapToArena } from './native-map-session';
+import { createNativeFootballSession } from './native-football-session';
+import type { NativeSession, NativeSessionSnapshot } from './native-session';
+import type { NativeClassicMode } from './native-mode-session';
+import type { NativeClassicCapZone } from './native-classic-world';
+import { encodePlayerInput } from './action-codec';
 import { PRNG } from './prng';
 import { SharedMemoryManager } from '../ipc/shared-memory';
 import { assertValidAction, decodeEncodedAction } from './action-validation';
@@ -44,6 +51,14 @@ const MAX_TICKS_DEFAULT = 30 * TPS;
  * terminal holds (#393).
  */
 export const MAX_FRAME_SKIP = 100;
+
+/** Native authored-map canvas and world origin. ClassicPhysics deliberately
+ * retains native world metres internally; the public Observation contract is
+ * authored map pixels, so the adapter subtracts this origin on presentation. */
+const NATIVE_MAP_WIDTH = 730;
+const NATIVE_MAP_HEIGHT = 500;
+const NATIVE_ORIGIN_X = NATIVE_MAP_WIDTH / 2;
+const NATIVE_ORIGIN_Y = NATIVE_MAP_HEIGHT / 2;
 
 // SPAWN_POSITIONS removed, now read dynamically from map
 
@@ -113,8 +128,21 @@ export interface EnvironmentConfig {
   maxTicks?: number;
   /** Whether to use a random opponent policy (default true) */
   randomOpponent?: boolean;
-  /** Custom map definition */
-  mapData?: MapDef;
+  /** Raw native map JSON uses the native session path; exporter and internal
+   * MapDef objects remain on the explicitly legacy physics implementation. */
+  mapData?: MapDef | NativeMap;
+  /** Original room gameSettings.mo for raw native maps, independent of the
+   * map's m.mo targeting metadata. Static Arrow, Death Arrow and VTOL are
+   * supported; non-Classic dynamic-map mechanics are rejected explicitly. */
+  nativeMode?: NativeClassicMode | 'f';
+  /** Initial native countdown (default 90). The original test-state oracle
+   * uses 60; 5 is the other native fast-start value. Subsequent rounds
+   * retain the native 90-tick countdown. */
+  countdownTicks?: 5 | 60 | 90;
+  /** Native gameSettings.wl: rounds a team must win (1..9, or 999 for no
+   * score limit). Football scores use this limit; Classic uses the session
+   * default (3). */
+  roundsToWin?: number;
   /** Seed for deterministic randomness */
   seed?: number;
   /** Number of ticks to hold each action before requesting new decision (default 1) */
@@ -244,22 +272,41 @@ function resolveMapPath(mapFile: string): string {
   return path.resolve(__dirname, '..', '..', mapFile);
 }
 
-/**
- * Creates a simple default map config if none is provided.
- */
-function getDefaultMap(): MapDef {
-  return {
-    name: 'Default_Box',
-    spawnPoints: {
-      team_blue: { x: -200, y: -100 },
-      team_red: { x: 200, y: -100 },
-    },
-    bodies: [
-      { name: 'floor', type: 'rect', x: 0, y: 200, width: 800, height: 30, static: true },
-      { name: 'left', type: 'rect', x: -500, y: 0, width: 30, height: 600, static: true },
-      { name: 'right', type: 'rect', x: 500, y: 0, width: 30, height: 600, static: true },
-    ],
-  };
+/** Strict native-map selection shared by environment construction and pool
+ * transport sizing. Legacy MapDef/exported maps deliberately return null. */
+function configuredNativeMap(config: Partial<EnvironmentConfig>): NativeMap | null {
+  if (config.mapData) return isNativeMapJson(config.mapData) ? validateNativeMapJson(config.mapData) : null;
+  const configuredPath = config.mapPath || config.defaultMapPath || '';
+  const mapPath = configuredPath
+    ? resolveMapPath(configuredPath)
+    : path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+  } catch (error) {
+    const failure = new Error(
+      `Failed to load Bonk map "${mapPath}": ${error instanceof Error ? error.message : String(error)}`,
+    ) as Error & { cause?: unknown };
+    failure.cause = error;
+    throw failure;
+  }
+  if (!isNativeMapJson(parsed)) return null;
+  if (config.mapData) return null; // Malformed legacy MapDefs use their strict legacy normalizer.
+  try {
+    return validateNativeMapJson(parsed);
+  } catch (error) {
+    const failure = new Error(
+      `Failed to load Bonk map "${mapPath}": ${error instanceof Error ? error.message : String(error)}`,
+    ) as Error & { cause?: unknown };
+    failure.cause = error;
+    throw failure;
+  }
+}
+
+/** Capture records required per resident in a shared-memory batch. This is a
+ * strict map inspection, never an override or a second simulation backend. */
+export function getNativeCapZoneCapacityForPool(config: Partial<EnvironmentConfig> = {}): number {
+  return configuredNativeMap(config)?.capZones.length ?? 0;
 }
 
 // ─── Environment ─────────────────────────────────────────────────────
@@ -390,11 +437,26 @@ function getCapZoneSensorSize(
 }
 
 export class BonkEnvironment {
-  private physics: PhysicsEngine;
+  private physics!: PhysicsEngine;
+  /** Strict raw-native Classic path, including normalized dynamic map bodies.
+   * Exporter/internal MapDefs remain on the legacy engine until their own
+   * native migration is evidence-backed. */
+  private nativeSession: NativeSession | null = null;
+  private nativeMap: NativeMap | null = null;
+  private nativeArena: ReturnType<typeof nativeMapToArena> | null = null;
+  private nativeTick: number = 0;
+  private readonly nativeCountdownTicks: 5 | 60 | 90;
+  /** Native round countdown configuration; ordinary matches default to 90. */
+  private nativeDeathViews: Map<number, PlayerState> = new Map();
+  private nativeSnapshot: NativeSessionSnapshot | null = null;
+  private closed: boolean = false;
   /** Stored resolved config: flat reward keys are not stored — only the nested
    * `reward` object holds the resolved weights (single source of truth) (#220). */
-  private config: Required<Omit<EnvironmentConfig, 'killReward' | 'deathPenalty' | 'timePenalty' | 'reward'>> & {
+  private config: Required<
+    Omit<EnvironmentConfig, 'killReward' | 'deathPenalty' | 'timePenalty' | 'reward' | 'mapData'>
+  > & {
     reward: Required<ResolvedRewardConfig>;
+    mapData?: MapDef;
   };
   private aiPlayerId: number = 0;
   private opponentIds: number[] = [];
@@ -431,6 +493,25 @@ export class BonkEnvironment {
     // that only carry injected defaults (#204).
     const rawConfig = config as any;
     const frameSkip = config.frameSkip ?? rawConfig.frame_skip;
+    const nativeMode = rawConfig.nativeMode ?? 'b';
+    if (
+      nativeMode !== 'b' &&
+      nativeMode !== 'ar' &&
+      nativeMode !== 'ard' &&
+      nativeMode !== 'v' &&
+      nativeMode !== 'sp' &&
+      nativeMode !== 'bs' &&
+      nativeMode !== 'f'
+    ) {
+      throw new Error(
+        `Invalid nativeMode ${JSON.stringify(nativeMode)}: expected original gameSettings.mo b, ar, ard, v, sp or bs, or gameSettings.ga f`,
+      );
+    }
+    if (nativeMode === 'f' && !config.teamsEnabled) {
+      // Native football is a teams-only mode: createNewState spawns only teams
+      // 2 and 3. An FFA football room is not a native configuration.
+      throw new Error('Invalid nativeMode f: native football requires teamsEnabled (teams 2 and 3)');
+    }
 
     // Validate before map loading or world construction (#392). This keeps an
     // oversized opponent count from exhausting the fixed Box2D broadphase
@@ -443,36 +524,79 @@ export class BonkEnvironment {
     // `environment.defaultMapPath` into `defaultMapPath`, which the worker
     // forwards verbatim. `mapPath` is the per-env programmatic override;
     // the hardcoded WDB path is only the last-resort fallback.
-    let mapDef: MapDef;
     let mapFile = '';
-    if (config.mapData) {
-      // Programmatic mapData is normalized too: callers may pass either
-      // the real exported bonk format or an already-normalized MapDef.
-      mapDef = normalizeMap(config.mapData);
-    } else {
-      // Resolve relative paths against the project root (see
-      // resolveMapPath) so the loader's cwd-relative default cannot
-      // shadow the cwd-independent fallback in worker mode.
+    const nativeModeValue = rawConfig.nativeMode ?? 'b';
+    const nativeMap = nativeModeValue === 'f' ? null : configuredNativeMap(config);
+    if (nativeMap) {
+      // Arrow, Death Arrow and VTOL mechanics are not implemented in the
+      // unified dynamic world; reject a dynamic map for those modes at
+      // construction instead of silently dropping the mode mechanics.
+      // sp and bs run on the unified world when the map needs it (native
+      // step reads gameSettings.mo from the room settings argument,
+      // readable :7221); m.mo never selects physics (display metadata,
+      // readable :27591/:11269/:33953).
+      if (nativeModeValue === 'ar' || nativeModeValue === 'ard' || nativeModeValue === 'v') {
+        const probe = nativeMapToArena(nativeMap);
+        if ('physics' in probe) {
+          throw new Error(
+            `Invalid configuration: nativeMode ${JSON.stringify(nativeModeValue)} requires a static arena; ` +
+              'the configured native map uses dynamic mechanics (moving bodies, joints, shrink, force zones or capture zones) ' +
+              'that are only simulated by the unified dynamic world, which implements modes b, sp and bs only.',
+          );
+        }
+        this.nativeArena = probe;
+      } else {
+        this.nativeArena = nativeMapToArena(nativeMap, nativeModeValue as 'b' | 'sp' | 'bs');
+      }
+    }
+    let mapDef: MapDef | undefined = nativeMap ? undefined : config.mapData ? normalizeMap(config.mapData) : undefined;
+    if (nativeModeValue === 'f') {
+      // Football has no map JSON: the pitch is hardcoded in the native
+      // FootballPhysics class. Any map configuration would be silently
+      // ignored, so reject it instead.
+      if (config.mapData || config.mapPath || config.defaultMapPath) {
+        throw new Error(
+          'Invalid nativeMode f configuration: native football has no map; remove mapData/mapPath/defaultMapPath',
+        );
+      }
+    } else if (!config.mapData && !nativeMap) {
+      // Legacy maps retain their historical loader and fallback path. Native
+      // failures are thrown by configuredNativeMap before this branch.
       const configuredPath = config.mapPath || config.defaultMapPath || '';
       const mapPath = configuredPath
         ? resolveMapPath(configuredPath)
         : path.join(__dirname, '..', '..', 'maps', 'bonk_WDB__No_Mapshake__716916.json');
-      try {
-        const parsed = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
-        // Convert the real exported bonk format into the engine MapDef.
-        const normalized = normalizeMap(parsed);
-        mapDef = normalized;
-        mapFile = mapPath;
-      } catch (e) {
-        console.warn(`Could not load map "${mapPath}", using fallback box`);
-        mapDef = getDefaultMap();
-      }
+      const parsed = JSON.parse(fs.readFileSync(mapPath, 'utf8'));
+      mapDef = normalizeMap(parsed);
+      mapFile = mapPath;
+    }
+    // A non-Classic native room mode with no native map would silently fall
+    // back to the legacy engine and ignore the requested mode — the exact
+    // "silently omit mechanics" failure the map contract forbids. Legacy
+    // maps are only supported in the native Classic room mode 'b', whose
+    // native session accepts the legacy arena conversion. Every other
+    // native mode requires a native map (mapData/mapPath/defaultMapPath in
+    // native format). Fail loudly instead of training on the wrong engine.
+    if (nativeModeValue !== 'b' && nativeModeValue !== 'f' && !nativeMap) {
+      const configuredPath = config.mapPath || config.defaultMapPath || '';
+      throw new Error(
+        `Invalid configuration: nativeMode ${JSON.stringify(nativeModeValue)} requires a native map ` +
+          `(mapData/mapPath/defaultMapPath in native format); ` +
+          (configuredPath ? `"${configuredPath}" is not a native map. ` : 'no map was configured. ') +
+          `Legacy maps are only supported with nativeMode 'b' (default).`,
+      );
     }
 
-    // Read map-level physics overrides
-    this.ppm = config.ppm ?? (mapDef as any).physics?.ppm ?? 12;
-    this.capZones = (mapDef as any).capZones ?? [];
-
+    // Read map-level physics overrides. Raw native maps are authoritative for
+    // PPM and s.re/s.nc/s.fl; legacy tuning is rejected before a native reset.
+    this.nativeMap = nativeMap ?? null;
+    const nativeCountdownTicks = rawConfig.countdownTicks ?? 90;
+    if (nativeCountdownTicks !== 5 && nativeCountdownTicks !== 60 && nativeCountdownTicks !== 90) {
+      throw new Error(`Invalid native countdownTicks ${nativeCountdownTicks}: expected 5, 60 or 90`);
+    }
+    this.nativeCountdownTicks = nativeCountdownTicks;
+    this.ppm = this.nativeArena?.ppm ?? config.ppm ?? mapDef?.physics?.ppm ?? 12;
+    this.capZones = this.nativeArena ? [] : (mapDef?.capZones ?? []);
     // Opponent random-policy probabilities: accept both the direct
     // opp*Prob names and the config-loader's documented randomOpp*Prob
     // aliases; an explicit opp*Prob value wins over the alias.
@@ -480,7 +604,7 @@ export class BonkEnvironment {
     const oppUpProb = config.oppUpProb ?? config.randomOppUpProb ?? 0.15;
     const oppDownProb = config.oppDownProb ?? config.randomOppDownProb ?? 0.1;
     const oppHeavyProb = config.oppHeavyProb ?? config.randomOppHeavyProb ?? 0.05;
-    const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? 0.05;
+    const oppGrappleProb = config.oppGrappleProb ?? config.randomOppGrappleProb ?? (nativeMap ? 0 : 0.05);
 
     // Reward shaping weights. The flat killReward/deathPenalty/timePenalty
     // input aliases win over the nested reward section; both are resolved
@@ -500,6 +624,9 @@ export class BonkEnvironment {
       maxTicks: config.maxTicks ?? rawConfig.max_ticks ?? MAX_TICKS_DEFAULT,
       randomOpponent: config.randomOpponent ?? rawConfig.random_opponent ?? true,
       mapData: mapDef,
+      nativeMode,
+      countdownTicks: this.nativeCountdownTicks,
+      roundsToWin: config.roundsToWin ?? rawConfig.rounds_to_win ?? 3,
       // Seed 0 is a valid deterministic seed and must reach the PRNG: a
       // truthiness check would map `--seed 0` / `SEED=0` /
       // `environment.seed: 0` onto a random seed while reset(0) and
@@ -522,15 +649,10 @@ export class BonkEnvironment {
       randomOppDownProb: oppDownProb,
       randomOppHeavyProb: oppHeavyProb,
       randomOppGrappleProb: oppGrappleProb,
-      teamsEnabled: config.teamsEnabled ?? (mapDef as any).physics?.teams ?? false,
-      // Explicit config wins; then the map's parsed `settings.nc`; then
-      // the legacy `physics.nc` key hand-authored MapDefs carried before
-      // P3b (exporter emits nc under settings, issue #329).
-      noCollide: config.noCollide ?? mapDef.settings?.nc ?? mapDef.physics?.nc ?? false,
-      // Symmetric with noCollide: explicit config overrides the map's
-      // per-map settings (P3b fl/re gating).
-      flipped: config.flipped ?? !!mapDef.settings?.fl,
-      respawnEnabled: config.respawnEnabled ?? !!mapDef.settings?.re,
+      teamsEnabled: config.teamsEnabled ?? (mapDef as any)?.physics?.teams ?? false,
+      noCollide: nativeMap?.s.nc ?? config.noCollide ?? mapDef?.settings?.nc ?? mapDef?.physics?.nc ?? false,
+      flipped: nativeMap?.s.fl ?? config.flipped ?? !!mapDef?.settings?.fl,
+      respawnEnabled: nativeMap?.s.re ?? config.respawnEnabled ?? !!mapDef?.settings?.re,
       physics: config.physics ?? {},
       arena: config.arena ?? {},
       player: config.player ?? {},
@@ -591,6 +713,12 @@ export class BonkEnvironment {
     assertSupportedSeed(this.config.seed, 'constructor');
 
     this.rng = new PRNG(this.config.seed);
+    if (this.nativeMap || this.config.nativeMode === 'f') {
+      this.initializeNativeSession(rawConfig);
+      return;
+    }
+    if (!mapDef) throw new Error('Legacy environment requires a normalized MapDef');
+    const legacyMap = mapDef;
     this.physics = new PhysicsEngine({
       ticksPerSecond: config.physics?.ticksPerSecond,
       velocityIterations: config.physics?.solverIterations,
@@ -598,7 +726,7 @@ export class BonkEnvironment {
       // Per-map native physics quality (pq): 2 → 15/15 solver iterations,
       // anything else → 2/6 (DEOBFUSCATION §Solver Iterations). Explicit
       // solverIterations/positionIterations config keys override it.
-      physicsQuality: this.config.mapData.settings?.pq,
+      physicsQuality: this.config.mapData!.settings?.pq,
       // Per-map native settings (P3b): `fl` flips the move-force base,
       // `re` enables immediate respawn on death (except cap-zone
       // eliminations). Resolved at construction (config wins over the
@@ -638,19 +766,19 @@ export class BonkEnvironment {
       (this.physics as any).setScale(this.ppm);
     }
 
-    for (const body of this.config.mapData.bodies) {
+    for (const body of this.config.mapData!.bodies) {
       this.physics.addBody(body);
     }
 
     // Add joints if defined
-    if ((mapDef as any).joints && (mapDef as any).joints.length > 0) {
+    if (legacyMap.joints && legacyMap.joints.length > 0) {
       const bodyMap = (this.physics as any).getBodyMap?.();
       if (bodyMap) {
         // Create non-gear joints FIRST so gear referents (which the
         // engine resolves from the created-joint map) always exist,
         // regardless of the joint array order.
         const gearJoints: any[] = [];
-        for (const j of (mapDef as any).joints) {
+        for (const j of legacyMap.joints) {
           if (j.type === 'g' || j.type === 'gear') gearJoints.push(j);
           else (this.physics as any).addJoint(j, bodyMap);
         }
@@ -661,9 +789,9 @@ export class BonkEnvironment {
     }
 
     // Add capZone sensors from map data
-    if (mapDef.capZones && mapDef.capZones.length > 0) {
-      for (const zone of mapDef.capZones) {
-        const fixtureDef = mapDef.bodies.find((b) => b.name === zone.fixture);
+    if (legacyMap.capZones && legacyMap.capZones.length > 0) {
+      for (const zone of legacyMap.capZones) {
+        const fixtureDef = legacyMap.bodies.find((b) => b.name === zone.fixture);
         if (fixtureDef) {
           const size = getCapZoneSensorSize(fixtureDef);
           if (size && typeof (this.physics as any).addCapZone === 'function') {
@@ -684,7 +812,7 @@ export class BonkEnvironment {
 
     // Cache explicit map bounds — reset() re-adds bodies, which recomputes
     // dynamic bounds, so the override must be re-applied after every reset.
-    this.mapBounds = (mapDef as any).physics?.bounds ?? null;
+    this.mapBounds = legacyMap.physics?.bounds ?? null;
 
     // Cache the map's OOB death-circle center (physics.deathCenter). The
     // native death circle is centered on the map's authored origin (850 map
@@ -692,7 +820,7 @@ export class BonkEnvironment {
     // are offset from the world origin carry that center here. Maps without
     // one use the engine default (world origin), preserving origin-centered
     // behavior for hand-built maps.
-    this.mapDeathCenter = (mapDef as any).physics?.deathCenter ?? null;
+    this.mapDeathCenter = legacyMap.physics?.deathCenter ?? null;
     if (this.mapDeathCenter && typeof (this.physics as any).setDeathCircleCenter === 'function') {
       this.physics.setDeathCircleCenter(this.mapDeathCenter.x, this.mapDeathCenter.y);
     }
@@ -704,16 +832,15 @@ export class BonkEnvironment {
    * Reset the environment to initial state, returning the first observation.
    */
   reset(seed?: number): Observation {
+    if (this.closed) throw new Error('BonkEnvironment is closed');
     if (seed !== undefined) {
-      // Same supported domain as the constructor slot, the pool's two
-      // transports, the IPC bridge and the Python client (#460): an
-      // out-of-domain seed previously bit-cast through the PRNG's
-      // `seed >>> 0` onto an unrelated stream, diverging silently from
-      // the replay the caller requested. Validate before any mutation so
-      // a rejected reset leaves the environment untouched.
       assertSupportedSeed(seed, 'reset');
       this.config.seed = seed;
       this.rng.setSeed(seed);
+    }
+    if (this.nativeMap || this.config.nativeMode === 'f') {
+      this.resetNativeSession();
+      return this.getObservation();
     }
     this.scoreBlue = 0;
     this.scoreRed = 0;
@@ -722,16 +849,16 @@ export class BonkEnvironment {
     this.physics.reset();
 
     // Re-add platforms to the fresh world
-    for (const body of this.config.mapData.bodies) {
+    for (const body of this.config.mapData!.bodies) {
       this.physics.addBody(body);
     }
 
     // Re-add joints if defined
-    if ((this.config.mapData as any).joints && (this.config.mapData as any).joints.length > 0) {
+    if (this.config.mapData!.joints && this.config.mapData!.joints.length > 0) {
       const bodyMap = (this.physics as any).getBodyMap?.();
       if (bodyMap) {
         const gearJoints: any[] = [];
-        for (const j of (this.config.mapData as any).joints) {
+        for (const j of this.config.mapData!.joints!) {
           if (j.type === 'g' || j.type === 'gear') gearJoints.push(j);
           else (this.physics as any).addJoint(j, bodyMap);
         }
@@ -742,9 +869,9 @@ export class BonkEnvironment {
     }
 
     // Re-add capZone sensors
-    if (this.config.mapData.capZones && this.config.mapData.capZones.length > 0) {
-      for (const zone of this.config.mapData.capZones) {
-        const fixtureDef = this.config.mapData.bodies.find((b) => b.name === zone.fixture);
+    if (this.config.mapData!.capZones && this.config.mapData!.capZones.length > 0) {
+      for (const zone of this.config.mapData!.capZones) {
+        const fixtureDef = this.config.mapData!.bodies.find((b) => b.name === zone.fixture);
         if (fixtureDef) {
           const size = getCapZoneSensorSize(fixtureDef);
           if (size && typeof (this.physics as any).addCapZone === 'function') {
@@ -762,7 +889,7 @@ export class BonkEnvironment {
     }
 
     // Extract spawn positions from map using team keys
-    const spawnPoints = this.config.mapData.spawnPoints;
+    const spawnPoints = this.config.mapData!.spawnPoints;
     const spawnKeys = Object.keys(spawnPoints);
     const teamB = spawnPoints.team_blue ||
       (spawnKeys.length > 0 ? spawnPoints[spawnKeys[0]] : null) || { x: -200, y: -100 };
@@ -843,12 +970,17 @@ export class BonkEnvironment {
    *   - Bit 5: grapple
    */
   step(action: Action): StepResult {
-    // Reject malformed actions (arrays, empty objects, non-boolean field
-    // values, null, NaN, ...) with the same labeled error the pool
-    // surfaces, before any state is touched. A wrong-shaped action must
-    // not silently execute as a different no-op action or crash with an
-    // opaque TypeError (#278).
+    if (this.closed) throw new Error('BonkEnvironment is closed');
     assertValidAction(action);
+    if (this.nativeSession) return this.stepNative(action);
+    const result = this.stepLegacy(action);
+    // Boundary metadata describes what the environment actually did after
+    // producing this result, not an inferred done/tick transition.
+    result.info.autoResetAfter = result.done && !this.isTerminalHoldActive();
+    return result;
+  }
+
+  private stepLegacy(action: Action): StepResult {
     // If terminal was already reached in a previous tick of this cycle,
     // return done immediately without stepping physics further (rewards
     // were already accumulated). terminalReached is only cleared by an
@@ -1006,6 +1138,10 @@ export class BonkEnvironment {
    * Close the environment and release resources.
    */
   close(): void {
+    if (this.closed) return;
+    this.closed = true;
+    this.nativeSession?.dispose();
+    this.nativeSession = null;
     try {
       this.physics.destroy();
     } catch (e: any) {
@@ -1014,6 +1150,398 @@ export class BonkEnvironment {
   }
 
   // ─── Private helpers ─────────────────────────────────────────────
+
+  /** Reject legacy tuning that would otherwise be silently ignored by native
+   * simulation. These remain available to the explicitly legacy MapDef path. */
+  private initializeNativeSession(rawConfig: Readonly<Record<string, any>>): void {
+    this.validateNativeConfig();
+    for (const key of ['ppm', 'noCollide', 'no_collide', 'flipped', 'respawnEnabled', 'respawn_enabled']) {
+      if (rawConfig[key] !== undefined)
+        throw new Error(`Unsupported native environment config: ${key} overrides cannot change authored map settings`);
+    }
+    this.ppm = this.nativeArena?.ppm ?? (this.config.nativeMode === 'f' ? 11 : this.ppm);
+    this.capZones = [];
+    this.physics = new PhysicsEngine();
+    this.mapBounds = { width: NATIVE_MAP_WIDTH, height: NATIVE_MAP_HEIGHT };
+    this._obsBuffer = new Float32Array(16 + 6 * Math.max(0, this.config.numOpponents - 1));
+    this.opponentIds = Array.from({ length: this.config.numOpponents + 1 }, (_, id) => id).filter(
+      (id) => id !== this.aiPlayerId,
+    );
+    this.reset();
+  }
+
+  private validateNativeConfig(): void {
+    const hasValues = (value: object | undefined): boolean => value !== undefined && Object.keys(value).length > 0;
+    if (hasValues(this.config.physics) || hasValues(this.config.arena) || hasValues(this.config.player)) {
+      throw new Error(
+        'Unsupported native environment config: physics/arena/player legacy tuning cannot override native simulation',
+      );
+    }
+    if (!Number.isInteger(this.config.maxTicks) || this.config.maxTicks < 1) {
+      throw new Error(`Invalid maxTicks ${this.config.maxTicks}: expected a positive integer`);
+    }
+    if (
+      !Number.isInteger(this.config.frameSkip) ||
+      this.config.frameSkip < 1 ||
+      this.config.frameSkip > MAX_FRAME_SKIP
+    ) {
+      throw new Error(`Invalid frameSkip ${this.config.frameSkip}: expected an integer in [1, ${MAX_FRAME_SKIP}]`);
+    }
+    if (
+      !Number.isInteger(this.config.aiPlayerId) ||
+      this.config.aiPlayerId < 0 ||
+      this.config.aiPlayerId > this.config.numOpponents
+    ) {
+      throw new Error(
+        `Invalid aiPlayerId ${this.config.aiPlayerId}: expected a slot in [0, ${this.config.numOpponents}]`,
+      );
+    }
+    const probabilities = [
+      this.config.oppMoveProb,
+      this.config.oppUpProb,
+      this.config.oppDownProb,
+      this.config.oppHeavyProb,
+      this.config.oppGrappleProb,
+    ];
+    if (probabilities.some((value) => !Number.isFinite(value) || value < 0 || value > 1)) {
+      throw new Error('Invalid native opponent policy: probabilities must be finite values in [0, 1]');
+    }
+    if (this.config.oppGrappleProb > 0) {
+      throw new Error(
+        'Unsupported native environment config: random grapple policy requires the unified grapple backend; set oppGrappleProb to 0',
+      );
+    }
+  }
+
+  private createNativePlayers(): Array<{ id: number; team: 1 | 2 | 3 | 4 | 5 }> {
+    return Array.from({ length: this.config.numOpponents + 1 }, (_, id) => ({
+      id,
+      // The native map has no room-level roster. RL supplies a two-team roster
+      // only when teams are explicitly enabled; ordinary public play is FFA.
+      team: (this.config.teamsEnabled ? (id === this.aiPlayerId ? 3 : 2) : 1) as 1 | 2 | 3,
+    }));
+  }
+
+  private resetNativeSession(): void {
+    if (this.config.nativeMode === 'f') {
+      // Football: standalone native physics with no map. The roster must
+      // contain both native football teams (validated at construction).
+      this.nativeSession?.dispose();
+      this.nativeSession = createNativeFootballSession({
+        players: this.createNativePlayers(),
+        seed: this.config.seed,
+        roundsToWin: this.config.roundsToWin ?? 3,
+      });
+      this.nativeTick = 0;
+      this.nativeSnapshot = this.nativeSession.getState();
+      this.nativeDeathViews.clear();
+      this.scoreBlue = this.nativeSnapshot.scores[3] ?? 0;
+      this.scoreRed = this.nativeSnapshot.scores[2] ?? 0;
+      this.previousAliveState.clear();
+      for (const disc of this.nativeSnapshot.discs) {
+        if (disc) this.previousAliveState.set(disc.id, disc.alive);
+      }
+      this.frameSkipTicks = 0;
+      this.terminalReached = false;
+      this.terminalTruncated = false;
+      this.terminalTerminated = false;
+      this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+      return;
+    }
+    if (!this.nativeMap || !this.nativeArena) throw new Error('Native session requires a validated native map');
+    this.nativeSession?.dispose();
+    const sessionOptions = {
+      map: this.nativeMap,
+      players: this.createNativePlayers(),
+      seed: this.config.seed,
+      teamsEnabled: this.config.teamsEnabled,
+      countdownTicks: this.nativeCountdownTicks,
+    } as const;
+    // Modes sp and bs run on the unified dynamic world when the map needs it
+    // (native step reads gameSettings.mo from the room settings argument,
+    // readable :7221); ar/ard/v were rejected at construction for dynamic
+    // maps, so they always take the static mode session here.
+    this.nativeSession =
+      this.config.nativeMode === 'b' || (this.config.nativeMode !== 'sp' && this.config.nativeMode !== 'bs')
+        ? this.config.nativeMode === 'b'
+          ? createNativeMapSession(sessionOptions)
+          : createNativeMapModeSession({ ...sessionOptions, mode: this.config.nativeMode as 'ar' | 'ard' | 'v' })
+        : createNativeMapModeSession({ ...sessionOptions, mode: this.config.nativeMode as 'sp' | 'bs' });
+    this.nativeTick = 0;
+    this.nativeSnapshot = this.nativeSession.getState();
+    this.nativeDeathViews.clear();
+    this.scoreBlue = 0;
+    this.scoreRed = 0;
+    this.previousAliveState.clear();
+    for (const disc of this.nativeSnapshot.discs) {
+      if (disc) this.previousAliveState.set(disc.id, disc.alive);
+    }
+    this.frameSkipTicks = 0;
+    this.terminalReached = false;
+    this.terminalTruncated = false;
+    this.terminalTerminated = false;
+    this.lastAction = { left: false, right: false, up: false, down: false, heavy: false, grapple: false };
+  }
+
+  private nativePlayerState(id: number, state = this.nativeState()): PlayerState {
+    const death = this.nativeDeathViews.get(id);
+    // A permanent native elimination removes the disc-table entry. The public
+    // death view remains complete throughout the terminal hold, so it must not
+    // require a live outgoing entry merely to read angle/heavy state.
+    const source =
+      death ??
+      (() => {
+        const disc = this.nativeDisc(id, state);
+        return {
+          x: disc.x,
+          y: disc.y,
+          velX: disc.xv,
+          velY: disc.yv,
+          angle: disc.angle,
+          angularVel: disc.angularVelocity,
+          isHeavy: disc.heavy,
+          alive: disc.alive,
+          deathType: 0,
+        };
+      })();
+    return {
+      x: source.x * this.ppm - NATIVE_ORIGIN_X,
+      y: source.y * this.ppm - NATIVE_ORIGIN_Y,
+      velX: source.velX * this.ppm,
+      velY: source.velY * this.ppm,
+      angle: source.angle,
+      angularVel: source.angularVel,
+      isHeavy: source.isHeavy,
+      alive: source.alive,
+      deathType: source.deathType,
+    };
+  }
+
+  private nativeState(): NativeSessionSnapshot {
+    if (!this.nativeSession || !this.nativeSnapshot) throw new Error('Native session is not initialized');
+    return this.nativeSnapshot;
+  }
+
+  private nativeDisc(id: number, state = this.nativeState()) {
+    const disc = state.discs[id];
+    if (!disc) throw new Error(`Native map has no eligible spawn for configured player ${id}`);
+    return disc;
+  }
+
+  private stepNative(action: Action): StepResult {
+    if (this.terminalReached) {
+      this.frameSkipTicks = Math.min(this.frameSkipTicks + 1, this.config.frameSkip);
+      const observation = this.getObservation();
+      return {
+        observation,
+        reward: 0,
+        done: true,
+        truncated: this.terminalTruncated,
+        terminated: this.terminalTerminated,
+        info: this.nativeStepInfo(observation, this.terminalTerminated, true),
+      };
+    }
+    if (this.frameSkipTicks === 0) {
+      this.lastAction = typeof action === 'number' ? this.decodeAction(action) : { ...action };
+    }
+    // Public bit 5 is named grapple for the legacy action schema. In native
+    // Arrow/Death Arrow/Grapple it carries original action2; Football consumes
+    // it as the zero-force control. All other native modes reject it instead
+    // of silently dropping a control or switching backend.
+    if (
+      this.lastAction.grapple &&
+      this.config.nativeMode !== 'ar' &&
+      this.config.nativeMode !== 'ard' &&
+      this.config.nativeMode !== 'sp' &&
+      this.config.nativeMode !== 'f'
+    ) {
+      throw new Error(
+        `Unsupported native Classic action (mode ${this.config.nativeMode}): grapple/action2 is supported only in Arrow, Death Arrow, Grapple or Football mode`,
+      );
+    }
+    const inputs: Record<number, number> = {
+      [this.aiPlayerId]: encodePlayerInput(this.lastAction),
+    };
+    for (const id of this.opponentIds) {
+      const input = this.getOpponentInput(id);
+      if (
+        input.grapple &&
+        this.config.nativeMode !== 'ar' &&
+        this.config.nativeMode !== 'ard' &&
+        this.config.nativeMode !== 'sp' &&
+        this.config.nativeMode !== 'f'
+      )
+        throw new Error(
+          `Unsupported native Classic opponent action (mode ${this.config.nativeMode}): grapple/action2 is supported only in Arrow, Death Arrow, Grapple or Football mode`,
+        );
+      inputs[id] = encodePlayerInput(input);
+    }
+    const previousDiscs = this.nativeState().discs;
+    const result = this.nativeSession!.stepWithEvents(inputs);
+    this.nativeSnapshot = result.state;
+    this.nativeTick = result.state.tick;
+    this.nativeDeathViews.clear();
+    const deaths: DeathEvent[] = result.events.deaths.map((death) => {
+      // Dynamic native elimination can remove the outgoing disc on the same
+      // tick. Its death record replaces pose/velocity only; angular/control
+      // presentation comes from the valid pre-step disc in that case.
+      const disc = result.state.discs[death.i] ?? previousDiscs[death.i];
+      if (!disc) throw new Error(`Native death ${death.i} has no outgoing or pre-step disc for angular state`);
+      return {
+        playerId: death.i,
+        deathType: death.m,
+        state: {
+          x: death.x,
+          y: death.y,
+          velX: death.xv,
+          velY: death.yv,
+          // Presentation records replace pose/velocity, not the outgoing
+          // disc's angular/control state. Native discDeaths carry only the
+          // former; substituting zero here would change the public view.
+          angle: disc.angle,
+          angularVel: disc.angularVelocity,
+          isHeavy: disc.heavy,
+          alive: false,
+          deathType: death.m,
+        },
+      };
+    });
+    for (const death of deaths) this.nativeDeathViews.set(death.playerId, death.state);
+    let reward = this.config.reward.timePenalty;
+    for (const death of deaths) {
+      if (death.deathType === 3) continue;
+      reward += death.playerId === this.aiPlayerId ? this.config.reward.deathPenalty : this.config.reward.killReward;
+    }
+    const state = result.state;
+    if (result.events.roundResult && !result.events.roundResult.draw && this.config.teamsEnabled) {
+      if (result.events.roundResult.winner === 3) this.scoreBlue++;
+      if (result.events.roundResult.winner === 2) this.scoreRed++;
+      reward += result.events.roundResult.winner === 3 ? 1 : -1;
+    }
+    const respawned = new Set(result.events.respawns);
+    const aiAlive = this.nativePlayerState(this.aiPlayerId, state).alive;
+    const opponentsAlive = this.opponentIds.filter((id) => this.nativePlayerState(id, state).alive).length;
+    const aiVisible = this.getVisiblePlayerState(this.aiPlayerId);
+    const aiPermanentlyDead = !aiVisible.alive && !respawned.has(this.aiPlayerId);
+    const allOpponentsPermanentlyDead =
+      this.opponentIds.length > 0 &&
+      this.opponentIds.every((id) => !this.getVisiblePlayerState(id).alive && !respawned.has(id));
+    // Football: a completed match (score limit reached) is a terminal state.
+    // Football discs never die (alive: true always), so the elimination paths
+    // above can never fire; without this check every football episode would
+    // end only by maxTicks truncation with the session frozen at the final
+    // score — the agent would keep "stepping" a dead match.
+    const matchComplete = state.matchComplete === true;
+    const terminated = aiPermanentlyDead || allOpponentsPermanentlyDead || matchComplete;
+    const truncated = this.nativeTick >= this.config.maxTicks;
+    if (terminated || truncated) {
+      this.terminalReached = true;
+      this.terminalTruncated = truncated;
+      this.terminalTerminated = terminated;
+    }
+    this.frameSkipTicks++;
+    if (this.frameSkipTicks >= this.config.frameSkip && !terminated && !truncated) this.frameSkipTicks = 0;
+    const observation = this.getObservation();
+    return {
+      observation,
+      reward,
+      done: terminated || truncated,
+      truncated,
+      terminated,
+      info: this.nativeStepInfo(observation, terminated, false, aiAlive, opponentsAlive),
+    };
+  }
+
+  private nativeStepInfo(
+    observation: Observation,
+    terminated: boolean,
+    terminalHold: boolean,
+    aiAlive = this.nativePlayerState(this.aiPlayerId).alive,
+    opponentsAlive = this.opponentIds.filter((id) => this.nativePlayerState(id).alive).length,
+  ): Record<string, any> {
+    return {
+      tick: this.nativeTick,
+      aiAlive,
+      opponentsAlive,
+      // The worker performs the reset after receiving this terminal result;
+      // direct callers receive the identical predicate from step().
+      autoResetAfter: this.terminalReached && !this.isTerminalHoldActive(),
+      terminated,
+      frameSkip: this.config.frameSkip,
+      capZones: this.capZones,
+      scoreBlue: this.scoreBlue,
+      scoreRed: this.scoreRed,
+      aiTeam: this.aiTeam,
+      native: true,
+      nativeMode: this.config.nativeMode,
+      nativePhase: this.nativeState().phase,
+      nativeRoundTick: this.nativeState().rl,
+      // Native capture state is dynamic. Copy each entry so public callers
+      // cannot mutate the session's frozen snapshot and reset/rollover changes
+      // are visible through every transport rather than just direct calls.
+      nativeCapZones: (this.nativeState().capZones ?? []).map((zone) => ({ ...zone })),
+      ...(this.terminalReached || terminalHold ? { terminal_observation: observation } : {}),
+    };
+  }
+
+  private getObservation(): Observation {
+    if (this.nativeSession) {
+      const view = (id: number): PlayerState => this.nativePlayerState(id);
+      const ai = view(this.aiPlayerId);
+      return {
+        playerX: ai.x,
+        playerY: ai.y,
+        playerVelX: ai.velX,
+        playerVelY: ai.velY,
+        playerAngle: ai.angle,
+        playerAngularVel: ai.angularVel,
+        playerIsHeavy: ai.isHeavy,
+        opponents: this.opponentIds.map((id) => {
+          const opponent = view(id);
+          return {
+            x: opponent.x,
+            y: opponent.y,
+            velX: opponent.velX,
+            velY: opponent.velY,
+            isHeavy: opponent.isHeavy,
+            alive: opponent.alive,
+          };
+        }),
+        arenaHalfWidth: this.getObservationArenaBounds().halfWidth,
+        arenaHalfHeight: this.getObservationArenaBounds().halfHeight,
+        tick: this.nativeTick,
+      };
+    }
+    const aiState = this.getVisiblePlayerState(this.aiPlayerId);
+
+    const opponents = this.opponentIds.map((id) => {
+      const s = this.getVisiblePlayerState(id);
+      return {
+        x: s.x,
+        y: s.y,
+        velX: s.velX,
+        velY: s.velY,
+        isHeavy: s.isHeavy,
+        alive: s.alive,
+      };
+    });
+
+    const arenaBounds = this.getObservationArenaBounds();
+
+    return {
+      playerX: aiState.x,
+      playerY: aiState.y,
+      playerVelX: aiState.velX,
+      playerVelY: aiState.velY,
+      playerAngle: aiState.angle,
+      playerAngularVel: aiState.angularVel,
+      playerIsHeavy: aiState.isHeavy,
+      opponents,
+      arenaHalfWidth: arenaBounds.halfWidth,
+      arenaHalfHeight: arenaBounds.halfHeight,
+      tick: this.physics.getTickCount(),
+    };
+  }
 
   /**
    * Convert an action (integer or object) to PlayerInput.
@@ -1115,46 +1643,11 @@ export class BonkEnvironment {
     return reward;
   }
 
-  /**
-   * Build the observation object from current physics state.
-   */
-  private getObservation(): Observation {
-    const aiState = this.getVisiblePlayerState(this.aiPlayerId);
-
-    const opponents = this.opponentIds.map((id) => {
-      const s = this.getVisiblePlayerState(id);
-      return {
-        x: s.x,
-        y: s.y,
-        velX: s.velX,
-        velY: s.velY,
-        isHeavy: s.isHeavy,
-        alive: s.alive,
-      };
-    });
-
-    const arenaBounds = this.getObservationArenaBounds();
-
-    return {
-      playerX: aiState.x,
-      playerY: aiState.y,
-      playerVelX: aiState.velX,
-      playerVelY: aiState.velY,
-      playerAngle: aiState.angle,
-      playerAngularVel: aiState.angularVel,
-      playerIsHeavy: aiState.isHeavy,
-      opponents,
-      arenaHalfWidth: arenaBounds.halfWidth,
-      arenaHalfHeight: arenaBounds.halfHeight,
-      tick: this.physics.getTickCount(),
-    };
-  }
-
-  /** The dying-step view: physics' pre-respawn snapshot for the latest tick
-   *  (the single source of truth shared with render readers), otherwise the
-   *  live state. */
+  /** The dying-step view: the latest death presentation record, otherwise the
+   * live native/legacy state. A native respawned disc remains alive in physics
+   * while this result exposes its death for exactly one public step. */
   private getVisiblePlayerState(playerId: number): PlayerState {
-    return this.physics.getVisiblePlayerState(playerId);
+    return this.nativeSession ? this.nativePlayerState(playerId) : this.physics.getVisiblePlayerState(playerId);
   }
 
   /**
@@ -1216,7 +1709,7 @@ export class BonkEnvironment {
     const arenaBounds = this.getObservationArenaBounds();
     this._obsBuffer[13] = arenaBounds.halfWidth;
     this._obsBuffer[14] = arenaBounds.halfHeight;
-    this._obsBuffer[15] = this.physics.getTickCount();
+    this._obsBuffer[15] = this.nativeSession ? this.nativeTick : this.physics.getTickCount();
     return this._obsBuffer;
   }
 
@@ -1241,15 +1734,31 @@ export class BonkEnvironment {
    * info fields (aiAlive, opponentsAlive, scoreBlue, scoreRed, tick) travel
    * with each step.
    */
+  /** Maximum capture-zone records any reset of this authored map can expose. */
+  getNativeCapZoneCapacity(): number {
+    return this.nativeMap?.capZones.length ?? 0;
+  }
+
   getStaticInfo(): {
     frameSkip: number;
     capZones: Array<{ index: number; owner: string; type: number }>;
     aiTeam: string;
+    native?: true;
+    nativeMode?: NativeClassicMode | 'f';
+    /** Authored zone capacity; live native state is transported per step. */
+    nativeCapZoneCapacity?: number;
   } {
     return {
       frameSkip: this.config.frameSkip,
       capZones: this.capZones,
       aiTeam: this.aiTeam,
+      ...(this.nativeMap || this.config.nativeMode === 'f'
+        ? {
+            native: true as const,
+            nativeMode: this.config.nativeMode,
+            nativeCapZoneCapacity: this.getNativeCapZoneCapacity(),
+          }
+        : {}),
     };
   }
 }

@@ -210,7 +210,7 @@ if (world.GetGravity().y != 20) {
 }
 ```
 
-This suggests gravity can be overridden by map settings (`gd` field in map settings), but defaults to 20.
+Native runtime gravity remains `(0, 20)`. The map setting `gd` is the editor snap-grid spacing, not a gravity override: the retained client uses it for editor snapping/grid rendering and does not apply it to the physics world.
 
 ### Contact Listener
 
@@ -548,7 +548,7 @@ Key entries in the runtime constant table (`M$QCc`, 1724 entries):
 | 147 | `nc` (no collision) |
 | 301 | `fl` (flipped) |
 | 326 | `pq` (physics quality) |
-| 1243 | `gd` (gravity direction) |
+| 1243 | `gd` (editor snap-grid spacing, not gravity) |
 
 ### Football/Swing Constants
 
@@ -3442,7 +3442,7 @@ Common block (all but `g`), read **after** the type-specific fields:
 - `d`: `aa, ab /= ppm`; if `bb == -1`, `ab += [365/ppm, 250/ppm]` (6622–6627 —
   ground anchors use map-px coords); `len = distance(world anchor A, world
   anchor B)` with each anchor rotated by its body angle (6656–6695), `len→0.01`
-  if 0; then `d.fh = d.fh == 0 ? 0.0001 : 1 / d.fh` (6696–6707).
+  if 0; then **independent inversion** if nonzero: `1 / 0.0001 = 10000` (6696–6707).
 - `p` (editor "platform"): `aa, ab /= ppm`; `d.ut /= ppm`; `d.lt /= ppm`;
   `d.mmf /= ppm³; d.mmf *= 12³ * 10 (=17280)`; `d.ms /= ppm; d.ms *= 12`
   (6466–6479); axis stored as `axa` is rotated: `θ = atan2(axa[1],axa[0]) −
@@ -3464,7 +3464,7 @@ Common block (all but `g`), read **after** the type-specific fields:
 
 **d** (t$e[84] = `b2DistanceJointDef`, 7815–7829):
 `localAnchorA/aa, localAnchorB/ab, length = joint.len, frequencyHz = d.fh
- (post-normalization: 0.0001 or 1/period), dampingRatio = d.dr,
+ (post-normalization: 10000 for authored zero, otherwise 1/period), dampingRatio = d.dr,
  collideConnected = (d.cc === true)`.
 
 **lpj** (constructed with `b2PrismaticJointDef`, 7653–7697):
@@ -3526,7 +3526,7 @@ skipped if either referent wasn't created.
   with a translation-proportional force (native `maxMotorForce = sf*|k|`,
   motorSpeed ±300) or a custom joint.
 - `d.fh` on disk is a **period** (seconds/oscillation); runtime converts to Hz
-  via `fh = 1/period` (0 stays 0.0001).
+  via `fh = 1/period`; authored zero first becomes 0.0001 and is then inverted to **10000 Hz**.
 - Joint-attached bodies silently lose `fixedRotation` (7560–7570).
 
 ### 33.10 Unresolved
@@ -4754,3 +4754,315 @@ The two dispatcher-interposition sites `S8z[Z9u]` (line 22938) and `r5E[J6c]`
 (line 23501) remain bracketed: after the fold a `73;` statement still sits
 between the selector and the index calculation, so their strict-adjacency
 rejection is unchanged.
+
+## §40 Reference Cross-Verification Against Kitaes Deobfuscator (2026-10-22)
+
+This section records a reference cross-check of the local `.deobf/` artifact
+against `Kitaes-software/bonk-deobfuscator` (commit `0ec0a1c`, 2026-10-10),
+which pins `version=96`. The reference was run on the byte-identical
+`.deobf/alpha2s.raw.js` input and produced a 29,375-line named artifact
+(1,681,399 bytes) after renaming 3,390 variables.
+
+### 40.1 Method
+
+The reference tool was instrumented in a temporary clone (outside this
+repository) to dump three internal maps while running on the exact retained
+input:
+
+1. `SCOPE` records: initial `fN` scope, original function name, arity, and the
+   per-function slot first-appearance order.
+2. `RFUNC`/`RVAR` records: the reference's variable-renumbering map from
+   `_fNvM` to final `fKvJ`.
+3. `MAINARRAY`: the decoded 1,724-entry property-name table.
+
+Joining these with the reference's `variableNames.ini` yields a
+raw-function -> real-name and receiver-slot -> real-name map
+(`.deobf/reference-name-map.json`). The map is applied to the local artifact by
+`.deobf/apply-reference-names.js`; `.deobf/reference-verify.js`
+checks the labels using shared mapping assumptions, not independent proof.
+
+### 40.2 Verified results
+
+These are the initial partial semantic-overlay results. Section 40.6 supersedes
+the bag census and adds complete dotted-label restoration; it does not turn
+unknown slots into verified semantic names.
+
+| Check | Result |
+|---|---|
+| Reference version gate | PASS - `version=96`, same as the retained build |
+| Decoded property table | PASS - 1,724/1,724 entries byte-identical to `tables.json` |
+| `node --check` (reference named output) | PASS |
+| `node --check` (corrected local output) | PASS |
+| Corrected artifact regeneration | PASS - byte-identical (SHA-256 `D5BA22B31F5811C1B0D0AA782104F7A390492529C5EF16DDCC66CB53213AA0D0`) |
+| Reference named variables | 3,390 |
+| Reference function names | 398 |
+| Reference slot names | 813 across 142 scopes |
+| Local bag-functions matched to reference | 369 / 1,173 |
+| SAFE receivers matched | 58 of 156 SAFE bag-functions; 187 SAFE receivers total |
+| Reference slots checked against local labels | 678 |
+| Local label sites checked | 7,084 |
+| Exact label matches before correction | **0** |
+| Label sites corrected by reference names | **7,084** |
+| Remaining dotted labels not covered by the reference map | **24,289** of 31,373 |
+
+Critical constants were re-derived from the reference's named output and match
+the simulator's verified values:
+
+| Constant | Reference | Local / simulator |
+|---|---|---|
+| gravity | `this.gravity = 20` | 20 |
+| ppm | `this.ppm = 12` | 12 |
+| native move force | `this.discAllForce = 12` | 12 native; port uses 30 (documented lift-invariant deviation) |
+| grapple frequency | `Physics.swingF = 2` | 2.0 |
+| grapple damping | `Physics.swingD = 0` | 0.0 |
+| solver iterations | `2/6`, `15/15` when `pq == 2` | 2/6, 15/15 |
+| map `fh`/`dr` | applied only to map `d` joints | not used for grapple |
+
+The reference confirms the property-table entries are real property strings
+(`table[414] = "layers"`, `[210] = "angle"`, `[286] = "frequencyHz"`,
+`[287] = "dampingRatio"`, `[9] = "swingF"`, `[10] = "swingD"`), while the
+local dotted labels were slot-index collisions. The corrected artifact now
+renders e.g. `N7I.editSkin["layers"][N7I.editSkinLayer]` and
+`N7I.skinRenderer["redrawLayer"](...)` instead of `.peerjs`/`.footHW`.
+
+### 40.3 Remaining gaps
+
+- The reference's INI leaves some core `Physics.prototype.step` locals unnamed;
+  those locals remain `f162vN` in the reference and their local labels remain
+  the old `names[slot]` labels (e.g. `z0M.joint1` for velocity iterations,
+  `z0M.textContent` for position iterations). The semantics are already
+  documented in sections 4, 31, and 34; only the display names are unresolved.
+- 804 local bag-functions have no reference name match (no INI section, or an
+  anonymous method).
+- Complete control-flow recovery has not been verified; the reference performs
+  transformations beyond renaming.
+- 10 out-of-table slots remain unlabelled; 247 index-47 sites remain bracketed.
+- The corrected artifact is an analysis convenience, not a replacement for
+  `alpha2s.readable.js`: the audited artifact remains the canonical value
+  source and the pipeline output remains byte-reproducible.
+
+### 40.4 Artifacts and reproduction
+
+Generated in `.deobf/` (gitignored, analysis-only):
+
+- `reference-name-map.json` - 402 retained function records from 1,337 dumped
+  scopes; raw function, arity, reference name, and slot names.
+- `reference-verify.json` - per-function match scores and mismatch detail.
+- `reference-slot-names.json` - 58 SAFE receiver maps.
+- `reference-function-names.json` - 58 corrected-function names.
+- `reference-function-names-all.json` - 398 raw-function -> reference-name
+  entries (arity and slot names included).
+- `alpha2s.reference.js` - 1,681,399-byte fully named output produced by the
+  third-party tool (29,375 lines; SHA-256
+  `5E47CC862861588AEBBD46A5C803F08DE8D2A5DBC23F1C7D8EDFD7B52CFF38AE`); it is
+  transformed (dead code and flag checks removed) and is not a replacement for
+  the audited artifact.
+- `alpha2s.reference-named.js` - 4,495,926-byte corrected artifact (same
+  line count as `alpha2s.readable.js`: 40,233 physical / 39,673 non-empty;
+  only member property names changed; `node --check` PASS).
+
+Reproduce the local checks:
+
+```text
+node .deobf/reference-verify.js
+node .deobf/apply-reference-names.js
+node .deobf/check-named.js
+node --check .deobf/alpha2s.reference-named.js
+```
+
+The reference clone and its instrumented dumps live outside the repository;
+`reference-name-map.json` is the retained bridge, so the local checks do not
+require re-running the third-party tool.
+
+### 40.5 License / use
+
+`Kitaes-software/bonk-deobfuscator` is GPL-3.0. Only its generated name data
+was used locally to verify and correct the analysis artifact; no reference code
+was copied into the repository. The corrected artifact remains a derivative of
+bonk.io's proprietary client and must not be committed, published, or shipped.
+Generated naming data is not assumed exempt from applicable license obligations.
+
+### 40.6 Complete dotted-label restoration
+
+The counts and hash in this subsection describe the initial restoration.
+Section 40.8 records the expanded provenance-backed annotation results.
+
+The expanded AST census includes object/class methods, which the earlier
+function-only scanner omitted. It finds **1,317** `[arguments]` bags, not 1,173.
+All **187** SAFE receivers are bags. `reference-scope-map.json` retains all
+1,337 dumped reference scopes, including scopes without INI names; unique
+raw-name-plus-arity matching now covers **499 / 1,317** local bags. Anonymous
+and unmatched functions are not guessed from similarity scores.
+
+`alpha2s.slot-accurate.js` is a separate analysis artifact. Rather than assigning
+invented semantic names, it reverses every misleading dotted bag label to its
+numeric slot: for example, `N7I.peerjs` becomes `N7I[1] /* ref: editSkin */`.
+Available reference names are comments only, so they cannot collide with
+Array properties or change numeric-key identity. Unknown slots remain numeric.
+The canonical readable file and the earlier semantic overlay are unchanged.
+
+| Check | Expanded result |
+|---|---|
+| Reference scopes retained | 1,337 / 1,337 |
+| Unique name-and-arity matches | 499 / 1,317 local bags |
+| SAFE receivers with dotted labels restored | 187 / 187 (100%) |
+| Distinct receiver/slot pairs restored | 5,383 |
+| Misleading dotted sites restored | 31,373 / 31,373 (100%) |
+| Whole-AST comparison | PASS; only the expected member keys/computed flags change |
+| Reference annotation sites | 7,084; annotations are not new semantic evidence |
+| Syntax and deterministic regeneration | PASS |
+| Focused simulator tests | 55 passed across 2 files; not client-equivalence tests |
+
+The generator validates bag containment, unique bag identifiers, unambiguous
+table labels, and original SAFE slot membership. The separate verifier derives
+the target-site census from the canonical AST, checks every manifest site and
+both SHA-256 hashes, then compares the entire AST while allowing only exact
+label-to-numeric-slot reversals. Comments and source locations are excluded
+from AST comparison. Both tools still rely on the retained table and SAFE data;
+neither proves earlier pipeline correctness, lexical alias safety, complete
+semantic naming, control-flow recovery, or browser/runtime equivalence.
+
+```text
+node .deobf/build-reference-map.js [reference-clone-directory]
+node .deobf/restore-bag-slots.js
+node .deobf/verify-slot-restoration.js
+node --check .deobf/alpha2s.slot-accurate.js
+```
+
+Map rebuilding requires the instrumented clone's `scopes-dump.jsonl` and the
+retained `reference-name-map.json`; it is not an end-to-end reference-tool
+reproduction. The latter two checks and slot generation use retained local
+inputs. Outputs also include `slot-restoration.json` (per-site provenance)
+and `slot-restoration-verification.json`. Artifact SHA-256:
+`954a81f0bf667558fc5faf59b30cd3a7517ce28a3a626abcc31f11f9b24a710b`.
+
+This is 100% coverage of the specified dotted-label defect, **not 100% perfect
+decompilation**. The 398 reference function names and 813 reference semantic
+slot names are available-source counts, not pass percentages. The historical
+zero exact matches before correction is a baseline, not a result to overwrite.
+
+### 40.7 Independent restoration audit
+
+`audit-slot-restoration-independent.js` independently confirmed the current
+numeric restoration at all 31,373 sites across 187 lexical bag bindings and
+5,383 receiver/slot pairs, including 7,441 captured closure references. Raw and
+pretty ASTs match; all 31,618 retained SAFE numeric accesses match pretty-source
+slot sequences after excluding recorded table/dispatcher folds. Byte-level
+reconstruction also matches the generated output.
+
+The audit identified an incorrect semantic comment at four `Z20[987]` sites:
+the old map says `capZoneExpandSign`, but these sites construct the Gear Joints
+heading. The actual capture-zone sign is slot 456. The old join discarded the
+reference variable's owning scope, allowing a name from the wrong INI section.
+This affects annotation meaning, not the restored numeric keys. Expanded
+mapping must join on the complete reference identifier.
+
+The audit also found verifier gaps involving lexical ownership, SAFE slot
+membership, duplicate table labels, and manifest/comment consistency. The
+current artifact independently passes the structural conditions; negative
+fixtures demonstrated that the original verifier did not enforce them all.
+Verifier hardening and expanded mapping are recorded in section 40.8; these
+checks must not be read as completion of semantic recovery.
+
+In particular, 235 old dotted-label sites overlap Array prototype methods.
+SAFE admission and syntax checks cannot establish runtime equivalence of the
+old dotted artifacts. Numeric restoration avoids that naming defect but does
+not validate unrelated earlier transformations.
+
+### 40.8 Expanded exact reference matching
+
+The expanded matcher uses unique receiver identity, raw function name, arity,
+function type, and method identity, backed by raw/readable source hashes and
+function ranges. It does not infer anonymous matches from similarity scores.
+All 1,337 dumped scopes are retained; 1,302 of 1,317 local bag functions
+(98.861%) match: 511 named declarations, 647 anonymous functions, and 144
+class methods. The remaining 15 are explicitly unmatched, not guessed.
+
+Semantic names now join through the complete final `fNvM` identifier and its
+active INI section/key. This yields 1,638 semantic slot names, versus 813 in
+the old bridge, and corrects the four `Z20[987]` comments to `gearJointExpand`.
+All 5,766 dumped slot records map to retained local bags. Of these, 2,443 lack
+final RVAR references; null references do not prove that variables are dead.
+
+| Check | Expanded result |
+|---|---|
+| Exact reference bag matches | 1,302 / 1,317 (98.861%) |
+| Explicitly classified extracted bags | 15 / 1,317 (1.139%) |
+| Total raw bag functions accounted for | 1,317 / 1,317 (100%) |
+| Retained dumped scopes | 1,337 / 1,337 |
+| Active upstream semantic slots | 1,638 / 5,766 (28.408%) |
+| Behavior-inferred physics slots (`z0M`) | 34 |
+| SAFE receivers matched and restored | 187 / 187 (100%) |
+| Misleading label sites restored (`alpha2s.slot-accurate.js`) | 31,373 / 31,373 (100%) |
+| Reference-name annotation sites (`/* ref: ... */`) | 14,802 |
+| Inferred-physics annotation sites (`/* inferred: ... */`) | 572 |
+| Collision-safe dotted semantic overlay (`alpha2s.reference-named.js`) | 126 SAFE receivers, 1,296 slots, 14,747 sites renamed (+3 coincidental = 14,750 verified) |
+| Exact mapping replay and negative fixtures | PASS; 9 rejected negative fixtures |
+| Hardened restoration verifier | PASS; all 31,373 sites, 7,441 closure sites, 14,802 ref + 572 inferred comments |
+| Refreshed independent audit | PASS; zero current findings, 31,618 retained numeric accesses checked |
+| Verifier regression fixtures | PASS; 12 positive and 59 negative |
+| Output syntax and byte-identical regeneration | PASS |
+
+Current `alpha2s.slot-accurate.js` SHA-256:
+`56d41a842b6f859fab0cfb7ad4164d22c1c318ef874a1b7c4abb707f5b9913d4`.
+Current `alpha2s.reference-named.js` SHA-256:
+`236bd56f60c810f64a9fe26fededffb2a15c7c2662aae8086101553f3fe54bb4`.
+
+```text
+node .deobf/instrument-reference-scopes.js
+node .deobf/build-reference-map.js
+node .deobf/match-reference-scopes.js
+node .deobf/check-reference-matches.js
+node .deobf/restore-bag-slots.js
+node .deobf/verify-slot-restoration.js
+node .deobf/test-slot-restoration.js
+node .deobf/audit-slot-restoration-independent.js
+node .deobf/reference-verify.js
+node .deobf/apply-reference-names.js
+node .deobf/check-named.js
+```
+
+Instrumentation replays the retained upstream clone with isolated writes and
+checks the original SCOPE/RFUNC/RVAR records. `reference-provenance.jsonl` and
+`reference-scope-matches.json` retain the exact matching evidence. Reproduction
+still depends on the retained upstream tool/input and its versioned name data.
+
+Separately, `inferred-physics-names.json` describes 34 behavior-validated roles
+covering 572 direct slot sites in `Physics.prototype.step`, including solver
+iteration counts, world/state handles, grapple parameters, and capture-zone
+aggregation. These are explicitly `behavior_inferred`, not active INI names or
+recovered developer spellings, and are emitted with the distinct `/* inferred: <name> */`
+tag in `alpha2s.slot-accurate.js` so they are never conflated with `/* ref: <name> */`
+comments. Disabled upstream naming proposals are not used because variable
+positions have drifted. Neither expanded matching nor descriptive naming proves
+native runtime equivalence or complete decompilation.
+
+The hardened verifier now enforces lexical bag ownership, SAFE index
+membership, table uniqueness, complete manifest fields, exact output bytes
+(including comments), reference identity and source/map/provenance hashes.
+The original audit gaps are covered by retained negative fixtures. It checks
+annotation agreement with reference data, not that every upstream name is
+semantically correct.
+
+### 40.9 Complete raw bag accounting
+
+`audit-reference-unmatched.js` accounts for all 15 bags without upstream
+matching provenance. Four occur in the extracted `B3jF8[210213]` assignment
+at raw offsets `[7902, 15206)`. Eleven occur in the extracted `w4fh5_`
+declaration at `[30633, 37104)`, enrolled for extraction by the call
+`w4fh5_(B3jF8[131198]);` at `[881, 903)`.
+
+The instrumented and baseline initial-filter ASTs are identical; the extracted
+receiver set exactly equals the unmatched set. Each record retains source
+ranges/hashes and extraction predicate evidence in `reference-unmatched-audit.json`.
+The audit stops before upstream decoder evaluation and blocks upstream writes.
+Deterministic regeneration and five corrupted-evidence fixtures pass.
+
+Thus **1,317/1,317 raw bags are accounted for**, with zero unexplained bags:
+1,302 exact matches plus 15 classified extractions. This adds no semantic
+matches. Exact matching remains 98.861%, and active slot naming remains
+1,638/5,766. Extraction is not proof of runtime irrelevance.
+
+```text
+node .deobf/audit-reference-unmatched.js
+```

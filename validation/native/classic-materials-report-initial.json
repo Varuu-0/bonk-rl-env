@@ -1,0 +1,839 @@
+{
+  "schema": "bonk-rl-env.native-classic-material-differential",
+  "version": 1,
+  "pass": true,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "scope": "Pinned original alpha2s Physics.step versus RL-local Classic core on one static floor with effective signed friction and restitution > 1. Parser acceptance alone, all maps/modes, and cross-platform bit parity are outside scope.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08"
+  },
+  "ticksPerScenario": 120,
+  "scenarios": [
+    {
+      "name": "negative-friction",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": -0.3,
+          "fp": false,
+          "re": 0
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": -0.3,
+          "restitution": 0
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 2,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0.6824990909095449,
+        "minReboundYv": -2.2166637140651884,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68284276554647,
+            "y": 18.833038171605647,
+            "xv": 0.3148373514616898,
+            "yv": -2.2166637140651884,
+            "tangentialLoss": 0.6824990909095449,
+            "upwardContactImpulse": 4.549993939396966
+          },
+          {
+            "tick": 14,
+            "x": 30.741659027841877,
+            "y": 18.811349331664445,
+            "xv": 0,
+            "yv": -1.6939467533455383,
+            "tangentialLoss": 0.314208201254531,
+            "upwardContactImpulse": 3.477048598972421
+          }
+        ]
+      }
+    },
+    {
+      "name": "restitution-over-one",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": 0.5,
+          "fp": false,
+          "re": 1.25
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": 0.5,
+          "restitution": 1.25
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 6,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0,
+        "minReboundYv": -6.007691613310694,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68293364428894,
+            "y": 18.832944962639008,
+            "xv": 0.9973364423712346,
+            "yv": -2.9166627816647224,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 5.2499930069965
+          },
+          {
+            "tick": 16,
+            "x": 30.94849140447168,
+            "y": 18.80569298944494,
+            "xv": 0.9946799792817109,
+            "yv": -3.0205568377292478,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 5.437002307912646
+          },
+          {
+            "tick": 25,
+            "x": 31.24639850008876,
+            "y": 18.75023316616176,
+            "xv": 0.9916999149707703,
+            "yv": -3.723127054568696,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 6.701628698223653
+          },
+          {
+            "tick": 36,
+            "x": 31.609295363086463,
+            "y": 18.809545307754572,
+            "xv": 0.9880697362812304,
+            "yv": -4.511480790424353,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 8.120665422763835
+          },
+          {
+            "tick": 49,
+            "x": 32.03646119803023,
+            "y": 18.777523687369303,
+            "xv": 0.9837966535708897,
+            "yv": -5.193126613279508,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 9.347627903903115
+          },
+          {
+            "tick": 64,
+            "x": 32.52704983420264,
+            "y": 18.813113385799504,
+            "xv": 0.9788891313684321,
+            "yv": -6.007691613310694,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 10.81384490395925
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-range-control",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": 0.5,
+          "fp": false,
+          "re": 0.8
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": 0.5,
+          "restitution": 0.8
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 19,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0,
+        "minReboundYv": -2.2166637140651884,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68293364428894,
+            "y": 18.833038171605647,
+            "xv": 0.9973364423712346,
+            "yv": -2.2166637140651884,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 4.549993939396966
+          },
+          {
+            "tick": 14,
+            "x": 30.882168350167902,
+            "y": 18.811349331664445,
+            "xv": 0.9953434309753132,
+            "yv": -1.6939467533455383,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.477048598972421
+          },
+          {
+            "tick": 19,
+            "x": 31.047893105136005,
+            "y": 18.80573782935035,
+            "xv": 0.9936856308255825,
+            "yv": -1.5569322862778172,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.195808377096572
+          },
+          {
+            "tick": 24,
+            "x": 31.21334183625641,
+            "y": 18.78939648358096,
+            "xv": 0.9920305918347151,
+            "yv": -1.6868792349974764,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.462541587626399
+          },
+          {
+            "tick": 29,
+            "x": 31.378515003262272,
+            "y": 18.82547512981774,
+            "xv": 0.9903783094038464,
+            "yv": -1.5636352459287637,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.209567083748515
+          },
+          {
+            "tick": 33,
+            "x": 31.510455439156303,
+            "y": 18.827723690227142,
+            "xv": 0.989058465096804,
+            "yv": -1.0477490567388932,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1506428006745706
+          },
+          {
+            "tick": 36,
+            "x": 31.609295363086474,
+            "y": 18.8115360039551,
+            "xv": 0.9880697362812304,
+            "yv": -0.9043670407429752,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8563323467882125
+          },
+          {
+            "tick": 39,
+            "x": 31.708036480035695,
+            "y": 18.81330209323714,
+            "xv": 0.987081995864933,
+            "yv": -1.0404437884231612,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.135647776237015
+          },
+          {
+            "tick": 42,
+            "x": 31.806678888778016,
+            "y": 18.824542983169792,
+            "xv": 0.9860952428598415,
+            "yv": -0.9113001079510987,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.870563379478571
+          },
+          {
+            "tick": 45,
+            "x": 31.905222687988747,
+            "y": 18.795994923481167,
+            "xv": 0.985109476278874,
+            "yv": -1.0338639587940641,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1221418101562373
+          },
+          {
+            "tick": 49,
+            "x": 32.036461198030246,
+            "y": 18.78868142487536,
+            "xv": 0.9837966535708897,
+            "yv": -1.5503610713337488,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.1823200937903264
+          },
+          {
+            "tick": 54,
+            "x": 32.20026341370541,
+            "y": 18.804560665446107,
+            "xv": 0.9821580852246897,
+            "yv": -1.693111491704651,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.475334114551652
+          },
+          {
+            "tick": 59,
+            "x": 32.363792807629586,
+            "y": 18.812054944688956,
+            "xv": 0.9805222460057085,
+            "yv": -1.5577244632204335,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.1974344245051003
+          },
+          {
+            "tick": 64,
+            "x": 32.52704983420266,
+            "y": 18.783520526652904,
+            "xv": 0.9788891313684321,
+            "yv": -1.686127920346242,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.4609994154475494
+          },
+          {
+            "tick": 69,
+            "x": 32.69003494706769,
+            "y": 18.83093844965157,
+            "xv": 0.9772587367749177,
+            "yv": -1.564347806058695,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.211029707173111
+          },
+          {
+            "tick": 73,
+            "x": 32.82022756385567,
+            "y": 18.822623718811844,
+            "xv": 0.9759563764869421,
+            "yv": -1.0470730267404353,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1492551601514203
+          },
+          {
+            "tick": 76,
+            "x": 32.91775815220335,
+            "y": 18.816316796755498,
+            "xv": 0.9749807453931009,
+            "yv": -0.905008627227064,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8576492874660788
+          },
+          {
+            "tick": 79,
+            "x": 33.015191242469264,
+            "y": 18.808821250167966,
+            "xv": 0.9740060896051792,
+            "yv": -1.0398348905672903,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1343979332697014
+          },
+          {
+            "tick": 82,
+            "x": 33.11252693211899,
+            "y": 18.828741977344162,
+            "xv": 0.9730324081481964,
+            "yv": -0.9118779826540091,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8717495433424398
+          }
+        ]
+      }
+    },
+    {
+      "name": "negative-friction",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": -0.3,
+          "fp": false,
+          "re": 0
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": -0.3,
+          "restitution": 0
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 2,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0.6824990909095449,
+        "minReboundYv": -2.2166637140651884,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68284276554647,
+            "y": 18.833038171605647,
+            "xv": 0.3148373514616898,
+            "yv": -2.2166637140651884,
+            "tangentialLoss": 0.6824990909095449,
+            "upwardContactImpulse": 4.549993939396966
+          },
+          {
+            "tick": 14,
+            "x": 30.741659027841877,
+            "y": 18.811349331664445,
+            "xv": 0,
+            "yv": -1.6939467533455383,
+            "tangentialLoss": 0.314208201254531,
+            "upwardContactImpulse": 3.477048598972421
+          }
+        ]
+      }
+    },
+    {
+      "name": "restitution-over-one",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": 0.5,
+          "fp": false,
+          "re": 1.25
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": 0.5,
+          "restitution": 1.25
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 6,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0,
+        "minReboundYv": -6.007691613310694,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68293364428894,
+            "y": 18.832944962639008,
+            "xv": 0.9973364423712346,
+            "yv": -2.9166627816647224,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 5.2499930069965
+          },
+          {
+            "tick": 16,
+            "x": 30.94849140447168,
+            "y": 18.80569298944494,
+            "xv": 0.9946799792817109,
+            "yv": -3.0205568377292478,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 5.437002307912646
+          },
+          {
+            "tick": 25,
+            "x": 31.24639850008876,
+            "y": 18.75023316616176,
+            "xv": 0.9916999149707703,
+            "yv": -3.723127054568696,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 6.701628698223653
+          },
+          {
+            "tick": 36,
+            "x": 31.609295363086463,
+            "y": 18.809545307754572,
+            "xv": 0.9880697362812304,
+            "yv": -4.511480790424353,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 8.120665422763835
+          },
+          {
+            "tick": 49,
+            "x": 32.03646119803023,
+            "y": 18.777523687369303,
+            "xv": 0.9837966535708897,
+            "yv": -5.193126613279508,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 9.347627903903115
+          },
+          {
+            "tick": 64,
+            "x": 32.52704983420264,
+            "y": 18.813113385799504,
+            "xv": 0.9788891313684321,
+            "yv": -6.007691613310694,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 10.81384490395925
+          }
+        ]
+      }
+    },
+    {
+      "name": "in-range-control",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1573,
+      "numericComparisons": 847,
+      "discreteComparisons": 726,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "normalizedMaterial": {
+        "fixture": {
+          "fr": 0.5,
+          "fp": false,
+          "re": 0.8
+        },
+        "body": {
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0.8
+        },
+        "effective": {
+          "friction": 0.5,
+          "restitution": 0.8
+        }
+      },
+      "coverage": {
+        "simulatedTicks": 120,
+        "materialResponseTicks": 19,
+        "firstResponseTick": 8,
+        "maxTangentialSpeedLoss": 0,
+        "minReboundYv": -2.2166637140651884,
+        "nativeSamples": [
+          {
+            "tick": 8,
+            "x": 30.68293364428894,
+            "y": 18.833038171605647,
+            "xv": 0.9973364423712346,
+            "yv": -2.2166637140651884,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 4.549993939396966
+          },
+          {
+            "tick": 14,
+            "x": 30.882168350167902,
+            "y": 18.811349331664445,
+            "xv": 0.9953434309753132,
+            "yv": -1.6939467533455383,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.477048598972421
+          },
+          {
+            "tick": 19,
+            "x": 31.047893105136005,
+            "y": 18.80573782935035,
+            "xv": 0.9936856308255825,
+            "yv": -1.5569322862778172,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.195808377096572
+          },
+          {
+            "tick": 24,
+            "x": 31.21334183625641,
+            "y": 18.78939648358096,
+            "xv": 0.9920305918347151,
+            "yv": -1.6868792349974764,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.462541587626399
+          },
+          {
+            "tick": 29,
+            "x": 31.378515003262272,
+            "y": 18.82547512981774,
+            "xv": 0.9903783094038464,
+            "yv": -1.5636352459287637,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.209567083748515
+          },
+          {
+            "tick": 33,
+            "x": 31.510455439156303,
+            "y": 18.827723690227142,
+            "xv": 0.989058465096804,
+            "yv": -1.0477490567388932,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1506428006745706
+          },
+          {
+            "tick": 36,
+            "x": 31.609295363086474,
+            "y": 18.8115360039551,
+            "xv": 0.9880697362812304,
+            "yv": -0.9043670407429752,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8563323467882125
+          },
+          {
+            "tick": 39,
+            "x": 31.708036480035695,
+            "y": 18.81330209323714,
+            "xv": 0.987081995864933,
+            "yv": -1.0404437884231612,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.135647776237015
+          },
+          {
+            "tick": 42,
+            "x": 31.806678888778016,
+            "y": 18.824542983169792,
+            "xv": 0.9860952428598415,
+            "yv": -0.9113001079510987,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.870563379478571
+          },
+          {
+            "tick": 45,
+            "x": 31.905222687988747,
+            "y": 18.795994923481167,
+            "xv": 0.985109476278874,
+            "yv": -1.0338639587940641,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1221418101562373
+          },
+          {
+            "tick": 49,
+            "x": 32.036461198030246,
+            "y": 18.78868142487536,
+            "xv": 0.9837966535708897,
+            "yv": -1.5503610713337488,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.1823200937903264
+          },
+          {
+            "tick": 54,
+            "x": 32.20026341370541,
+            "y": 18.804560665446107,
+            "xv": 0.9821580852246897,
+            "yv": -1.693111491704651,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.475334114551652
+          },
+          {
+            "tick": 59,
+            "x": 32.363792807629586,
+            "y": 18.812054944688956,
+            "xv": 0.9805222460057085,
+            "yv": -1.5577244632204335,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.1974344245051003
+          },
+          {
+            "tick": 64,
+            "x": 32.52704983420266,
+            "y": 18.783520526652904,
+            "xv": 0.9788891313684321,
+            "yv": -1.686127920346242,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.4609994154475494
+          },
+          {
+            "tick": 69,
+            "x": 32.69003494706769,
+            "y": 18.83093844965157,
+            "xv": 0.9772587367749177,
+            "yv": -1.564347806058695,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 3.211029707173111
+          },
+          {
+            "tick": 73,
+            "x": 32.82022756385567,
+            "y": 18.822623718811844,
+            "xv": 0.9759563764869421,
+            "yv": -1.0470730267404353,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1492551601514203
+          },
+          {
+            "tick": 76,
+            "x": 32.91775815220335,
+            "y": 18.816316796755498,
+            "xv": 0.9749807453931009,
+            "yv": -0.905008627227064,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8576492874660788
+          },
+          {
+            "tick": 79,
+            "x": 33.015191242469264,
+            "y": 18.808821250167966,
+            "xv": 0.9740060896051792,
+            "yv": -1.0398348905672903,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 2.1343979332697014
+          },
+          {
+            "tick": 82,
+            "x": 33.11252693211899,
+            "y": 18.828741977344162,
+            "xv": 0.9730324081481964,
+            "yv": -0.9118779826540091,
+            "tangentialLoss": 0,
+            "upwardContactImpulse": 1.8717495433424398
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "negative-control-injected-xv-error",
+    "quality": 1,
+    "seed": 1,
+    "ticks": 1,
+    "pass": true,
+    "comparisons": 26,
+    "numericComparisons": 14,
+    "discreteComparisons": 12,
+    "maxError": 0.0000010000000000287557,
+    "maxErrorByField": {
+      "x": 0,
+      "y": 0,
+      "xv": 0.0000010000000000287557,
+      "yv": 0,
+      "angle": 0,
+      "angularVelocity": 0,
+      "energy": 0
+    },
+    "firstMismatch": {
+      "tick": 1,
+      "field": "xv",
+      "actual": 0.9996676666666667,
+      "native": 0.9996666666666667,
+      "error": 0.0000010000000000287557
+    },
+    "normalizedMaterial": {
+      "fixture": {
+        "fr": -0.3,
+        "fp": false,
+        "re": 0
+      },
+      "body": {
+        "fric": 0.5,
+        "fricp": false,
+        "re": 0.8
+      },
+      "effective": {
+        "friction": -0.3,
+        "restitution": 0
+      }
+    },
+    "coverage": {
+      "simulatedTicks": 1,
+      "materialResponseTicks": 0,
+      "firstResponseTick": null,
+      "maxTangentialSpeedLoss": 0,
+      "minReboundYv": 0,
+      "nativeSamples": []
+    },
+    "injectedError": 0.000001,
+    "detected": true
+  },
+  "totals": {
+    "scenarios": 6,
+    "ticks": 720,
+    "comparisons": 9438,
+    "numericComparisons": 5082,
+    "discreteComparisons": 4356,
+    "maximumAbsoluteError": 0
+  }
+}
