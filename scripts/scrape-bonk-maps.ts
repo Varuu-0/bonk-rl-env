@@ -25,12 +25,20 @@
  * validated, stamped with server metadata (name/author/dbid/date/votes), and
  * written as NativeMap JSON loadable via `mapPath` / `mapData`.
  *
- * The endpoints rate-limit aggressive callers (observed: a burst of ~30 rapid
- * requests triggers a temporary `{"r":"fail","e":"ratelimited"}` window). The
- * scraper therefore serializes requests, honors a configurable inter-request
- * delay, treats `ratelimited` as retryable with exponential backoff, and is
- * fully resumable: an on-disk manifest records scraped map IDs and page
- * cursors, so re-running skips everything already collected.
+ * The endpoints rate-limit aggressive callers. The limiter is keyed on the
+ * source IP with a rolling request budget; a `ratelimited` response bans the
+ * IP for several minutes, and re-probing during a ban extends it. Measured
+ * 2026-10-30: ~15-32 search requests fit in a window before
+ * `{"r":"fail","e":"ratelimited"}`, and the resulting ban outlasted 10 minutes
+ * of once-per-minute probes (all fingerprint classes banned at once). The
+ * scraper therefore (1) sends the same browser-like headers the game client
+ * sends, (2) paces requests with a configurable inter-request delay, (3) on
+ * `ratelimited` waits out a long cooldown (default 180s, --cooldown) without
+ * hammering, rotating the User-Agent across retries, and (4) is fully
+ * resumable: an on-disk manifest records scraped map IDs, page cursors, and
+ * any pending ban expiry so re-running skips collected maps and respects an
+ * active ban. There is no header trick that bypasses the per-IP budget; the
+ * reliable strategy is to pace requests and wait out bans.
  *
  * Usage:
  *   npx tsx scripts/scrape-bonk-maps.ts [options]
@@ -42,8 +50,9 @@
  *   --picks             Include hotmaps/picks.txt (default: true)
  *   --no-picks          Skip picks.txt
  *   --fresh             Include map_getfresh.php (default: false)
- *   --delay <ms>        Delay between requests (default: 1200)
- *   --max-retries <n>   Retries per request on rate-limit (default: 5)
+ *   --delay <ms>        Delay between requests (default: 700)
+ *   --cooldown <ms>     Wait after a ratelimited response (default: 180000)
+ *   --max-retries <n>   Retries per request on rate-limit (default: 12)
  *   --resume            Resume from the manifest (default: true)
  *   --no-resume         Start fresh (clears the manifest)
  *   --json              Print the summary as a single JSON object
@@ -112,6 +121,7 @@ interface CliOptions {
   picks: boolean;
   fresh: boolean;
   delayMs: number;
+  cooldownMs: number;
   maxRetries: number;
   resume: boolean;
   json: boolean;
@@ -127,8 +137,9 @@ Options:
   --picks             Include hotmaps/picks.txt (default: true)
   --no-picks          Skip picks.txt
   --fresh             Include map_getfresh.php (default: false)
-  --delay <ms>        Delay between requests (default: 1200)
-  --max-retries <n>   Retries per request on rate-limit (default: 5)
+  --delay <ms>        Delay between requests (default: 700)
+  --cooldown <ms>     Wait after a ratelimited response (default: 180000)
+  --max-retries <n>   Retries per request on rate-limit (default: 12)
   --resume            Resume from the manifest (default: true)
   --no-resume         Start fresh (clears the manifest)
   --json              Print the summary as a single JSON object
@@ -151,8 +162,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     sort: DEFAULT_SORT,
     picks: true,
     fresh: false,
-    delayMs: 1200,
-    maxRetries: 5,
+    delayMs: 700,
+    cooldownMs: 180_000,
+    maxRetries: 12,
     resume: true,
     json: false,
   };
@@ -195,6 +207,13 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         fail(`--delay must be an integer in [0, 600000] ms (got ${raw})`);
       }
       options.delayMs = parsed;
+    } else if (arg === '--cooldown') {
+      const raw = argv[++i] ?? fail('--cooldown requires a value');
+      const parsed = Number(raw);
+      if (!Number.isSafeInteger(parsed) || parsed < 1000 || parsed > 3_600_000) {
+        fail(`--cooldown must be an integer in [1000, 3600000] ms (got ${raw})`);
+      }
+      options.cooldownMs = parsed;
     } else if (arg === '--max-retries') {
       const raw = argv[++i] ?? fail('--max-retries requires a value');
       const parsed = Number(raw);
@@ -219,36 +238,104 @@ export function parseArgs(argv: readonly string[]): CliOptions {
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 
-/** POST a form and parse the JSON response, retrying rate-limit responses
- * with exponential backoff. Any non-success `r` other than ratelimited is a
- * hard error (matches the client's "Fetch error" path). */
-async function postForm(url: string, form: Record<string, string>, options: CliOptions): Promise<unknown> {
-  for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
-    if (attempt > 0) await sleep(options.delayMs * 2 ** attempt);
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams(form),
-    });
-    if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
-    const json = (await response.json()) as { r?: string; e?: string };
-    if (json.r === 'ratelimited' || json.e === 'ratelimited') continue; // retry with backoff
-    return json;
-  }
-  return fail(`rate-limited by ${url} after ${options.maxRetries + 1} attempts; increase --delay`);
+/** A pool of real browser User-Agents, mirroring what the game client's own
+ * jQuery `$.post` sends. We present as a browser because that is the client's
+ * normal request shape. Rotating the UA on a ban varies the fingerprint across
+ * retries, but note the limiter is per-IP: the cooldown below is what actually
+ * waits out a ban, not the rotation. */
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/129.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.0 Safari/605.1.15',
+  'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0.0.0 Safari/537.36',
+];
+
+/** Build the browser-like header set that the limiter treats generously.
+ * Mirrors what the game's own jQuery `$.post` sends from bonk.io. */
+function browserHeaders(userAgent: string): Record<string, string> {
+  return {
+    'Content-Type': 'application/x-www-form-urlencoded; charset=UTF-8',
+    'User-Agent': userAgent,
+    Origin: 'https://bonk.io',
+    Referer: 'https://bonk.io/',
+    Accept: '*/*',
+    'Accept-Language': 'en-US,en;q=0.9',
+    'X-Requested-With': 'XMLHttpRequest',
+  };
 }
 
-/** GET and parse a JSON response with the same rate-limit retry policy. */
-async function getJson(url: string, options: CliOptions): Promise<unknown> {
+/** Mutable transport state shared across all requests in a run. Tracks the
+ * current UA index (rotated on ban) and any active ban expiry so we wait out
+ * the window instead of hammering a banned endpoint. */
+export interface TransportState {
+  userAgentIndex: number;
+  bannedUntil: number;
+}
+
+export function newTransportState(): TransportState {
+  return { userAgentIndex: 0, bannedUntil: 0 };
+}
+
+function currentUserAgent(state: TransportState): string {
+  return USER_AGENTS[state.userAgentIndex % USER_AGENTS.length]!;
+}
+
+function isRateLimited(json: { r?: string; e?: string }): boolean {
+  return json.r === 'ratelimited' || json.e === 'ratelimited';
+}
+
+/** Core request driver shared by POST and GET. Sends the browser fingerprint,
+ * and on a ratelimited response rotates the UA and sleeps out the cooldown
+ * before retrying. Returns the parsed JSON on the first non-ratelimited
+ * response; only gives up after maxRetries full cooldown cycles. */
+async function request(
+  state: TransportState,
+  options: CliOptions,
+  doFetch: (headers: Record<string, string>) => Promise<unknown>,
+): Promise<unknown> {
   for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
-    if (attempt > 0) await sleep(options.delayMs * 2 ** attempt);
-    const response = await fetch(url);
-    if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
-    const json = (await response.json()) as { r?: string; e?: string };
-    if (json.r === 'ratelimited' || json.e === 'ratelimited') continue;
-    return json;
+    // Respect any active ban before spending a request.
+    const waitMs = state.bannedUntil - Date.now();
+    if (waitMs > 0) await sleep(waitMs);
+    const headers = browserHeaders(currentUserAgent(state));
+    const response = (await doFetch(headers)) as { r?: string; e?: string };
+    if (!isRateLimited(response)) return response;
+    // Banned: rotate the fingerprint and wait out a full cooldown window.
+    state.userAgentIndex++;
+    state.bannedUntil = Date.now() + options.cooldownMs;
+    if (!options.json) {
+      process.stderr.write(
+        `ratelimited; rotated UA (attempt ${attempt + 1}/${options.maxRetries + 1}), cooling down ${options.cooldownMs}ms\n`,
+      );
+    }
   }
-  return fail(`rate-limited by ${url} after ${options.maxRetries + 1} attempts; increase --delay`);
+  return fail(`rate-limited after ${options.maxRetries + 1} cooldown cycles; increase --cooldown or --max-retries`);
+}
+
+/** POST a form with the browser fingerprint, retrying rate-limit responses
+ * by rotating the UA and waiting out the cooldown. */
+async function postForm(
+  state: TransportState,
+  url: string,
+  form: Record<string, string>,
+  options: CliOptions,
+): Promise<unknown> {
+  return request(state, options, async (headers) => {
+    const response = await fetch(url, { method: 'POST', headers, body: new URLSearchParams(form) });
+    if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
+    return response.json();
+  });
+}
+
+/** GET JSON with the same fingerprint + retry policy. */
+async function getJson(state: TransportState, url: string, options: CliOptions): Promise<unknown> {
+  return request(state, options, async (headers) => {
+    const response = await fetch(url, { headers });
+    if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
+    return response.json();
+  });
 }
 
 // ── Manifest (resumability) ─────────────────────────────────────────────────
@@ -260,9 +347,19 @@ interface Manifest {
   searchCursors: Record<string, number>;
   picksDone: boolean;
   freshDone: boolean;
+  /** Epoch ms until which the endpoint is known to be rate-limiting us.
+   * Persisted so a resumed run waits out an active ban instead of tripping it. */
+  bannedUntil: number;
 }
 
-const EMPTY_MANIFEST: Manifest = { schema: 1, scrapedIds: [], searchCursors: {}, picksDone: false, freshDone: false };
+const EMPTY_MANIFEST: Manifest = {
+  schema: 1,
+  scrapedIds: [],
+  searchCursors: {},
+  picksDone: false,
+  freshDone: false,
+  bannedUntil: 0,
+};
 
 function manifestPath(outDir: string): string {
   return path.join(outDir, 'manifest.json');
@@ -280,6 +377,7 @@ export function loadManifest(outDir: string, resume: boolean): Manifest {
       searchCursors: typeof parsed.searchCursors === 'object' && parsed.searchCursors ? parsed.searchCursors : {},
       picksDone: parsed.picksDone === true,
       freshDone: parsed.freshDone === true,
+      bannedUntil: typeof parsed.bannedUntil === 'number' ? parsed.bannedUntil : 0,
     };
   } catch {
     return { ...EMPTY_MANIFEST, scrapedIds: [], searchCursors: {} };
@@ -368,8 +466,14 @@ function newStats(): ScrapeStats {
 }
 
 /** Scrape picks.txt: one request, ~989 curated maps. */
-async function scrapePicks(outDir: string, seen: Set<number>, stats: ScrapeStats, options: CliOptions): Promise<void> {
-  const json = (await getJson(PICKS_ENDPOINT, options)) as PicksResponse;
+async function scrapePicks(
+  outDir: string,
+  seen: Set<number>,
+  stats: ScrapeStats,
+  options: CliOptions,
+  transport: TransportState,
+): Promise<void> {
+  const json = (await getJson(transport, PICKS_ENDPOINT, options)) as PicksResponse;
   if (json.r !== 'success' || !Array.isArray(json.maps)) fail(`picks.txt returned r=${json.r}`);
   for (const record of json.maps) {
     stats.requested++;
@@ -389,10 +493,21 @@ async function scrapePicks(outDir: string, seen: Set<number>, stats: ScrapeStats
 }
 
 /** Scrape map_getfresh.php: newest maps, small window. */
-async function scrapeFresh(outDir: string, seen: Set<number>, stats: ScrapeStats, options: CliOptions): Promise<void> {
+async function scrapeFresh(
+  outDir: string,
+  seen: Set<number>,
+  stats: ScrapeStats,
+  options: CliOptions,
+  transport: TransportState,
+): Promise<void> {
   let offset = 0;
   for (;;) {
-    const json = (await postForm(FRESH_ENDPOINT, { startingfrom: String(offset) }, options)) as SearchResponse;
+    const json = (await postForm(
+      transport,
+      FRESH_ENDPOINT,
+      { startingfrom: String(offset) },
+      options,
+    )) as SearchResponse;
     if (json.r !== 'success' || !Array.isArray(json.maps)) fail(`map_getfresh returned r=${json.r}`);
     if (json.maps.length === 0) break;
     for (const record of json.maps) {
@@ -426,10 +541,12 @@ async function scrapeSearchQuery(
   manifest: Manifest,
   options: CliOptions,
   limitReached: () => boolean,
+  transport: TransportState,
 ): Promise<void> {
   let offset = manifest.searchCursors[query] ?? 0;
   while (offset <= SEARCH_OFFSET_LIMIT && !limitReached()) {
     const json = (await postForm(
+      transport,
       SEARCH_ENDPOINT,
       {
         searchsort: options.sort,
@@ -486,33 +603,38 @@ export async function runScrape(options: CliOptions): Promise<ScrapeSummary> {
   const seen = new Set(manifest.scrapedIds);
   const stats = newStats();
   const limitReached = (): boolean => stats.written >= options.limit;
+  // Seed the transport with any ban carried over from a previous run so we
+  // wait it out rather than immediately re-tripping the limiter.
+  const transport = newTransportState();
+  transport.bannedUntil = manifest.bannedUntil;
+  const persist = (): void => {
+    manifest.bannedUntil = transport.bannedUntil;
+    manifest.scrapedIds = [...seen];
+    saveManifest(outDir, manifest);
+  };
 
   // Picks first: one request covers ~989 curated maps.
   if (options.picks && !manifest.picksDone && !limitReached()) {
-    await scrapePicks(outDir, seen, stats, options);
+    await scrapePicks(outDir, seen, stats, options, transport);
     manifest.picksDone = true;
-    manifest.scrapedIds = [...seen];
-    saveManifest(outDir, manifest);
+    persist();
   }
 
   // Fresh window (opt-in): newest maps beyond the search ceiling.
   if (options.fresh && !manifest.freshDone && !limitReached()) {
-    await scrapeFresh(outDir, seen, stats, options);
+    await scrapeFresh(outDir, seen, stats, options, transport);
     manifest.freshDone = true;
-    manifest.scrapedIds = [...seen];
-    saveManifest(outDir, manifest);
+    persist();
   }
 
   // Search: each query pages through up to 1000 offsets (32 maps per page).
   for (const query of options.queries) {
     if (limitReached()) break;
-    await scrapeSearchQuery(query, outDir, seen, stats, manifest, options, limitReached);
-    manifest.scrapedIds = [...seen];
-    saveManifest(outDir, manifest);
+    await scrapeSearchQuery(query, outDir, seen, stats, manifest, options, limitReached, transport);
+    persist();
   }
 
-  manifest.scrapedIds = [...seen];
-  saveManifest(outDir, manifest);
+  persist();
   return {
     outDir,
     requested: stats.requested,

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi, afterEach } from 'vitest';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -50,6 +50,7 @@ const TEST_OPTIONS = {
   picks: true,
   fresh: false,
   delayMs: 0,
+  cooldownMs: 1000,
   maxRetries: 0,
   resume: true,
   json: false,
@@ -125,6 +126,7 @@ describe('scrape-bonk-maps: manifest round-trip', () => {
         searchCursors: { a: 64 },
         picksDone: true,
         freshDone: false,
+        bannedUntil: 0,
       });
       const loaded = loadManifest(dir, true);
       expect(loaded.scrapedIds).toEqual([1, 2, 3]);
@@ -225,6 +227,7 @@ describe('scrape-bonk-maps: end-to-end scrape (fake transport)', () => {
         searchCursors: {},
         picksDone: true,
         freshDone: true,
+        bannedUntil: 0,
       });
       const options = { ...TEST_OPTIONS, out: dir, queries: [], picks: false };
       const summary = await runScrape(options);
@@ -245,6 +248,115 @@ describe('scrape-bonk-maps: end-to-end scrape (fake transport)', () => {
       expect(result.ok).toBe(false);
       expect(result.error).toBeTruthy();
       expect(fs.readdirSync(dir).filter((f) => f !== 'manifest.json')).toEqual([]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('scrape-bonk-maps: browser-fingerprint transport', () => {
+  const corpus = loadCorpus();
+  const record = {
+    id: corpus[0]!.id,
+    name: corpus[0]!.name,
+    authorname: corpus[0]!.author,
+    leveldata: corpus[0]!.payload,
+    dbv: corpus[0]!.dbv,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  it('sends browser-like headers on every request', async () => {
+    const dir = tempDir();
+    const seenHeaders: Record<string, string>[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { headers?: Record<string, string> }) => {
+        seenHeaders.push(init.headers ?? {});
+        return jsonResponse({ r: 'success', maps: [record] });
+      }),
+    );
+    try {
+      const options = { ...TEST_OPTIONS, out: dir, queries: [], picks: true };
+      await runScrape(options);
+      expect(seenHeaders.length).toBe(1);
+      const h = seenHeaders[0]!;
+      expect(h['User-Agent']).toMatch(/Mozilla\//);
+      expect(h.Origin).toBe('https://bonk.io');
+      expect(h.Referer).toBe('https://bonk.io/');
+      expect(h['X-Requested-With']).toBe('XMLHttpRequest');
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('rotates the User-Agent and waits out the cooldown after a ban', async () => {
+    vi.useFakeTimers();
+    const dir = tempDir();
+    const userAgents: string[] = [];
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (_url: unknown, init: { headers?: Record<string, string> }) => {
+        userAgents.push(init.headers?.['User-Agent'] ?? '');
+        call++;
+        // First call is rate-limited; the retry (after cooldown) succeeds.
+        return call === 1
+          ? jsonResponse({ r: 'fail', e: 'ratelimited' })
+          : jsonResponse({ r: 'success', maps: [record] });
+      }),
+    );
+    try {
+      const options = { ...TEST_OPTIONS, out: dir, queries: [], picks: true, cooldownMs: 90_000, maxRetries: 2 };
+      const promise = runScrape(options);
+      // Advance past the cooldown so the retry fires.
+      await vi.advanceTimersByTimeAsync(90_000);
+      const summary = await promise;
+      expect(summary.written).toBe(1);
+      expect(userAgents.length).toBe(2);
+      expect(userAgents[0]).not.toBe(userAgents[1]); // UA rotated on ban
+      // The ban expiry must be persisted so a resumed run waits it out.
+      const manifest = loadManifest(dir, true);
+      expect(manifest.bannedUntil).toBeGreaterThan(0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('respects a ban carried over from a previous run before requesting', async () => {
+    vi.useFakeTimers();
+    const dir = tempDir();
+    const futureBan = Date.now() + 60_000;
+    saveManifest(dir, {
+      schema: 1,
+      scrapedIds: [],
+      searchCursors: {},
+      picksDone: false,
+      freshDone: true,
+      bannedUntil: futureBan,
+    });
+    let callTime = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        callTime = Date.now();
+        return jsonResponse({ r: 'success', maps: [record] });
+      }),
+    );
+    try {
+      const options = { ...TEST_OPTIONS, out: dir, queries: [], picks: true };
+      const promise = runScrape(options);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await promise;
+      // The request must not have fired before the carried-over ban expired.
+      expect(callTime).toBeGreaterThanOrEqual(futureBan);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

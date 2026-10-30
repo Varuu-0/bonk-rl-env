@@ -132,11 +132,16 @@ npx tsx scripts/scrape-bonk-maps.ts --queries a --no-picks --limit 989
 npx tsx scripts/scrape-bonk-maps.ts --fresh --json
 ```
 
-The endpoints rate-limit bursts (temporary `ratelimited` responses). The scraper serializes
-requests with a `--delay` (default 1200 ms), retries with exponential backoff, and resumes from
-the manifest on re-run. Maps that fail strict codec validation are counted and reported, never
-written. Engine-load failures (gear joints, spawn-less maps, degenerate polygons) are the same
-pre-existing coverage limits as the committed corpus, not scraper errors.
+The endpoints rate-limit by **source IP** with a rolling request budget; a `ratelimited` response bans
+the IP for several minutes, and re-probing during a ban extends it. The scraper sends the same
+browser-like headers the game client sends, paces requests with `--delay` (default 700 ms), and on
+`ratelimited` waits out a `--cooldown` (default 180000 ms) instead of erroring, rotating the
+User-Agent across retries (`--max-retries`, default 12). The ban expiry is persisted in the manifest,
+so a resumed run waits out an active ban rather than re-tripping it. There is no header trick that
+bypasses the per-IP budget — the reliable way to scrape faster is to stay within the budget and let
+the resumable manifest carry progress across runs. Maps that fail strict codec validation are counted
+and reported, never written. Engine-load failures (gear joints, spawn-less maps, degenerate polygons)
+are the same pre-existing coverage limits as the committed corpus, not scraper errors.
 
 ## DSP CLI
 
