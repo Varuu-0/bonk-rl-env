@@ -305,6 +305,11 @@ function runScenario(paths, scenario, perturb = false, perturbTicks = null, pert
       ];
       for (let index = 0; index < flat.length; index++) {
         report.comparisons++;
+        // W9: this check verifies the Float32 fast-observation buffer against
+        // the double-precision observation object (self-consistency). The
+        // native-parity gate itself is the 1e-9 double comparison above;
+        // public Float32 rounding (~1e-7 relative) is a presentation
+        // contract, not a native-divergence detector.
         if (fast[index] !== Math.fround(flat[index]))
           mismatch({
             tick,

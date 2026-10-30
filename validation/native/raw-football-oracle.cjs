@@ -91,6 +91,13 @@ function createFootballOracle({ rawPath, physicsPath, trigPath }) {
     t$e[5] = M$QCc;
     // B is the raw FootballPhysics module object: the step span reads its
     // statics (world, soundsThisStep, contactListener) directly.
+    // W5: these are the module-init statics from the deobfuscated source
+    // (alpha2s.slot-accurate.numeric.js :12864-13935 FootballPhysics class):
+    // world starts null and is assigned in createNewState; soundsThisStep is
+    // reset to [] at each step entry; contactListener is installed by
+    // createNewState. The t$e alias table maps the bundle's numeric module
+    // indices to the pinned Box2D classes; a missing slot used by the
+    // executed spans fails loud with "undefined is not a constructor".
     var B = { world: null, soundsThisStep: [], contactListener: null };
     var aliases = {
       1:Box2D.Common.Math.b2Vec2,82:Box2D.Dynamics.b2BodyDef,23:Box2D.Dynamics.b2World,

@@ -73,6 +73,14 @@ function createOracle({ rawPath, physicsPath, trigPath }) {
     // directly, so its constructor/static world must be shared with instances.
     // I is the bundle's graphics namespace; only its shake coefficient is used
     // by the Classic step's optional presentation-event output.
+    // W5: every reconstructed literal below is cross-checked against the
+    // deobfuscated source (alpha2s.slot-accurate.numeric.js):
+    //   ftu=90, fte=90 (:1040-1041); footHW=0.3, footHH=0.2,
+    //   footOffsetX=-1, footOffsetY=0 (:1042-1045); swingF=2, swingD=0
+    //   (:1061-1063); GraphicsHandler.shakeAmount=0.012 (:23906).
+    // The t$e alias table maps the bundle's numeric module indices to the
+    // pinned Box2D classes; a missing slot used by the executed spans fails
+    // loud with "undefined is not a constructor".
     function z() {}
     var I = { shakeAmount: 0.012 };
     Object.assign(z, {world:null,ftu:90,fte:90,footHW:0.3,footHH:0.2,footOffsetX:-1,footOffsetY:0,swingF:2,swingD:0});
