@@ -1,0 +1,256 @@
+{
+  "schema": "bonk-rl-env.native-classic-death-pose-differential",
+  "version": 1,
+  "pass": true,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Pinned original alpha2s Physics.step versus only ClassicPhysicsWorld on a one-player static lethal floor. Compares post-solver death x/y/xv/yv and immediate restored live-disc state at q1/q2 without a round rollover. Full-session lifecycle, other death causes, all maps/modes, online play, and bit parity are outside scope.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localClassicPhysicsSha256": "7069d4aab2927f47a43af41e6904ee5b950bbb2417f2b2cda694afcdfdeb3743"
+  },
+  "scenarios": [
+    {
+      "name": "lethal-respawn-q1",
+      "quality": 1,
+      "seed": 1,
+      "ticks": 1,
+      "pass": true,
+      "comparisons": 35,
+      "numericComparisons": 18,
+      "discreteComparisons": 17,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 1,
+        "lethalDeaths": 1,
+        "respawns": 1,
+        "roundRollovers": 0,
+        "deathDiffersFromRestoredLiveDisc": true,
+        "originalSample": {
+          "tick": 1,
+          "death": {
+            "x": 30.44998888888889,
+            "y": 18.75558148148148,
+            "xv": 0.9996666666666667,
+            "yv": -2.332555555555556,
+            "f": 0,
+            "m": 1
+          },
+          "restoredDisc": {
+            "x": 30.416666666666668,
+            "y": 18.833333333333332,
+            "xv": 1,
+            "yv": -3,
+            "sx": 30.416666666666668,
+            "sy": 18.833333333333332,
+            "sxv": 1,
+            "syv": -3,
+            "ni": true
+          }
+        }
+      },
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "lethal-respawn-q2",
+      "quality": 2,
+      "seed": 1,
+      "ticks": 1,
+      "pass": true,
+      "comparisons": 35,
+      "numericComparisons": 18,
+      "discreteComparisons": 17,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 1,
+        "lethalDeaths": 1,
+        "respawns": 1,
+        "roundRollovers": 0,
+        "deathDiffersFromRestoredLiveDisc": true,
+        "originalSample": {
+          "tick": 1,
+          "death": {
+            "x": 30.44998888888889,
+            "y": 18.75558148148148,
+            "xv": 0.9996666666666667,
+            "yv": -2.332555555555556,
+            "f": 0,
+            "m": 1
+          },
+          "restoredDisc": {
+            "x": 30.416666666666668,
+            "y": 18.833333333333332,
+            "xv": 1,
+            "yv": -3,
+            "sx": 30.416666666666668,
+            "sy": 18.833333333333332,
+            "sxv": 1,
+            "syv": -3,
+            "ni": true
+          }
+        }
+      },
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "negative-control-injected-death-y-error",
+    "quality": 1,
+    "seed": 1,
+    "ticks": 1,
+    "pass": true,
+    "comparisons": 35,
+    "numericComparisons": 18,
+    "discreteComparisons": 17,
+    "maxError": 0.0000010000000010279564,
+    "maxErrorByField": {
+      "disc.x": 0,
+      "disc.y": 0,
+      "disc.xv": 0,
+      "disc.yv": 0,
+      "disc.angle": 0,
+      "disc.angularVelocity": 0,
+      "disc.energy": 0,
+      "death.x": 0,
+      "death.y": 0.0000010000000010279564,
+      "death.xv": 0,
+      "death.yv": 0
+    },
+    "firstMismatch": {
+      "tick": 1,
+      "entity": "death",
+      "id": 0,
+      "field": "y",
+      "actual": 18.755582481481483,
+      "native": 18.75558148148148,
+      "error": 0.0000010000000010279564
+    },
+    "coverage": {
+      "simulatedTicks": 1,
+      "lethalDeaths": 1,
+      "respawns": 1,
+      "roundRollovers": 0,
+      "deathDiffersFromRestoredLiveDisc": true,
+      "originalSample": {
+        "tick": 1,
+        "death": {
+          "x": 30.44998888888889,
+          "y": 18.75558148148148,
+          "xv": 0.9996666666666667,
+          "yv": -2.332555555555556,
+          "f": 0,
+          "m": 1
+        },
+        "restoredDisc": {
+          "x": 30.416666666666668,
+          "y": 18.833333333333332,
+          "xv": 1,
+          "yv": -3,
+          "sx": 30.416666666666668,
+          "sy": 18.833333333333332,
+          "sxv": 1,
+          "syv": -3,
+          "ni": true
+        }
+      }
+    },
+    "provenance": {
+      "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+      "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+      "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+      "functions": [
+        {
+          "name": "createNewState",
+          "start": 1771638,
+          "end": 1790433,
+          "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+        },
+        {
+          "name": "step",
+          "start": 1790462,
+          "end": 1862467,
+          "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+        }
+      ]
+    },
+    "injectedError": 0.000001,
+    "detected": true
+  },
+  "totals": {
+    "scenarios": 2,
+    "ticks": 2,
+    "comparisons": 70,
+    "numericComparisons": 36,
+    "discreteComparisons": 34,
+    "lethalDeaths": 2,
+    "respawns": 2,
+    "maximumAbsoluteError": 0
+  }
+}

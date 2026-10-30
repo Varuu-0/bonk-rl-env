@@ -1,0 +1,58 @@
+{
+  "schema": "bonk-rl-env.native-mode-differential",
+  "version": 1,
+  "pass": false,
+  "status": "FAIL",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Pinned original alpha2s createNewState/Physics.step versus only src/core/classic-physics.ts on static box fixtures and controlled native input states. Covers declared Arrow/Death Arrow/VTOL scenarios; not public PhysicsEngine/environment integration, dynamic maps, match/round lifecycle, complete modes, online play, or cross-platform bit parity.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localClassicPhysicsSha256": "c8294f2cee67009ba1d8d7988e4e69c9745aa48377876aeffe43270d3354faf8"
+  },
+  "group": "all",
+  "scenarioNames": ["vtol-disc-collision-v-q1"],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "vtol-disc-collision-v-q1",
+      "kind": "vtol-disc-collision",
+      "group": "vtol",
+      "mode": "v",
+      "quality": 1,
+      "pass": false,
+      "status": "ERROR",
+      "ticks": 0,
+      "frames": 0,
+      "comparisons": 0,
+      "numericComparisons": 0,
+      "discreteComparisons": 0,
+      "maxError": 0,
+      "maxErrorByField": {},
+      "firstMismatch": null,
+      "error": {
+        "message": "Cannot read properties of null (reading 'SetContactListener')",
+        "stack": "instrument-original-contact-listener.js:3\n        var originalSetContactListener = z.world.SetContactListener;\n                                                 ^\n\nTypeError: Cannot read properties of null (reading 'SetContactListener')\n    at instrument-original-contact-listener.js:3:50\n    at Script.runInContext (node:vm:149:12)\n    at run (E:\\Projects\\bonk-rl-env\\validation\\native\\raw-physics-oracle.cjs:40:88)\n    at Object.instrumentContacts (E:\\Projects\\bonk-rl-env\\validation\\native\\raw-physics-oracle.cjs:94:7)\n    at createRun (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-modes.cjs:475:43)\n    at compareNativeModes (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-modes.cjs:615:20)\n    at main (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-modes.cjs:676:18)\n    at Object.<anonymous> (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-modes.cjs:691:20)\n    at Module._compile (node:internal/modules/cjs/loader:1554:14)\n    at Object.transformer (E:\\Projects\\bonk-rl-env\\node_modules\\tsx\\dist\\register-D46fvsV_.cjs:3:1104)"
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0
+    }
+  ],
+  "negativeControl": null,
+  "totals": {
+    "scenarios": 1,
+    "passed": 0,
+    "failed": 1,
+    "ticks": 0,
+    "comparisons": 0,
+    "numericComparisons": 0,
+    "discreteComparisons": 0,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 0,
+    "localRepairOrReseeds": 0
+  }
+}

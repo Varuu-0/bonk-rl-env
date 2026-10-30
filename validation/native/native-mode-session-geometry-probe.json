@@ -1,0 +1,447 @@
+{
+  "schema": "bonk-rl-env.native-mode-session-differential",
+  "version": 1,
+  "pass": false,
+  "status": "FAIL",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "freshCreateNewStateEveryScenario": true,
+  "scope": "Pinned original alpha2s createNewState/Physics.step versus src/core/native-mode-session.ts delegating static match lifecycle to createNativeSession. Covers declared fresh-session Classic, Arrow expiry, Death Arrow lethal/result/rollover and VTOL contact scenarios; not public PhysicsEngine/environment integration, dynamic maps, complete modes, online play, respawn matches or cross-platform bit parity.",
+  "provenance": {
+    "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "functions": [
+      {
+        "name": "createNewState",
+        "start": 1771638,
+        "end": 1790433,
+        "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+      },
+      {
+        "name": "step",
+        "start": 1790462,
+        "end": 1862467,
+        "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+      }
+    ],
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localFiles": {
+      "src/core/native-mode-session.ts": "1e62e69d678e0111b9b59f958309f4f8a098f57c9bcab43e333e6c3b2abd93dc",
+      "src/core/native-session.ts": "3d4214739b976033e51f493f6ed6605b01076f0ee4317b96071c8b2699bbf363",
+      "src/core/classic-physics.ts": "7069d4aab2927f47a43af41e6904ee5b950bbb2417f2b2cda694afcdfdeb3743",
+      "src/core/native-spawns.ts": "82a475f88f3c2cb91838e959b381207b58f11382825076b49e28fd06104605b4",
+      "src/core/safe-trig.ts": "7d2c4c79c2a36dd83c95ea63704bb9d1d9e8978c1586f866d71aa6368f31b7cc"
+    }
+  },
+  "scenarioNames": ["classic-lifecycle-b-q1", "death-arrow-result-rollover-ard-q1", "vtol-contact-v-q1"],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "classic-lifecycle-b-q1",
+      "kind": "classic-lifecycle",
+      "mode": "b",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 185,
+      "tickCap": 185,
+      "ticks": 185,
+      "frames": 186,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 9251,
+      "numericComparisons": 2874,
+      "discreteComparisons": 6377,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": {
+        "tick": 185,
+        "field": "coverage",
+        "expected": "one native out-of-world Classic death"
+      },
+      "mismatches": [
+        {
+          "tick": 185,
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 124,
+        "countdownTicks": 61,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 1,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 94,
+            "id": 1,
+            "cause": 4
+          },
+          {
+            "tick": 102,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 2
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "one native out-of-world Classic death"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "death-arrow-result-rollover-ard-q1",
+      "kind": "death-arrow-result-rollover",
+      "mode": "ard",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 400,
+      "tickCap": 400,
+      "ticks": 400,
+      "frames": 401,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 20361,
+      "numericComparisons": 6274,
+      "discreteComparisons": 14087,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": {
+        "tick": 400,
+        "field": "coverage",
+        "expected": "Death Arrow lethal attribution to target disc"
+      },
+      "mismatches": [
+        {
+          "tick": 400,
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "tick": 400,
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "tick": 400,
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "tick": 400,
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 248,
+        "countdownTicks": 152,
+        "resultTicks": 182,
+        "rollovers": 2,
+        "postRolloverTicks": 216,
+        "roundResults": [
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          },
+          {
+            "winner": null,
+            "draw": true,
+            "score": null
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 94,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 94,
+            "id": 1,
+            "cause": 4
+          },
+          {
+            "tick": 309,
+            "id": 0,
+            "cause": 4
+          },
+          {
+            "tick": 309,
+            "id": 1,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 0,
+          "3": 0,
+          "4": 4
+        },
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 128,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "Death Arrow lethal attribution to target disc"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow native winner and score"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow result rollover"
+        },
+        {
+          "field": "coverage",
+          "expected": "Death Arrow projectile owner"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    },
+    {
+      "name": "vtol-contact-v-q1",
+      "kind": "vtol-contact",
+      "mode": "v",
+      "quality": 1,
+      "seed": 1,
+      "requestedTicks": 185,
+      "tickCap": 185,
+      "ticks": 185,
+      "frames": 186,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 9740,
+      "numericComparisons": 3119,
+      "discreteComparisons": 6621,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0,
+        "disc.sx": 0,
+        "disc.sy": 0,
+        "disc.sxv": 0,
+        "disc.syv": 0,
+        "death.x": 0,
+        "death.y": 0,
+        "death.xv": 0,
+        "death.yv": 0
+      },
+      "firstMismatch": {
+        "tick": 185,
+        "field": "coverage",
+        "expected": "native VTOL disc contact attribution"
+      },
+      "mismatches": [
+        {
+          "tick": 185,
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 101,
+        "countdownTicks": 84,
+        "resultTicks": 91,
+        "rollovers": 1,
+        "postRolloverTicks": 24,
+        "roundResults": [
+          {
+            "winner": 0,
+            "draw": false,
+            "score": 1
+          }
+        ],
+        "maxProjectiles": 0,
+        "projectileFteZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "releases": [],
+        "firedOwners": [],
+        "postFireEnergies": [],
+        "maxDraw": 0,
+        "deaths": [
+          {
+            "tick": 71,
+            "id": 1,
+            "cause": 1
+          },
+          {
+            "tick": 114,
+            "id": 0,
+            "cause": 4
+          }
+        ],
+        "deathCauses": {
+          "1": 1,
+          "3": 0,
+          "4": 1
+        },
+        "vtStates": [0, 1, 2, 3],
+        "nonzeroAngularTicks": 51,
+        "lastHitTicks": 0,
+        "arrowContacts": 0,
+        "matchCompleteTicks": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "native VTOL disc contact attribution"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": null,
+  "totals": {
+    "scenarios": 3,
+    "passed": 0,
+    "failed": 3,
+    "ticks": 770,
+    "frames": 773,
+    "comparisons": 39352,
+    "numericComparisons": 12267,
+    "discreteComparisons": 27085,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 6,
+    "localRepairOrReseeds": 0,
+    "rollovers": 4
+  }
+}

@@ -1,0 +1,500 @@
+{
+  "schema": "bonk-rl-env.native-classic-sparse-options-differential",
+  "version": 1,
+  "pass": true,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "scope": "Pinned original alpha2s Physics.step versus RL-local Classic core with dense and sparse native player IDs and sparse balance/team arrays. Single-player in-round static-floor balance behavior only; multi-player team-collision lifecycle and cross-platform bit parity are outside scope.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08"
+  },
+  "ticksPerScenario": 120,
+  "scenarios": [
+    {
+      "name": "dense-balance",
+      "id": 1,
+      "quality": 1,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 83,
+        "radius": 2,
+        "nativeSlots": [1],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.788912438082622,
+          "xv": 0,
+          "yv": 0.13602851391687193,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "dense-default",
+      "id": 1,
+      "quality": 1,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [1],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "name": "sparse-id-19-balance",
+      "id": 19,
+      "quality": 1,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 83,
+        "radius": 2,
+        "nativeSlots": [19],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.788912438082622,
+          "xv": 0,
+          "yv": 0.13602851391687193,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "sparse-id-19-default",
+      "id": 19,
+      "quality": 1,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [19],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "name": "sparse-id-3-balance",
+      "id": 3,
+      "quality": 1,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 83,
+        "radius": 2,
+        "nativeSlots": [3],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.788912438082622,
+          "xv": 0,
+          "yv": 0.13602851391687193,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "sparse-id-3-default",
+      "id": 3,
+      "quality": 1,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [3],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "name": "dense-balance",
+      "id": 1,
+      "quality": 2,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 91,
+        "radius": 2,
+        "nativeSlots": [1],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.831907991927483,
+          "xv": 0,
+          "yv": -0.0009687734895516954,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "dense-default",
+      "id": 1,
+      "quality": 2,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [1],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "name": "sparse-id-19-balance",
+      "id": 19,
+      "quality": 2,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 91,
+        "radius": 2,
+        "nativeSlots": [19],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.831907991927483,
+          "xv": 0,
+          "yv": -0.0009687734895516954,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "sparse-id-19-default",
+      "id": 19,
+      "quality": 2,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [19],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    },
+    {
+      "name": "sparse-id-3-balance",
+      "id": 3,
+      "quality": 2,
+      "balance": 100,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 91,
+        "radius": 2,
+        "nativeSlots": [3],
+        "final": {
+          "tick": 120,
+          "x": 42.91666666666666,
+          "y": 17.831907991927483,
+          "xv": 0,
+          "yv": -0.0009687734895516954,
+          "radius": 2
+        }
+      }
+    },
+    {
+      "name": "sparse-id-3-default",
+      "id": 3,
+      "quality": 2,
+      "balance": null,
+      "ticks": 120,
+      "pass": true,
+      "comparisons": 1452,
+      "numericComparisons": 847,
+      "discreteComparisons": 605,
+      "maxError": 0,
+      "maxErrorByField": {
+        "x": 0,
+        "y": 0,
+        "xv": 0,
+        "yv": 0,
+        "angle": 0,
+        "angularVelocity": 0,
+        "energy": 0
+      },
+      "firstMismatch": null,
+      "coverage": {
+        "simulatedTicks": 120,
+        "contactTicks": 64,
+        "radius": 1,
+        "nativeSlots": [3],
+        "final": {
+          "tick": 120,
+          "x": 42.916666666666664,
+          "y": 18.39483067011251,
+          "xv": 0,
+          "yv": -0.008330075290445696,
+          "radius": 1
+        }
+      }
+    }
+  ],
+  "negativeControl": {
+    "name": "negative-control-injected-yv-error",
+    "id": 19,
+    "quality": 1,
+    "balance": 100,
+    "ticks": 1,
+    "pass": true,
+    "comparisons": 24,
+    "numericComparisons": 14,
+    "discreteComparisons": 10,
+    "maxError": 0.0000010000000000287557,
+    "maxErrorByField": {
+      "x": 0,
+      "y": 0,
+      "xv": 0,
+      "yv": 0.0000010000000000287557,
+      "angle": 0,
+      "angularVelocity": 0,
+      "energy": 0
+    },
+    "firstMismatch": {
+      "tick": 1,
+      "field": "yv",
+      "actual": -0.6331212222222221,
+      "native": -0.6331222222222221,
+      "error": 0.0000010000000000287557
+    },
+    "coverage": {
+      "simulatedTicks": 1,
+      "contactTicks": 1,
+      "radius": 2,
+      "nativeSlots": [19],
+      "final": {
+        "tick": 1,
+        "x": 42.916666666666664,
+        "y": 17.95887302693926,
+        "xv": 0,
+        "yv": -0.6331222222222221,
+        "radius": 2
+      }
+    },
+    "injectedError": 0.000001,
+    "detected": true
+  },
+  "totals": {
+    "scenarios": 12,
+    "ticks": 1440,
+    "comparisons": 17424,
+    "numericComparisons": 10164,
+    "discreteComparisons": 7260,
+    "maximumAbsoluteError": 0
+  }
+}

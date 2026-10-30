@@ -1,0 +1,36 @@
+{
+  "schemaVersion": 1,
+  "name": "native-worker-failure-recreation",
+  "native": true,
+  "automaticRecovery": false,
+  "crashAction": 47,
+  "injectedExitCode": 86,
+  "crashSettleBudgetMs": 4000,
+  "durationMs": 4575.4247,
+  "cases": [
+    {
+      "shared": false,
+      "crashes": [21.562, 7.5787],
+      "recreated": [
+        [4, 5],
+        [6, 7]
+      ],
+      "replayStepsPerGraph": 20,
+      "replayComparisons": 4,
+      "nativeReplayComparisons": 4
+    },
+    {
+      "shared": true,
+      "crashes": [15.8746, 29.6987],
+      "recreated": [
+        [10, 11],
+        [12, 13]
+      ],
+      "replayStepsPerGraph": 20,
+      "replayComparisons": 4,
+      "nativeReplayComparisons": 4
+    }
+  ],
+  "runner": "vitest",
+  "passed": true
+}

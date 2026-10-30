@@ -1,0 +1,193 @@
+{
+  "schema": "bonk-rl-env.native-public-environment-differential",
+  "version": 1,
+  "pass": false,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Actual BonkEnvironment reset/step/getObservationFast against pinned original raw static Classic states; only documented native-world to public map-pixel conversion. Covers active controls, countdown/first solver boundary, lethal result and OOB respawn presentation. No reward/termination policy parity, dynamic maps, worker transport, non-Classic modes, or whole-game claim.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "environmentSha256": "772666b22d9f92c6ce32b7bbdd88f79f52a3007ffae93bd63afa919ccf2959fe"
+  },
+  "scenarios": [
+    {
+      "name": "public-active-q1",
+      "kind": "active",
+      "quality": 1,
+      "ticks": 150,
+      "frames": 151,
+      "comparisons": 5733,
+      "numericComparisons": 1510,
+      "discreteComparisons": 1807,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 150,
+        "field": "coverage",
+        "actual": "countdown/solver boundary not covered"
+      },
+      "mismatches": [
+        {
+          "tick": 150,
+          "field": "coverage",
+          "actual": "countdown/solver boundary not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": true,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 151
+      },
+      "coverageFailures": ["countdown/solver boundary not covered"],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    },
+    {
+      "name": "public-active-q2",
+      "kind": "active",
+      "quality": 2,
+      "ticks": 150,
+      "frames": 151,
+      "comparisons": 5733,
+      "numericComparisons": 1510,
+      "discreteComparisons": 1807,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 150,
+        "field": "coverage",
+        "actual": "countdown/solver boundary not covered"
+      },
+      "mismatches": [
+        {
+          "tick": 150,
+          "field": "coverage",
+          "actual": "countdown/solver boundary not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": true,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 151
+      },
+      "coverageFailures": ["countdown/solver boundary not covered"],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    },
+    {
+      "name": "public-lethal-result",
+      "kind": "lethal",
+      "quality": 1,
+      "ticks": 200,
+      "frames": 64,
+      "comparisons": 2389,
+      "numericComparisons": 630,
+      "discreteComparisons": 751,
+      "maxError": 0,
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 2,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 1,
+        "deaths": 2,
+        "respawns": 0,
+        "fastObservationTicks": 63
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "pass": false,
+      "error": {
+        "message": "Cannot read properties of undefined (reading 'x')",
+        "stack": "TypeError: Cannot read properties of undefined (reading 'x')\n    at conversion (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:123:18)\n    at check (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:132:26)\n    at runScenario (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:185:7)\n    at E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:210:49\n    at Array.map (<anonymous>)\n    at main (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:210:31)\n    at Object.<anonymous> (E:\\Projects\\bonk-rl-env\\validation\\native\\compare-native-environment.cjs:241:20)\n    at Module._compile (node:internal/modules/cjs/loader:1554:14)\n    at Object.transformer (E:\\Projects\\bonk-rl-env\\node_modules\\tsx\\dist\\register-D46fvsV_.cjs:3:1104)\n    at Module.load (node:internal/modules/cjs/loader:1289:32)"
+      }
+    },
+    {
+      "name": "public-respawn",
+      "kind": "respawn",
+      "quality": 1,
+      "ticks": 150,
+      "frames": 151,
+      "comparisons": 5733,
+      "numericComparisons": 1510,
+      "discreteComparisons": 1807,
+      "maxError": 0,
+      "firstMismatch": null,
+      "mismatches": [],
+      "coverage": {
+        "simulatedTicks": 90,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 0,
+        "deaths": 4,
+        "respawns": 4,
+        "fastObservationTicks": 151
+      },
+      "coverageFailures": [],
+      "localRepairOrReseeds": 0,
+      "pass": true
+    }
+  ],
+  "negativeControl": {
+    "name": "public-active-q1",
+    "kind": "active",
+    "quality": 1,
+    "ticks": 150,
+    "frames": 2,
+    "comparisons": 71,
+    "numericComparisons": 20,
+    "discreteComparisons": 19,
+    "maxError": 0.000001,
+    "firstMismatch": {
+      "tick": 1,
+      "entity": "disc",
+      "id": 0,
+      "field": "xv",
+      "actual": 0.000001,
+      "native": 0,
+      "error": 0.000001
+    },
+    "mismatches": [
+      {
+        "tick": 1,
+        "entity": "disc",
+        "id": 0,
+        "field": "xv",
+        "actual": 0.000001,
+        "native": 0,
+        "error": 0.000001
+      }
+    ],
+    "coverage": {
+      "simulatedTicks": 0,
+      "countdownActiveBoundary": false,
+      "firstSolverTick": false,
+      "resultTicks": 0,
+      "deaths": 0,
+      "respawns": 0,
+      "fastObservationTicks": 2
+    },
+    "coverageFailures": [],
+    "localRepairOrReseeds": 0,
+    "pass": true,
+    "detected": true
+  },
+  "totals": {
+    "scenarios": 4,
+    "frames": 517,
+    "comparisons": 19588,
+    "numericComparisons": 5160,
+    "discreteComparisons": 6172,
+    "maximumAbsoluteError": 0
+  }
+}

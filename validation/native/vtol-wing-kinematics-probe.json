@@ -1,0 +1,145 @@
+{
+  "schema": "bonk-rl-env.native-mode-differential",
+  "version": 1,
+  "pass": false,
+  "status": "FAIL",
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "publicEngineParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Pinned original alpha2s createNewState/Physics.step versus only src/core/classic-physics.ts on static box fixtures and controlled native input states. Covers declared Arrow/Death Arrow/VTOL scenarios; not public PhysicsEngine/environment integration, dynamic maps, match/round lifecycle, complete modes, online play, or cross-platform bit parity.",
+  "provenance": {
+    "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "functions": [
+      {
+        "name": "createNewState",
+        "start": 1771638,
+        "end": 1790433,
+        "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+      },
+      {
+        "name": "step",
+        "start": 1790462,
+        "end": 1862467,
+        "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+      }
+    ],
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "localClassicPhysicsSha256": "a4bfc0a77cf37a95a2012d10a99cb89f22536f8ab4a5bdc87b99cc75775987ed"
+  },
+  "group": "all",
+  "scenarioNames": ["vtol-wing-kinematics-v-q1"],
+  "tickLimit": null,
+  "scenarios": [
+    {
+      "name": "vtol-wing-kinematics-v-q1",
+      "kind": "vtol-wing-kinematics",
+      "group": "vtol",
+      "mode": "v",
+      "quality": 1,
+      "seed": 1,
+      "boundary": "controlled-native-state-seed",
+      "requestedTicks": 8,
+      "tickCap": 8,
+      "ticks": 8,
+      "frames": 9,
+      "pass": false,
+      "status": "FAIL",
+      "comparisons": 161,
+      "numericComparisons": 63,
+      "discreteComparisons": 98,
+      "maxError": 0,
+      "maxErrorByField": {
+        "disc.x": 0,
+        "disc.y": 0,
+        "disc.xv": 0,
+        "disc.yv": 0,
+        "disc.angle": 0,
+        "disc.angularVelocity": 0,
+        "disc.energy": 0
+      },
+      "firstMismatch": {
+        "tick": 8,
+        "field": "coverage",
+        "expected": "native non-lethal wing/world contact creates angular velocity"
+      },
+      "mismatches": [
+        {
+          "tick": 8,
+          "field": "coverage",
+          "expected": "native non-lethal wing/world contact creates angular velocity"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 8,
+        "maxDraw": 0,
+        "chargeGatedTicks": 0,
+        "aimWraps": 0,
+        "releaseTicks": [],
+        "postFireEnergies": [],
+        "firedOwners": [],
+        "firedTeams": [],
+        "projectileZeroTicks": 0,
+        "projectileExpiryTicks": 0,
+        "maxProjectiles": 0,
+        "targetMotionTicks": 0,
+        "targetDeaths": 0,
+        "ownerIgnored": false,
+        "teammatePassed": false,
+        "enemyAffected": false,
+        "nativeWorldBounceTicks": 0,
+        "vtStates": [0],
+        "nonzeroAngularTicks": 0,
+        "lastHitTicks": 0,
+        "heavyTicks": 0,
+        "minEnergy": 1000,
+        "nativeDeathEvents": 0,
+        "roundRollovers": 0,
+        "localArrowContactEvents": 0
+      },
+      "coverageFailures": [
+        {
+          "field": "coverage",
+          "expected": "native non-lethal wing/world contact creates angular velocity"
+        }
+      ],
+      "localRepairOrReseeds": 0,
+      "provenance": {
+        "rawSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+        "boxSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+        "trigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+        "functions": [
+          {
+            "name": "createNewState",
+            "start": 1771638,
+            "end": 1790433,
+            "hash": "a25d16f355bed2bd15bf0738df26c7ed7ca0d65c921e092500b48bf4c5992f84"
+          },
+          {
+            "name": "step",
+            "start": 1790462,
+            "end": 1862467,
+            "hash": "60cf39290eb8ada29646c29137a9ce6164d69822335c966d8430302f7e33090e"
+          }
+        ]
+      }
+    }
+  ],
+  "negativeControl": null,
+  "totals": {
+    "scenarios": 1,
+    "passed": 0,
+    "failed": 1,
+    "ticks": 8,
+    "comparisons": 161,
+    "numericComparisons": 63,
+    "discreteComparisons": 98,
+    "maximumAbsoluteError": 0,
+    "coverageFailures": 1,
+    "localRepairOrReseeds": 0
+  }
+}

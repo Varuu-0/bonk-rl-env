@@ -1,0 +1,339 @@
+{
+  "schema": "bonk-rl-env.native-public-environment-differential",
+  "version": 1,
+  "pass": false,
+  "tolerance": 1e-9,
+  "bitParityClaimed": false,
+  "originalOnlyExpectedValues": true,
+  "scope": "Actual BonkEnvironment reset/step/getObservationFast against pinned original raw static Classic states; only documented native-world to public map-pixel conversion. Covers active controls, countdown/first solver boundary, lethal result and OOB respawn presentation. No reward/termination policy parity, dynamic maps, worker transport, non-Classic modes, or whole-game claim.",
+  "provenance": {
+    "rawClientSha256": "e549ed7b6840a908bc0e9c595321aa5e9dcfa787190bae9b60938e32dfa65c8e",
+    "modifiedBox2DSha256": "0f7645c88f53b51b731819c2f8ee3d9af5040c3c741371f8b1ff82c2074f3a83",
+    "safeTrigSha256": "d1d09e414ba4c16bfb9ce8492f135bbc87b581c364a3b91019c4f93a18557b08",
+    "environmentSha256": "d857ed20dccc1d5dc8a82ae5613a76b7f298be12783d0563715df39b60eb0d68"
+  },
+  "scenarios": [
+    {
+      "name": "public-active-q1",
+      "kind": "active",
+      "quality": 1,
+      "ticks": 150,
+      "frames": 1,
+      "comparisons": 33,
+      "numericComparisons": 10,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "xv",
+        "native": 0,
+        "error": null
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "xv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "yv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "incomplete fast-observation coverage"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "countdown/solver boundary not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 1
+      },
+      "coverageFailures": [
+        "no simulated ticks",
+        "incomplete fast-observation coverage",
+        "countdown/solver boundary not covered"
+      ],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    },
+    {
+      "name": "public-active-q2",
+      "kind": "active",
+      "quality": 2,
+      "ticks": 150,
+      "frames": 1,
+      "comparisons": 33,
+      "numericComparisons": 10,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "xv",
+        "native": 0,
+        "error": null
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "xv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "yv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "incomplete fast-observation coverage"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "countdown/solver boundary not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 1
+      },
+      "coverageFailures": [
+        "no simulated ticks",
+        "incomplete fast-observation coverage",
+        "countdown/solver boundary not covered"
+      ],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    },
+    {
+      "name": "public-lethal-result",
+      "kind": "lethal",
+      "quality": 1,
+      "ticks": 200,
+      "frames": 1,
+      "comparisons": 33,
+      "numericComparisons": 10,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "xv",
+        "native": 0,
+        "error": null
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "xv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "yv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "incomplete fast-observation coverage"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "death/result not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 1
+      },
+      "coverageFailures": ["no simulated ticks", "incomplete fast-observation coverage", "death/result not covered"],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    },
+    {
+      "name": "public-respawn",
+      "kind": "respawn",
+      "quality": 1,
+      "ticks": 150,
+      "frames": 1,
+      "comparisons": 33,
+      "numericComparisons": 10,
+      "discreteComparisons": 7,
+      "maxError": 0,
+      "firstMismatch": {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "xv",
+        "native": -250,
+        "error": null
+      },
+      "mismatches": [
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "xv",
+          "native": -250,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "entity": "disc",
+          "id": 1,
+          "field": "yv",
+          "native": 0,
+          "error": null
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "no simulated ticks"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "incomplete fast-observation coverage"
+        },
+        {
+          "tick": 0,
+          "field": "coverage",
+          "actual": "death/respawn not covered"
+        }
+      ],
+      "coverage": {
+        "simulatedTicks": 0,
+        "countdownActiveBoundary": false,
+        "firstSolverTick": false,
+        "resultTicks": 0,
+        "deaths": 0,
+        "respawns": 0,
+        "fastObservationTicks": 1
+      },
+      "coverageFailures": ["no simulated ticks", "incomplete fast-observation coverage", "death/respawn not covered"],
+      "localRepairOrReseeds": 0,
+      "pass": false
+    }
+  ],
+  "negativeControl": {
+    "name": "public-active-q1",
+    "kind": "active",
+    "quality": 1,
+    "ticks": 150,
+    "frames": 1,
+    "comparisons": 33,
+    "numericComparisons": 10,
+    "discreteComparisons": 7,
+    "maxError": 0,
+    "firstMismatch": {
+      "tick": 0,
+      "entity": "disc",
+      "id": 1,
+      "field": "xv",
+      "native": 0,
+      "error": null
+    },
+    "mismatches": [
+      {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "xv",
+        "native": 0,
+        "error": null
+      },
+      {
+        "tick": 0,
+        "entity": "disc",
+        "id": 1,
+        "field": "yv",
+        "native": 0,
+        "error": null
+      }
+    ],
+    "coverage": {
+      "simulatedTicks": 0,
+      "countdownActiveBoundary": false,
+      "firstSolverTick": false,
+      "resultTicks": 0,
+      "deaths": 0,
+      "respawns": 0,
+      "fastObservationTicks": 1
+    },
+    "coverageFailures": [],
+    "localRepairOrReseeds": 0,
+    "pass": false,
+    "detected": false
+  },
+  "totals": {
+    "scenarios": 4,
+    "frames": 4,
+    "comparisons": 132,
+    "numericComparisons": 40,
+    "discreteComparisons": 28,
+    "maximumAbsoluteError": 0
+  }
+}
