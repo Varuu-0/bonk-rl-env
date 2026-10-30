@@ -4,24 +4,26 @@ Shell scripts, PowerShell scripts, and CLI tools for managing Bonk.io RL Environ
 
 ## Files
 
-| File                         | Platform             | Purpose                                                                                       |
-| ---------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
-| `start.sh`                   | Unix/macOS/Linux     | Quick start — launches the server with default settings                                       |
-| `start.bat`                  | Windows              | Quick start — launches the server with default settings                                       |
-| `start-server.sh`            | Unix/macOS/Linux     | Detailed server start with port and configuration options                                     |
-| `stop-server.sh`             | Unix/macOS/Linux     | Stop a running Bonk RL server                                                                 |
-| `test-server-exit.sh`        | Unix/macOS/Linux     | Test server exit behavior and cleanup                                                         |
-| `Start-BonkServer.ps1`       | Windows (PowerShell) | Start the Bonk RL server                                                                      |
-| `Stop-BonkServer.ps1`        | Windows (PowerShell) | Stop a running Bonk RL server                                                                 |
-| `local-ci.ts`                | Cross-platform       | Master local CI/CD engine (8 verification domains, 4 tiers)                                   |
-| `local-ci.sh`                | Unix/macOS/Linux     | Bash entry point forwarding flags to `local-ci.ts`                                            |
-| `Invoke-LocalCI.ps1`         | Windows (PowerShell) | PowerShell entry point forwarding flags to `local-ci.ts`                                      |
-| `ci-bench-check.ts`          | Cross-platform       | Benchmark regression checker — runs Layers 1–6 and enforces SLA thresholds                    |
-| `format.ts`                  | Cross-platform       | Prettier check/write scoped to changed (or staged) files                                      |
-| `check-webscript-ids.js`     | Cross-platform       | Validates Webscript DOM selectors against retained fixtures                                   |
-| `verify-heavy-flip-probe.js` | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)      |
-| `extract-bonk-map.ts`        | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON |
-| `dsp-cli.py`                 | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                    |
+| File                          | Platform             | Purpose                                                                                              |
+| ----------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `start.sh`                    | Unix/macOS/Linux     | Quick start — launches the server with default settings                                              |
+| `start.bat`                   | Windows              | Quick start — launches the server with default settings                                              |
+| `start-server.sh`             | Unix/macOS/Linux     | Detailed server start with port and configuration options                                            |
+| `stop-server.sh`              | Unix/macOS/Linux     | Stop a running Bonk RL server                                                                        |
+| `test-server-exit.sh`         | Unix/macOS/Linux     | Test server exit behavior and cleanup                                                                |
+| `Start-BonkServer.ps1`        | Windows (PowerShell) | Start the Bonk RL server                                                                             |
+| `Stop-BonkServer.ps1`         | Windows (PowerShell) | Stop a running Bonk RL server                                                                        |
+| `local-ci.ts`                 | Cross-platform       | Master local CI/CD engine (8 verification domains, 4 tiers)                                          |
+| `local-ci.sh`                 | Unix/macOS/Linux     | Bash entry point forwarding flags to `local-ci.ts`                                                   |
+| `Invoke-LocalCI.ps1`          | Windows (PowerShell) | PowerShell entry point forwarding flags to `local-ci.ts`                                             |
+| `ci-bench-check.ts`           | Cross-platform       | Benchmark regression checker — runs Layers 1–6 and enforces SLA thresholds                           |
+| `format.ts`                   | Cross-platform       | Prettier check/write scoped to changed (or staged) files                                             |
+| `check-webscript-ids.js`      | Cross-platform       | Validates Webscript DOM selectors against retained fixtures                                          |
+| `verify-heavy-flip-probe.js`  | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)             |
+| `extract-bonk-map.ts`         | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON        |
+| `verify-mapexporter-fixes.js` | Cross-platform       | Source-level regression harness for `Webscripts/mapexporter.js` (contract keys, hooks, output shape) |
+| `verify-mapexporter-e2e.js`   | Cross-platform       | Offline E2E harness for the mapexporter userscript (vm sandbox, state hook, export button, download) |
+| `dsp-cli.py`                  | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                           |
 
 ## Usage
 

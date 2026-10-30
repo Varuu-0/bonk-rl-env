@@ -1,8 +1,10 @@
 # maps
 
 Bonk.io map exports in JSON format, produced by the **Bonk Map Exporter** userscript
-(`../Webscripts/mapexporter.js`). Each file captures the full body → fixture → shape
-hierarchy, collision configuration, spawns, and cap zones for a single arena.
+(`../Webscripts/mapexporter.js`, v3+). Each file is a **NativeMap JSON** document
+(`{ v, s, physics: { shapes, fixtures, bodies, bro, joints, ppm }, spawns, capZones, m }`)
+capturing the full body → fixture → shape hierarchy, collision configuration, spawns,
+and cap zones for a single arena in the native serialized field format.
 
 ## Capturing a map
 
@@ -11,9 +13,10 @@ The exporter is installed as a userscript on `https://bonk.io/gameframe-release.
 
 1. **Install `../Webscripts/mapexporter.js`** in your userscript manager (Tampermonkey/Violentmonkey).
 2. Optional: also install `../Webscripts/codeinjector.js` (the shared "Code Injector"
-   host) or `../Webscripts/bonk-live-tool.user.js`. The exporter is now self-contained,
-   so it works alone too — it installs its own `alpha2s.js` fetch/patch hook, and is
-   idempotent so coexisting hosts never double-patch.
+   host) or `../Webscripts/bonk-live-tool.user.js`. The exporter is self-contained: it
+   installs its own `alpha2s.js` fetch/patch hook (run-at `document-start`), so it works
+   alone. It is idempotent (shared `__bonkRLAppend` / `__bonkRLInt` flags) so coexisting
+   hosts never double-patch.
 3. Open a game (play or watch a match).
 4. Click the green **⬇ Export** button (bottom-right). The exported JSON downloads as
    `bonk_<MapName>_<dbid>.json`.
@@ -27,85 +30,94 @@ The exporter is installed as a userscript on `https://bonk.io/gameframe-release.
 
 ## Files
 
-| File | Description |
-|------|-------------|
-| `bonk_Simple_1v1_123.json` | Minimal 1v1 arena — a single flat platform |
-| `bonk_Gang_Grounds_2_0_37368.json` | Popular community 1v1 map (Gang Grounds 2.0) with box/circle geometry |
+| File                                 | Description                                                                             |
+| ------------------------------------ | --------------------------------------------------------------------------------------- |
+| `bonk_Simple_1v1_123.json`           | Minimal 1v1 arena — a single flat platform                                              |
+| `bonk_Gang_Grounds_2_0_37368.json`   | Popular community 1v1 map (Gang Grounds 2.0) with box/circle geometry                   |
 | `bonk_WDB__No_Mapshake__716916.json` | WDB (World Domination Battle) map — capture zones, joints, polygons; the engine default |
-| `bonk_WDB__no_nothing__1232248.json` | WDB variant with more bodies/joints |
-| `bonk_WeiRd_DeAth_BalL__80622.json` | Open "death ball" arena with dynamic platforms and cap zones |
+| `bonk_WDB__no_nothing__1232248.json` | WDB variant with more bodies/joints                                                     |
+| `bonk_WeiRd_DeAth_BalL__80622.json`  | Open "death ball" arena with dynamic platforms and cap zones                            |
 
 ## Loading in the engine
 
-The engine's `MapDef` loader (`src/core/map-adapter.ts::normalizeMap`) converts the
-real exported bonk format into the internal engine shape at load time. It maps
-`spawns[]` → `spawnPoints` (blue/red), `collidesGroup1..4` → `collides.{g1..g4}`,
-`capZones[].fixtureIndex` → the named platform body, `physicsJoints[]` integer body
-refs → body names, and computes a bounding-box `physics.deathCenter`. Any of the
-files above load via `mapPath` / `defaultMapPath` / `mapData`. The default map is
-`bonk_WDB__No_Mapshake__716916.json`.
+v3+ exports are native-format JSON: they load through the engine's native map path
+(`src/core/native-map-codec.ts` → `validateNativeMapJson` → the native map session),
+the same path used for the 288-map native corpus. Verify an export before use:
+
+```
+npx tsx scripts/extract-bonk-map.ts --in bonk_<MapName>_<dbid>.json --verify
+```
+
+Any of the files above load via `mapPath` / `defaultMapPath` / `mapData`. The default
+map is `bonk_WDB__No_Mapshake__716916.json`.
 
 ## Map Format
 
-The exporter emits a full, faithful hierarchy rather than a flattened list. Key
-top-level keys: `metadata`, `settings`, `physics`, `physicsBodies`, `physicsFixtures`,
-`physicsShapes`, `physicsJoints`, `spawns`, `capZones`, `bodies` (flat convenience),
-`bodyRenderOrder`, `exportedAt`, and (when available) `runtimeConstantTable` and
-`extractedPhysicsConstants`.
+v3+ exports are strict **NativeMap JSON** — the same field names and defaults the
+native client serializes (see `docs/MAPFORMAT.md` and the corpus in `.local-artifacts/`).
+Top-level keys: `v` (format version), `s` (settings), `physics`, `spawns`, `capZones`,
+and `m` (map metadata). No debug extras are included.
 
-### Metadata
-- `name`, `author`, `dbid`, `dbv`, `authid`, `date`, `mode`, `published`
+### Metadata (`m`)
+
+- `n`, `a`, `dbid`, `dbv`, `authid`, `date`, `mo` (mode), `pub`
 - `rxid`, `rxn`, `rxa`, `rxdb` — remix identifiers
-- `version` — map format version (top-level `v`)
-- `contributors`
+- `v` — map format version (also top-level `v`)
+- `cr` — contributors
 
-### Settings
+### Settings (`s`)
+
 Map-level physics toggles: `re` (respawn), `nc` (no-collision), `pq` (quality),
 `gd` (gravity), `fl` (show flags).
 
 ### Physics (global)
-`ppm` (pixels per metre). Global gravity/bounds/background fields are emitted as
-`null` because they do not live in the serialized `physics` object; runtime gravity
-(if the b2World was captured) appears under `extractedPhysicsConstants.runtimeGravity`.
 
-### Bodies (per `physicsBodies[]`)
-Position/angle, linear/angular velocity, surface physics (`friction`, `restitution`,
-`density`, `linearDamping`, `angularDamping`), collision filters (`collidesGroup1..4`,
-`collidesPlayers`), flags (`fixedRotation`, `antiTunnel`), `constantForce`, `forceZone`,
-`fixtureIndices`, and resolved `fixtures[]` (each carrying its shape, physics, and
-collision masks).
+`ppm` (pixels per metre), plus the `shapes`, `fixtures`, `bodies`, `bro` (body
+render order), and `joints` arrays. Gravity and bounds live in the game state, not the
+serialized map, and are set by the engine at load time.
 
-### Shapes (`physicsShapes[]`)
+### Bodies (per `physics.bodies[]`)
+
+`p` (position), `a` (angle), `lv`/`av` (velocities), `cf` (collision flags), `fx`
+(fixture list), `fz` (force-zone data), `s` (surface: `n`, `type`, `fric`, `fricp`, `re`,
+`de`, `ld`, `ad`, `fr`, `bu`, `f_c`, `f_p`, `f_1..f_4`).
+
+### Shapes (`physics.shapes[]`)
+
 `type` is one of:
-| `type` | Shape |
-|--------|-------|
-| `bx` | Box (rectangle, `width`/`height`) |
-| `ci` | Circle (`radius`) |
-| `po` | Polygon (vertex array) |
 
-### Joints (`physicsJoints[]`)
-`type`, `bodyA`, `bodyB`, `data` (opaque clone of the raw `d`), `length`, plus
-type-specific fields for revolute (`rv`), distance (`d`), line/prismatic (`lpj`), and
-rope (`lsj`).
+| `type` | Shape                                           |
+| ------ | ----------------------------------------------- |
+| `bx`   | Box (`w`/`h`, center `c`, angle `a`, `sk` skin) |
+| `ci`   | Circle (`r`, center `c`, `sk`)                  |
+| `po`   | Polygon (vertex array `v`, `sk`)                |
+
+### Joints (`physics.joints[]`)
+
+`type` (`rv` revolute, `d` distance, `p` prismatic, `g` pin/weld-like), `ba`/`bb`
+(body indices, `-1` = ground), `d` (type-specific data), `l` (length), plus anchors
+(`pax`/`pay`, `sax`/`say`) and motor/limit fields (`pa`, `pf`, `pl`, `pu`, `plen`, `pms`).
 
 ### Spawns
+
 Array of spawn points from the decoded map definition (`gs.map.spawns`), each with
-`index`, `name`, `x`, `y`, `xVelocity`, `yVelocity`, `priority`, and per-team flags.
+`x`, `y`, `xv`/`yv` (initial velocity), `priority`, `r`/`f`/`b`/`gr`/`ye` (per-team
+flags), and `n` (name).
 
 ### Cap Zones (`capZones[]`)
-Each zone has `index`, `name`, `type`/`typeName`, `captureTime` (seconds), `fixtureIndex`,
-`owner`, `originalTeam`, `progress`. On a tick-only fallback export, `captureTime` is
-converted from 30 Hz ticks to seconds.
+
+Each zone has `n` (name), `ty` (type), `l` (capture time, native 30 Hz ticks), `i`
+(fixture index), plus runtime-only `o`/`p`/`ot`/`f` when captured mid-match. Native
+`l` is kept as-is — no seconds conversion.
 
 ## Usage
 
 Point the environment at an exported map with the `mapPath` config (or `mapData`)
 so it loads real geometry; otherwise it uses the default WDB map (or falls back to
-a box if that file is absent). `bonk-rl-env` consumes maps whose body/surface/
-fixture/shape layout matches this schema. Validate a file parses before use:
+a box if that file is absent). Validate an export (schema + engine load) before use:
 
 ```
-python -c "import json; json.load(open('maps/your_map.json'))"
+npx tsx scripts/extract-bonk-map.ts --in maps/your_map.json --verify
 ```
 
 ## Rendering

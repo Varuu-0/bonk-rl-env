@@ -102,7 +102,11 @@ function captureWarn(fn: () => void): string[] {
   const warnings: string[] = [];
   const orig = console.warn;
   console.warn = (m: unknown) => warnings.push(String(m));
-  try { fn(); } finally { console.warn = orig; }
+  try {
+    fn();
+  } finally {
+    console.warn = orig;
+  }
   return warnings;
 }
 
@@ -119,12 +123,14 @@ describe('mapexporter gear joint emission (issue #285)', () => {
   });
 
   it('shipped mapexporter.js still lists ja/jb/r/n and emits ja/jb/r for gear joints', () => {
+    // Whitespace-insensitive: prettier may wrap the KNOWN.joint Set array and
+    // the jointDef assignments across lines. The KNOWN.joint members and the
+    // gear emission in toNativeMap are matched with \s*-tolerant regexes.
     const source = fs.readFileSync(MAPEXPORTER, 'utf8');
-    expect(source).toContain(`'ja','jb','r','n',`);
-    expect(source).toContain(`} else if (jt.type === 'g') {`);
-    expect(source).toContain(`jointDef.ja = jt.ja ?? null;`);
-    expect(source).toContain(`jointDef.jb = jt.jb ?? null;`);
-    expect(source).toContain(`jointDef.ratio = jt.r ?? 1;`);
+    const flat = source.replace(/\s+/g, ' ');
+    expect(source).toMatch(/'ja',\s*'jb',\s*'r',\s*'n',/);
+    expect(flat).toContain(`if (jt.type === 'g') {`);
+    expect(flat).toContain(`ja: jt.ja ?? 0, jb: jt.jb ?? 0, r: jt.r ?? 1`);
   });
 
   it('round-trips an exported gear joint through normalizeMap into a working b2GearJoint', () => {
@@ -157,9 +163,14 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(gear.bodyB).toBe('gate');
 
     const bm = new Map<string, any>();
-    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const b of md.bodies) {
+      e.addBody(b);
+      bm.set(b.name, e.getBodyMap().get(b.name));
+    }
     const warnings = captureWarn(() => {
-      for (const j of md.joints) { e.addJoint(j, bm); }
+      for (const j of md.joints) {
+        e.addJoint(j, bm);
+      }
     });
     expect(warnings).toHaveLength(0);
 
@@ -199,9 +210,14 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(gear.bodyB).toBe('gate');
 
     const bm = new Map<string, any>();
-    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const b of md.bodies) {
+      e.addBody(b);
+      bm.set(b.name, e.getBodyMap().get(b.name));
+    }
     const warnings = captureWarn(() => {
-      for (const j of md.joints) { e.addJoint(j, bm); }
+      for (const j of md.joints) {
+        e.addJoint(j, bm);
+      }
     });
     expect(warnings).toHaveLength(0);
 
@@ -243,9 +259,14 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(gear.bodyB).toBe(GROUND_BODY_NAME);
 
     const bm = new Map<string, any>();
-    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const b of md.bodies) {
+      e.addBody(b);
+      bm.set(b.name, e.getBodyMap().get(b.name));
+    }
     const warnings = captureWarn(() => {
-      for (const j of md.joints) { e.addJoint(j, bm); }
+      for (const j of md.joints) {
+        e.addJoint(j, bm);
+      }
     });
     expect(warnings).toHaveLength(0);
 
@@ -282,11 +303,16 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     // The malformed referent joint is dropped (unknown body warning), and the
     // gear then warns about its missing referent — never silently created.
     const bm = new Map<string, any>();
-    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const b of md.bodies) {
+      e.addBody(b);
+      bm.set(b.name, e.getBodyMap().get(b.name));
+    }
     const warnings = captureWarn(() => {
-      for (const j of md.joints) { e.addJoint(j, bm); }
+      for (const j of md.joints) {
+        e.addJoint(j, bm);
+      }
     });
-    expect(warnings.some(w => /unknown body/.test(w))).toBe(true);
+    expect(warnings.some((w) => /unknown body/.test(w))).toBe(true);
     expect((e as any).createdJoints.has('joint_2')).toBe(false);
   });
 
@@ -314,9 +340,14 @@ describe('mapexporter gear joint emission (issue #285)', () => {
     expect(md.joints[1].bodyB).toBe('');
 
     const bm = new Map<string, any>();
-    for (const b of md.bodies) { e.addBody(b); bm.set(b.name, e.getBodyMap().get(b.name)); }
+    for (const b of md.bodies) {
+      e.addBody(b);
+      bm.set(b.name, e.getBodyMap().get(b.name));
+    }
     const warnings = captureWarn(() => {
-      for (const j of md.joints) { e.addJoint(j, bm); }
+      for (const j of md.joints) {
+        e.addJoint(j, bm);
+      }
     });
     // The -1 joint is created silently (ground-anchored); only the malformed
     // -2 joint warns and is skipped.
