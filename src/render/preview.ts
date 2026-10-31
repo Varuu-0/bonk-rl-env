@@ -17,12 +17,27 @@ import { BonkEnvironment } from '../core/environment';
 import { createPreviewFrameStepper } from './preview-loop';
 import { renderEnvFrameSvg } from './render-wiring';
 import { parseArgs, parseIntArg, resolvePreviewMap } from './preview-shared';
+import { isNativeMapJson } from '../core/native-map-codec';
+import { loadNativeMapForRender } from './native-map-geometry';
+import { renderNativeMapSvg } from './native-map-preview';
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv.slice(2));
   const map = resolvePreviewMap(args.map);
-  const ticks = parseIntArg(args.ticks, 20, 'ticks');
   const outDir = args.out || 'render-preview';
+  const parsed = JSON.parse(fs.readFileSync(map, 'utf8'));
+  if (isNativeMapJson(parsed)) {
+    // Native maps use the strict engine decoder and render initial geometry
+    // without constructing an environment, stepping physics, or using workers.
+    const data = loadNativeMapForRender(map);
+    const svg = renderNativeMapSvg(data, { filename: path.basename(map) });
+    fs.mkdirSync(outDir, { recursive: true });
+    const output = path.resolve(outDir, 'native-map-preview.svg');
+    fs.writeFileSync(output, svg);
+    console.log(`Wrote native map preview: ${output}`);
+    return;
+  }
+  const ticks = parseIntArg(args.ticks, 20, 'ticks');
   const width = parseIntArg(args.width, 730, 'width');
   const height = parseIntArg(args.height, 500, 'height');
 
