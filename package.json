@@ -64,6 +64,7 @@
   "license": "MIT",
   "dependencies": {
     "box2d": "^1.0.0",
+    "undici": "^7.30.1",
     "zeromq": "^6.5.0"
   },
   "devDependencies": {

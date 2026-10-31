@@ -11,6 +11,7 @@ import {
   writeMap,
   runScrape,
   parseArgs,
+  loadProxyFile,
   ScrapeBonkMapsError,
 } from '../../scripts/scrape-bonk-maps';
 import { isNativeMapJson, validateNativeMapJson } from '../../src/core/native-map-codec';
@@ -52,6 +53,7 @@ const TEST_OPTIONS = {
   delayMs: 0,
   cooldownMs: 1000,
   maxRetries: 0,
+  proxies: [],
   resume: true,
   json: false,
 };
@@ -382,6 +384,71 @@ describe('scrape-bonk-maps: browser-fingerprint transport', () => {
       await promise;
       // The request must not have fired before the carried-over ban expired.
       expect(callTime).toBeGreaterThanOrEqual(futureBan);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('scrape-bonk-maps: proxy pool', () => {
+  const corpus = loadCorpus();
+  const record = {
+    id: corpus[0]!.id,
+    name: corpus[0]!.name,
+    authorname: corpus[0]!.author,
+    leveldata: corpus[0]!.payload,
+    dbv: corpus[0]!.dbv,
+  };
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    vi.useRealTimers();
+  });
+
+  function jsonResponse(body: unknown): Response {
+    return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+  }
+
+  it('loadProxyFile parses lanes and ignores comments/blanks', () => {
+    const dir = tempDir();
+    try {
+      const file = path.join(dir, 'proxies.txt');
+      fs.writeFileSync(file, '# comment\n\nhttp://127.0.0.1:8080\nsocks5://127.0.0.1:1080\ndirect\n', 'utf8');
+      expect(loadProxyFile(file)).toEqual(['http://127.0.0.1:8080', 'socks5://127.0.0.1:1080', 'direct']);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fails over to a healthy lane on ban without waiting out the cooldown', async () => {
+    const dir = tempDir();
+    // Two lanes; the first lane is rate-limited, the second succeeds. The
+    // request must complete without any cooldown sleep because lane 2's IP
+    // still has budget — this is the whole point of the proxy pool.
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call++;
+        return call === 1
+          ? jsonResponse({ r: 'fail', e: 'ratelimited' })
+          : jsonResponse({ r: 'success', maps: [record] });
+      }),
+    );
+    try {
+      const options = {
+        ...TEST_OPTIONS,
+        out: dir,
+        queries: [],
+        picks: true,
+        cooldownMs: 90_000,
+        maxRetries: 2,
+        proxies: ['http://127.0.0.1:8080', 'http://127.0.0.1:8081'],
+      };
+      // Real timers: if failover works, no 90s sleep happens and this resolves fast.
+      const summary = await runScrape(options);
+      expect(summary.written).toBe(1);
+      expect(call).toBe(2);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }

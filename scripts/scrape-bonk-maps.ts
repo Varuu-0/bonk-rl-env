@@ -37,8 +37,10 @@
  * hammering, rotating the User-Agent across retries, and (4) is fully
  * resumable: an on-disk manifest records scraped map IDs, page cursors, and
  * any pending ban expiry so re-running skips collected maps and respects an
- * active ban. There is no header trick that bypasses the per-IP budget; the
- * reliable strategy is to pace requests and wait out bans.
+ * active ban. There is no header trick that bypasses the per-IP budget, but
+ * you CAN scale around it: --proxies <file> spreads requests across many
+ * egress IPs (one HTTP/SOCKS proxy per line, or `direct`), each with its own
+ * budget, and fails over to a healthy lane on ban.
  *
  * Usage:
  *   npx tsx scripts/scrape-bonk-maps.ts [options]
@@ -53,6 +55,9 @@
  *   --delay <ms>        Delay between requests (default: 700)
  *   --cooldown <ms>     Wait after a ratelimited response (default: 180000)
  *   --max-retries <n>   Retries per request on rate-limit (default: 12)
+ *   --proxies <file>    One proxy per line (http://[user:pass@]host:port,
+ *                       socks5://host:port, or `direct`); each gets its own
+ *                       per-IP rate budget and lanes fail over on ban
  *   --resume            Resume from the manifest (default: true)
  *   --no-resume         Start fresh (clears the manifest)
  *   --json              Print the summary as a single JSON object
@@ -60,6 +65,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { ProxyAgent, Agent, type Dispatcher } from 'undici';
 import {
   decodeNativeMapDatabasePayload,
   decodeLegacyNativeMapPayload,
@@ -123,6 +129,9 @@ interface CliOptions {
   delayMs: number;
   cooldownMs: number;
   maxRetries: number;
+  /** Proxy URLs to spread requests across (each gets its own IP budget).
+   * Empty = direct connection only. */
+  proxies: string[];
   resume: boolean;
   json: boolean;
 }
@@ -140,6 +149,9 @@ Options:
   --delay <ms>        Delay between requests (default: 700)
   --cooldown <ms>     Wait after a ratelimited response (default: 180000)
   --max-retries <n>   Retries per request on rate-limit (default: 12)
+  --proxies <file>    One proxy per line (http://[user:pass@]host:port,
+                      socks5://host:port, or 'direct'); each gets its own
+                      per-IP rate budget and lanes fail over on ban
   --resume            Resume from the manifest (default: true)
   --no-resume         Start fresh (clears the manifest)
   --json              Print the summary as a single JSON object
@@ -165,6 +177,7 @@ export function parseArgs(argv: readonly string[]): CliOptions {
     delayMs: 700,
     cooldownMs: 180_000,
     maxRetries: 12,
+    proxies: [],
     resume: true,
     json: false,
   };
@@ -214,6 +227,9 @@ export function parseArgs(argv: readonly string[]): CliOptions {
         fail(`--cooldown must be an integer in [1000, 3600000] ms (got ${raw})`);
       }
       options.cooldownMs = parsed;
+    } else if (arg === '--proxies') {
+      const raw = argv[++i] ?? fail('--proxies requires a value');
+      options.proxies = loadProxyFile(raw);
     } else if (arg === '--max-retries') {
       const raw = argv[++i] ?? fail('--max-retries requires a value');
       const parsed = Number(raw);
@@ -266,19 +282,50 @@ function browserHeaders(userAgent: string): Record<string, string> {
   };
 }
 
+/** One egress lane: a proxy (or the direct connection) with its own per-IP
+ * rate budget. `bannedUntil` is the epoch-ms expiry of this lane's current
+ * ban; other lanes keep working while this one cools down. */
+export interface ProxyLane {
+  /** The proxy URL, or 'direct' for the local IP. */
+  url: string;
+  bannedUntil: number;
+}
+
 /** Mutable transport state shared across all requests in a run. Tracks the
- * current UA index (rotated on ban) and any active ban expiry so we wait out
- * the window instead of hammering a banned endpoint. `onBan` (if set) fires
- * the moment a ban is detected so callers can persist `bannedUntil` even when
- * the current query never completes. */
+ * current UA index (rotated on ban), the direct-connection ban expiry, and an
+ * optional pool of proxy lanes. With proxies configured the limiter's per-IP
+ * budget is per-LANE, so throughput scales with lane count and a banned lane
+ * is skipped while others serve. `onBan` (if set) fires the moment any lane is
+ * banned so callers can persist state even when a query never completes. */
 export interface TransportState {
   userAgentIndex: number;
   bannedUntil: number;
   onBan?: (bannedUntil: number) => void;
+  lanes: ProxyLane[];
+  laneIndex: number;
 }
 
 export function newTransportState(): TransportState {
-  return { userAgentIndex: 0, bannedUntil: 0 };
+  return { userAgentIndex: 0, bannedUntil: 0, lanes: [], laneIndex: 0 };
+}
+
+/** Read a proxy file: one proxy URL per line, `#` comments and blanks ignored.
+ * `direct` adds the local connection as a lane. Returns the lane URL list. */
+export function loadProxyFile(file: string): string[] {
+  if (!fs.existsSync(file)) fail(`--proxies file not found: ${file}`);
+  const lanes = fs
+    .readFileSync(file, 'utf8')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && !line.startsWith('#'));
+  if (lanes.length === 0) fail(`--proxies file has no entries: ${file}`);
+  return lanes;
+}
+
+/** Build the dispatcher for a lane: an HTTP/SOCKS ProxyAgent for proxied
+ * lanes, or a plain keep-alive Agent for the direct connection. */
+function laneDispatcher(url: string): Dispatcher {
+  return url === 'direct' ? new Agent() : new ProxyAgent(url);
 }
 
 function currentUserAgent(state: TransportState): string {
@@ -289,26 +336,51 @@ function isRateLimited(json: { r?: string; e?: string }): boolean {
   return json.r === 'ratelimited' || json.e === 'ratelimited';
 }
 
-/** Core request driver shared by POST and GET. Sends the browser fingerprint,
- * and on a ratelimited response rotates the UA and sleeps out the cooldown
- * before retrying. Returns the parsed JSON on the first non-ratelimited
- * response; only gives up after maxRetries full cooldown cycles. */
+/** Core request driver shared by POST and GET. Sends the browser fingerprint
+ * through a proxy lane. On a ratelimited response the current lane is banned;
+ * if another lane is healthy we fail over to it immediately (its IP still has
+ * budget), otherwise we wait out the earliest lane's cooldown. Only gives up
+ * after maxRetries ban cycles. */
 async function request(
   state: TransportState,
   options: CliOptions,
-  doFetch: (headers: Record<string, string>) => Promise<unknown>,
+  doFetch: (headers: Record<string, string>, dispatcher?: Dispatcher) => Promise<unknown>,
 ): Promise<unknown> {
+  const proxied = state.lanes.length > 0;
   for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
-    // Respect any active ban before spending a request.
-    const waitMs = state.bannedUntil - Date.now();
-    if (waitMs > 0) await sleep(waitMs);
+    let dispatcher: Dispatcher | undefined;
+    if (proxied) {
+      // Pick the healthy lane whose ban expires soonest (0 = not banned).
+      const now = Date.now();
+      let best = -1;
+      let bestWait = Number.POSITIVE_INFINITY;
+      for (let i = 0; i < state.lanes.length; i++) {
+        const wait = state.lanes[i]!.bannedUntil - now;
+        if (wait < bestWait) {
+          bestWait = wait;
+          best = i;
+        }
+      }
+      if (bestWait > 0) await sleep(bestWait); // every lane banned: wait for the soonest
+      state.laneIndex = best;
+      dispatcher = laneDispatcher(state.lanes[best]!.url);
+    } else {
+      // Direct connection: respect any active ban before spending a request.
+      const waitMs = state.bannedUntil - Date.now();
+      if (waitMs > 0) await sleep(waitMs);
+    }
     const headers = browserHeaders(currentUserAgent(state));
-    const response = (await doFetch(headers)) as { r?: string; e?: string };
+    const response = (await doFetch(headers, dispatcher)) as { r?: string; e?: string };
     if (!isRateLimited(response)) return response;
-    // Banned: rotate the fingerprint and wait out a full cooldown window.
+    // Banned: rotate the fingerprint and mark the offending lane's expiry.
     state.userAgentIndex++;
-    state.bannedUntil = Date.now() + options.cooldownMs;
-    state.onBan?.(state.bannedUntil);
+    const expiry = Date.now() + options.cooldownMs;
+    if (proxied) {
+      state.lanes[state.laneIndex]!.bannedUntil = expiry;
+    } else {
+      state.bannedUntil = expiry;
+    }
+    state.onBan?.(expiry);
     if (!options.json) {
       process.stderr.write(
         `ratelimited; rotated UA (attempt ${attempt + 1}/${options.maxRetries + 1}), cooling down ${options.cooldownMs}ms\n`,
@@ -319,15 +391,20 @@ async function request(
 }
 
 /** POST a form with the browser fingerprint, retrying rate-limit responses
- * by rotating the UA and waiting out the cooldown. */
+ * by failing over to a healthy lane / waiting out the cooldown. */
 async function postForm(
   state: TransportState,
   url: string,
   form: Record<string, string>,
   options: CliOptions,
 ): Promise<unknown> {
-  return request(state, options, async (headers) => {
-    const response = await fetch(url, { method: 'POST', headers, body: new URLSearchParams(form) });
+  return request(state, options, async (headers, dispatcher) => {
+    const response = await fetch(url, {
+      method: 'POST',
+      headers,
+      body: new URLSearchParams(form),
+      ...(dispatcher ? { dispatcher } : {}),
+    } as RequestInit);
     if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
     return response.json();
   });
@@ -335,8 +412,8 @@ async function postForm(
 
 /** GET JSON with the same fingerprint + retry policy. */
 async function getJson(state: TransportState, url: string, options: CliOptions): Promise<unknown> {
-  return request(state, options, async (headers) => {
-    const response = await fetch(url, { headers });
+  return request(state, options, async (headers, dispatcher) => {
+    const response = await fetch(url, { headers, ...(dispatcher ? { dispatcher } : {}) } as RequestInit);
     if (!response.ok) fail(`HTTP ${response.status} from ${url}`);
     return response.json();
   });
@@ -611,6 +688,9 @@ export async function runScrape(options: CliOptions): Promise<ScrapeSummary> {
   // wait it out rather than immediately re-tripping the limiter.
   const transport = newTransportState();
   transport.bannedUntil = manifest.bannedUntil;
+  // Build one lane per configured proxy; each lane's independent IP gets its
+  // own rate budget, so the pool's throughput scales with lane count.
+  transport.lanes = options.proxies.map((url) => ({ url, bannedUntil: 0 }));
   const persist = (): void => {
     manifest.bannedUntil = transport.bannedUntil;
     manifest.scrapedIds = [...seen];
