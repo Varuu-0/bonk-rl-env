@@ -4,24 +4,28 @@ Shell scripts, PowerShell scripts, and CLI tools for managing Bonk.io RL Environ
 
 ## Files
 
-| File                         | Platform             | Purpose                                                                                       |
-| ---------------------------- | -------------------- | --------------------------------------------------------------------------------------------- |
-| `start.sh`                   | Unix/macOS/Linux     | Quick start — launches the server with default settings                                       |
-| `start.bat`                  | Windows              | Quick start — launches the server with default settings                                       |
-| `start-server.sh`            | Unix/macOS/Linux     | Detailed server start with port and configuration options                                     |
-| `stop-server.sh`             | Unix/macOS/Linux     | Stop a running Bonk RL server                                                                 |
-| `test-server-exit.sh`        | Unix/macOS/Linux     | Test server exit behavior and cleanup                                                         |
-| `Start-BonkServer.ps1`       | Windows (PowerShell) | Start the Bonk RL server                                                                      |
-| `Stop-BonkServer.ps1`        | Windows (PowerShell) | Stop a running Bonk RL server                                                                 |
-| `local-ci.ts`                | Cross-platform       | Master local CI/CD engine (8 verification domains, 4 tiers)                                   |
-| `local-ci.sh`                | Unix/macOS/Linux     | Bash entry point forwarding flags to `local-ci.ts`                                            |
-| `Invoke-LocalCI.ps1`         | Windows (PowerShell) | PowerShell entry point forwarding flags to `local-ci.ts`                                      |
-| `ci-bench-check.ts`          | Cross-platform       | Benchmark regression checker — runs Layers 1–6 and enforces SLA thresholds                    |
-| `format.ts`                  | Cross-platform       | Prettier check/write scoped to changed (or staged) files                                      |
-| `check-webscript-ids.js`     | Cross-platform       | Validates Webscript DOM selectors against retained fixtures                                   |
-| `verify-heavy-flip-probe.js` | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)      |
-| `extract-bonk-map.ts`        | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON |
-| `dsp-cli.py`                 | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                    |
+| File                          | Platform             | Purpose                                                                                              |
+| ----------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------- |
+| `start.sh`                    | Unix/macOS/Linux     | Quick start — launches the server with default settings                                              |
+| `start.bat`                   | Windows              | Quick start — launches the server with default settings                                              |
+| `start-server.sh`             | Unix/macOS/Linux     | Detailed server start with port and configuration options                                            |
+| `stop-server.sh`              | Unix/macOS/Linux     | Stop a running Bonk RL server                                                                        |
+| `test-server-exit.sh`         | Unix/macOS/Linux     | Test server exit behavior and cleanup                                                                |
+| `Start-BonkServer.ps1`        | Windows (PowerShell) | Start the Bonk RL server                                                                             |
+| `Stop-BonkServer.ps1`         | Windows (PowerShell) | Stop a running Bonk RL server                                                                        |
+| `local-ci.ts`                 | Cross-platform       | Master local CI/CD engine (8 verification domains, 4 tiers)                                          |
+| `local-ci.sh`                 | Unix/macOS/Linux     | Bash entry point forwarding flags to `local-ci.ts`                                                   |
+| `Invoke-LocalCI.ps1`          | Windows (PowerShell) | PowerShell entry point forwarding flags to `local-ci.ts`                                             |
+| `ci-bench-check.ts`           | Cross-platform       | Benchmark regression checker — runs Layers 1–6 and enforces SLA thresholds                           |
+| `format.ts`                   | Cross-platform       | Prettier check/write scoped to changed (or staged) files                                             |
+| `check-webscript-ids.js`      | Cross-platform       | Validates Webscript DOM selectors against retained fixtures                                          |
+| `verify-heavy-flip-probe.js`  | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)             |
+| `extract-bonk-map.ts`         | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON        |
+| `scrape-bonk-maps.ts`         | Cross-platform       | Scrape thousands of Bonk.io community maps into engine-loadable NativeMap JSON (resumable)           |
+| `validate-proxies.ts`         | Cross-platform       | Validate a free-proxy list against live bonk2.io and write the working proxies for `--proxies`       |
+| `verify-mapexporter-fixes.js` | Cross-platform       | Source-level regression harness for `Webscripts/mapexporter.js` (contract keys, hooks, output shape) |
+| `verify-mapexporter-e2e.js`   | Cross-platform       | Offline E2E harness for the mapexporter userscript (vm sandbox, state hook, export button, download) |
+| `dsp-cli.py`                  | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                           |
 
 ## Usage
 
@@ -107,6 +111,55 @@ npx tsx scripts/extract-bonk-map.ts --in maps/bonk_Simple_1v1_123.json --out map
 
 The regression suite `tests/unit/extract-bonk-map.test.ts` round-trips all 288 unique built-in map
 envelopes from the committed corpus through the extractor and the engine's native map session.
+
+## Map Scraper
+
+`scrape-bonk-maps.ts` bulk-collects community maps from the same public endpoints the game client
+calls (search, hotmaps picks, fresh), decodes each `leveldata` payload with the strict native map
+codec, stamps server metadata (name/author/dbid/date/votes), and writes validated NativeMap JSON.
+Output goes to `.local-artifacts/scraped-maps` (gitignored) with a resumable manifest.
+
+```bash
+# Default: picks.txt (~989 curated maps) + 10 common-char search queries, 1000-map limit
+npx tsx scripts/scrape-bonk-maps.ts
+
+# Larger runs: more queries, higher limit
+npx tsx scripts/scrape-bonk-maps.ts --limit 5000 --queries a,e,i,o,u,s,t,n,r,l,1,2,3
+
+# Just the curated picks in one request
+npx tsx scripts/scrape-bonk-maps.ts --queries a --no-picks --limit 989
+
+# Include the fresh window and print JSON summary
+npx tsx scripts/scrape-bonk-maps.ts --fresh --json
+
+# Spread requests across many egress IPs (one proxy per line; each gets its
+# own per-IP rate budget and the pool fails over to a healthy lane on ban)
+npx tsx scripts/scrape-bonk-maps.ts --proxies proxies.txt --limit 5000
+```
+
+The endpoints rate-limit by **source IP** with a rolling request budget; a `ratelimited` response bans
+the IP for several minutes, and re-probing during a ban extends it. The scraper sends the same
+browser-like headers the game client sends, paces requests with `--delay` (default 700 ms), and on
+`ratelimited` waits out a `--cooldown` (default 180000 ms) instead of erroring, rotating the
+User-Agent across retries (`--max-retries`, default 12). The ban expiry is persisted in the manifest,
+so a resumed run waits out an active ban rather than re-tripping it. There is no header trick that
+bypasses the per-IP budget, but `--proxies <file>` scales around it: each proxy (or `direct`) is a
+lane with its own budget, so throughput scales with lane count and a banned lane is skipped while
+others serve. Proxy file format: one `http://[user:pass@]host:port`, `socks4://` / `socks5://host:port`,
+or `direct` per line, `#` comments allowed (HTTP/HTTPS via undici, SOCKS via socks-proxy-agent).
+
+To build a working proxy file from a free list, `validate-proxies.ts` tests each proxy against live
+bonk2.io (bounded concurrency + timeout) and writes only the ones that return a real success payload:
+
+```bash
+# Fetch the iplocate/free-proxy-list and keep the working proxies (~3% hit rate is normal)
+npx tsx scripts/validate-proxies.ts --concurrency 100 --timeout 6000
+# -> .local-artifacts/working-proxies.txt, ready for --proxies
+```
+
+Maps that fail strict codec validation are counted and reported, never written. Engine-load failures
+(gear joints, spawn-less maps, degenerate polygons) are the same pre-existing coverage limits as the
+committed corpus, not scraper errors.
 
 ## DSP CLI
 

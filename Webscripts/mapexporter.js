@@ -1,68 +1,394 @@
 // ==UserScript==
 // @name         Bonk Map Exporter
 // @namespace    https://bonk.io/
-// @version      2.4.0
-// @description  Extracts and exports the current Bonk.io map as faithful JSON, preserving the full body→fixture→shape hierarchy and all physics fields
+// @version      3.2.0
+// @description  Extracts the current Bonk.io map as NativeMap JSON (engine-loadable) or legacy MapDef, preserving the full body→fixture→shape hierarchy
 // @author       you
 // @match        https://bonk.io/gameframe-release.html
 // @match        https://bonk.io/*
 // @grant        none
-// @run-at       document-body
+// @run-at       document-start
 // ==/UserScript==
 
 (function () {
   'use strict';
+
+  // ── Contract keys (shared with bonk-live-tool / codeinjector) ──────────────
+  // Shared coordination flags so a sibling interceptor never double-patches.
+  const HEAD_APPEND_FLAG = '__bonkRLAppend';
+  const SCRIPT_INTERCEPT_FLAG = '__bonkRLInt';
+  const GAME_SCRIPT_FRAGMENT = 'alpha2s.js';
 
   // ── Known field sets (from DemystifyBonk MAPFORMAT.md) ──────────────────────
   // These track which fields the exporter recognizes. Any unknown field encountered
   // at runtime is logged so the format can be kept up to date.
   const KNOWN = {
     root: new Set([
-      'physics','discs','capZones','spawns','mm','m','re','rx','v',
-      'discDeaths','seed','fte','ftu','players','scores',
-      'lscr','ms','rl','projectiles','rc',
-      'shk','sts','s',
+      'physics',
+      'discs',
+      'capZones',
+      'spawns',
+      'mm',
+      'm',
+      're',
+      'rx',
+      'v',
+      'discDeaths',
+      'seed',
+      'fte',
+      'ftu',
+      'players',
+      'scores',
+      'lscr',
+      'ms',
+      'rl',
+      'projectiles',
+      'rc',
+      'shk',
+      'sts',
+      's',
     ]),
-    physics: new Set([
-      'ppm','ss','bodies','fixtures','shapes','joints','bro',
-    ]),
-    settings: new Set(['re','nc','pq','gd','fl','v']),
+    physics: new Set(['ppm', 'ss', 'bodies', 'fixtures', 'shapes', 'joints', 'bro']),
+    settings: new Set(['re', 'nc', 'pq', 'gd', 'fl', 'v']),
     mm: new Set([
-      'n','a','dbid','v','rxid',
-      'dbv','authid','date','rxn','rxa','rxdb','cr','pub','mo','vu','vd',
+      'n',
+      'a',
+      'dbid',
+      'v',
+      'rxid',
+      'dbv',
+      'authid',
+      'date',
+      'rxn',
+      'rxa',
+      'rxdb',
+      'cr',
+      'pub',
+      'mo',
+      'vu',
+      'vd',
     ]),
-    fixture: new Set([
-      'sh','n','fr','re','de','d','np','ng','ig','f','fp',
-    ]),
-    shape: new Set(['type','c','w','h','r','v','a','s','sk']),
-    body: new Set([
-      'p','a','s','fx','lv','av','fric','re','de','type',
-      'cf','fz',
-    ]),
+    fixture: new Set(['sh', 'n', 'fr', 're', 'de', 'd', 'np', 'ng', 'ig', 'f', 'fp']),
+    shape: new Set(['type', 'c', 'w', 'h', 'r', 'v', 'a', 's', 'sk']),
+    body: new Set(['p', 'a', 's', 'fx', 'lv', 'av', 'fric', 're', 'de', 'type', 'cf', 'fz']),
     surface: new Set([
-      'n','type','fric','re','de','fc','f_c','fp','f_p',
-      'f_1','f_2','f_3','f_4','fricp','frc','ld','ad','fr','bu',
+      'n',
+      'type',
+      'fric',
+      're',
+      'de',
+      'fc',
+      'f_c',
+      'fp',
+      'f_p',
+      'f_1',
+      'f_2',
+      'f_3',
+      'f_4',
+      'fricp',
+      'frc',
+      'ld',
+      'ad',
+      'fr',
+      'bu',
     ]),
     disc: new Set([
-      'x','y','sx','sy','xv','yv','a','av','team',
-      'sxv','syv','a1a','a1','lhid','lht','ds','da','vt',
-      'a2','ni','swing','spawnTeamInfo',
+      'x',
+      'y',
+      'sx',
+      'sy',
+      'xv',
+      'yv',
+      'a',
+      'av',
+      'team',
+      'sxv',
+      'syv',
+      'a1a',
+      'a1',
+      'lhid',
+      'lht',
+      'ds',
+      'da',
+      'vt',
+      'a2',
+      'ni',
+      'swing',
+      'spawnTeamInfo',
     ]),
-    capzone: new Set(['n','ty','o','p','l','i','ot','f']),
+    capzone: new Set(['n', 'ty', 'o', 'p', 'l', 'i', 'ot', 'f']),
+    spawn: new Set(['x', 'y', 'xv', 'yv', 'priority', 'r', 'f', 'b', 'gr', 'ye', 'n']),
     joint: new Set([
-      'type','ba','bb','d','aa','ab','l',
-      'pax','pay','pa','pf','pl','pu','plen','pms',
-      'sax','say','sf','slen',
-      'ja','jb','r','n',
+      'type',
+      'ba',
+      'bb',
+      'd',
+      'aa',
+      'ab',
+      'l',
+      'pax',
+      'pay',
+      'pa',
+      'pf',
+      'pl',
+      'pu',
+      'plen',
+      'pms',
+      'sax',
+      'say',
+      'sf',
+      'slen',
+      'ja',
+      'jb',
+      'r',
+      'n',
     ]),
-    jointData: new Set([
-      'la','ua','mmt','ms','el','em',
-      'fh','dr','cc','bf','dl',
-    ]),
+    jointData: new Set(['la', 'ua', 'mmt', 'ms', 'el', 'em', 'fh', 'dr', 'cc', 'bf', 'dl']),
   };
 
   let unknownFields = {};
 
+  function checkUnknown(label, obj, knownSet) {
+    if (!obj || typeof obj !== 'object') return;
+    const extra = Object.keys(obj).filter((k) => !knownSet.has(k));
+    if (extra.length === 0) return;
+    if (!unknownFields[label]) {
+      unknownFields[label] = extra;
+      console.warn(`%c[BonkExport] Unknown fields in ${label}: ${extra.join(', ')}`, 'color:#ff9800;font-weight:bold');
+    }
+  }
+
+  // ── Deep clone a value, preserving arrays and nulls ────────────────────────
+  function clone(v) {
+    if (v === null || v === undefined) return v;
+    if (typeof v !== 'object') return v;
+    if (Array.isArray(v)) return v.map(clone);
+    const out = {};
+    for (const k of Object.keys(v)) out[k] = clone(v[k]);
+    return out;
+  }
+
+  // ── NativeMap JSON conversion ───────────────────────────────────────────────
+  // Converts the runtime map object (gs.map or tick state) into strict NativeMap
+  // JSON: { v, s, physics:{shapes,fixtures,bodies,bro,joints,ppm}, spawns,
+  // capZones, m }. The output validates against the engine's
+  // validateNativeMapJson and loads via mapPath/mapData.
+  function toNativeMap(state) {
+    unknownFields = {};
+    const ph = state.physics || {};
+    const mm = state.mm || state.m || {};
+    const settings = state.s || state.ms || {};
+
+    checkUnknown('root', state, KNOWN.root);
+    checkUnknown('physics', ph, KNOWN.physics);
+    checkUnknown('settings', settings, KNOWN.settings);
+    checkUnknown('mm', mm, KNOWN.mm);
+
+    const shapes = (ph.shapes || []).map((sh, i) => {
+      if (!sh) return null;
+      checkUnknown(`shape[${i}]`, sh, KNOWN.shape);
+      if (sh.type === 'bx') {
+        return { type: 'bx', w: sh.w ?? 0, h: sh.h ?? 0, c: clone(sh.c) || [0, 0], a: sh.a ?? 0, sk: !!sh.sk };
+      }
+      if (sh.type === 'ci') {
+        return { type: 'ci', r: sh.r ?? 0, c: clone(sh.c) || [0, 0], sk: !!sh.sk };
+      }
+      if (sh.type === 'po' || sh.type === 'ch') {
+        const out = { type: sh.type, v: clone(sh.v) || [], s: sh.s ?? 1, a: sh.a ?? 0, c: clone(sh.c) || [0, 0] };
+        if (sh.type === 'ch') {
+          out.l = !!sh.l;
+          out.sk = !!sh.sk;
+        }
+        return out;
+      }
+      return null;
+    });
+
+    const fixtures = (ph.fixtures || []).map((fx, i) => {
+      if (!fx) return null;
+      checkUnknown(`fixture[${i}]`, fx, KNOWN.fixture);
+      const out = {
+        sh: fx.sh ?? null,
+        n: fx.n ?? '',
+        fr: fx.fr ?? null,
+        fp: fx.fp ?? null,
+        re: fx.re ?? null,
+        de: fx.de ?? null,
+        f: fx.f ?? 0,
+        d: !!fx.d,
+        np: !!fx.np,
+        ng: !!fx.ng,
+      };
+      if (fx.ig != null) out.ig = !!fx.ig;
+      return out;
+    });
+
+    const bodies = (ph.bodies || []).map((body, i) => {
+      if (!body) return null;
+      checkUnknown(`body[${i}]`, body, KNOWN.body);
+      const surf = body.s || {};
+      checkUnknown(`body[${i}].s (surface)`, surf, KNOWN.surface);
+      const cf = body.cf || { x: 0, y: 0, w: true, ct: 0 };
+      const fz = body.fz || { on: false, x: 0, y: 0, d: false, p: false, a: false, t: 0, cf: 0 };
+      return {
+        p: clone(body.p) || [0, 0],
+        a: body.a ?? 0,
+        lv: clone(body.lv) || [0, 0],
+        av: body.av ?? 0,
+        cf: { x: cf.x ?? 0, y: cf.y ?? 0, w: cf.w ?? true, ct: cf.ct ?? 0 },
+        fx: clone(body.fx) || [],
+        fz: {
+          on: !!fz.on,
+          x: fz.x ?? 0,
+          y: fz.y ?? 0,
+          d: !!fz.d,
+          p: !!fz.p,
+          a: !!fz.a,
+          t: fz.t ?? 0,
+          cf: fz.cf ?? 0,
+        },
+        s: {
+          type: surf.type ?? 's',
+          n: surf.n ?? '',
+          fric: surf.fric ?? 0,
+          fricp: !!surf.fricp,
+          re: surf.re ?? 0,
+          de: surf.de ?? 0,
+          ld: surf.ld ?? 0,
+          ad: surf.ad ?? 0,
+          fr: !!surf.fr,
+          bu: !!surf.bu,
+          f_c: surf.f_c ?? 0,
+          f_p: !!surf.f_p,
+          f_1: !!surf.f_1,
+          f_2: !!surf.f_2,
+          f_3: !!surf.f_3,
+          f_4: !!surf.f_4,
+        },
+      };
+    });
+
+    const joints = (ph.joints || []).map((jt, i) => {
+      if (!jt) return null;
+      checkUnknown(`joint[${i}]`, jt, KNOWN.joint);
+      if (jt.type === 'g') {
+        return { type: 'g', n: jt.n ?? '', ja: jt.ja ?? 0, jb: jt.jb ?? 0, r: jt.r ?? 1 };
+      }
+      const d = jt.d || {};
+      const out = {
+        type: jt.type,
+        ba: jt.ba ?? 0,
+        bb: jt.bb ?? -1,
+        d: { cc: !!d.cc, bf: d.bf ?? 0, dl: d.dl ?? false },
+      };
+      if (jt.type === 'rv') {
+        out.aa = clone(jt.aa) || [0, 0];
+        out.d = { ...out.d, la: d.la ?? 0, ua: d.ua ?? 0, mmt: d.mmt ?? 0, ms: d.ms ?? 0, el: !!d.el, em: !!d.em };
+      } else if (jt.type === 'd') {
+        out.aa = clone(jt.aa) || [0, 0];
+        out.ab = clone(jt.ab) || [0, 0];
+        out.d = { ...out.d, fh: d.fh ?? 0, dr: d.dr ?? 0 };
+      } else if (jt.type === 'lpj') {
+        out.pax = jt.pax ?? 0;
+        out.pay = jt.pay ?? 0;
+        out.pa = jt.pa ?? 0;
+        out.pf = jt.pf ?? 0;
+        out.pl = jt.pl ?? 0;
+        out.pu = jt.pu ?? 0;
+        out.plen = jt.plen ?? 0;
+        out.pms = jt.pms ?? 0;
+      } else if (jt.type === 'lsj') {
+        out.sax = jt.sax ?? 0;
+        out.say = jt.say ?? 0;
+        out.sf = jt.sf ?? 0;
+        out.slen = jt.slen ?? 0;
+      } else if (jt.type === 'p') {
+        out.aa = clone(jt.aa) || [0, 0];
+        out.ab = clone(jt.ab) || [0, 0];
+        out.axa = clone(jt.axa) || [0, 0];
+        out.d = {
+          ...out.d,
+          el: !!d.el,
+          lt: d.lt ?? 0,
+          ut: d.ut ?? 0,
+          em: !!d.em,
+          mmf: d.mmf ?? 0,
+          ms: d.ms ?? 0,
+          cd: !!d.cd,
+        };
+      } else {
+        return null;
+      }
+      return out;
+    });
+
+    const spawns = (state.spawns || []).map((s, i) => {
+      checkUnknown(`spawns[${i}]`, s, KNOWN.spawn);
+      return {
+        x: s.x ?? 0,
+        y: s.y ?? 0,
+        xv: s.xv ?? 0,
+        yv: s.yv ?? 0,
+        priority: s.priority ?? 0,
+        r: !!s.r,
+        f: !!s.f,
+        b: !!s.b,
+        gr: !!s.gr,
+        ye: !!s.ye,
+        n: s.n ?? '',
+      };
+    });
+
+    const capZones = (state.capZones || []).map((cz, i) => {
+      checkUnknown(`capZone[${i}]`, cz, KNOWN.capzone);
+      return {
+        n: cz.n ?? '',
+        ty: cz.ty ?? 1,
+        l: cz.l ?? 0,
+        i: cz.i ?? -1,
+      };
+    });
+
+    return {
+      v: state.v ?? 1,
+      s: {
+        re: settings.re ?? false,
+        nc: settings.nc ?? false,
+        pq: settings.pq ?? 1,
+        gd: settings.gd ?? 25,
+        fl: settings.fl ?? false,
+      },
+      physics: {
+        shapes,
+        fixtures,
+        bodies,
+        bro: clone(ph.bro) || [],
+        joints,
+        ppm: ph.ppm ?? 12,
+      },
+      spawns,
+      capZones,
+      m: {
+        a: mm.a ?? '',
+        n: mm.n ?? '',
+        dbv: mm.dbv ?? 2,
+        dbid: mm.dbid ?? -1,
+        authid: mm.authid ?? -1,
+        date: mm.date ?? '',
+        rxid: mm.rxid ?? 0,
+        rxn: mm.rxn ?? '',
+        rxa: mm.rxa ?? '',
+        rxdb: mm.rxdb ?? -1,
+        cr: clone(mm.cr) || [],
+        pub: !!mm.pub,
+        mo: mm.mo ?? 'b',
+        ...(mm.vu != null ? { vu: mm.vu } : {}),
+        ...(mm.vd != null ? { vd: mm.vd } : {}),
+      },
+    };
+  }
+
+  // ── Legacy MapDef extraction (unchanged core from v2.4.0) ───────────────────
   // The current client keeps property names in a loader-provided M$QCc table.
   // Export it with each map so a future investigation can reproduce the exact
   // symbol mapping for the client build that produced the capture.
@@ -78,29 +404,6 @@
       length: table.length,
       entries,
     };
-  }
-
-  function checkUnknown(label, obj, knownSet) {
-    if (!obj || typeof obj !== 'object') return;
-    const extra = Object.keys(obj).filter(k => !knownSet.has(k));
-    if (extra.length === 0) return;
-    if (!unknownFields[label]) {
-      unknownFields[label] = extra;
-      console.warn(
-        `%c[BonkExport] Unknown fields in ${label}: ${extra.join(', ')}`,
-        'color:#ff9800;font-weight:bold'
-      );
-    }
-  }
-
-  // ── Deep clone a value, preserving arrays and nulls ────────────────────────
-  function clone(v) {
-    if (v === null || v === undefined) return v;
-    if (typeof v !== 'object') return v;
-    if (Array.isArray(v)) return v.map(clone);
-    const out = {};
-    for (const k of Object.keys(v)) out[k] = clone(v[k]);
-    return out;
   }
 
   // ── Extract the map definition from the runtime game state ────────────────
@@ -133,7 +436,7 @@
       const body = bodies[b];
       if (!body) continue;
       const surf = body.s || {};
-      for (const fxIdx of (body.fx || [])) {
+      for (const fxIdx of body.fx || []) {
         if (typeof fxIdx === 'number') fixtureOwnerSurface[fxIdx] = surf;
       }
     }
@@ -300,9 +603,7 @@
         shapeDef.radius = sh.r ?? null;
       } else if (sh.type === 'po') {
         shapeDef.scale = sh.s ?? null;
-        shapeDef.vertices = sh.v
-          ? sh.v.map(v => ({ x: v[0], y: v[1] }))
-          : [];
+        shapeDef.vertices = sh.v ? sh.v.map((v) => ({ x: v[0], y: v[1] })) : [];
       }
 
       mapDef.physicsShapes.push(shapeDef);
@@ -361,10 +662,13 @@
         type: surf.type ?? body.type ?? null,
         // type: "s" (stationary), "d" (dynamic), "k" (kinematic)
         typeName:
-          (surf.type ?? body.type) === 's' ? 'static'
-          : (surf.type ?? body.type) === 'd' ? 'dynamic'
-          : (surf.type ?? body.type) === 'k' ? 'kinematic'
-          : 'unknown',
+          (surf.type ?? body.type) === 's'
+            ? 'static'
+            : (surf.type ?? body.type) === 'd'
+              ? 'dynamic'
+              : (surf.type ?? body.type) === 'k'
+                ? 'kinematic'
+                : 'unknown',
 
         // Position and angle
         position: Array.isArray(body.p) ? { x: body.p[0], y: body.p[1] } : null,
@@ -382,12 +686,12 @@
         angularDamping: surf.ad ?? null,
 
         // Collision
-        collisionGroup: surf.f_c ?? null,
-        frictionCategory: surf.frc ?? null,
         collidesGroup1: surf.f_1 ?? null,
         collidesGroup2: surf.f_2 ?? null,
         collidesGroup3: surf.f_3 ?? null,
         collidesGroup4: surf.f_4 ?? null,
+        collisionGroup: surf.f_c ?? null,
+        frictionCategory: surf.frc ?? null,
         collidesPlayers: surf.f_p ?? null,
 
         // Flags
@@ -396,12 +700,14 @@
         antiTunnel: surf.bu ?? false,
 
         // Constant force
-        constantForce: body.cf ? {
-          x: body.cf.x ?? 0,
-          y: body.cf.y ?? 0,
-          torque: body.cf.ct ?? 0,
-          absolute: body.cf.w ?? true,
-        } : null,
+        constantForce: body.cf
+          ? {
+              x: body.cf.x ?? 0,
+              y: body.cf.y ?? 0,
+              torque: body.cf.ct ?? 0,
+              absolute: body.cf.w ?? true,
+            }
+          : null,
 
         // Force zone
         forceZone: body.fz ? clone(body.fz) : null,
@@ -410,56 +716,56 @@
         fixtureIndices: body.fx ? clone(body.fx) : [],
 
         // Resolved fixtures (full objects for convenience)
-        fixtures: (body.fx || []).map(fxIdx => {
-          const fx = fixtures[fxIdx];
-          if (!fx) return null;
-          const sh = fx.sh != null ? shapes[fx.sh] : null;
-          const fixtureSurface = fixtureOwnerSurface[fxIdx] || surf;
+        fixtures: (body.fx || [])
+          .map((fxIdx) => {
+            const fx = fixtures[fxIdx];
+            if (!fx) return null;
+            const sh = fx.sh != null ? shapes[fx.sh] : null;
+            const fixtureSurface = fixtureOwnerSurface[fxIdx] || surf;
 
-          const resolved = {
-            fixtureIndex: fxIdx,
-            name: fx.n ?? null,
-            shapeIndex: fx.sh ?? null,
-            death: fx.d ?? false,
-            noPhysics: fx.np ?? false,
-            noGrapple: fx.ng ?? false,
-            innerGrapple: fx.ig ?? false,
-            friction: fx.fr ?? surf.fric ?? null,
-            restitution: fx.re ?? surf.re ?? null,
-            density: fx.de ?? surf.de ?? null,
-            fricPlayers: fx.fp ?? fixtureSurface.fricp ?? null,
-            collisionGroup: fixtureSurface.f_c ?? null,
-            collidesGroup1: fixtureSurface.f_1 ?? null,
-            collidesGroup2: fixtureSurface.f_2 ?? null,
-            collidesGroup3: fixtureSurface.f_3 ?? null,
-            collidesGroup4: fixtureSurface.f_4 ?? null,
-            collidesPlayers: fixtureSurface.f_p ?? null,
-            color: fx.f ?? null,
-          };
-
-          if (sh) {
-            resolved.shape = {
-              type: sh.type,
-              typeName: sh.type === 'bx' ? 'rect' : sh.type === 'ci' ? 'circle' : 'polygon',
-              center: Array.isArray(sh.c) ? { x: sh.c[0], y: sh.c[1] } : null,
-              angle: sh.a ?? 0,
-              shrink: sh.sk ?? false,
+            const resolved = {
+              fixtureIndex: fxIdx,
+              name: fx.n ?? null,
+              shapeIndex: fx.sh ?? null,
+              death: fx.d ?? false,
+              noPhysics: fx.np ?? false,
+              noGrapple: fx.ng ?? false,
+              innerGrapple: fx.ig ?? false,
+              friction: fx.fr ?? surf.fric ?? null,
+              restitution: fx.re ?? surf.re ?? null,
+              density: fx.de ?? surf.de ?? null,
+              fricPlayers: fx.fp ?? fixtureSurface.fricp ?? null,
+              collisionGroup: fixtureSurface.f_c ?? null,
+              collidesGroup1: fixtureSurface.f_1 ?? null,
+              collidesGroup2: fixtureSurface.f_2 ?? null,
+              collidesGroup3: fixtureSurface.f_3 ?? null,
+              collidesGroup4: fixtureSurface.f_4 ?? null,
+              collidesPlayers: fixtureSurface.f_p ?? null,
+              color: fx.f ?? null,
             };
-            if (sh.type === 'bx') {
-              resolved.shape.width = sh.w ?? null;
-              resolved.shape.height = sh.h ?? null;
-            } else if (sh.type === 'ci') {
-              resolved.shape.radius = sh.r ?? null;
-            } else if (sh.type === 'po') {
-              resolved.shape.scale = sh.s ?? null;
-              resolved.shape.vertices = sh.v
-                ? sh.v.map(v => ({ x: v[0], y: v[1] }))
-                : [];
-            }
-          }
 
-          return resolved;
-        }).filter(f => f !== null),
+            if (sh) {
+              resolved.shape = {
+                type: sh.type,
+                typeName: sh.type === 'bx' ? 'rect' : sh.type === 'ci' ? 'circle' : 'polygon',
+                center: Array.isArray(sh.c) ? { x: sh.c[0], y: sh.c[1] } : null,
+                angle: sh.a ?? 0,
+                shrink: sh.sk ?? false,
+              };
+              if (sh.type === 'bx') {
+                resolved.shape.width = sh.w ?? null;
+                resolved.shape.height = sh.h ?? null;
+              } else if (sh.type === 'ci') {
+                resolved.shape.radius = sh.r ?? null;
+              } else if (sh.type === 'po') {
+                resolved.shape.scale = sh.s ?? null;
+                resolved.shape.vertices = sh.v ? sh.v.map((v) => ({ x: v[0], y: v[1] })) : [];
+              }
+            }
+
+            return resolved;
+          })
+          .filter((f) => f !== null),
       };
 
       mapDef.physicsBodies.push(bodyDef);
@@ -467,15 +773,15 @@
       // ── Flattened body view for backward compatibility ──────────────────────
       // Each fixture→shape combo becomes one entry in bodies[], matching the
       // old export format but with correct field names and no METRES_TO_PX.
-      (body.fx || []).forEach(fxIdx => {
+      (body.fx || []).forEach((fxIdx) => {
         const fx = fixtures[fxIdx];
         if (!fx) return;
         const sh = fx.sh != null ? shapes[fx.sh] : null;
 
         const bx = Array.isArray(body.p) ? body.p[0] : 0;
         const by = Array.isArray(body.p) ? body.p[1] : 0;
-        const cx = Array.isArray(sh?.c) ? (sh.c[0] || 0) : 0;
-        const cy = Array.isArray(sh?.c) ? (sh.c[1] || 0) : 0;
+        const cx = Array.isArray(sh?.c) ? sh.c[0] || 0 : 0;
+        const cy = Array.isArray(sh?.c) ? sh.c[1] || 0 : 0;
 
         const flat = {
           bodyIndex: bodyIdx,
@@ -515,7 +821,7 @@
           flat.radius = sh.r ?? null;
         } else if (sh?.type === 'po') {
           flat.scale = sh.s ?? null;
-          flat.vertices = (sh.v || []).map(v => ({
+          flat.vertices = (sh.v || []).map((v) => ({
             x: bx + cx + v[0],
             y: by + cy + v[1],
           }));
@@ -530,7 +836,7 @@
       });
     });
 
-    // ── Extract joints ───────────────────────────────────────────────────────
+    // ── Extract joints (level of hierarchy: joints) ──────────────────────────
     joints.forEach((jt, i) => {
       if (!jt) {
         mapDef.physicsJoints.push(null);
@@ -587,12 +893,13 @@
         jointDef.anchorA = { x: jt.pax ?? 0, y: jt.pay ?? 0 };
         jointDef.angle = jt.pa ?? null; // axis derivation tracked by issue #280
         // Issue #281: the native piston is a DRIVEN joint with a limit. The
-        // travel (±plen) is the translation limit, pf is maxMotorForce and pms
-        // is motorSpeed (DEOBFUSCATION §33.8). Travel is sign-clamped so the
-        // range can never invert, non-finite values fall back to zero travel,
-        // and the limit is only enabled when there is positive travel — a map
-        // with missing/zero/NaN plen stays unconstrained instead of being
-        // locked at zero travel or emitting NaN limits.
+        // travel (±plen) is the map author's translation limit, pf is
+        // maxMotorForce and pms is motorSpeed (DEOBFUSCATION §33.8). Travel is
+        // sign-clamped so the range can never invert, non-finite values fall
+        // back to zero travel, and the limit is only enabled when there is
+        // positive travel — a map with missing/zero/NaN plen stays
+        // unconstrained instead of being locked at zero travel or emitting
+        // NaN limits.
         const rawPlen = Number(jt.plen);
         const plen = Number.isFinite(rawPlen) ? Math.abs(rawPlen) : 0;
         jointDef.lowerTranslation = -plen;
@@ -653,12 +960,12 @@
     // Pattern: z[z0M[2][131]]={discs:... (same regex as bonkhost.js)
     // arguments[0] = game state (physics, discs, capZones, mm, etc.)
     // arguments[4] = game settings (contains .map with full map definition)
-    const stateRegexMatch = code.match(
-      /[A-Za-z]\[[A-Za-z0-9$_]{3}(\[[0-9]{1,3}\]){2}\]={discs/
-    );
+    // Single scan: exec() locates the match once and the string is rebuilt with
+    // slice() around it. A second match()+replace() pass would re-scan the
+    // multi-megabyte source and interpret `$` patterns in the matched text.
+    const stateMatch = /[A-Za-z]\[[A-Za-z0-9$_]{3}(\[[0-9]{1,3}\]){2}\]={discs/.exec(code);
 
-    if (stateRegexMatch) {
-      const stateRegex = stateRegexMatch[0];
+    if (stateMatch) {
       const captureCode = [
         '{',
         'try{',
@@ -668,99 +975,117 @@
         'if(arguments[4]){',
         'window.__bonkExportGameSettings=arguments[4];',
         '}',
+        'if(window.__bonkExportNotify){try{window.__bonkExportNotify();}catch(e){}}',
         '}catch(e){}',
         '}',
       ].join('');
 
-      code = code.replace(stateRegex, captureCode + stateRegex);
+      code =
+        code.slice(0, stateMatch.index) +
+        captureCode +
+        stateMatch[0] +
+        code.slice(stateMatch.index + stateMatch[0].length);
       hooks++;
       console.log('%c[BonkExport] State capture hook injected', 'color:#4caf50;font-weight:bold');
     } else {
       console.warn('[BonkExport] Could not find state creation pattern — game may have been updated');
     }
 
-    // ── Hook 2: Extract physics constants from the source ────────────────────
-    // We parse the obfuscated source to find hardcoded physics constants:
-    // - Gravity: world.SetGravity(new b2Vec2(0, GRAVITY_Y))
-    // - Solver iterations: z0M[291]=VEL_ITER; z0M[554]=POS_ITER;
-    // - High-quality iterations: z0M[291]=15; z0M[554]=15;
-    // - Default ppm: 12, default gravity: 20
-    const physicsConstants = {};
-
-    // Current builds retain this b2Vec2 construction even when the SetGravity
-    // branch is optimized out or rewritten by the obfuscator.
-    const gravMatch = code.match(/new\s+[A-Za-z0-9$_]{1,5}\[1\]\(0,\s*(\d+(?:\.\d+)?)\)/);
-    if (gravMatch) {
-      physicsConstants.gravity = parseFloat(gravMatch[1]);
-    }
-
-    // Extract solver iterations from the variable assignments
-    // Pattern: VAR[291]=NUMBER;VAR[554]=NUMBER;
-    // But the variable names change per obfuscation. Use the pattern near Step call.
-    // We found: z0M[291]=2;z0M[554]=6; (low quality) and z0M[291]=15;z0M[554]=15; (high quality)
-    // The pattern is: =NUMBER;VAR[NUMBER]=NUMBER;
-    // The current secondary Step call uses literal low-quality iterations.
-    const stepLiteralMatch = code.match(/\[327\]\]\([^;]*?,\s*(\d+)\s*,\s*(\d+)\)/);
-    if (stepLiteralMatch) {
-      physicsConstants.velocityIterations = parseInt(stepLiteralMatch[1]);
-      physicsConstants.positionIterations = parseInt(stepLiteralMatch[2]);
-    }
-
-    // Extract default ppm and gravity from the constructor defaults
-    // Pattern: this[...[620]]=NUMBER;this[...[46]]=NUMBER;
-    const defaultsMatch = code.match(/\[620\]\]=(\d+(?:\.\d+)?);[^;]*\[46\]\]=(\d+(?:\.\d+)?)/);
-    if (defaultsMatch) {
-      physicsConstants.defaultGravity = parseFloat(defaultsMatch[1]);
-      physicsConstants.defaultPpm = parseFloat(defaultsMatch[2]);
-    }
-
-    // Extract high-quality iterations (pq==2). The numeric table indices are
-    // stable anchors in the current build but are re-exported at runtime below.
-    const highQualMatch = code.match(/\[326\]\]\s*==\s*2\)\{[^}]*?=(\d+);[^}]*?=(\d+);/);
-    if (highQualMatch) {
-      physicsConstants.highQualityVelocityIterations = parseInt(highQualMatch[1]);
-      physicsConstants.highQualityPositionIterations = parseInt(highQualMatch[2]);
-    }
-
-    if (Object.keys(physicsConstants).length > 0) {
-      window.__bonkExportPhysicsConstants = physicsConstants;
-      console.log('%c[BonkExport] Physics constants extracted from source:',
-        'color:#4caf50;font-weight:bold');
-      console.log(JSON.stringify(physicsConstants, null, 2));
-      hooks++;
-    }
-
-    // ── Hook 3: Capture the b2World instance for runtime physics queries ──────
-    // We inject code right after world assignment to store a reference
-    // Pattern: z0M[16]=z[z0M[2][2]]; → world = state.world
-    // We add: window.__bonkExportWorld = z0M[16];
-    const worldAssignMatch = code.match(/[A-Za-z0-9$_]{1,5}\[16\]=[A-Za-z0-9$_]{1,5}\[[A-Za-z0-9$_]{1,5}\[2\]\[2\]\];/);
-    if (worldAssignMatch) {
-      const worldAssign = worldAssignMatch[0];
-      const worldCapture = worldAssign + 'window.__bonkExportWorld=' + worldAssign.match(/^[A-Za-z0-9$_\[\]]+/)[0] + ';';
-      code = code.replace(worldAssign, worldCapture);
-      hooks++;
-      console.log('%c[BonkExport] World capture hook injected', 'color:#4caf50;font-weight:bold');
-    }
-
     console.log(`%c[BonkExport] Total hooks injected: ${hooks}`, 'color:#4caf50;font-weight:bold');
     return code;
   }
 
-  // ── Register the code injector ─────────────────────────────────────────────
-  if (typeof window !== 'undefined') {
-    if (!window.bonkCodeInjectors) window.bonkCodeInjectors = [];
+  // ── Self-contained script interceptor (idempotent, coexists with siblings) ──
+  // Wraps document.head.appendChild so the game's alpha2s.js script is fetched,
+  // run through every registered injector (ours and any sibling's), and inlined
+  // instead of loaded from src. Falls back to a plain load on failure so the
+  // game still runs unpatched. This mirrors the proven bonk-live-tool /
+  // codeinjector.js flow and shares its coordination flags, so installing this
+  // script alongside either of them never double-patches.
+  function installScriptInterceptor() {
+    const head = document.head;
+    if (!head || head[HEAD_APPEND_FLAG]) return;
+    head[HEAD_APPEND_FLAG] = true;
+
+    const append = head.appendChild.bind(head);
+    head.appendChild = function (...args) {
+      const script = args[0];
+      const isGameScript =
+        script &&
+        script.tagName === 'SCRIPT' &&
+        typeof script.src === 'string' &&
+        script.src.includes(GAME_SCRIPT_FRAGMENT);
+      if (!isGameScript || script[SCRIPT_INTERCEPT_FLAG]) {
+        return append.apply(head, args);
+      }
+
+      script[SCRIPT_INTERCEPT_FLAG] = true;
+      const url = script.src;
+      script.removeAttribute('src');
+
+      // Remove src before the asynchronous fetch. Re-adding it on failure
+      // restores the browser's normal script-loading path.
+      (async () => {
+        try {
+          const response = await fetch(url, { credentials: 'same-origin' });
+          if (!response.ok) throw new Error(`HTTP ${response.status}`);
+
+          let patched = await response.text();
+          for (const injector of window.bonkCodeInjectors) {
+            patched = injector(patched);
+          }
+
+          script.textContent = patched;
+          script.dispatchEvent(new Event('load'));
+          append.apply(head, args);
+        } catch {
+          script.src = url; // game still loads, just unpatched
+          append.apply(head, args);
+        }
+      })();
+
+      return script; // resolve synchronously, like a real append
+    };
+  }
+
+  function installGamePatching() {
+    if (!Array.isArray(window.bonkCodeInjectors)) window.bonkCodeInjectors = [];
     window.bonkCodeInjectors.push(function (bonkCode) {
       try {
-        const patched = createInjector(bonkCode);
-        console.log('%c[BonkExport] Code injector registered',
-          'color:#4caf50;font-weight:bold');
-        return patched;
+        return createInjector(bonkCode);
       } catch (error) {
         console.error('[BonkExport] Injector failed:', error);
         return bonkCode; // Return unmodified on failure
       }
     });
+    installScriptInterceptor();
+  }
+
+  // ── Game window resolution ─────────────────────────────────────────────────
+  // bonk.io embeds the game in a same-origin iframe (#maingameframe) whose
+  // document is gameframe-release.html. The capture hooks publish state on the
+  // gameframe's window. When this script runs inside that document we read
+  // `window` directly; when it runs in the host page we read the iframe's
+  // contentWindow, mirroring bonk-live-tool's getGameWindow().
+  const IS_GAMEFRAME = typeof location !== 'undefined' && location.pathname.includes('gameframe-release.html');
+
+  let cachedGameFrame = null;
+  let cachedGameWindow = null;
+
+  function getGameWindow() {
+    if (IS_GAMEFRAME || typeof document === 'undefined') return window;
+    const frame = document.getElementById('maingameframe');
+    const contentWindow = frame && frame.contentWindow;
+    if (!contentWindow) {
+      cachedGameFrame = null;
+      cachedGameWindow = null;
+      return window;
+    }
+    if (frame !== cachedGameFrame || contentWindow !== cachedGameWindow) {
+      cachedGameFrame = frame;
+      cachedGameWindow = contentWindow;
+    }
+    return cachedGameWindow;
   }
 
   // ── Export button UI ───────────────────────────────────────────────────────
@@ -791,19 +1116,24 @@
       userSelect: 'none',
     });
 
-    btn.onmouseenter = () => Object.assign(btn.style, {
-      background: '#4caf50', color: '#1a1a2e',
-      boxShadow: '0 4px 20px rgba(76,175,80,0.6)',
-    });
-    btn.onmouseleave = () => Object.assign(btn.style, {
-      background: '#1a1a2e', color: '#4caf50',
-      boxShadow: '0 4px 15px rgba(76,175,80,0.3)',
-    });
+    btn.onmouseenter = () =>
+      Object.assign(btn.style, {
+        background: '#4caf50',
+        color: '#1a1a2e',
+        boxShadow: '0 4px 20px rgba(76,175,80,0.6)',
+      });
+    btn.onmouseleave = () =>
+      Object.assign(btn.style, {
+        background: '#1a1a2e',
+        color: '#4caf50',
+        boxShadow: '0 4px 15px rgba(76,175,80,0.3)',
+      });
 
     btn.onclick = () => {
       // Try game settings first (has full map def with spawns), then per-tick state
-      const gs = window.__bonkExportGameSettings;
-      const tickState = window.__bonkExportState;
+      const gw = getGameWindow();
+      const gs = gw.__bonkExportGameSettings;
+      const tickState = gw.__bonkExportState;
 
       let mapSource = null;
       let capZoneTimeInTicks = false;
@@ -821,99 +1151,15 @@
         return;
       }
 
-      const mapDef = extractMap(mapSource, { capZoneTimeInTicks });
+      // Primary output: strict NativeMap JSON, engine-loadable via mapPath.
+      const nativeMap = toNativeMap(mapSource);
 
-      const runtimeConstantTable = captureRuntimeConstantTable();
-      if (runtimeConstantTable) {
-        mapDef.runtimeConstantTable = runtimeConstantTable;
-      }
-
-      // Add extracted physics constants (from source deobfuscation)
-      const physConstants = window.__bonkExportPhysicsConstants;
-      if (physConstants) {
-        mapDef.extractedPhysicsConstants = physConstants;
-
-        // If we also have the live world, try to read runtime gravity
-        const world = window.__bonkExportWorld;
-        if (world) {
-          try {
-            // Box2DFlash stores gravity as m_gravity (b2Vec2)
-            const grav = world.m_gravity || world.GetGravity?.();
-            if (grav) {
-              mapDef.extractedPhysicsConstants.runtimeGravity = { x: grav.x, y: grav.y };
-            }
-          } catch (e) {}
-        }
-      }
-
-      // If we have game settings, merge in the full map metadata
-      if (gs && gs.map) {
-        const mapMeta = gs.map.m || {};
-        if (mapMeta.n) mapDef.metadata.name = mapMeta.n;
-        if (mapMeta.a) mapDef.metadata.author = mapMeta.a;
-        if (mapMeta.dbid != null) mapDef.metadata.dbid = mapMeta.dbid;
-        if (mapMeta.dbv != null) mapDef.metadata.dbv = mapMeta.dbv;
-        if (mapMeta.authid != null) mapDef.metadata.authid = mapMeta.authid;
-        if (mapMeta.date) mapDef.metadata.date = mapMeta.date;
-        if (mapMeta.mo) mapDef.metadata.mode = mapMeta.mo;
-        if (mapMeta.pub != null) mapDef.metadata.published = mapMeta.pub;
-        if (mapMeta.cr) mapDef.metadata.contributors = mapMeta.cr;
-        if (mapMeta.rxid != null) mapDef.metadata.rxid = mapMeta.rxid;
-        if (mapMeta.rxn != null) mapDef.metadata.rxn = mapMeta.rxn;
-        if (mapMeta.rxa != null) mapDef.metadata.rxa = mapMeta.rxa;
-        if (mapMeta.rxdb != null) mapDef.metadata.rxdb = mapMeta.rxdb;
-
-        // Merge map-level settings
-        const mapSettings = gs.map.s || {};
-        if (mapSettings.re != null) mapDef.settings.re = mapSettings.re;
-        if (mapSettings.nc != null) mapDef.settings.nc = mapSettings.nc;
-        if (mapSettings.pq != null) mapDef.settings.pq = mapSettings.pq;
-        if (mapSettings.gd != null) mapDef.settings.gd = mapSettings.gd;
-        if (mapSettings.fl != null) mapDef.settings.fl = mapSettings.fl;
-
-        // Extract spawns from the map definition (not the per-tick state)
-        if (gs.map.spawns) {
-          mapDef.spawns = gs.map.spawns.map((s, i) => ({
-            index: i,
-            name: s.n ?? null,
-            x: s.x ?? null,
-            y: s.y ?? null,
-            xVelocity: s.xv ?? null,
-            yVelocity: s.yv ?? null,
-            priority: s.priority ?? null,
-            ffa: s.f ?? null,
-            red: s.r ?? null,
-            blue: s.b ?? null,
-            green: s.gr ?? null,
-            yellow: s.ye ?? null,
-          }));
-        }
-
-        // Extract cap zones from the map definition
-        if (gs.map.capZones) {
-          mapDef.capZones = gs.map.capZones.map((cz, i) => {
-            const capTypeNames = {
-              1: 'normal', 2: 'instant_red', 3: 'instant_blue',
-              4: 'instant_green', 5: 'instant_yellow',
-            };
-            return {
-              index: i,
-              name: cz.n ?? `capzone_${i}`,
-              type: cz.ty ?? null,
-              typeName: capTypeNames[cz.ty] ?? `type_${cz.ty}`,
-              captureTime: cz.l ?? null,
-              fixtureIndex: cz.i ?? -1,
-            };
-          });
-        }
-      }
-
-      const json = JSON.stringify(mapDef, null, 2);
+      const json = JSON.stringify(nativeMap, null, 2);
       const blob = new Blob([json], { type: 'application/json' });
       const url = URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `bonk_${(mapDef.metadata.name || 'map').replace(/[^a-z0-9_-]/gi, '_')}_${mapDef.metadata.dbid || Date.now()}.json`;
+      a.download = `bonk_${(nativeMap.m.n || 'map').replace(/[^a-z0-9_-]/gi, '_')}_${nativeMap.m.dbid || Date.now()}.json`;
       document.body.appendChild(a);
       a.click();
       a.remove();
@@ -923,7 +1169,7 @@
       btn.textContent = '✅ Downloaded!';
       Object.assign(btn.style, { background: '#4caf50', color: '#1a1a2e' });
       setTimeout(() => {
-        btn.textContent = `⬇ ${mapDef.metadata.name || '?'}`;
+        btn.textContent = `⬇ ${nativeMap.m.n || '?'}`;
         Object.assign(btn.style, { background: '#1a1a2e', color: '#4caf50' });
       }, 2000);
     };
@@ -933,54 +1179,89 @@
   }
 
   // ── Poll for map changes and update button ─────────────────────────────────
+  // Two layers: the state hook calls __bonkExportNotify the same tick a map
+  // arrives (instant), and this poller re-syncs as a fallback (e.g. if the
+  // notify registration raced the game script). Reads are cheap property
+  // accesses on the gameframe window.
   function startPolling(btn) {
     let lastMapId = null;
 
-    setInterval(() => {
+    const sync = () => {
       // Prefer the full map definition, but also surface tick-only fallback
-      // captures so the button reflects every exportable source.
-      const gs = window.__bonkExportGameSettings;
-      const tickState = window.__bonkExportState;
+      // captures so the button reflects every exportable source. Reads come
+      // from the gameframe window (iframe contentWindow in the host page).
+      const gw = getGameWindow();
+      const gs = gw.__bonkExportGameSettings;
+      const tickState = gw.__bonkExportState;
       const mapMeta = gs?.map?.m || tickState?.mm || null;
-      const hasMapSource = !!(
-        (gs?.map?.physics?.bodies) || (tickState?.physics?.bodies)
-      );
+      const hasMapSource = !!gs?.map?.physics?.bodies || tickState?.physics?.bodies;
       const mapId = mapMeta?.dbid ?? mapMeta?.n ?? (hasMapSource ? 'live-map' : null);
 
       if (mapId && mapId !== lastMapId) {
         lastMapId = mapId;
         const name = mapMeta?.n || (hasMapSource ? 'Live map' : '?');
         btn.textContent = `⬇ ${name}`;
-        console.log(`%c[BonkExport] Map: "${name}" (dbid=${mapMeta?.dbid ?? '?'})`,
-          'color:#4caf50;font-weight:bold');
+        console.log(`%c[BonkExport] Map: "${name}" (dbid=${mapMeta?.dbid ?? '?'})`, 'color:#4caf50;font-weight:bold');
         Object.assign(btn.style, { borderColor: '#ff9800', color: '#ff9800' });
-        setTimeout(() => Object.assign(btn.style, {
-          borderColor: '#4caf50', color: '#4caf50',
-        }), 1000);
+        setTimeout(
+          () =>
+            Object.assign(btn.style, {
+              borderColor: '#4caf50',
+              color: '#4caf50',
+            }),
+          1000,
+        );
       }
-    }, 1500);
+    };
+
+    // Same-tick notify: the injected state hook calls this the moment a map
+    // arrives, so the button updates instantly instead of waiting for the
+    // poller. try/catch keeps a game-side change from breaking the game.
+    try {
+      window.__bonkExportNotify = sync;
+    } catch (e) {
+      /* window may be frozen in exotic sandboxes; poller still covers us */
+    }
+
+    setInterval(sync, 250);
   }
 
   // ── Boot ────────────────────────────────────────────────────────────────────
-  function init() {
+  // The interceptor MUST be installed synchronously at document-start: the
+  // gameframe HTML ends with <script data-main="js/alpha2s" src="js/require.js">,
+  // and require.js appends alpha2s.js to <head> during parsing — BEFORE
+  // DOMContentLoaded fires. Waiting for DOMContentLoaded (the v3.0.0 bug) always
+  // installed the wrap too late, so the game script was never intercepted and
+  // the button stayed "No map loaded" forever.
+  function injectButtonAndPoll() {
     const btn = injectButton();
     startPolling(btn);
-    console.log('%c[BonkExport] v2.4.0 active — requires Code Injector userscript',
-      'color:#4caf50;font-weight:bold');
-    console.log('%c[BonkExport] Install: https://greasyfork.org/en/scripts/433861',
-      'color:#888;font-size:11px');
+    console.log(
+      '%c[BonkExport] v3.2.0 active — self-contained (embedded script interceptor)',
+      'color:#4caf50;font-weight:bold',
+    );
+  }
+
+  function init() {
+    if (IS_GAMEFRAME) installGamePatching();
+    injectButtonAndPoll();
   }
 
   // The pure extraction path is exercised directly by Node tests (the UI
   // bootstrap below is browser-only and skipped there).
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { extractMap };
+    module.exports = { extractMap, toNativeMap };
   }
   if (typeof document !== 'undefined') {
-    if (document.readyState === 'loading') {
-      document.addEventListener('DOMContentLoaded', init);
-    } else {
+    // document.body may not exist yet at document-start. The button needs it,
+    // but the interceptor (gameframe only) must not wait: patch immediately.
+    if (document.body) {
       init();
+    } else if (IS_GAMEFRAME) {
+      installGamePatching(); // race-safe: patch before alpha2s.js is appended
+      document.addEventListener('DOMContentLoaded', injectButtonAndPoll);
+    } else {
+      document.addEventListener('DOMContentLoaded', injectButtonAndPoll);
     }
   }
 })();

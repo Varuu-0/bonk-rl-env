@@ -1,0 +1,252 @@
+{
+  "v": 15,
+  "s": { "re": true, "nc": false, "pq": 1, "gd": 25, "fl": false },
+  "physics": {
+    "ppm": 10,
+    "shapes": [
+      { "type": "bx", "w": 300, "h": 30, "c": [0, 0], "a": 0, "sk": false },
+      { "type": "ci", "r": 35, "c": [50, -50], "sk": false },
+      {
+        "type": "po",
+        "v": [
+          [0, -50],
+          [50, 40],
+          [-50, 40]
+        ],
+        "s": 1,
+        "a": 0.2,
+        "c": [20, 10]
+      },
+      { "type": "bx", "w": 90, "h": 40, "c": [20, 15], "a": 0.35, "sk": false }
+    ],
+    "fixtures": [
+      {
+        "sh": 0,
+        "n": "platform",
+        "fr": null,
+        "fp": null,
+        "re": null,
+        "de": null,
+        "f": 10000536,
+        "d": false,
+        "np": false,
+        "ng": false
+      },
+      {
+        "sh": 1,
+        "n": "wheel",
+        "fr": null,
+        "fp": null,
+        "re": null,
+        "de": null,
+        "f": 4810969,
+        "d": false,
+        "np": false,
+        "ng": false
+      },
+      {
+        "sh": 2,
+        "n": "lethal triangle",
+        "fr": null,
+        "fp": null,
+        "re": null,
+        "de": null,
+        "f": 14251626,
+        "d": true,
+        "np": false,
+        "ng": false
+      },
+      {
+        "sh": 3,
+        "n": "decoration",
+        "fr": null,
+        "fp": null,
+        "re": null,
+        "de": null,
+        "f": 10181046,
+        "d": false,
+        "np": true,
+        "ng": false
+      },
+      {
+        "sh": 3,
+        "n": "capture",
+        "fr": null,
+        "fp": null,
+        "re": null,
+        "de": null,
+        "f": 15842575,
+        "d": false,
+        "np": false,
+        "ng": false
+      }
+    ],
+    "bodies": [
+      {
+        "p": [0, 120],
+        "a": 0,
+        "lv": [0, 0],
+        "av": 0,
+        "cf": { "x": 0, "y": 0, "w": true, "ct": 0 },
+        "fx": [0],
+        "fz": { "on": false, "x": 0, "y": 0, "d": true, "p": true, "a": true, "t": 0, "cf": 0 },
+        "s": {
+          "type": "s",
+          "n": "static",
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0,
+          "de": 0,
+          "ld": 0,
+          "ad": 0,
+          "fr": false,
+          "bu": false,
+          "f_c": 1,
+          "f_p": true,
+          "f_1": true,
+          "f_2": true,
+          "f_3": true,
+          "f_4": true
+        }
+      },
+      {
+        "p": [-120, -20],
+        "a": 0.3,
+        "lv": [0, 0],
+        "av": 0,
+        "cf": { "x": 0, "y": 0, "w": true, "ct": 0 },
+        "fx": [1, 3],
+        "fz": { "on": false, "x": 0, "y": 0, "d": true, "p": true, "a": true, "t": 0, "cf": 0 },
+        "s": {
+          "type": "d",
+          "n": "compound dynamic",
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0,
+          "de": 0,
+          "ld": 0,
+          "ad": 0,
+          "fr": false,
+          "bu": false,
+          "f_c": 1,
+          "f_p": true,
+          "f_1": true,
+          "f_2": true,
+          "f_3": true,
+          "f_4": true
+        }
+      },
+      {
+        "p": [140, -40],
+        "a": -0.2,
+        "lv": [0, 0],
+        "av": 0,
+        "cf": { "x": 0, "y": 0, "w": true, "ct": 0 },
+        "fx": [2],
+        "fz": { "on": false, "x": 0, "y": 0, "d": true, "p": true, "a": true, "t": 0, "cf": 0 },
+        "s": {
+          "type": "k",
+          "n": "kinematic",
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0,
+          "de": 0,
+          "ld": 0,
+          "ad": 0,
+          "fr": false,
+          "bu": false,
+          "f_c": 1,
+          "f_p": true,
+          "f_1": true,
+          "f_2": true,
+          "f_3": true,
+          "f_4": true
+        }
+      },
+      {
+        "p": [0, -120],
+        "a": 0,
+        "lv": [0, 0],
+        "av": 0,
+        "cf": { "x": 0, "y": 0, "w": true, "ct": 0 },
+        "fx": [4],
+        "fz": { "on": false, "x": 0, "y": 0, "d": true, "p": true, "a": true, "t": 0, "cf": 0 },
+        "s": {
+          "type": "s",
+          "n": "zone",
+          "fric": 0.5,
+          "fricp": false,
+          "re": 0,
+          "de": 0,
+          "ld": 0,
+          "ad": 0,
+          "fr": false,
+          "bu": false,
+          "f_c": 1,
+          "f_p": true,
+          "f_1": true,
+          "f_2": true,
+          "f_3": true,
+          "f_4": true
+        }
+      }
+    ],
+    "joints": [
+      {
+        "type": "rv",
+        "ba": 0,
+        "bb": 1,
+        "aa": [-120, -140],
+        "d": { "la": 0, "ua": 0, "mmt": 0, "ms": 0, "el": false, "em": false, "cc": false, "bf": 0, "dl": true }
+      }
+    ],
+    "bro": [0, 1, 2, 3]
+  },
+  "spawns": [
+    {
+      "x": -220,
+      "y": 50,
+      "xv": 10,
+      "yv": 0,
+      "priority": 5,
+      "r": true,
+      "f": false,
+      "b": false,
+      "gr": false,
+      "ye": false,
+      "n": "red spawn"
+    },
+    {
+      "x": 220,
+      "y": 50,
+      "xv": 0,
+      "yv": 0,
+      "priority": 5,
+      "r": false,
+      "f": false,
+      "b": true,
+      "gr": false,
+      "ye": false,
+      "n": "blue spawn"
+    }
+  ],
+  "capZones": [
+    { "n": "goal", "ty": 1, "l": 1, "i": 4 },
+    { "n": "whole map", "ty": 1, "l": 1, "i": -1 }
+  ],
+  "m": {
+    "a": "Bonk RL project",
+    "n": "Native render fixture",
+    "dbv": 15,
+    "dbid": -1,
+    "authid": -1,
+    "date": "",
+    "rxid": 0,
+    "rxn": "",
+    "rxa": "",
+    "rxdb": 1,
+    "cr": [],
+    "pub": false,
+    "mo": "b"
+  }
+}
