@@ -65,6 +65,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 import { ProxyAgent, Agent, type Dispatcher } from 'undici';
 import {
   decodeNativeMapDatabasePayload,
@@ -322,10 +323,24 @@ export function loadProxyFile(file: string): string[] {
   return lanes;
 }
 
-/** Build the dispatcher for a lane: an HTTP/SOCKS ProxyAgent for proxied
- * lanes, or a plain keep-alive Agent for the direct connection. */
-function laneDispatcher(url: string): Dispatcher {
-  return url === 'direct' ? new Agent() : new ProxyAgent(url);
+/** Load SocksProxyAgent via a file:// URL to its ESM entry. socks-proxy-agent
+ * is ESM-only, and tsx's CJS transform turns a bare dynamic import into a
+ * require() that yields an empty namespace; importing the dist file directly
+ * uses Node's native ESM loader and works regardless of the caller's module
+ * system. */
+async function loadSocksAgent(url: string): Promise<Dispatcher> {
+  const entry = pathToFileURL(path.join('node_modules', 'socks-proxy-agent', 'dist', 'index.js')).href;
+  const { SocksProxyAgent } = (await import(entry)) as { SocksProxyAgent: new (u: string) => Dispatcher };
+  return new SocksProxyAgent(url);
+}
+
+/** Build the dispatcher for a lane: an HTTP/HTTPS proxy via undici's
+ * ProxyAgent, a SOCKS4/SOCKS5 proxy via socks-proxy-agent, or a plain
+ * keep-alive Agent for the direct connection. */
+async function laneDispatcher(url: string): Promise<Dispatcher> {
+  if (url === 'direct') return new Agent();
+  if (/^socks/i.test(url)) return loadSocksAgent(url);
+  return new ProxyAgent(url);
 }
 
 function currentUserAgent(state: TransportState): string {
@@ -363,7 +378,7 @@ async function request(
       }
       if (bestWait > 0) await sleep(bestWait); // every lane banned: wait for the soonest
       state.laneIndex = best;
-      dispatcher = laneDispatcher(state.lanes[best]!.url);
+      dispatcher = await laneDispatcher(state.lanes[best]!.url);
     } else {
       // Direct connection: respect any active ban before spending a request.
       const waitMs = state.bannedUntil - Date.now();

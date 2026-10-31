@@ -22,6 +22,7 @@ Shell scripts, PowerShell scripts, and CLI tools for managing Bonk.io RL Environ
 | `verify-heavy-flip-probe.js`  | Cross-platform       | Offline harness for `Webscripts/heavy-flip-probe.user.js` (hook, flip cadence, teardown)             |
 | `extract-bonk-map.ts`         | Cross-platform       | Extract a native Bonk.io map (envelope/payload/PSON/JSON) into engine-loadable NativeMap JSON        |
 | `scrape-bonk-maps.ts`         | Cross-platform       | Scrape thousands of Bonk.io community maps into engine-loadable NativeMap JSON (resumable)           |
+| `validate-proxies.ts`         | Cross-platform       | Validate a free-proxy list against live bonk2.io and write the working proxies for `--proxies`       |
 | `verify-mapexporter-fixes.js` | Cross-platform       | Source-level regression harness for `Webscripts/mapexporter.js` (contract keys, hooks, output shape) |
 | `verify-mapexporter-e2e.js`   | Cross-platform       | Offline E2E harness for the mapexporter userscript (vm sandbox, state hook, export button, download) |
 | `dsp-cli.py`                  | Cross-platform       | Data Structure Protocol CLI for managing the `.dsp/` graph                                           |
@@ -144,10 +145,21 @@ User-Agent across retries (`--max-retries`, default 12). The ban expiry is persi
 so a resumed run waits out an active ban rather than re-tripping it. There is no header trick that
 bypasses the per-IP budget, but `--proxies <file>` scales around it: each proxy (or `direct`) is a
 lane with its own budget, so throughput scales with lane count and a banned lane is skipped while
-others serve. Proxy file format: one `http://[user:pass@]host:port`, `socks5://host:port`, or
-`direct` per line, `#` comments allowed. Maps that fail strict codec validation are counted and
-reported, never written. Engine-load failures (gear joints, spawn-less maps, degenerate polygons)
-are the same pre-existing coverage limits as the committed corpus, not scraper errors.
+others serve. Proxy file format: one `http://[user:pass@]host:port`, `socks4://` / `socks5://host:port`,
+or `direct` per line, `#` comments allowed (HTTP/HTTPS via undici, SOCKS via socks-proxy-agent).
+
+To build a working proxy file from a free list, `validate-proxies.ts` tests each proxy against live
+bonk2.io (bounded concurrency + timeout) and writes only the ones that return a real success payload:
+
+```bash
+# Fetch the iplocate/free-proxy-list and keep the working proxies (~3% hit rate is normal)
+npx tsx scripts/validate-proxies.ts --concurrency 100 --timeout 6000
+# -> .local-artifacts/working-proxies.txt, ready for --proxies
+```
+
+Maps that fail strict codec validation are counted and reported, never written. Engine-load failures
+(gear joints, spawn-less maps, degenerate polygons) are the same pre-existing coverage limits as the
+committed corpus, not scraper errors.
 
 ## DSP CLI
 
