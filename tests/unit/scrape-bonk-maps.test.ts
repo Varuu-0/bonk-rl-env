@@ -453,4 +453,35 @@ describe('scrape-bonk-maps: proxy pool', () => {
       fs.rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('fails over to a healthy lane when a proxy is unreachable (no crash)', async () => {
+    const dir = tempDir();
+    // First lane throws a connect timeout (dead free proxy); second lane
+    // succeeds. The run must complete, not crash on the network error.
+    let call = 0;
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () => {
+        call++;
+        if (call === 1) throw new TypeError('fetch failed');
+        return jsonResponse({ r: 'success', maps: [record] });
+      }),
+    );
+    try {
+      const options = {
+        ...TEST_OPTIONS,
+        out: dir,
+        queries: [],
+        picks: true,
+        cooldownMs: 90_000,
+        maxRetries: 2,
+        proxies: ['http://127.0.0.1:8080', 'http://127.0.0.1:8081'],
+      };
+      const summary = await runScrape(options);
+      expect(summary.written).toBe(1);
+      expect(call).toBe(2);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
 });

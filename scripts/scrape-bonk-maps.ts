@@ -290,6 +290,10 @@ export interface ProxyLane {
   /** The proxy URL, or 'direct' for the local IP. */
   url: string;
   bannedUntil: number;
+  /** Epoch-ms until which this lane is considered dead (network unreachable).
+   * Free proxies drop without warning; a connect timeout/reset marks the lane
+   * dead so the pool skips it instead of crashing the run. */
+  deadUntil: number;
 }
 
 /** Mutable transport state shared across all requests in a run. Tracks the
@@ -362,21 +366,32 @@ async function request(
   doFetch: (headers: Record<string, string>, dispatcher?: Dispatcher) => Promise<unknown>,
 ): Promise<unknown> {
   const proxied = state.lanes.length > 0;
+  let lastNetworkError: unknown;
   for (let attempt = 0; attempt <= options.maxRetries; attempt++) {
     let dispatcher: Dispatcher | undefined;
     if (proxied) {
-      // Pick the healthy lane whose ban expires soonest (0 = not banned).
+      // Pick the healthy lane whose ban expires soonest (0 = not banned),
+      // skipping lanes currently marked dead (network unreachable).
       const now = Date.now();
       let best = -1;
       let bestWait = Number.POSITIVE_INFINITY;
       for (let i = 0; i < state.lanes.length; i++) {
-        const wait = state.lanes[i]!.bannedUntil - now;
+        const lane = state.lanes[i]!;
+        if (lane.deadUntil > now) continue;
+        const wait = lane.bannedUntil - now;
         if (wait < bestWait) {
           bestWait = wait;
           best = i;
         }
       }
-      if (bestWait > 0) await sleep(bestWait); // every lane banned: wait for the soonest
+      if (best < 0) {
+        // Every lane is dead or banned: wait for the soonest recovery of any.
+        let soonest = Number.POSITIVE_INFINITY;
+        for (const lane of state.lanes) soonest = Math.min(soonest, Math.max(lane.bannedUntil, lane.deadUntil) - now);
+        if (soonest > 0) await sleep(Math.min(soonest, options.cooldownMs));
+        continue;
+      }
+      if (bestWait > 0) await sleep(bestWait); // every live lane banned: wait for the soonest
       state.laneIndex = best;
       dispatcher = await laneDispatcher(state.lanes[best]!.url);
     } else {
@@ -385,7 +400,20 @@ async function request(
       if (waitMs > 0) await sleep(waitMs);
     }
     const headers = browserHeaders(currentUserAgent(state));
-    const response = (await doFetch(headers, dispatcher)) as { r?: string; e?: string };
+    let response: { r?: string; e?: string };
+    try {
+      response = (await doFetch(headers, dispatcher)) as { r?: string; e?: string };
+    } catch (error) {
+      // Network failure (connect timeout, reset, DNS). On a proxied lane, mark
+      // it dead and fail over to another lane; on direct, rethrow.
+      if (!proxied) throw error;
+      lastNetworkError = error;
+      state.lanes[state.laneIndex]!.deadUntil = Date.now() + options.cooldownMs;
+      if (!options.json) {
+        process.stderr.write(`lane ${state.lanes[state.laneIndex]!.url} unreachable; failing over\n`);
+      }
+      continue;
+    }
     if (!isRateLimited(response)) return response;
     // Banned: rotate the fingerprint and mark the offending lane's expiry.
     state.userAgentIndex++;
@@ -401,6 +429,11 @@ async function request(
         `ratelimited; rotated UA (attempt ${attempt + 1}/${options.maxRetries + 1}), cooling down ${options.cooldownMs}ms\n`,
       );
     }
+  }
+  if (lastNetworkError) {
+    return fail(
+      `all proxy lanes unreachable after ${options.maxRetries + 1} attempts; last error: ${lastNetworkError}`,
+    );
   }
   return fail(`rate-limited after ${options.maxRetries + 1} cooldown cycles; increase --cooldown or --max-retries`);
 }
@@ -705,7 +738,7 @@ export async function runScrape(options: CliOptions): Promise<ScrapeSummary> {
   transport.bannedUntil = manifest.bannedUntil;
   // Build one lane per configured proxy; each lane's independent IP gets its
   // own rate budget, so the pool's throughput scales with lane count.
-  transport.lanes = options.proxies.map((url) => ({ url, bannedUntil: 0 }));
+  transport.lanes = options.proxies.map((url) => ({ url, bannedUntil: 0, deadUntil: 0 }));
   const persist = (): void => {
     manifest.bannedUntil = transport.bannedUntil;
     manifest.scrapedIds = [...seen];
