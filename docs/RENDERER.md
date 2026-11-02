@@ -102,16 +102,20 @@ ZeroMQ, browser automation or simulation stepping.
 ### Interactive native inspector
 
 ```powershell
-npm run preview:native -- --map=maps/native-render-fixture.json --port=8081
+npm run preview:native -- --port=8081
 ```
 
-Open the printed local URL. The inspector supports wheel zoom, drag panning,
+The central map library is `maps/library/`, including downloaded maps. Keep project fixtures directly under `maps/`. The library is gitignored so a large local collection is not committed. Omitting `--map` opens the first library map alphabetically; explicit paths outside it remain supported.
+
+Open the printed local URL. Use the **Map** dropdown to browse filenames and switch maps without restarting. Selection is reflected in `?map=…` for reloads and bookmarks. Malformed maps show an error and are never replaced with a fallback.
+
+The inspector also supports wheel zoom, drag panning,
 double-click/fit-to-map, SVG download, and independent geometry, spawn, capture
 zone, joint, metadata, and legend layers. Click a fixture or select a body,
-fixture, or joint in the sidebar to inspect its native values. Everything is
-embedded in one local HTML response with no remote assets, browser automation,
-simulation, or worker pool. The existing `preview:live` command remains the
-animated exporter-map server.
+fixture, or joint in the sidebar to inspect its native values. Map discovery and
+loading validate paths inside the library. The existing `preview:live` command
+remains the animated exporter-map server. No remote assets, browser automation,
+simulation, or worker pool are used.
 
 ## Preview CLI
 

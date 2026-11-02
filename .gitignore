@@ -154,3 +154,6 @@ benchmarks/_archived/
 
 # Generated renderer previews
 /render-preview/
+
+# Local native map collection
+/maps/library/
