@@ -99,6 +99,20 @@ Shrink animation is not stepped, and active force zones are reported rather than
 drawn. The output is a self-contained SVG and requires no workers, Python,
 ZeroMQ, browser automation or simulation stepping.
 
+### Interactive native inspector
+
+```powershell
+npm run preview:native -- --map=maps/native-render-fixture.json --port=8081
+```
+
+Open the printed local URL. The inspector supports wheel zoom, drag panning,
+double-click/fit-to-map, SVG download, and independent geometry, spawn, capture
+zone, joint, metadata, and legend layers. Click a fixture or select a body,
+fixture, or joint in the sidebar to inspect its native values. Everything is
+embedded in one local HTML response with no remote assets, browser automation,
+simulation, or worker pool. The existing `preview:live` command remains the
+animated exporter-map server.
+
 ## Preview CLI
 
 ```

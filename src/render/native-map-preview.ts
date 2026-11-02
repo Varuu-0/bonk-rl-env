@@ -47,13 +47,20 @@ export function renderNativeMapSvg(data: NativeMapRenderData, options: NativePre
     ? [...data.input.bodyRenderOrder].reverse()
     : (data.input.bodies ?? []).map((body) => body.index);
   order.forEach((bodyIndex, z) => bodyForZ.set(z, bodyIndex));
+  const fixtureForCommand = new Map<string, number>();
+  const commandCounts = new Map<number, number>();
   for (const command of commands) {
+    const seen = commandCounts.get(command.z) ?? 0;
+    commandCounts.set(command.z, seen + 1);
+    const bodyIndex = bodyForZ.get(command.z) ?? -1;
+    const body = data.input.bodies?.find((candidate) => candidate.index === bodyIndex);
+    const fixtureIndex = body?.fixtureIndices[seen];
     const p = command.primitive;
     const bodyType = data.bodyTypes[bodyForZ.get(command.z) ?? -1] ?? 'static';
     const stroke = p.stroke ?? (bodyType === 'dynamic' ? '#4a90d9' : bodyType === 'kinematic' ? '#b47ad6' : '#161b20');
     const dash = bodyType === 'dynamic' ? '8 4' : bodyType === 'kinematic' ? '3 4' : undefined;
     const opacity = command.isSensor ? 0.4 : 1;
-    const attributes = `fill="${p.fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${fixed(Math.max(1.5, p.lineWidth))}"${dash ? ` stroke-dasharray="${dash}"` : ''}`;
+    const attributes = `data-fixture="${fixtureIndex ?? ''}" data-body="${bodyIndex}" fill="${p.fill}" fill-opacity="${opacity}" stroke="${stroke}" stroke-width="${fixed(Math.max(1.5, p.lineWidth))}"${dash ? ` stroke-dasharray="${dash}"` : ''}`;
     if (p.kind === 'circle') {
       lines.push(`<circle cx="${fixed(p.sx)}" cy="${fixed(p.sy)}" r="${fixed(p.r)}" ${attributes}/>`);
     } else if (p.kind === 'poly') {

@@ -41,6 +41,7 @@
     "bench:ipc-stress": "python python/benchmarks/layer7-ipc-stress.py",
     "preview": "tsx src/render/preview.ts",
     "preview:live": "tsx src/render/preview-server.ts",
+    "preview:native": "node node_modules/tsx/dist/cli.mjs src/render/native-preview-server.ts",
     "start": "tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "ci": "npx tsx scripts/local-ci.ts --standard",
