@@ -82,7 +82,11 @@ frame-dump behavior described below.
 
 The static preview shows initial boxes, circles, polygons, compound fixtures,
 shape/body transforms, native body render order, joint anchors, team-labelled
-spawn points and capture zones. Static bodies have solid dark outlines, dynamic
+spawn points and capture zones. Authored pixel maps are the default. With two
+or more bodies, already-normalized world-metre runtime exports are auto-detected
+from native-frame body bounds and linear-joint anchors, then converted to map
+pixels exactly once. The SVG reports when this interpretation is used;
+single-body files conservatively remain authored. Static bodies have solid dark outlines, dynamic
 bodies dashed blue outlines, and kinematic bodies dashed purple outlines. Lethal
 fixtures have red outlines, nonphysical fixtures are translucent, and capture
 zones are yellow. Capture zones with fixture `-1` are represented on the map

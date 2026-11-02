@@ -4,6 +4,7 @@ import * as path from 'path';
 import { validateNativeMapJson } from '../../src/core/native-map-codec';
 import { buildGeometry } from '../../src/render/map-geometry';
 import {
+  detectNativeStateKind,
   fitNativeCamera,
   loadNativeMapForRender,
   nativeGeometryBounds,
@@ -121,6 +122,57 @@ describe('native map rendering', () => {
     expect(svg).toContain('1 bodies, 1 fixtures, 2 spawns, 0 zones, 0 joints');
     expect(svg).toContain('<polygon');
     expect(svg).toContain('Left Spawn [FFA/red/blue] p5');
+  });
+
+  it('auto-detects world-metre runtime states without shrinking geometry twice', () => {
+    const authored = validateNativeMapJson(JSON.parse(fs.readFileSync(FIXTURE, 'utf8')));
+    expect(detectNativeStateKind(authored)).toBe('authored');
+    // Construct a known normalized state: body positions in the positive
+    // native world frame and a circle radius already measured in metres.
+    const runtime = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+    runtime.v = 1;
+    runtime.m.vu = 1;
+    runtime.m.vd = 1;
+    runtime.physics.bodies = runtime.physics.bodies.map((body: any) => ({
+      ...body,
+      p: [(body.p[0] + 365) / 10, (body.p[1] + 250) / 10],
+    }));
+    runtime.physics.shapes = runtime.physics.shapes.map((shape: any) => ({
+      ...shape,
+      ...(shape.w === undefined ? {} : { w: shape.w / 10, h: shape.h / 10 }),
+      ...(shape.r === undefined ? {} : { r: shape.r / 10 }),
+      c: [shape.c[0] / 10, shape.c[1] / 10],
+    }));
+    const map = validateNativeMapJson(runtime, { featureGates: 'native-json' });
+    // Authored rv joints derive ab during normalization; runtime states carry
+    // it explicitly in body B's local frame.
+    const joints = map.physics.joints.map((joint) => {
+      if (!joint || joint.type !== 'rv') return joint;
+      const a = runtime.physics.bodies[joint.ba];
+      const b = runtime.physics.bodies[joint.bb];
+      const world = [a.p[0] + joint.aa[0], a.p[1] + joint.aa[1]];
+      const dx = world[0] - b.p[0],
+        dy = world[1] - b.p[1];
+      const cos = Math.cos(-b.a),
+        sin = Math.sin(-b.a);
+      return { ...joint, ab: [dx * cos - dy * sin, dx * sin + dy * cos] };
+    });
+    map.physics.joints = joints;
+    expect(detectNativeStateKind(map)).toBe('normalized');
+    const normalized = nativeMapRenderData(map, 'native-json', 'normalized');
+    expect(normalized.stateKind).toBe('normalized');
+    expect(normalized.input.bodies?.[1].x).toBe(-120);
+    expect(normalized.input.bodies?.[1].y).toBe(-20);
+    expect(normalized.input.shapes?.[1].radius).toBe(35);
+    expect(renderNativeMapSvg(normalized)).toContain('Auto-detected normalized world-metre state');
+    // Large authored maps cannot be classified as world-metre states merely
+    // because some of their coordinates are small.
+    const large = JSON.parse(fs.readFileSync(FIXTURE, 'utf8'));
+    large.physics.bodies[0].p = [500, 0];
+    expect(detectNativeStateKind(validateNativeMapJson(large))).toBe('authored');
+    // The single-body signature is deliberately conservative.
+    const single = JSON.parse(fs.readFileSync(REAL, 'utf8'));
+    expect(detectNativeStateKind(validateNativeMapJson(single))).toBe('authored');
   });
 
   it('is deterministic for the same map and options', () => {

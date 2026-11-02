@@ -48,6 +48,56 @@ export interface NativeRenderGeometry {
 export interface NativeMapRenderData extends NativeRenderGeometry {
   map: NativeMap;
   physics: NativeMapPhysics;
+  /** Validation policy actually used; native-json covers legacy/PSON merges. */
+  featureGates: 'database-version' | 'native-json';
+  /** Authored pixel maps are the default; runtime exports carry world metres. */
+  stateKind: 'authored' | 'normalized';
+}
+
+/**
+ * Runtime physics exports carry already-normalized world-metre positions in
+ * the map's positive frame. Their joint anchors expose the same invariant, so
+ * an lpj/lsj whose stored anchor differs from body A's position is decisive.
+ * Otherwise, with multiple bodies, native-frame bounds (all x in [0,730/ppm]
+ * and y in [0,500/ppm]) distinguish them from signed authored canvas pixels.
+ * Single-body maps stay authored: this inexpensive signature cannot prove
+ * their units, and silently guessing would risk changing valid map geometry.
+ */
+export function detectNativeStateKind(map: NativeMap): 'authored' | 'normalized' {
+  const ppm = map.physics.ppm;
+  const bodies = map.physics.bodies.filter((body): body is NonNullable<typeof body> => body != null);
+  if (bodies.length < 2) return 'authored';
+  const anchorsDiffer = map.physics.joints.some((joint) => {
+    if (!joint || (joint.type !== 'lpj' && joint.type !== 'lsj')) return false;
+    const body = joint.ba >= 0 ? map.physics.bodies[joint.ba] : null;
+    if (!body) return false;
+    const x = joint.type === 'lpj' ? joint.pax : joint.sax;
+    const y = joint.type === 'lpj' ? joint.pay : joint.say;
+    return Math.abs(x - body.p[0]) > 1e-9 || Math.abs(y - body.p[1]) > 1e-9;
+  });
+  if (anchorsDiffer) return 'normalized';
+  return bodies.every((body) => body.p[0] >= 0 && body.p[0] <= 730 / ppm && body.p[1] >= 0 && body.p[1] <= 500 / ppm)
+    ? 'normalized'
+    : 'authored';
+}
+
+/**
+ * Legacy/PSON merge exports reset `v` to 1 while retaining newer optional
+ * fields such as `m.vu`/`m.vd`. The codec documents `native-json` for exactly
+ * that case, so select it only when that shape is present; everything else
+ * stays on the strict database-version gates.
+ */
+function usesLegacyMergeGates(parsed: unknown): boolean {
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return false;
+  const root = parsed as Record<string, unknown>;
+  const metadata = root.m;
+  if (metadata === null || typeof metadata !== 'object' || Array.isArray(metadata)) return false;
+  const version = root.v;
+  return (
+    typeof version === 'number' &&
+    version < 10 &&
+    (Object.prototype.hasOwnProperty.call(metadata, 'vu') || Object.prototype.hasOwnProperty.call(metadata, 'vd'))
+  );
 }
 
 /** Read and strictly decode an authored native map without repairing it. */
@@ -61,13 +111,18 @@ export function loadNativeMapForRender(mapPath: string): NativeMapRenderData {
   if (!isNativeMapJson(parsed)) {
     throw new Error(`Cannot render ${mapPath} as a native map: missing the native map JSON structure`);
   }
-  const map = validateNativeMapJson(parsed);
-  return nativeMapRenderData(map);
+  const featureGates = usesLegacyMergeGates(parsed) ? 'native-json' : 'database-version';
+  const map = validateNativeMapJson(parsed, { featureGates });
+  return nativeMapRenderData(map, featureGates, detectNativeStateKind(map));
 }
 
-/** Project a validated native map through the engine's authored-map normalizer. */
-export function nativeMapRenderData(map: NativeMap): NativeMapRenderData {
-  const physics = normalizeNativeMap(map as NativeMapSource, { authored: true });
+/** Project a validated native map through the engine's map-state normalizer. */
+export function nativeMapRenderData(
+  map: NativeMap,
+  featureGates: 'database-version' | 'native-json' = 'database-version',
+  stateKind: 'authored' | 'normalized' = 'authored',
+): NativeMapRenderData {
+  const physics = normalizeNativeMap(map as NativeMapSource, { authored: stateKind === 'authored' });
   const ppm = physics.ppm;
   const input: MapGeometryInput = {
     bodies: physics.bodies
@@ -155,7 +210,13 @@ export function nativeMapRenderData(map: NativeMap): NativeMapRenderData {
   if (physics.ss.length > 0) limitations.push('Initial geometry is drawn; shrink animation is not simulated.');
   if (physics.bodies.some((body) => body?.fz.on)) limitations.push('Force zones are not visually represented.');
   if (frameCapZones.length > 0) limitations.push('Capture zones with fixture -1 are shown on the map frame.');
-  return { map, physics, input, bodyTypes, spawns, joints, frameCapZones, limitations };
+  if (featureGates === 'native-json') {
+    limitations.push('Legacy/PSON merge export (v1 with newer optional fields): native-json feature gates used.');
+  }
+  if (stateKind === 'normalized') {
+    limitations.push('Auto-detected normalized world-metre state; converted to map pixels once.');
+  }
+  return { map, physics, featureGates, stateKind, input, bodyTypes, spawns, joints, frameCapZones, limitations };
 }
 
 function bodyAnchor(bodyIndex: number, local: NativePoint, physics: NativeMapPhysics): NativePoint {
