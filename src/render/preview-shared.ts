@@ -54,6 +54,15 @@ export function parsePositiveIntArg(value: string | undefined, fallback: number,
 }
 
 /** Pairwise `--key value` → record; unknown keys are passed through. */
+export function parsePairArgs(argv: string[]): Record<string, string> {
+  return parseArgs(
+    argv.flatMap((arg) => {
+      const match = /^(--[^=]+)=(.*)$/.exec(arg);
+      return match ? [match[1], match[2]] : [arg];
+    }),
+  );
+}
+
 export function parseArgs(argv: string[]): Record<string, string> {
   const out: Record<string, string> = {};
   for (let i = 0; i < argv.length; i += 2) {
@@ -71,9 +80,7 @@ export function listPreviewMaps(dir: string = PREVIEW_MAPS_DIR): string[] {
   } catch {
     return [];
   }
-  return entries
-    .filter((name) => name.toLowerCase().endsWith('.json'))
-    .sort();
+  return entries.filter((name) => name.toLowerCase().endsWith('.json')).sort();
 }
 
 /** Validate a menu answer against the entry count; returns the 0-based index
@@ -98,9 +105,15 @@ export function promptMapSelection(maps: string[]): Promise<string> {
     let settled = false;
     const rl = readline.createInterface({ input: process.stdin, output: process.stdout });
     const finish = (done: () => void): void => {
-      if (!settled) { settled = true; done(); }
+      if (!settled) {
+        settled = true;
+        done();
+      }
     };
-    rl.on('SIGINT', () => { rl.close(); process.exit(130); });
+    rl.on('SIGINT', () => {
+      rl.close();
+      process.exit(130);
+    });
     rl.on('close', () => finish(() => reject(new Error('Map selection cancelled.'))));
     rl.question(`Select a map [1-${maps.length}] (default 1): `, (answer) => {
       finish(() => {

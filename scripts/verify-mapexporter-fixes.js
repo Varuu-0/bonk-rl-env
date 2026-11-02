@@ -11,7 +11,14 @@ const src = fs.readFileSync('Webscripts/mapexporter.js', 'utf8');
 
 // Provide minimal globals so the IIFE body (which references document only when
 // init runs) parses. We won't call init.
-const fakeWindow = { M$QCc: null, __bonkExportState: null, __bonkExportGameSettings: null, __bonkExportPhysicsConstants: null, __bonkExportWorld: null, console: console };
+const fakeWindow = {
+  M$QCc: null,
+  __bonkExportState: null,
+  __bonkExportGameSettings: null,
+  __bonkExportPhysicsConstants: null,
+  __bonkExportWorld: null,
+  console: console,
+};
 fakeWindow.window = fakeWindow;
 global.window = fakeWindow;
 global.document = {
@@ -31,56 +38,68 @@ global.setInterval = () => 0;
 // the exact extractMap body here is impractical. Instead we do a focused test:
 // verify the SOURCE contains the corrections and that they're syntactically
 // coherent, plus run an end-to-end on a lean re-implementation.
-function assert(cond, msg) { if (!cond) throw new Error('ASSERT FAILED: ' + msg); }
+function assert(cond, msg) {
+  if (!cond) throw new Error('ASSERT FAILED: ' + msg);
+}
+// Whitespace-insensitive view of the source: newlines/indentation collapsed to
+// single spaces, so prettier reformatting cannot break the assertions below.
+const flat = src.replace(/\s+/g, ' ');
 
 console.log('--- Source-level fix verification ---');
 
 // 1. settings sourced from ms (with s fallback)
-assert(/const settings = state\.s \|\| state\.ms \|\| \{\};/.test(src), 'settings prefer map s with ms fallback');
+assert(/const settings = state\.s \|\| state\.ms \|\| \{\};/.test(flat), 'settings prefer map s with ms fallback');
 console.log('  PASS bug 1: settings = state.s || state.ms');
 
 // Primary map definitions use m while tick snapshots use mm.
-assert(/const mm = state\.mm \|\| state\.m \|\| \{\};/.test(src), 'metadata reads both mm and m');
-assert(/'capZones','spawns','mm'/.test(src), 'KNOWN.root covers map spawns');
-assert(/capzone: new Set\(\['n'/.test(src), 'KNOWN.capzone covers map names');
-assert(/'dbv','authid','date','rxn','rxa','rxdb','cr','pub','mo','vu','vd'/.test(src), 'KNOWN metadata covers v10 fields');
-assert(/capZoneTimeInTicks \? cz\.l \/ 30 : cz\.l/.test(src), 'tick cap-zone time converts to seconds');
+assert(/const mm = state\.mm \|\| state\.m \|\| \{\};/.test(flat), 'metadata reads both mm and m');
+assert(/'capZones',\s*'spawns',\s*'mm'/.test(src), 'KNOWN.root covers map spawns');
+assert(/capzone: new Set\(\[\s*'n'/.test(src), 'KNOWN.capzone covers map names');
+assert(
+  /'dbv',\s*'authid',\s*'date',\s*'rxn',\s*'rxa',\s*'rxdb',\s*'cr',\s*'pub',\s*'mo',\s*'vu',\s*'vd'/.test(src),
+  'KNOWN metadata covers v10 fields',
+);
+assert(/capZoneTimeInTicks \? cz\.l \/ 30 : cz\.l/.test(flat), 'tick cap-zone time converts to seconds');
 console.log('  PASS primary metadata, known fields, and cap-zone units');
 
 // 2. fixture collision sourced from fixtureOwnerSurface
 assert(/fixtureOwnerSurface\[i\]/.test(src), 'fixture collision from owner body surface (bug 3)');
 assert(/frictionCategory: null/.test(src), 'frc set null (not in table)');
-assert(/const fixtureOwnerSurface = \{\};/.test(src), 'fixtureOwnerSurface built');
-assert(/collidesGroup4: fixtureSurface\.f_4 \?\? null/.test(src), 'resolved fixtures retain collision masks');
-assert(/fricPlayers: fx\.fp \?\? fixtureSurface\.fricp \?\? null/.test(src), 'resolved fixtures inherit fricp');
-assert(/fricPlayers: fx\.fp \?\? surf\.fricp \?\? null/.test(src), 'flat fixtures retain fricp');
-assert(!/if \(!sh\) return;/.test(src), 'flat view retains fixtures without shapes');
+assert(/const fixtureOwnerSurface = \{\};/.test(flat), 'fixtureOwnerSurface built');
+assert(/collidesGroup4: fixtureSurface\.f_4 \?\? null/.test(flat), 'resolved fixtures retain collision masks');
+assert(/fricPlayers: fx\.fp \?\? fixtureSurface\.fricp \?\? null/.test(flat), 'resolved fixtures inherit fricp');
+assert(/fricPlayers: fx\.fp \?\? surf\.fricp \?\? null/.test(flat), 'flat fixtures retain fricp');
+assert(!/if \(!sh\) return;/.test(flat), 'flat view retains fixtures without shapes');
 console.log('  PASS bug 3: fixture collision filter from body.s, frc=null');
 
 // 3. disc phantom reads removed
 assert(!/d\.fn\b/.test(src), 'disc fn removed (bug 4)');
 assert(!/d\.fz\b/.test(src), 'disc fz removed (bug 4)');
-assert(/swing: d\.swing/.test(src), 'swing added');
-assert(/spawnTeamInfo: d\.spawnTeamInfo/.test(src), 'spawnTeamInfo added');
+assert(/swing: d\.swing/.test(flat), 'swing added');
+assert(/spawnTeamInfo: d\.spawnTeamInfo/.test(flat), 'spawnTeamInfo added');
 console.log('  PASS bug 4: phantom fn/fz removed; swing/spawnTeamInfo added');
 
 // 4. version from state.v
-assert(/version: state\.v \?\? null/.test(src), 'version from state.v (bug 5)');
+assert(/version: state\.v \?\? null/.test(flat), 'version from state.v (bug 5)');
 console.log('  PASS bug 5: metadata.version = state.v');
 
-assert(/'type','ba','bb','d','aa','ab','l'/.test(src), 'KNOWN.joint covers chain length');
-assert(/length: jt\.l \?\? null/.test(src), 'joint length retains top-level chain l');
+assert(/'type',\s*'ba',\s*'bb',\s*'d',\s*'aa',\s*'ab',\s*'l'/.test(src), 'KNOWN.joint covers chain length');
+assert(/length: jt\.l \?\? null/.test(flat), 'joint length retains top-level chain l');
 console.log('  PASS chain joint length retained');
 
-assert(/const existing = document\.getElementById\('bonk-export-btn'\);/.test(src), 'existing button is returned');
-assert(/document\.body\.appendChild\(a\);/.test(src), 'download anchor attaches to the document');
-assert(/setTimeout\(\(\) => URL\.revokeObjectURL\(url\), 1000\);/.test(src), 'object URL revocation is deferred');
-assert(/const tickState = window\.__bonkExportState;/.test(src), 'poller consults tick fallback state');
+assert(/const existing = document\.getElementById\('bonk-export-btn'\);/.test(flat), 'existing button is returned');
+assert(/document\.body\.appendChild\(a\);/.test(flat), 'download anchor attaches to the document');
+assert(/setTimeout\(\(\) => URL\.revokeObjectURL\(url\), 1000\);/.test(flat), 'object URL revocation is deferred');
+assert(/const tickState = gw\.__bonkExportState;/.test(flat), 'poller consults tick fallback state');
+assert(/const gs = gw\.__bonkExportGameSettings;/.test(flat), 'button reads game settings from the game window');
+assert(/function getGameWindow\(\)/.test(src), 'game window resolution exists (iframe bridge)');
+assert(/IS_GAMEFRAME =/.test(src), 'gameframe context detection exists');
+assert(/installGamePatching\(\); \/\/ race-safe/.test(src), 'interceptor installs at document-start before alpha2s.js');
 console.log('  PASS button lifecycle and tick fallback polling');
 
 // KNOWN sets cleaned
-assert(!/frc','f_c','fc','fp','f_1/.test(src), 'fixture KNOWN cleaned');
-assert(!/fn','fz/.test(src), 'disc KNOWN cleaned');
+assert(!/frc',\s*'f_c',\s*'fc',\s*'fp',\s*'f_1/.test(src), 'fixture KNOWN cleaned');
+assert(!/fn',\s*'fz/.test(src), 'disc KNOWN cleaned');
 console.log('  PASS KNOWN sets cleaned');
 
 // --- End-to-end behaviour: re-express extractMap is too large; instead run the
@@ -92,9 +111,10 @@ function fixtureOwnerSurfaceSemantics(bodies, fixtures) {
   // mirrors mapexporter's inline construction
   const map = {};
   for (let b = 0; b < bodies.length; b++) {
-    const body = bodies[b]; if (!body) continue;
+    const body = bodies[b];
+    if (!body) continue;
     const surf = body.s || {};
-    for (const fxIdx of (body.fx || [])) if (typeof fxIdx === 'number') map[fxIdx] = surf;
+    for (const fxIdx of body.fx || []) if (typeof fxIdx === 'number') map[fxIdx] = surf;
   }
   const out = fixtures.map((fx, i) => ({
     collisionGroup: (map[i] && map[i].f_c) ?? null,
@@ -103,8 +123,11 @@ function fixtureOwnerSurfaceSemantics(bodies, fixtures) {
   return out;
 }
 
-const bodies = [{ p:[0,0], a:0, s: { f_c: 2, f_p: true, f_1: 1 }, fx: [0, 2] }, { p:[5,5], s: { f_c: 4 }, fx: [1] }];
-const fixtures = [{ sh:0, n:'a' }, { sh:1 }, { sh:0 }];
+const bodies = [
+  { p: [0, 0], a: 0, s: { f_c: 2, f_p: true, f_1: 1 }, fx: [0, 2] },
+  { p: [5, 5], s: { f_c: 4 }, fx: [1] },
+];
+const fixtures = [{ sh: 0, n: 'a' }, { sh: 1 }, { sh: 0 }];
 const res = fixtureOwnerSurfaceSemantics(bodies, fixtures);
 assert(res[0].collisionGroup === 2 && res[0].collidesPlayers === true, 'fixture 0 inherits body0 surface f_c/f_p');
 assert(res[1].collisionGroup === 4, 'fixture 1 inherits body1 surface f_c');

@@ -151,3 +151,9 @@ benchmarks/_archived/
 
 # Local deobfuscation workspace
 .deobf/
+
+# Generated renderer previews
+/render-preview/
+
+# Local native map collection
+/maps/library/
